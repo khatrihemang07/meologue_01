@@ -37,33 +37,58 @@
  * caller scopes it, this view only renders" split `comments` above
  * already takes.
  *
- * **Date, Deadline and Priority all open the identical `TaskScheduleSheet`
- * every row's own "Date" hover action already opens** (`onOpenSchedule`
+ * **Deadline and Priority open the identical `TaskScheduleSheet` every
+ * row's own More-actions "Deadline…" item already opens** (`onOpenSchedule`
  * below) — the brief's own "Reuse what exists" instruction, applied
- * literally: this view has no second Date/Deadline/Priority picker of its
- * own to keep in sync with the row's. Project and Labels have no existing
+ * literally: this view has no second Deadline/Priority picker of its own
+ * to keep in sync with the row's. Project and Labels have no existing
  * picker to reuse (neither TaskScheduleSheet nor anything else in this
  * app edits either), so this file builds the one inline control each
  * needs.
+ *
+ * **Date is the one exception (issue #253).** It no longer shares
+ * `onOpenSchedule` at all — the sheet lost its own Date section entirely
+ * — and instead opens its own `TaskSchedulePopover` instance
+ * (`dateScheduleOpen` below), anchored directly under the Date attribute
+ * itself, the identical per-site instance a row's own hover Date button
+ * opens (`task-row-content.tsx`'s own doc comment). This view has exactly
+ * one Task open at a time, so "per-site" here just means "owned by this
+ * component," with no fan-in of its own to build: nothing else in this
+ * view can open a Task's Date.
  */
 import type { Comment, Event, Label, Project, Section, Task } from "@meologue/core";
 import { uiPriorityOf } from "@meologue/core";
 import { ChevronLeft, ChevronRight, Pencil, Trash2, X } from "lucide-react";
 import { Dialog as DialogPrimitive } from "radix-ui";
 import type * as React from "react";
-import { Suspense, useRef, useState } from "react";
+import { forwardRef, Suspense, useEffect, useRef, useState } from "react";
+import { toast } from "sonner";
 import { entryProse } from "@/components/entry-prose";
 import { ActivityFeed } from "@/components/todo/activity-feed";
 import { LazyTaskDescriptionEditor } from "@/components/todo/lazy-task-description-editor";
 import { LazyTaskTitleEditor } from "@/components/todo/lazy-task-title-editor";
+import { TaskSchedulePopover } from "@/components/todo/task-schedule-popover";
 import { ConfirmDialog } from "@/components/ui/alert-dialog";
+import { useTaskDateState } from "@/hooks/use-task-date-state";
 import { useWideLayout } from "@/hooks/use-wide-layout";
+import { isRenderableEvent } from "@/lib/format-event";
 import { formatDay, formatTaskDate } from "@/lib/format-task-date";
 import { localDayKey } from "@/lib/local-day-key";
 import { useSettingsStore } from "@/lib/settings";
 import { priorityColour } from "@/lib/task-priority-colors";
 import { quickAddRecognitionPlugin } from "@/lib/todo-quick-add-recognition";
 import { cn } from "@/lib/utils";
+
+/**
+ * DET-16 (parity-ledger.md): live Todoist's own "Date updated to Tomorrow"
+ * toast, with Undo, was present through 9,609ms and gone by 10,119ms after
+ * Save (`rename-capture-2026-09-11.md`; flow 4, polled every ~500ms). 10s,
+ * not `todo-page.tsx`'s own 11s `COMPLETION_TOAST_DURATION_MS` — that
+ * row's own note is explicit that the two toasts' lifetimes should not be
+ * assumed to share a duration, and this is a separate measurement, not a
+ * reused one.
+ */
+const RENAME_DATE_TOAST_DURATION_MS = 10_000;
 
 export interface TaskDetailViewProps {
   task: Task;
@@ -99,8 +124,14 @@ export interface TaskDetailViewProps {
    */
   onComplete: () => void;
   onUncomplete: () => void;
-  /** Opens the shared `TaskScheduleSheet` — this file's own header comment on why Date/Deadline/Priority all funnel through the one door rather than each growing a picker of its own. */
+  /** Opens the shared `TaskScheduleSheet` — this file's own header comment on why Deadline/Priority funnel through the one door rather than each growing a picker of its own. Date no longer does (issue #253) — see `onSetDate`/`onSetDateString`/`datesWithTasks` below. */
   onOpenSchedule: () => void;
+  /** Sets or clears the Task's `date` (issue #253) — reaches this view's own `TaskSchedulePopover` instance for the Date attribute, mirroring `task-row-content.tsx`'s identical wiring. */
+  onSetDate: (id: string, date: string | null) => void;
+  /** Sets or clears the Task's Recurrence phrase (issue #253) — `TaskStore.setDateString`'s own doc comment (task-schedule-sheet.tsx) has the reasoning for why `date` is recomputed by the store rather than trusted from a caller. */
+  onSetDateString: (id: string, dateString: string | null, now: string) => void;
+  /** Day-keys carrying at least one active Task, mapped to how many — threaded straight through to `TaskSchedulePopover`'s identical prop (its own doc comment: SCHED-09's calendar dot and SCHED-04's preview subline share this one source). */
+  datesWithTasks: ReadonlyMap<string, number>;
   onSetProject: (projectId: string | null) => void;
   onSetLabels: (labelIds: string[]) => void;
   /** Sets the Task's `description` (issue #180) — `null` clears it back to "nothing chosen yet." */
@@ -134,36 +165,58 @@ export interface TaskDetailViewProps {
   events: Event[];
 }
 
-/** A Task's attribute, before it has one — a small, tappable pill rather than an empty row (this file's own header comment: "the view grows with the Task instead of showing empty fields"). */
-function AttributePill({ label, onClick }: { label: string; onClick: () => void }) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className="w-fit rounded-full border border-border px-2.5 py-1 text-muted-foreground text-xs transition hover:border-foreground/30 hover:text-foreground"
-    >
-      {label}
-    </button>
-  );
-}
+/**
+ * A Task's attribute, before it has one — a small, tappable pill rather
+ * than an empty row (this file's own header comment: "the view grows with
+ * the Task instead of showing empty fields").
+ *
+ * **`forwardRef`, since issue #253.** The Date attribute anchors a
+ * `TaskSchedulePopover` directly to this pill via Radix `asChild`, which
+ * clones this element and attaches a ref to it to measure where to
+ * anchor — a plain function component (no `forwardRef`) would silently
+ * swallow that ref the identical way `ui/button.tsx`'s own `Button` does
+ * (`task-row-content.tsx`'s own doc comment has the fuller account of that
+ * trap, found once already in this repo). `onClick` is optional now for
+ * the identical reason: the Date attribute passes none — Radix's own
+ * trigger click is what opens its popover — where Project/Deadline/
+ * Priority/Labels below still pass one to toggle their own local picker.
+ */
+const AttributePill = forwardRef<HTMLButtonElement, { label: string; onClick?: () => void }>(
+  function AttributePill({ label, onClick }, ref) {
+    return (
+      <button
+        ref={ref}
+        type="button"
+        onClick={onClick}
+        className="w-fit rounded-full border border-border px-2.5 py-1 text-muted-foreground text-xs transition hover:border-foreground/30 hover:text-foreground"
+      >
+        {label}
+      </button>
+    );
+  },
+);
 
-/** A Task's attribute, once it has one — promoted into its own full-width row (this file's own header comment). */
-function AttributeRow({
-  icon,
-  label,
-  value,
-  colour,
-  onClick,
-}: {
-  icon: React.ReactNode;
-  label: string;
-  value: React.ReactNode;
-  /** A leading dot in this colour — Priority's own ring colour, or a Project's/Label's own swatch. Omitted for Date/Deadline, which carry no colour of their own. */
-  colour?: string;
-  onClick: () => void;
-}) {
+/**
+ * A Task's attribute, once it has one — promoted into its own full-width
+ * row (this file's own header comment). `forwardRef` and an optional
+ * `onClick` for the identical reason `AttributePill` above carries both —
+ * the Date attribute, once set, is a promoted row like this one, and needs
+ * the identical ref for its own `TaskSchedulePopover` trigger.
+ */
+const AttributeRow = forwardRef<
+  HTMLButtonElement,
+  {
+    icon: React.ReactNode;
+    label: string;
+    value: React.ReactNode;
+    /** A leading dot in this colour — Priority's own ring colour, or a Project's/Label's own swatch. Omitted for Date/Deadline, which carry no colour of their own. */
+    colour?: string;
+    onClick?: () => void;
+  }
+>(function AttributeRow({ icon, label, value, colour, onClick }, ref) {
   return (
     <button
+      ref={ref}
       type="button"
       onClick={onClick}
       className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm transition hover:bg-muted"
@@ -182,7 +235,7 @@ function AttributeRow({
       <span className="ml-auto truncate">{value}</span>
     </button>
   );
-}
+});
 
 /**
  * One Comment in the thread (issue #180) — rendered inline, click to
@@ -191,6 +244,54 @@ function AttributeRow({
  * trash pair rather than a swipe or a context menu: this file has no
  * other row chrome to match, and a Comment thread is short enough that
  * two small buttons cost nothing to keep visible on hover.
+ *
+ * **CMT-03: explicit Cancel/Update, not save-on-blur.** Todoist's own
+ * comment editor (`docs/reference/todoist/live-audit-dom/flow5-CMT-03-
+ * todoist.json`) opens with those two buttons and never commits just
+ * because focus left the field — clicking away leaves the draft sitting
+ * there, unresolved, and only Cancel or Update decides its fate. The
+ * live audit's own meologue side (`flow5-CMT-03-meologue.json`) is what
+ * this replaces: a bare textarea whose `onBlur` committed, which meant
+ * an edit could never actually be abandoned once the reader looked away
+ * — clicking outside to reconsider silently saved a half-finished draft.
+ * Deletion is untouched — both apps already agree there
+ * (`ConfirmDialog`/CMT-03's own confirm-first note on `onRequestRemove`
+ * below) — and neither app marks a Comment "edited," so this still
+ * writes no such marker.
+ *
+ * **Escape used to look safe and wasn't.** The previous handler did
+ * `setDraft(comment.text); event.currentTarget.blur()` — but `setDraft`
+ * doesn't apply before `.blur()` fires, and `.blur()` fires the real
+ * blur event synchronously, in the same tick, calling the old `onBlur`
+ * commit handler while it was still closed over *this render's* `draft`
+ * — the edited text, not the just-requested reset. Escape was
+ * discarding nothing; it was saving the very edit it was meant to
+ * cancel (a failing test guarded this before the fix — see this
+ * comment's own commit message). `cancelEditing` below sidesteps the
+ * whole flush question by closing the editor directly, with no blur in
+ * the loop at all.
+ *
+ * **Escape also used to close the whole dialog, not just this editor.**
+ * `cancelEditing`'s own Escape handler lived on the textarea's `onKeyDown`
+ * — a normal React (bubble-phase, root-delegated) handler — which reads
+ * as though `event.stopPropagation()` there would keep the keystroke from
+ * ever reaching `TaskDetailView`'s Radix `Dialog`. It doesn't: Radix's own
+ * Escape handling (`DismissableLayer`, inside `@radix-ui/react-dialog`)
+ * listens on `document` in the CAPTURE phase, which runs BEFORE the
+ * event ever reaches this textarea at all — by the time any handler here
+ * could call `stopPropagation`/`preventDefault`, Radix has already read
+ * `event.defaultPrevented`, found it false, and closed the dialog. Verified
+ * directly against a real `Dialog` before writing this comment: neither
+ * call, made from a nested field's own `onKeyDown`, stops the close.
+ * The one node that sits earlier than `document` in the capture order is
+ * `window` itself — a capture-phase listener registered there intercepts
+ * Escape before capture ever reaches `document`, and (per the DOM's own
+ * "stopping propagation mid-capture skips the target entirely" contract)
+ * also means this textarea's own `onKeyDown` never sees that keystroke —
+ * which is why `cancelEditing` is invoked directly from the effect below,
+ * not left for the textarea to call. The effect is scoped to `editing`
+ * so a reader who isn't mid-edit still closes the dialog on Escape
+ * exactly as before.
  */
 function CommentRow({
   comment,
@@ -210,9 +311,16 @@ function CommentRow({
     setEditing(true);
   }
 
-  function commit() {
+  /** Escape and Cancel both land here — discard the draft, close the editor, save nothing. No blur involved (this file's own header comment above on why routing through blur was the bug). */
+  function cancelEditing() {
+    setDraft(comment.text);
     setEditing(false);
+  }
+
+  /** Update's only path to `onEdit` — trims first, and a blank or unchanged draft commits nothing (CMT-03's own guard, carried over unchanged from the save-on-blur version this replaces). */
+  function commit() {
     const trimmed = draft.trim();
+    setEditing(false);
     if (trimmed === "" || trimmed === comment.text) {
       setDraft(comment.text);
       return;
@@ -220,30 +328,79 @@ function CommentRow({
     onEdit(trimmed);
   }
 
+  // The "latest callback" ref pattern this file's own `TaskDetailBody`
+  // (and `task-title-editor.tsx`) already use for an imperative listener
+  // that outlives a single render — `cancelEditing` closes over this
+  // render's `comment.text`, and the `window` listener below is only
+  // re-attached when `editing` flips, not on every keystroke.
+  const cancelEditingRef = useRef(cancelEditing);
+  cancelEditingRef.current = cancelEditing;
+
+  // This file's own header comment above ("Escape also used to close the
+  // whole dialog") has the full account of why this listener lives on
+  // `window`, in the capture phase, rather than on this row's own
+  // textarea: it is the only point in the DOM earlier than Radix's own
+  // `document`-capture Escape handler. Scoped to `editing` — mounted only
+  // while this row's inline editor is open, torn down the instant it
+  // closes — so an Escape pressed anywhere else in the dialog still
+  // reaches Radix and closes it exactly as before.
+  useEffect(() => {
+    if (!editing) {
+      return;
+    }
+    function handleWindowEscape(event: KeyboardEvent) {
+      if (event.key !== "Escape") {
+        return;
+      }
+      // Stops the keystroke from ever reaching `document`'s own capture
+      // listener — Radix never gets a chance to read `defaultPrevented`,
+      // so there is nothing to `preventDefault()` here. This also means
+      // the textarea's own `onKeyDown` below never fires for this key
+      // (the DOM never delivers a stopped event to its target), so
+      // `cancelEditing` has to be called from here directly.
+      event.stopPropagation();
+      cancelEditingRef.current();
+    }
+    window.addEventListener("keydown", handleWindowEscape, { capture: true });
+    return () => window.removeEventListener("keydown", handleWindowEscape, { capture: true });
+  }, [editing]);
+
   if (editing) {
     return (
-      <li>
+      <li className="flex flex-col gap-1.5">
         <textarea
           aria-label="Edit comment"
           value={draft}
           onChange={(event) => setDraft(event.target.value)}
-          onBlur={commit}
-          onKeyDown={(event) => {
-            if (event.key === "Escape") {
-              setDraft(comment.text);
-              event.currentTarget.blur();
-            }
-          }}
           rows={2}
           className="w-full resize-none rounded-md border border-border bg-transparent p-2 text-sm outline-none"
         />
+        {/* Todoist's own labels (this row exists to match it) — real accessible names via visible text, no separate aria-label needed. */}
+        <div className="flex justify-end gap-2">
+          <button
+            type="button"
+            onClick={cancelEditing}
+            className="shrink-0 rounded-md border border-border px-2.5 py-1.5 text-sm transition hover:bg-muted"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            onClick={commit}
+            className="shrink-0 rounded-md border border-border px-2.5 py-1.5 text-sm transition hover:bg-muted"
+          >
+            Update
+          </button>
+        </div>
       </li>
     );
   }
 
   return (
     <li className="group flex items-start gap-1 rounded-md p-1.5 text-sm transition hover:bg-muted">
-      <div className="min-w-0 flex-1 [&_p]:my-0 [&_ul]:my-0">{entryProse(comment.text)}</div>
+      <div className="min-w-0 flex-1 [&_p]:my-0 [&_ul]:my-0">
+        {entryProse(comment.text, undefined, undefined, undefined, "comment")}
+      </div>
       <button
         type="button"
         aria-label="Edit comment"
@@ -329,11 +486,15 @@ function TaskDetailBody({
   labels,
   prevTask,
   nextTask,
+  onClose,
   onNavigate,
   onRename,
   onComplete,
   onUncomplete,
   onOpenSchedule,
+  onSetDate,
+  onSetDateString,
+  datesWithTasks,
   onSetProject,
   onSetLabels,
   onSetDescription,
@@ -347,8 +508,40 @@ function TaskDetailBody({
   onUncompleteSubtask,
   events,
   wide,
-}: Omit<TaskDetailViewProps, "onClose"> & {
+  contentRef,
+  dismissGuardRef,
+}: TaskDetailViewProps & {
   wide: boolean;
+  /**
+   * DET-10: the dialog Content node itself (`TaskDetailView`'s own
+   * `contentRef`, which Radix already gives `tabIndex={-1}`) — the one
+   * neutral focus target that matches live Todoist's own "a generic
+   * click in the combined edit form focuses the dialog, neither field"
+   * finding (`parity-ledger.md`'s DET-10 row, flow 5's DOM-identified
+   * gap click). Threaded down rather than duplicated: `TaskDetailView`
+   * already owns the ref Radix needs for `onOpenAutoFocus`, and this is
+   * the same node, not a second one.
+   */
+  contentRef: React.RefObject<HTMLDivElement | null>;
+  /**
+   * DET-15: `TaskDetailView`'s own hook into this form's dismissal claim,
+   * consulted from `Content`'s composable `onEscapeKeyDown`/
+   * `onPointerDownOutside` props (that file's own doc comment on the
+   * prop). Called with no arguments; returns `true` when this form wants
+   * the attempt (editing, whether or not there are unsaved changes — see
+   * this file's assignment of it below), which is `TaskDetailView`'s own
+   * signal to `preventDefault()` so Radix's `DismissableLayer` never
+   * dismisses the whole view for an interaction this form claimed first.
+   * A ref rather than a prop read once: `TaskDetailView` calls
+   * `dismissGuardRef.current?.(source)` from a stable handler it hands to
+   * Radix at mount, so this needs to stay current across every render
+   * without that handler itself changing identity. `source` distinguishes
+   * an outside click from Escape (DET-15 round 3's own gap): the two now
+   * disagree on what Discard does afterward — outside click closes the
+   * whole view, Escape does not — so this door needs to know which one
+   * it's answering, not just that a dismissal was attempted.
+   */
+  dismissGuardRef: React.RefObject<((source: "escape" | "outside") => boolean) | null>;
 }) {
   // DET-09: editing is task-wide, not field-wide — clicking either the
   // title or the description puts BOTH into edit together, sharing one
@@ -376,16 +569,36 @@ function TaskDetailBody({
   // date rollover mid-rename should not need the editor itself torn down
   // and rebuilt to see it.
   //
-  // What this does NOT do: change what saving a recognised title does.
-  // `saveEditing` below still commits `titleText`/`titleDraft` verbatim,
-  // unparsed — the reference (lifecycle.md) is silent on whether Todoist
-  // resolves a recognised phrase in the DETAIL title into a real Date
-  // property on save, as opposed to the composer's Send, and inventing
-  // that behaviour here would be exactly the unevidenced guess the
-  // parity ledger exists to catch. That silence is also why DET-08 (the
-  // Date attribute row reads `task.date`, never the title editor's own
-  // live state) stops being vacuous the moment this plugin ships: there
-  // is now something in the title for that principle to actually ignore.
+  // What this file still does NOT do: `saveEditing` below still commits
+  // `titleText`/`titleDraft` verbatim, unparsed, and hands that string
+  // straight to its own `onRename` prop unaware anything downstream might
+  // read it differently — this plugin only decorates what the reader sees
+  // while typing. Issue #247 is what moved resolution into the picture at
+  // all, and deliberately one layer up: todo-page.tsx's and
+  // composer-page.tsx's own `commitRename` wrappers are what `onRename`
+  // actually is now, each reaching `commitTaskTitle` (task-title-commit.ts)
+  // to resolve the same phrase this plugin already highlighted into real
+  // Date/Deadline/Priority/recurrence/Label fields before ever touching
+  // the store. This view's own contract — `onRename: (content: string) =>
+  // void`, a plain string in, nothing back out — is exactly why that
+  // seam works: it never needed to know resolution was about to start
+  // happening on the other side of it. DET-08 (the Date attribute row
+  // reads `task.date`, never the title editor's own live state) is what
+  // that seam makes possible — the field this view shows still comes from
+  // the Task the store hands back down, not from anything this file
+  // parsed itself.
+  //
+  // The reference is no longer silent on this either, as an earlier
+  // version of this comment said: `docs/reference/todoist/rename-capture-
+  // 2026-09-11.md` drove both of Todoist's own rename surfaces directly
+  // and found both resolve a recognised phrase, stripping it from the
+  // stored title exactly as Quick Add does — the parity ledger's own
+  // DET-07 row cites it. That capture did not exercise a phrase that
+  // fails to resolve, or a rename with no phrase at all, so the guard
+  // below (only ever *set* a field a phrase actually resolved, never
+  // clear one the reader didn't touch) is still this app's own
+  // conservative choice, not something that capture proves Todoist does
+  // too.
   const smartDates = useSettingsStore((state) => state.smartDatesEnabled);
   const titleRecognitionOptionsRef = useRef({ now: localDayKey(new Date()), smartDates });
   titleRecognitionOptionsRef.current = { now: localDayKey(new Date()), smartDates };
@@ -401,6 +614,41 @@ function TaskDetailBody({
   // Comment it's currently open for, mirroring `todo-page.tsx`'s own
   // `confirmingId`/`ConfirmDialog` pair for deleting a Task.
   const [confirmingCommentId, setConfirmingCommentId] = useState<string | null>(null);
+  // DET-15: the shared discard-confirm dialog for the title/description
+  // form — one boolean, not one per field, since DET-09 already made
+  // Cancel/Save a single pair for both fields together; asking twice
+  // (once per field) would be asking about a boundary this form no
+  // longer has.
+  const [discardConfirmOpen, setDiscardConfirmOpen] = useState(false);
+  // DET-15 round 3: which gesture opened the discard confirmation —
+  // Todoist's own live re-drive found this actually matters for what
+  // Discard does next (`flow11-R3-DET-15-both.json`'s
+  // `attempt3_clickOutsideModal`). An outside click's own intent was
+  // "leave the task," so confirming Discard there completes that intent
+  // and closes the whole view too; Cancel and Escape carry no such
+  // intent beyond "stop editing," so Discard there only ends editing,
+  // matching this file's pre-existing behaviour. Read once, at the
+  // moment `onConfirm` fires below — a plain ref, not state, since
+  // nothing here needs a re-render when it changes.
+  const cancelTriggeredByOutsideClickRef = useRef(false);
+  // DET-15 round 3, gap 2: sets when Discard itself was clicked, so the
+  // discard ConfirmDialog's own `onCloseAutoFocus` below can tell "this
+  // close is a Discard" (editing is ending or the whole view is closing —
+  // nothing to refocus) apart from "this close is a Cancel/Escape on the
+  // confirmation itself" (editing continues — focus belongs back on
+  // whichever editor the reader was last in).
+  const discardConfirmedRef = useRef(false);
+  // DET-15 round 3, gap 2: the editor element the reader was last typing
+  // in, tracked via a `focusin` listener on the edit column below rather
+  // than read from `document.activeElement` at confirm-dismiss time —
+  // by the time the confirmation (a separate, now-closing Radix layer)
+  // hands focus back, the field itself has already lost it, so there's
+  // nothing left in `document.activeElement` worth reading.
+  const lastFocusedEditorRef = useRef<HTMLElement | null>(null);
+  const editColumnRef = useRef<HTMLDivElement>(null);
+  // ActivityFeed drops old "Edited a comment" events (CMT-06), so the badge
+  // counts what it will actually show rather than what the store holds.
+  const renderableEvents = events.filter(isRenderableEvent);
   const uiPriority = uiPriorityOf(task.priority);
   // Issue #224: computed once, not inline in the Date row's own `value`
   // JSX below, so `text`/`colour` can't drift from calling
@@ -412,6 +660,93 @@ function TaskDetailBody({
           completed: task.completedAt !== null,
           recurring: task.dateString !== null,
         });
+  // Issue #256: this view's own `TaskSchedulePopover` instance for the
+  // Date attribute reads `task.date` split into day/time through
+  // `useTaskDateState` — the identical hook `task-row-content.tsx`'s own
+  // popover instance also consumes, rather than the two files each
+  // carrying their own copy of the split and combine (issue #253's
+  // wiring, byte-identical between them, is what #256 closed).
+  const [dateScheduleOpen, setDateScheduleOpen] = useState(false);
+  const { dateDay, dateTime, setScheduleDay, setScheduleTime } = useTaskDateState(task, onSetDate);
+
+  // DET-16: `saveEditing` below hands the raw typed title straight to its
+  // `onRename` prop and gets nothing back — resolving a recognised phrase
+  // into a real Date happens one layer up, in `todo-page.tsx`'s/
+  // `composer-page.tsx`'s own `commitRename` wrapper (`commitTaskTitle`,
+  // task-title-commit.ts), asynchronously (its Task-store write is a
+  // `useMutation`, not an optimistic cache write — hooks/use-tasks.ts's
+  // own `setDateMutation`). So the only way this view can tell a rename
+  // just resolved a Date is by watching its own `task.date` prop for the
+  // change that wrapper eventually produces, against a snapshot taken
+  // the instant a title-changing Save fired. `previousDate` carries the
+  // full `Task.date` string (day and time-of-day both, when present),
+  // not just the day, since Undo below has to restore both.
+  //
+  // This is a heuristic, not a closed loop back to the specific rename
+  // that triggered it — nothing in this view's own contract (`onRename`
+  // returns `void`) can make it one. The risk that heuristic carries: an
+  // unrelated `task.date` change arriving in this same window (a
+  // completely separate edit, mid-flight for some other reason) would be
+  // misread as this rename's own effect. The three sites in this file
+  // that change `task.date` directly — `onPickDay`/`onSetTime`/
+  // `onPickRecurrence` below, all reached through this view's own Date
+  // attribute — clear this ref first, precisely so an explicit, reader-
+  // driven date edit can never be mistaken for a rename's side effect.
+  const pendingRenameDateRef = useRef<{ taskId: string; previousDate: string | null } | null>(null);
+
+  // DET-16: the toast itself — same mechanism `todo-page.tsx`'s own
+  // `raiseCompletionToast` uses (`toast(message, { duration, action:
+  // { label: "Undo", onClick } })`), read there rather than reimplemented
+  // blind, but not shared code: that function lives in a file this ticket
+  // does not own, and its Undo reverses a completion, not a Date.
+  //
+  // Undo restores only the Date (day and time together, via `onSetDate`)
+  // — not the title. `rename-capture-2026-09-11.md`, the one live capture
+  // of this toast, records that it reads "Date updated to Tomorrow" with
+  // an Undo/Close pair, but never drove Undo itself or read back what it
+  // left the title as — so what Todoist's own Undo restores is
+  // unmeasured, not merely undocumented here. Restoring only the Date is
+  // this file's own conservative choice, matching the toast's own wording
+  // ("Date updated," not "Rename undone") and the guard `commitTaskTitle`
+  // already applies on the way in (only ever set a field a phrase
+  // actually resolved) — Undo mirrors that by only ever restoring the one
+  // field the toast itself names.
+  function raiseDateResolvedToast(taskId: string, dayText: string, previousDate: string | null) {
+    toast(`Date updated to ${dayText}`, {
+      duration: RENAME_DATE_TOAST_DURATION_MS,
+      action: {
+        label: "Undo",
+        onClick: () => onSetDate(taskId, previousDate),
+      },
+    });
+  }
+
+  // DET-16: fires once per rename that changed `task.date` — comparing
+  // this render's own `task.date` against the snapshot `saveEditing` took
+  // right before calling `onRename`. Keyed on `task.date`/`task.id`
+  // specifically, not the whole `task` object, so an unrelated field
+  // changing (a Comment posted, a Label added, while this modal happens
+  // to still be open) can't retrigger this check once it has already run
+  // for the pending rename. `dateDisplay` below is read as of THIS
+  // render, the same value the Date attribute row itself is about to
+  // show — DET-16's own brief: the toast must use the identical word the
+  // row badge would. `dateDisplay`/`raiseDateResolvedToast` are
+  // deliberately absent from the dependency list: both are recomputed
+  // fresh every render from `task`/`onSetDate`, so naming them would only
+  // ever re-run this effect in lockstep with `task.date` itself — the one
+  // dependency that actually decides whether this effect has anything to
+  // do.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: see comment above — task.date/task.id are the only real re-run triggers; dateDisplay and raiseDateResolvedToast are derived from them each render, not independent inputs.
+  useEffect(() => {
+    const pending = pendingRenameDateRef.current;
+    if (pending === null || pending.taskId !== task.id || task.date === pending.previousDate) {
+      return;
+    }
+    pendingRenameDateRef.current = null;
+    if (dateDisplay !== null) {
+      raiseDateResolvedToast(task.id, dateDisplay.text, pending.previousDate);
+    }
+  }, [task.date, task.id]);
 
   function startEditing(field: "title" | "description") {
     setTitleDraft(task.content);
@@ -423,6 +758,134 @@ function TaskDetailBody({
   function cancelEditing() {
     setEditing(false);
   }
+
+  // DET-15: "is there anything Cancel/Escape/an outside click would
+  // actually throw away" — the identical question `saveEditing` below
+  // already answers per-field (would it call `onRename`/
+  // `onSetDescription` at all), asked once, up front, so
+  // `requestCancelEditing` never has to guess at a looser definition of
+  // "changed" than the one that actually governs a write. Trims here too
+  // for the identical reason `saveEditing` does: a reader who types a
+  // trailing space and then backs it out again has not, by this file's
+  // own convention, changed anything worth confirming.
+  function hasUnsavedChanges() {
+    const trimmedTitle = titleDraft.trim();
+    const titleChanged = trimmedTitle !== "" && trimmedTitle !== task.content;
+    const trimmedDescription = descriptionDraft.trim();
+    const nextDescription = trimmedDescription === "" ? null : trimmedDescription;
+    const descriptionChanged = nextDescription !== task.description;
+    return titleChanged || descriptionChanged;
+  }
+
+  // DET-15: the one door Cancel, Escape and an outside click all go
+  // through now, replacing the direct `cancelEditing` call each of them
+  // used to make — live Todoist confirms first ("Discard unsaved
+  // changes?" / "Your unsaved changes will be discarded.",
+  // `parity-ledger.md`'s DET-15 row); meologue used to discard
+  // immediately. A no-op edit (nothing typed, or typed and then undone)
+  // still cancels straight through, matching Todoist's own behaviour —
+  // the confirm is for data loss specifically, not for touching Cancel
+  // at all.
+  // `fromOutsideClick` defaults to `false`: the Cancel button and both
+  // editors' own `onCancel` (their Escape handling — this file's own
+  // header comment on `CommentRow` above has the fuller account of why
+  // Escape inside an editor reaches its caller directly rather than
+  // through Radix) call this with no argument, and only ever meant "stop
+  // editing," never "leave the task." Only `dismissGuardRef` below ever
+  // passes `true`, and only for an actual outside click.
+  function requestCancelEditing(fromOutsideClick = false) {
+    if (hasUnsavedChanges()) {
+      cancelTriggeredByOutsideClickRef.current = fromOutsideClick;
+      setDiscardConfirmOpen(true);
+      return;
+    }
+    cancelEditing();
+  }
+
+  // DET-15 round 3, gap 2: remembers whichever editor (title or
+  // description) last held focus inside this form, so the discard
+  // confirmation's own `onCloseAutoFocus` below has somewhere real to
+  // send focus back to when it closes without a Discard. A `focusin`
+  // listener on the edit column rather than on each editor directly:
+  // this form's `editing` branch mounts/unmounts either editor freely
+  // (DET-09's shared Cancel/Save pair), and one listener on their common
+  // ancestor outlives both remounts without needing to be re-attached
+  // each time `focusField` changes. `focusin` (not `focus`, which
+  // doesn't bubble) is why this can live on the column at all rather
+  // than needing a ref on each editor's own host node.
+  //
+  // The real `TaskTitleEditor`/`TaskDescriptionEditor` are both
+  // ProseMirror instances whose focusable root is `[contenteditable=
+  // true]` (`task-title-editor.tsx`'s own header comment has the DOM
+  // shape); this file's own test doubles for both
+  // (`task-detail-view.test.tsx`'s `StubTaskTitleEditor`/
+  // `StubTaskDescriptionEditor`) stand in with a plain `<input>`/
+  // `<textarea>` instead, deliberately — mounting a real ProseMirror
+  // `EditorView` needs a real browser, the identical reason those
+  // doubles exist at all. Matching on tag name alongside the
+  // `contenteditable` attribute is what lets the identical listener
+  // track focus correctly against both, with no special-casing for
+  // which one is mounted.
+  useEffect(() => {
+    const column = editColumnRef.current;
+    if (column === null) {
+      return;
+    }
+    function handleFocusIn(event: FocusEvent) {
+      const target = event.target;
+      if (!(target instanceof HTMLElement)) {
+        return;
+      }
+      const isEditableSurface =
+        target.getAttribute("contenteditable") === "true" ||
+        target.tagName === "INPUT" ||
+        target.tagName === "TEXTAREA";
+      if (isEditableSurface) {
+        lastFocusedEditorRef.current = target;
+      }
+    }
+    column.addEventListener("focusin", handleFocusIn);
+    return () => column.removeEventListener("focusin", handleFocusIn);
+  }, []);
+
+  // DET-15 (reworked after review): Escape and an outside click both used
+  // to reach Radix's own Dialog Escape/outside-dismiss handling and close
+  // the WHOLE view — confirmed directly, before any guard existed here,
+  // by asserting `onClose` and watching it fire on an Escape aimed at the
+  // title editor. A first version of this guard fixed that with a
+  // `window`-capture `keydown`/`pointerdown` listener (`CommentRow`'s own
+  // established pattern above, for the identical reason its own header
+  // comment gives). That approach doesn't compose: `window` capture runs
+  // before ANY layer gets the event, so it also ate Escape meant for
+  // `discardConfirmOpen`'s own `ConfirmDialog` once THAT was open (a
+  // keyboard trap — Escape just re-opened the same confirm instead of
+  // dismissing it), swallowed every pointerdown on that dialog's own
+  // Cancel/Discard buttons (mis-read as "outside the panel"), and would
+  // have done the identical thing to any other portaled layer opened
+  // while editing (a popover, a menu).
+  //
+  // Radix already solves exactly this: `DismissableLayer` (what
+  // `Dialog.Content` is built on, both here and in `ConfirmDialog`) only
+  // wires its OWN `document`-capture Escape listener while it is the
+  // topmost layer, and gates its own outside-pointerdown detection on the
+  // same stacking — so a nested modal layer on top correctly gets first
+  // (and, for Escape, exclusive) claim, with no coordination this file
+  // has to write by hand. `dismissGuardRef` (a callback `TaskDetailView`
+  // holds and calls from `Content`'s own composable `onEscapeKeyDown`/
+  // `onPointerDownOutside` props, `TaskDetailView`'s own doc comment on
+  // the prop has the rest) is what lets THIS layer's dismissal ask this
+  // form first, without this file reaching past Radix's layer stack the
+  // way the `window` listener did. Assigned plainly during render (the
+  // identical `xRef.current = ...` pattern `titleRecognitionOptionsRef`
+  // above already uses), not in an effect: the value has to be current by
+  // the time an interaction fires, and a plain assignment already is.
+  dismissGuardRef.current = (source) => {
+    if (!editing) {
+      return false;
+    }
+    requestCancelEditing(source === "outside");
+    return true;
+  };
 
   // The one door both the title's own `onCommit` (Enter, or the Save
   // button below) and the description's own Save button go through —
@@ -437,6 +900,11 @@ function TaskDetailBody({
     setEditing(false);
     const trimmedTitle = (titleText ?? titleDraft).trim();
     if (trimmedTitle !== "" && trimmedTitle !== task.content) {
+      // DET-16: snapshot taken before `onRename` fires — see
+      // `pendingRenameDateRef`'s own doc comment above for why this is
+      // the only hook this view has into whether the rename it just sent
+      // upstream turns out to resolve a Date.
+      pendingRenameDateRef.current = { taskId: task.id, previousDate: task.date };
       onRename(trimmedTitle);
     }
     // Trims only — the identical "never reflows a body, only trims it"
@@ -504,7 +972,44 @@ function TaskDetailBody({
       </header>
 
       <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto p-3 sm:flex-row">
-        <div className="flex min-w-0 flex-1 flex-col gap-3">
+        {/* DET-10: this container's own `gap-3` spacing is real empty
+            space between the title row and the Description block below —
+            belonging to neither child (live audit's own
+            `flow5-DET-10-meologue.json`, `commonContainer`, named this
+            exact element by className). `event.target ===
+            event.currentTarget` is what tells a genuine click on that
+            gap apart from a click on the title button, the Description's
+            own pill/block, or either editor, all of which bubble THROUGH
+            this element rather than starting on it — so this never fires
+            for the two deliberate entry points those elements' own
+            `onClick`s already handle. Live Todoist's own finding was
+            "focuses the dialog," not "does nothing": clicking here while
+            `editing` moves focus to `contentRef` (`TaskDetailView`'s own
+            Content node, already `tabIndex={-1}` for Radix's identical
+            `onOpenAutoFocus` reason above `TaskDetailView`), which blurs
+            whichever editor still held it from whichever entry point
+            opened this form — matching the reference rather than leaving
+            stale focus sitting in a field the reader didn't click.
+
+            Pointer-only, deliberately: there is no keyboard equivalent of
+            "click the empty gap between two fields" for this to pair
+            with (matching `entry-row.tsx`'s own identical reasoning for
+            its pointer-only `onContextMenu`), and giving this div an
+            interactive role would misrepresent it as a control a reader
+            might mean to activate rather than the plain layout container
+            it is. */}
+        {/* biome-ignore lint/a11y/noStaticElementInteractions: pointer-only progressive enhancement on a plain layout container — see the comment above. */}
+        {/* biome-ignore lint/a11y/useKeyWithClickEvents: no keyboard equivalent of clicking empty space exists to pair this with — see the comment above. */}
+        <div
+          data-testid="task-detail-edit-column"
+          ref={editColumnRef}
+          onClick={(event) => {
+            if (editing && event.target === event.currentTarget) {
+              contentRef.current?.focus();
+            }
+          }}
+          className="flex min-w-0 flex-1 flex-col gap-3"
+        >
           {/* The title (issue #225's display/edit split — `editingTitle`'s
               own doc comment above). Editable regardless of completion
               state: nothing about this view's own scope refuses a rename
@@ -562,7 +1067,7 @@ function TaskDetailBody({
                       value={task.content}
                       onChange={setTitleDraft}
                       onCommit={saveEditing}
-                      onCancel={cancelEditing}
+                      onCancel={requestCancelEditing}
                       autoFocus={focusField === "title"}
                       // DET-09: blur no longer means "done" — moving focus
                       // from the title into the description (still inside
@@ -627,7 +1132,7 @@ function TaskDetailBody({
                 <LazyTaskDescriptionEditor
                   value={task.description ?? ""}
                   onChange={setDescriptionDraft}
-                  onCancel={cancelEditing}
+                  onCancel={requestCancelEditing}
                   autoFocus={focusField === "description"}
                   className="text-sm"
                 />
@@ -635,7 +1140,16 @@ function TaskDetailBody({
               <div className="flex justify-end gap-2">
                 <button
                   type="button"
-                  onClick={cancelEditing}
+                  // A wrapper, not `requestCancelEditing` passed
+                  // directly: React hands an `onClick` handler the
+                  // native (truthy) MouseEvent as its first argument,
+                  // which — passed straight through as this function's
+                  // now-optional `fromOutsideClick` parameter — would
+                  // read as "yes, this was an outside click" on every
+                  // ordinary Cancel-button press (DET-15 round 3's own
+                  // regression, caught by this file's own "clicking
+                  // Discard...without closing the whole view" test).
+                  onClick={() => requestCancelEditing()}
                   className="rounded-md border border-border px-2.5 py-1 text-sm transition hover:bg-muted"
                 >
                   Cancel
@@ -760,6 +1274,75 @@ function TaskDetailBody({
             <CommentComposer onSubmit={onAddComment} />
           </div>
 
+          {/* DET-15: Cancel/Escape/an outside click confirm first when the
+              title/description form holds unsaved changes, verbatim
+              wording matching live Todoist's own (`parity-ledger.md`'s
+              DET-15 row) — meologue used to discard immediately. Rendered
+              unconditionally (not nested inside the `editing` branch
+              above) for the identical reason the Comment-delete
+              `ConfirmDialog` right below is: `discardConfirmOpen` alone
+              controls whether it's open, so a Discard click that flips
+              `editing` back to `false` in the same tick doesn't also
+              unmount this dialog out from under its own closing
+              animation. */}
+          <ConfirmDialog
+            open={discardConfirmOpen}
+            onOpenChange={setDiscardConfirmOpen}
+            title="Discard unsaved changes?"
+            description="Your unsaved changes will be discarded."
+            confirmLabel="Discard"
+            // DET-15 round 3: matches live Todoist's own
+            // `attempt3_clickOutsideModal` finding
+            // (`flow11-R3-DET-15-both.json`) — Discard after an
+            // outside-click trigger completes that click's own original
+            // intent (leave the task) by closing the whole view too, on
+            // top of ending the edit every trigger already ends. Cancel
+            // and Escape leave `cancelTriggeredByOutsideClickRef` `false`
+            // (its own default, and `requestCancelEditing`'s), so Discard
+            // there stays exactly what it already was: end editing, keep
+            // the view open.
+            onConfirm={() => {
+              discardConfirmedRef.current = true;
+              cancelEditing();
+              if (cancelTriggeredByOutsideClickRef.current) {
+                onClose();
+              }
+            }}
+            // DET-15 round 3, gap 2: only reached when this confirmation
+            // closes WITHOUT Discard (Escape, or its own Cancel button —
+            // `discardConfirmedRef` is what tells the two apart, set only
+            // by `onConfirm` just above). Radix's own default here would
+            // restore focus to whatever triggered this dialog's open —
+            // nothing, since `requestCancelEditing` opens it
+            // programmatically — which is why live meologue previously
+            // dropped focus to `document.body`
+            // (`flow11-R3-DET-15-both.json`'s `escapeInsideConfirmation`).
+            // `preventDefault()` takes that default away in favour of the
+            // one place a reader dismissing this without discarding
+            // actually came from: whichever editor `lastFocusedEditorRef`
+            // last saw. A Discard close skips this entirely — editing is
+            // ending (or the whole view is), so there is no editor left
+            // to send focus back to.
+            // Radix defers this dispatch a tick (`FocusScope`'s own
+            // cleanup effect wraps it in `setTimeout(..., 0)`, so the
+            // container is fully gone from the DOM before anything tries
+            // to focus relative to it) — a caller (this file's own tests
+            // included) needs to let that tick pass before checking where
+            // focus landed, the identical `setTimeout(resolve, 0)` wait
+            // this file's own `clickOutside` test helper already uses for
+            // Radix's own outside-pointerdown listener, for the identical
+            // reason: a real async gap inside Radix, not a jsdom quirk to
+            // work around.
+            onCloseAutoFocus={(event) => {
+              if (discardConfirmedRef.current) {
+                discardConfirmedRef.current = false;
+                return;
+              }
+              event.preventDefault();
+              lastFocusedEditorRef.current?.focus();
+            }}
+          />
+
           {/* CMT-03: deleting a Comment confirms first, verbatim wording
               matching Todoist's own (`lifecycle.md` §2). */}
           <ConfirmDialog
@@ -784,22 +1367,22 @@ function TaskDetailBody({
               own header comment). Renders nothing when there's nothing
               to show yet, the same "don't show a section with nothing in
               it" restraint CompletedTasks itself takes. */}
-          {events.length > 0 && (
+          {renderableEvents.length > 0 && (
             <details className="rounded-lg border border-border">
               <summary className="cursor-pointer select-none px-3 py-2 text-muted-foreground text-sm">
-                Activity ({events.length})
+                Activity ({renderableEvents.length})
               </summary>
               <div className="border-t border-border">
                 <ActivityFeed
-                  events={events}
-                  // Every Event this view reads is already scoped to
-                  // `task.id` (`listEventsByTask`, entry-store-layout.tsx),
-                  // so its own subject is always suppressed below and
-                  // `resolveTaskSubject` never actually runs against this
-                  // list — see `format-event.ts`'s own `describeEventLine`.
-                  tasks={[]}
+                  events={renderableEvents}
+                  // CMT-06: no `currentTaskId`. Flow 5 read Todoist's own
+                  // per-task activity and it names the task in every line
+                  // ("You completed {task}", "You deleted a comment from
+                  // {task}"), even though every line is about that task, so
+                  // suppressing the subject here was the divergence itself.
+                  // `tasks` holds this task so its subject resolves.
+                  tasks={[task]}
                   projects={projects}
-                  currentTaskId={task.id}
                 />
               </div>
             </details>
@@ -846,20 +1429,59 @@ function TaskDetailBody({
               ))}
             </select>
           )}
-          {task.date === null || dateDisplay === null ? (
-            <AttributePill label="Date" onClick={onOpenSchedule} />
-          ) : (
-            <AttributeRow
-              icon={null}
-              label="Date"
-              // Issue #224: the identical tone `task-row.tsx`'s own badge
-              // reads through `formatTaskDate` — `completed`/`recurring`
-              // passed the same way, so a Task overdue in the row is
-              // never merely upcoming in its own detail view.
-              value={<span style={{ color: dateDisplay.colour }}>{dateDisplay.text}</span>}
-              onClick={onOpenSchedule}
-            />
-          )}
+          {/*
+            Issue #253: Date is the one attribute here that no longer
+            opens `onOpenSchedule`'s shared sheet — it anchors this view's
+            own `TaskSchedulePopover` instance directly under the pill/row
+            below instead, the identical per-site instance
+            `task-row-content.tsx`'s own hover Date button opens. Both
+            `AttributePill` and `AttributeRow` forward refs (their own doc
+            comments above) specifically so this works as a Radix `asChild`
+            trigger.
+          */}
+          <TaskSchedulePopover
+            open={dateScheduleOpen}
+            onOpenChange={setDateScheduleOpen}
+            dateDay={dateDay}
+            dateTime={dateTime}
+            // DET-16: each of these three is a reader-driven, explicit
+            // Date edit — clearing `pendingRenameDateRef` first means a
+            // rename that didn't itself touch the Date can never have a
+            // LATER, unrelated edit here misread as its own effect (that
+            // ref's own doc comment above has the full reasoning).
+            onSetTime={(time) => {
+              pendingRenameDateRef.current = null;
+              setScheduleTime(time);
+            }}
+            dateString={task.dateString}
+            datesWithTasks={datesWithTasks}
+            onPickDay={(day) => {
+              pendingRenameDateRef.current = null;
+              setScheduleDay(day);
+              if (task.dateString !== null) {
+                onSetDateString(task.id, null, new Date().toISOString());
+              }
+            }}
+            onPickRecurrence={(dateString) => {
+              pendingRenameDateRef.current = null;
+              onSetDateString(task.id, dateString, new Date().toISOString());
+            }}
+            trigger={
+              task.date === null || dateDisplay === null ? (
+                <AttributePill label="Date" />
+              ) : (
+                <AttributeRow
+                  icon={null}
+                  label="Date"
+                  // Issue #224: the identical tone `task-row.tsx`'s own badge
+                  // reads through `formatTaskDate` — `completed`/`recurring`
+                  // passed the same way, so a Task overdue in the row is
+                  // never merely upcoming in its own detail view.
+                  value={<span style={{ color: dateDisplay.colour }}>{dateDisplay.text}</span>}
+                />
+              )
+            }
+          />
           {task.deadline === null ? (
             <AttributePill label="Deadline" onClick={onOpenSchedule} />
           ) : (
@@ -947,6 +1569,16 @@ export function TaskDetailView(props: TaskDetailViewProps) {
   // element through it needs a cast, and a cast here would be asserting the
   // one fact this file can simply hold instead.
   const contentRef = useRef<HTMLDivElement>(null);
+  // DET-15: `TaskDetailBody`'s own dismissal claim — assigned there, on
+  // every render, to a closure that opens the discard-confirm (or cancels
+  // outright, for a no-op edit) and returns `true` whenever the shared
+  // title/description form is open. `null` is a real, meaningful default
+  // (nothing has claimed a dismissal yet, e.g. before `TaskDetailBody`'s
+  // own first render, or once `editing` there is `false`), not a stand-in
+  // for "not wired up" — `onEscapeKeyDown`/`onPointerDownOutside` below
+  // both treat a missing or false-returning guard identically: let Radix
+  // dismiss as it always has.
+  const dismissGuardRef = useRef<((source: "escape" | "outside") => boolean) | null>(null);
 
   function handleOpenChange(open: boolean) {
     if (!open) {
@@ -1002,6 +1634,40 @@ export function TaskDetailView(props: TaskDetailViewProps) {
             event.preventDefault();
             contentRef.current?.focus();
           }}
+          // DET-15: gives `TaskDetailBody`'s own edit form first claim on
+          // Escape and an outside click, ahead of this Dialog's own
+          // default (close the whole view). Composable, unlike Radix's
+          // own `AlertDialog.Content` (this file's sibling
+          // `alert-dialog.tsx` has the full contrast) — `preventDefault()`
+          // here is read by the identical `DismissableLayer` that would
+          // otherwise call `onDismiss`, so returning `true` from the ref
+          // genuinely stops the close rather than merely reacting after
+          // the fact. Both consult the SAME guard: whatever counts as
+          // "this form wants to handle it" is one decision, not two that
+          // could disagree.
+          //
+          // This is layer-stack-aware for free, which a `window`-level
+          // listener (this file's own first attempt, reverted) was not:
+          // `DismissableLayer` only wires its `document`-capture Escape
+          // listener while a layer is the topmost one, so once
+          // `TaskDetailBody`'s own `ConfirmDialog` (itself a
+          // `DismissableLayer`) opens on top, THIS Content's own listener
+          // goes quiet and stops calling `onEscapeKeyDown` at all — the
+          // confirm dialog gets Escape, not this guard, with nothing
+          // written here to make that true. The identical stacking is
+          // what keeps a pointerdown on the confirm's own Cancel/Discard
+          // buttons from ever reaching this Content's outside-pointerdown
+          // detection as "outside" while it's open.
+          onEscapeKeyDown={(event) => {
+            if (dismissGuardRef.current?.("escape")) {
+              event.preventDefault();
+            }
+          }}
+          onPointerDownOutside={(event) => {
+            if (dismissGuardRef.current?.("outside")) {
+              event.preventDefault();
+            }
+          }}
           className={cn(
             // No border, and Todoist's own measured shadow rather than
             // shadow-lg (DET-14): the modal was measured directly at
@@ -1014,13 +1680,30 @@ export function TaskDetailView(props: TaskDetailViewProps) {
               ? // DET-14: measured directly against the live Todoist modal —
                 // radius 10px, not Tailwind's own 14px `rounded-xl` this
                 // used to carry.
-                // 54rem x 48.25rem is Todoist's own measured 864 x 772 at
-                // desktop width (DET-14), against the 40rem x 32rem this
-                // carried before — a third narrower and a third shorter,
-                // which is what made the two columns feel cramped where
-                // Todoist's breathe. Both stay clamped so a smaller window
-                // still gets a modal that fits inside it.
-                "top-1/2 left-1/2 h-[min(48.25rem,85vh)] w-[min(54rem,calc(100%-2rem))] -translate-x-1/2 -translate-y-1/2 rounded-lg data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95"
+                // 54rem wide is Todoist's own measured 864px at desktop
+                // width (DET-14), against the 40rem this carried before —
+                // a third narrower, which is what made the two columns
+                // feel cramped where Todoist's breathe. Width stays
+                // clamped so a smaller window still gets a modal that
+                // fits inside it.
+                //
+                // Height is `100vh - 8rem` (128px), not a flat fraction of
+                // the viewport: re-measured live at the same 1470×836
+                // viewport (flow 5, parity-ledger.md's DET-14 row),
+                // Todoist read 864×708 twice with no animation running,
+                // against this file's own `min(48.25rem,85vh)`, which
+                // resolved to 710.594 there once meologue's own opening
+                // animation was driven to its resting frame
+                // (`Animation.finish()`) rather than read mid-transform.
+                // 836 − 128 = 708 is an exact match; 85vh never was. The
+                // 48.25rem (772px) cap is `100vh − 128px` at a 900px-tall
+                // viewport, matching the corpus's older 864×772 reading
+                // (flow 4) — but nobody has actually measured a live
+                // Todoist modal at a viewport taller than 900px, so this
+                // formula holding as the cap above that height is this
+                // file's own assumption, consistent with both readings
+                // rather than a third one.
+                "top-1/2 left-1/2 h-[min(48.25rem,calc(100vh-8rem))] w-[min(54rem,calc(100%-2rem))] -translate-x-1/2 -translate-y-1/2 rounded-lg data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95"
               : "inset-x-0 bottom-0 max-h-[85vh] rounded-t-xl data-open:animate-in data-open:slide-in-from-bottom data-closed:animate-out data-closed:slide-out-to-bottom",
           )}
           style={wide ? undefined : { paddingBottom: "max(0.5rem, env(safe-area-inset-bottom))" }}
@@ -1037,7 +1720,12 @@ export function TaskDetailView(props: TaskDetailViewProps) {
               className="mx-auto mt-2 h-1 w-10 shrink-0 rounded-full bg-muted-foreground/30"
             />
           )}
-          <TaskDetailBody {...props} wide={wide} />
+          <TaskDetailBody
+            {...props}
+            wide={wide}
+            contentRef={contentRef}
+            dismissGuardRef={dismissGuardRef}
+          />
         </DialogPrimitive.Content>
       </DialogPrimitive.Portal>
     </DialogPrimitive.Root>

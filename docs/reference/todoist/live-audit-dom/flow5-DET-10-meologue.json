@@ -1,0 +1,45 @@
+{
+  "ok": true,
+  "titleRect": {
+    "top": 123.703125,
+    "left": 339,
+    "width": 576,
+    "height": 24,
+    "bottom": 147.703125
+  },
+  "descRect": {
+    "top": 159.703125,
+    "left": 315,
+    "width": 600,
+    "height": 40,
+    "bottom": 199.703125
+  },
+  "gapPoint": {
+    "x": 627,
+    "y": 153.703125
+  },
+  "elementAtPointBeforeClick": {
+    "tag": "DIV",
+    "role": null,
+    "ariaLabel": null,
+    "className": "flex min-w-0 flex-1 flex-col gap-3",
+    "id": ""
+  },
+  "commonContainer": {
+    "tag": "DIV",
+    "role": null,
+    "ariaLabel": null,
+    "className": "flex min-w-0 flex-1 flex-col gap-3",
+    "id": ""
+  },
+  "focusAfterClick": {
+    "tag": "DIV",
+    "role": "textbox",
+    "ariaLabel": "Task name",
+    "className": "ProseMirror tiptap font-medium text-base ProseMirror-focused",
+    "id": ""
+  },
+  "activeElementTextSnippet": "ZZ probe comments",
+  "activeElementIsTitleEditor": true,
+  "activeElementIsDescEditor": false
+}

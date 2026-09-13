@@ -45,6 +45,16 @@ export interface LabelsViewProps {
   onRemove: (id: string) => void;
 }
 
+// Defect 32 (docs/reference/todoist/live-audit-2026-09-11.md): Todoist's
+// Add/Edit label dialogs cap the Name field at 60 characters and show a
+// live `n/60` counter. Neither existed anywhere here before this fix —
+// including on Project's own name field, despite the ledger citing an
+// `8/120` counter there; that reading turns out to be Todoist's Edit
+// Project dialog (parity-ledger.md's STR-02), not meologue's, which has
+// no counter or cap of its own. So there is no in-repo pattern to reuse;
+// this is the first one.
+const LABEL_NAME_MAX = 60;
+
 export function LabelsView({ labels, onAdd, onRename, onSetColour, onRemove }: LabelsViewProps) {
   const [name, setName] = useState("");
   const [colour, setColour] = useState(LABEL_COLOURS[0]?.hex ?? "#808080");
@@ -53,6 +63,11 @@ export function LabelsView({ labels, onAdd, onRename, onSetColour, onRemove }: L
   // Section delete (that component's own doc comment on why the target
   // is captured, not just a boolean).
   const [confirmingDelete, setConfirmingDelete] = useState<Label | null>(null);
+  // Live length for each row's (uncontrolled, `defaultValue`-driven) name
+  // field, so its `n/60` counter can update on every keystroke without
+  // promoting the whole row to a controlled input. Falls back to the
+  // Label's own committed name whenever a row hasn't been touched yet.
+  const [editLengths, setEditLengths] = useState<Record<string, number>>({});
 
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -82,8 +97,12 @@ export function LabelsView({ labels, onAdd, onRename, onSetColour, onRemove }: L
           aria-label="New Label's name"
           value={name}
           onChange={(event) => setName(event.target.value)}
+          maxLength={LABEL_NAME_MAX}
           className="flex-1"
         />
+        <span className="shrink-0 self-center text-muted-foreground text-xs">
+          {name.length}/{LABEL_NAME_MAX}
+        </span>
         <Button type="submit" disabled={name.trim() === ""}>
           Add
         </Button>
@@ -116,6 +135,10 @@ export function LabelsView({ labels, onAdd, onRename, onSetColour, onRemove }: L
                 type="text"
                 aria-label="Label name"
                 defaultValue={label.name}
+                maxLength={LABEL_NAME_MAX}
+                onChange={(event) =>
+                  setEditLengths((prev) => ({ ...prev, [label.id]: event.target.value.length }))
+                }
                 onBlur={(event) => {
                   const trimmed = event.target.value.trim();
                   if (trimmed !== "" && trimmed !== label.name) {
@@ -124,6 +147,9 @@ export function LabelsView({ labels, onAdd, onRename, onSetColour, onRemove }: L
                 }}
                 className="min-w-0 flex-1 rounded-md border border-transparent bg-transparent px-1.5 py-1 text-sm hover:border-border focus:border-border"
               />
+              <span className="shrink-0 text-muted-foreground text-xs">
+                {editLengths[label.id] ?? label.name.length}/{LABEL_NAME_MAX}
+              </span>
               <button
                 type="button"
                 aria-label={`Delete Label "${label.name}"`}
@@ -147,7 +173,7 @@ export function LabelsView({ labels, onAdd, onRename, onSetColour, onRemove }: L
         }}
         title="Delete label?"
         description={
-          confirmingDelete && <>The "{confirmingDelete.name}" label will be permanently deleted.</>
+          confirmingDelete && <>The {confirmingDelete.name} label will be permanently deleted.</>
         }
         confirmLabel="Delete"
         onConfirm={() => {

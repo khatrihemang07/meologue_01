@@ -1,0 +1,12 @@
+{
+  "ok": true,
+  "ids": {
+    "ZZ probe one": "6167ab88-01d4-44d7-a1d3-1ed07bbc3036",
+    "ZZ probe two": "b4ca268e-614f-49c3-9d4b-5a266948f80d",
+    "ZZ probe three": "655c7e8b-bafe-4efa-9fd4-25f6e1955ab6",
+    "ZZ probe four": "8cb1b9bc-8643-4e1c-ab33-126f64cf1249",
+    "ZZ probe completed": "1cbd2870-089b-4ab5-83f7-c6c68649c18c"
+  },
+  "deviceId": "01a09274-c0d7-74e0-b105-ee91dc37d230",
+  "ready": true
+}

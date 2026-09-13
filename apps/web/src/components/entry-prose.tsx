@@ -33,10 +33,15 @@
  * longer be a `<p>` itself — a `<ul>` cannot validly nest inside one — which
  * is why both callers moved to a `<div>` alongside this ticket.
  */
-import type { ReactNode } from "react";
+import { Fragment, type ReactNode } from "react";
 import { type ReferenceRenderers, renderNodes } from "@/components/inline-prose";
 import type { EntryBlockNode, EntryListItem } from "@/lib/inline-markdown";
-import { entryBlocksToText, parseEntryMarkdown, referencedTaskOf } from "@/lib/inline-markdown";
+import {
+  entryBlocksToText,
+  parseCommentMarkdown,
+  parseEntryMarkdown,
+  referencedTaskOf,
+} from "@/lib/inline-markdown";
 import { cn } from "@/lib/utils";
 
 /**
@@ -139,6 +144,34 @@ export type TaskReferenceRenderer = (props: TaskReferenceProps, key: string) => 
 const BLOCK_SPACING = "mt-0";
 
 /**
+ * CMT-08's heading form — "comment" mode only (`entryProse`'s own `mode`
+ * param, below); `parseEntryMarkdown` never produces a `"heading"` block,
+ * so this table is dead weight for every other caller. No existing prose
+ * style covers a heading anywhere in this app (grep of index.css turned up
+ * nothing — this app has no `@tailwindcss/typography` and no `.prose`
+ * rule of its own), so these are plain Tailwind utilities, the same way
+ * every other size/weight choice in this file already is
+ * (`bulletListStyleClass`, above). Only level 1 is exercised live (CMT-08's
+ * own reading was `# heading`); levels 2-6 scale down from it rather than
+ * inventing a look nothing observed asks for.
+ */
+const HEADING_CLASS: Record<number, string> = {
+  1: "text-lg font-semibold",
+  2: "text-base font-semibold",
+  3: "text-sm font-semibold",
+  4: "text-sm font-semibold",
+  5: "text-sm font-semibold",
+  6: "text-sm font-semibold",
+};
+
+const HEADING_TAG = ["h1", "h2", "h3", "h4", "h5", "h6"] as const;
+
+function headingTag(level: number): (typeof HEADING_TAG)[number] {
+  const index = Math.min(Math.max(level, 1), HEADING_TAG.length) - 1;
+  return HEADING_TAG[index] ?? "h6";
+}
+
+/**
  * The disc → circle → square cascade for a NESTED bullet list, issue #162
  * — the read-side twin of index.css's `.ProseMirror ul` / `:is(ul, ol) ul`
  * / `:is(ul, ol) :is(ul, ol) ul` cascade (that file's own comment, above
@@ -200,6 +233,30 @@ function bulletListStyleClass(depth: number): string {
  * the counter for whatever list-of-either-kind nests INSIDE it to see the
  * right depth, exactly what index.css's `:is(ul, ol)` selectors count on
  * the CSS side.
+ *
+ * `mode` (CMT-08) picks two things `renderNodes` needs and cannot infer
+ * from an `InlineNode` on its own — `strikeTag` (`<del>` in "comment" mode,
+ * matching Todoist; `<s>` everywhere else, unchanged) and `breakNewlines`
+ * (a bare `\n` a "comment"-mode "prose" block still carries — see
+ * `pushProseRuns`'s own comment, inline-markdown.ts, for why it is still
+ * there — becomes a real `<br>` instead of relying on an ancestor's
+ * `white-space: pre-wrap`). Both stay at their entry-mode default the
+ * instant `mode` is `"entry"`, which is every existing caller of this
+ * function before CMT-08 and every recursive call this function itself
+ * makes with an unchanged `mode`.
+ *
+ * `suppressPara` (CMT-08) is CommonMark 5.3's own "a tight list's items
+ * render their text directly inside `<li>`, with no wrapping `<p>`" —
+ * `true` only for the "prose" blocks directly inside a "comment"-mode
+ * tight list's own item content (`renderListItem`'s own call into this
+ * function, below, is the only place that ever computes it as `true`);
+ * every other call — the top-level `entryProse` call, a blockquote's own
+ * content, a NESTED list's own items (which get a freshly recomputed value
+ * from THEIR OWN `tight` flag, not this one) — passes `false`, so a
+ * suppressed wrapper never leaks past the one container it was computed
+ * for. Entry mode never sets this at all (`EntryBlockNode`'s own comment on
+ * why `tight` is `undefined` there), so this parameter has no effect on it
+ * regardless of whether it is passed.
  */
 function renderBlocks(
   blocks: readonly EntryBlockNode[],
@@ -208,11 +265,17 @@ function renderBlocks(
   keyPrefix: string,
   renderTaskReference: TaskReferenceRenderer,
   depth: number,
+  mode: EntryProseMode,
+  suppressPara = false,
 ): ReactNode[] {
+  const inlineOptions = {
+    strikeTag: mode === "comment" ? ("del" as const) : ("s" as const),
+    breakNewlines: mode === "comment",
+  };
   return blocks.map((block, index) => {
     const key = `${keyPrefix}${index}`;
     switch (block.kind) {
-      case "prose":
+      case "prose": {
         // No `whitespace-pre-wrap` of its own (ADR 0069's prefactor) — every
         // caller of `entryProse` wraps it in an element that already sets
         // that (`EntryBody`, entry-row.tsx; the bubble body, entry-bubble.tsx),
@@ -224,13 +287,22 @@ function renderBlocks(
         // inline-markdown.ts) is still a literal `\n` character sitting
         // inside this `<p>`'s own text, and multiple consecutive spaces are
         // still exactly what the author typed.
+        const inline = renderNodes(block.children, query, refs, `${key}-`, inlineOptions);
+        if (suppressPara) {
+          // CMT-08 — a tight list item's own paragraph, unwrapped. `Fragment`
+          // rather than an array so `renderBlocks`' own `ReactNode[]` return
+          // type stays uniform across every case.
+          return <Fragment key={key}>{inline}</Fragment>;
+        }
         return (
           <p key={key} className={BLOCK_SPACING}>
-            {renderNodes(block.children, query, refs, `${key}-`)}
+            {inline}
           </p>
         );
+      }
       case "bulletList": {
         const listDepth = depth + 1;
+        const tight = mode === "comment" && block.tight === true;
         return (
           <ul
             key={key}
@@ -244,6 +316,8 @@ function renderBlocks(
                 `${key}-${itemIndex}`,
                 renderTaskReference,
                 listDepth,
+                mode,
+                tight,
               ),
             )}
           </ul>
@@ -251,10 +325,17 @@ function renderBlocks(
       }
       case "orderedList": {
         const listDepth = depth + 1;
+        const tight = mode === "comment" && block.tight === true;
+        // CMT-08: Todoist omits `start` entirely when it's the default 1;
+        // entry mode always renders it, even at 1 (a pinned behaviour —
+        // `entry-prose.test.tsx`'s own "defaults an ordered list's start to
+        // 1" comment — that this must not disturb), so the omission is
+        // scoped to "comment" mode only.
+        const start = mode === "comment" && block.start === 1 ? undefined : block.start;
         return (
           <ol
             key={key}
-            start={block.start}
+            start={start}
             className={cn("list-decimal space-y-0.5 pl-5", BLOCK_SPACING)}
           >
             {block.items.map((item, itemIndex) =>
@@ -265,14 +346,70 @@ function renderBlocks(
                 `${key}-${itemIndex}`,
                 renderTaskReference,
                 listDepth,
+                mode,
+                tight,
               ),
             )}
           </ol>
         );
       }
+      case "heading": {
+        // CMT-08 — only ever reached in "comment" mode (`entryProse`'s own
+        // `mode` param): `parseEntryMarkdown` never produces a `"heading"`
+        // block (ADR 0041, `entryParser`'s own `remove` list), so this
+        // branch is unreachable from any of ADR 0041's original seven prose
+        // surfaces.
+        const Tag = headingTag(block.level);
+        return (
+          <Tag
+            key={key}
+            className={cn(HEADING_CLASS[block.level] ?? HEADING_CLASS[6], BLOCK_SPACING)}
+          >
+            {renderNodes(block.children, query, refs, `${key}-`, inlineOptions)}
+          </Tag>
+        );
+      }
+      case "blockquote":
+        // CMT-08 — same "comment" mode-only reachability as "heading" above.
+        // `suppressPara` always resets to `false` here: a blockquote's own
+        // paragraphs are not part of any enclosing tight list's item
+        // content, so they always get their own `<p>`, matching Todoist's
+        // own `<blockquote><p>quote</p></blockquote>` (CMT-08's own
+        // reading) — a simplification for a quote that is itself a tight
+        // list, which nothing observed live needs.
+        return (
+          <blockquote
+            key={key}
+            className={cn(
+              "border-muted-foreground/40 border-l-2 pl-3 text-muted-foreground",
+              BLOCK_SPACING,
+            )}
+          >
+            {renderBlocks(block.content, query, refs, `${key}-`, renderTaskReference, depth, mode)}
+          </blockquote>
+        );
+      case "codeBlock":
+        // CMT-08 — same "comment" mode-only reachability. `<code>` nested in
+        // `<pre>` is what preserves the block's own line breaks and
+        // whitespace without a second `whitespace-pre-wrap` class — `<pre>`
+        // already sets `white-space: pre` by user-agent default, unlike the
+        // "prose" case above, which relies on an ancestor for it. `block.text`
+        // already carries Todoist's own trailing newline (`fencedCodeBlock`'s
+        // own comment, inline-markdown.ts).
+        return (
+          <pre
+            key={key}
+            className={cn(
+              "overflow-x-auto rounded-md bg-muted p-2 font-mono text-xs",
+              BLOCK_SPACING,
+            )}
+          >
+            <code>{block.text}</code>
+          </pre>
+        );
       default:
-        // Exhaustive over EntryBlockNode's three kinds — `satisfies never`
-        // is what makes a fourth kind a compile error here rather than a
+        // Exhaustive over EntryBlockNode's six kinds — `satisfies never`
+        // is what makes a seventh kind a compile error here rather than a
         // silent fallthrough, and the explicit `return` (rather than
         // relying on the switch being exhaustive) is what the linter wants
         // out of a callback passed to `map`.
@@ -404,6 +541,13 @@ function isMarkerlessParentItem(item: EntryListItem): boolean {
  * ticking it, or opening its Task (ADR 0074) — is entirely
  * `renderTaskReference`'s own business; this file has no Task store to act
  * through (this file's own module comment) for either gesture.
+ *
+ * `mode`/`tight` (CMT-08) are threaded straight through to every
+ * `renderBlocks` call this function makes for the item's OWN content —
+ * `tight` is the enclosing list's own tightness (`renderBlocks`' own
+ * `bulletList`/`orderedList` cases compute it fresh per list, above), never
+ * recomputed here, so a nested list inside this item gets its own fresh
+ * value from ITS tight flag instead of inheriting this one.
  */
 function renderListItem(
   item: EntryListItem,
@@ -412,6 +556,8 @@ function renderListItem(
   key: string,
   renderTaskReference: TaskReferenceRenderer,
   depth: number,
+  mode: EntryProseMode,
+  tight: boolean,
 ): ReactNode {
   if (item.task !== undefined) {
     const reference = referencedTaskOf(item);
@@ -423,6 +569,8 @@ function renderListItem(
         `${key}-`,
         renderTaskReference,
         depth,
+        mode,
+        tight,
       );
       return renderTaskReference(
         {
@@ -437,7 +585,16 @@ function renderListItem(
       );
     }
   }
-  const content = renderBlocks(item.content, query, refs, `${key}-`, renderTaskReference, depth);
+  const content = renderBlocks(
+    item.content,
+    query,
+    refs,
+    `${key}-`,
+    renderTaskReference,
+    depth,
+    mode,
+    tight,
+  );
   if (item.task === undefined) {
     return (
       <li key={key} className={isMarkerlessParentItem(item) ? "list-none" : undefined}>
@@ -462,6 +619,29 @@ function renderListItem(
 }
 
 /**
+ * Which dialect `entryProse` reads `body` through (CMT-02/CMT-08,
+ * `docs/reference/todoist/parity-ledger.md`). "entry" — the default, and
+ * every caller's behaviour before this mode existed — is `parseEntryMarkdown`:
+ * ADR 0041's seven original prose surfaces, where a heading, a blockquote,
+ * a fenced code block and a bare URL all stay exactly the literal
+ * characters typed, by construction. "comment" is `parseCommentMarkdown`
+ * instead, which reverses exactly those four for a Task comment — CMT-02's
+ * own live reading found Todoist renders a comment "like the
+ * description's," and ADR 0041's own reasons for removing them (the Entry
+ * bubble's floated clock, the Digest clamp's line-counting arithmetic,
+ * `CONTEXT.md`'s "an Entry stays untitled and unorganized") are about
+ * those seven surfaces specifically, none of which is a Task comment or
+ * description.
+ *
+ * Only a caller that passes `"comment"` explicitly gets the new rendering
+ * — every existing call (`entry-row.tsx`, `entry-bubble.tsx`, and
+ * `task-detail-view.tsx`'s own two Task-description reads) omits this
+ * parameter entirely and keeps rendering exactly as before this mode was
+ * added.
+ */
+export type EntryProseMode = "entry" | "comment";
+
+/**
  * `renderTaskReference` defaults to `defaultTaskReferenceItem` (cached
  * data, disabled) for every caller that doesn't supply its own — Grounding
  * (`entry-row.tsx`'s `EntryBody`), every test in this file's own suite,
@@ -473,13 +653,19 @@ function renderListItem(
  * reader, so a bare `\n` in `body` renders as a block break and `\`
  * immediately followed by `\n` as a soft break within one, the identical
  * shape `entryMarkdownToDocument` (entry-document.ts, the Composer's own
- * load path) builds a ProseMirror document from.
+ * load path) builds a ProseMirror document from. `mode` (above) switches
+ * this to `parseCommentMarkdown` instead; `renderBlocks` itself needs no
+ * mode of its own to do that safely — the three block kinds only that
+ * parser produces (`"heading"`/`"blockquote"`/`"codeBlock"`) simply never
+ * occur in whatever `parseEntryMarkdown` hands it.
  */
 export function entryProse(
   body: string,
   query = "",
   refs: ReferenceRenderers = {},
   renderTaskReference: TaskReferenceRenderer = defaultTaskReferenceItem,
+  mode: EntryProseMode = "entry",
 ): ReactNode {
-  return <>{renderBlocks(parseEntryMarkdown(body), query, refs, "", renderTaskReference, 0)}</>;
+  const blocks = mode === "comment" ? parseCommentMarkdown(body) : parseEntryMarkdown(body);
+  return <>{renderBlocks(blocks, query, refs, "", renderTaskReference, 0, mode)}</>;
 }

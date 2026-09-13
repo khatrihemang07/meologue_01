@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
   entryBlocksToText,
+  flattenCommentPreview,
   formatTaskReference,
   type InlineNode,
   inlineNodesToText,
+  parseCommentMarkdown,
   parseEntryMarkdown,
   parseInlineMarkdown,
   parseReferenceDate,
@@ -869,5 +871,178 @@ describe("refreshTaskReferenceLabel finds a task reference nested inside a mark"
     expect(refreshTaskReferenceLabel(`**${oldRaw}**`, ENTRY_ID, "buy oat milk")).toBe(
       `**${newRaw}**`,
     );
+  });
+});
+
+// CMT-02/CMT-08 (docs/reference/todoist/parity-ledger.md) — a Task
+// comment's own dialect. `parseCommentMarkdown` reverses exactly the three
+// block removals `parseEntryMarkdown`'s own suite (entry-prose.test.tsx)
+// pins as literal text for an Entry, plus linkifies a bare `http`/`https`
+// URL — `parseEntryMarkdown` on the same inputs is asserted unchanged
+// alongside each one, so a regression in an Entry's own rendering would
+// fail right beside the comment behaviour it must never affect.
+describe("parseCommentMarkdown", () => {
+  it("returns an empty list for an empty body, same contract as parseEntryMarkdown", () => {
+    expect(parseCommentMarkdown("")).toEqual([]);
+  });
+
+  it("renders `# heading` as a heading block, unlike parseEntryMarkdown's literal prose", () => {
+    expect(parseCommentMarkdown("# heading")).toEqual([
+      { kind: "heading", level: 1, children: [{ kind: "text", text: "heading" }] },
+    ]);
+    expect(parseEntryMarkdown("# heading")).toEqual([
+      { kind: "prose", children: [{ kind: "text", text: "# heading" }] },
+    ]);
+  });
+
+  it("renders `> quote` as a blockquote block, unlike parseEntryMarkdown's literal prose", () => {
+    expect(parseCommentMarkdown("> quote")).toEqual([
+      {
+        kind: "blockquote",
+        content: [{ kind: "prose", children: [{ kind: "text", text: "quote" }] }],
+      },
+    ]);
+    expect(parseEntryMarkdown("> quote")).toEqual([
+      { kind: "prose", children: [{ kind: "text", text: "> quote" }] },
+    ]);
+  });
+
+  // Trailing `\n`: Todoist's own rendered `<pre><code>` keeps it (CMT-08's
+  // own reading, `code block\n`) even though `CodeText`'s own span stops
+  // short of it — `fencedCodeBlock`'s own comment (inline-markdown.ts) has
+  // the full account.
+  it("renders a fenced block as a codeBlock, carrying its info string, unlike parseEntryMarkdown's literal prose", () => {
+    expect(parseCommentMarkdown("```js\nconsole.log(1)\n```")).toEqual([
+      { kind: "codeBlock", text: "console.log(1)\n", lang: "js" },
+    ]);
+    expect(parseEntryMarkdown("```js\nconsole.log(1)\n```")).toEqual([
+      { kind: "prose", children: [{ kind: "text", text: "```js" }] },
+      { kind: "prose", children: [{ kind: "text", text: "console.log(1)" }] },
+      { kind: "prose", children: [{ kind: "text", text: "```" }] },
+    ]);
+  });
+
+  it("carries no info string when the fence has none", () => {
+    expect(parseCommentMarkdown("```\nplain\n```")).toEqual([
+      { kind: "codeBlock", text: "plain\n", lang: undefined },
+    ]);
+  });
+
+  it("linkifies a bare https URL, unlike parseEntryMarkdown's literal text", () => {
+    expect(parseCommentMarkdown("see https://example.com now")).toEqual([
+      {
+        kind: "prose",
+        children: [
+          { kind: "text", text: "see " },
+          { kind: "link", url: "https://example.com", text: "https://example.com" },
+          { kind: "text", text: " now" },
+        ],
+      },
+    ]);
+    expect(parseEntryMarkdown("see https://example.com now")).toEqual([
+      { kind: "prose", children: [{ kind: "text", text: "see https://example.com now" }] },
+    ]);
+  });
+
+  it("linkifies a bare http URL too", () => {
+    expect(parseCommentMarkdown("http://example.com")).toEqual([
+      {
+        kind: "prose",
+        children: [{ kind: "link", url: "http://example.com", text: "http://example.com" }],
+      },
+    ]);
+  });
+
+  // CMT-02's own safety requirement: only http/https. `Autolink` also
+  // recognises `www.`/`mailto:`/`xmpp:` — none of which this app asked to
+  // linkify — so those fall back to the plain text they already were.
+  it("does not linkify a www./mailto: URL missing an http(s) scheme", () => {
+    expect(parseCommentMarkdown("www.example.com")).toEqual([
+      { kind: "prose", children: [{ kind: "text", text: "www.example.com" }] },
+    ]);
+    expect(parseCommentMarkdown("mailto:a@example.com")).toEqual([
+      { kind: "prose", children: [{ kind: "text", text: "mailto:a@example.com" }] },
+    ]);
+  });
+
+  // A `javascript:` URL is never even recognised as a `URL` node by
+  // `Autolink` in the first place (verified directly against the parser),
+  // so this is a second, independent gate over that fact — `isSafeAutolinkUrl`
+  // — rather than a test that could only ever pass by relying on the same
+  // upstream behaviour it exists to guard against changing.
+  it("never linkifies a javascript: URL", () => {
+    const body = "javascript:alert(1)";
+    // `Autolink` never recognises this scheme as a `URL` node in the first
+    // place (verified directly against the parser), so this stays
+    // byte-identical to `parseEntryMarkdown`'s own output — no `"link"`
+    // node anywhere in it.
+    expect(parseCommentMarkdown(body)).toEqual(parseEntryMarkdown(body));
+    expect(entryBlocksToText(parseCommentMarkdown(body))).toBe(body);
+  });
+
+  // `tight: true` (CMT-08, comment mode only — `listIsTight`'s own comment,
+  // inline-markdown.ts) — no blank line separates the two items, so Todoist's
+  // own tight-list rendering applies: `entry-prose.tsx` renders each item's
+  // text directly inside its `<li>`, no wrapping `<p>`.
+  it("still renders a real bullet list, the gap CMT-08 says runs the other way (only a numbered list stays literal in Todoist, not this app's)", () => {
+    expect(parseCommentMarkdown("- milk\n- eggs")).toEqual([
+      {
+        kind: "bulletList",
+        tight: true,
+        items: [
+          {
+            task: undefined,
+            content: [{ kind: "prose", children: [{ kind: "text", text: "milk" }] }],
+          },
+          {
+            task: undefined,
+            content: [{ kind: "prose", children: [{ kind: "text", text: "eggs" }] }],
+          },
+        ],
+      },
+    ]);
+  });
+
+  it("still renders a real ordered list — CMT-08 leaves meologue's <ol> alone", () => {
+    const blocks = parseCommentMarkdown("1. first\n2. second");
+    expect(blocks[0]?.kind).toBe("orderedList");
+  });
+
+  it("injects no HTML — an HTML-looking string stays literal text, same as parseEntryMarkdown", () => {
+    const body = "<script>alert(1)</script>";
+    expect(parseCommentMarkdown(body)).toEqual(parseEntryMarkdown(body));
+    expect(entryBlocksToText(parseCommentMarkdown(body))).toBe(body);
+  });
+
+  it("keeps bold/italic/strikethrough/inline-code the same as parseEntryMarkdown", () => {
+    const body = "**bold** *italic* ~~struck~~ `code`";
+    expect(parseCommentMarkdown(body)).toEqual(parseEntryMarkdown(body));
+  });
+});
+
+// CMT-06 (docs/reference/todoist/parity-ledger.md) — Activity's own
+// content-preview chip (`format-event.ts`'s `describeEventLine`) shows a
+// plain-text flattening of a comment's/description's raw markdown, not the
+// source itself. Both cases here are Todoist's own live-measured strings,
+// reproduced exactly — not invented shapes this function merely happens to
+// produce.
+describe("flattenCommentPreview", () => {
+  it("reproduces Todoist's own measured single-line flattening — marks stripped, a bare URL kept", () => {
+    expect(flattenCommentPreview("**bold** and https://example.com")).toBe(
+      "bold and https://example.com",
+    );
+  });
+
+  it("reproduces Todoist's own measured multi-line flattening — fence lines dropped, # and > kept, lines joined with single spaces", () => {
+    const body = "*italic*\n~~strike~~\n# heading\n> quote\n```\ncode block\n```\n1. first";
+    expect(flattenCommentPreview(body)).toBe("italic strike # heading > quote code block 1. first");
+  });
+
+  it("returns an empty string for an empty body", () => {
+    expect(flattenCommentPreview("")).toBe("");
+  });
+
+  it("drops a fence line even when it carries an info string", () => {
+    expect(flattenCommentPreview("```js\nconsole.log(1)\n```")).toBe("console.log(1)");
   });
 });

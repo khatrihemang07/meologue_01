@@ -122,7 +122,7 @@ describe("LabelsView — delete", () => {
 
     await waitFor(() => expect(screen.getByRole("alertdialog")).toBeInTheDocument());
     expect(screen.getByText("Delete label?")).toBeInTheDocument();
-    expect(screen.getByText('The "Work" label will be permanently deleted.')).toBeInTheDocument();
+    expect(screen.getByText("The Work label will be permanently deleted.")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Cancel" })).toBeInTheDocument();
   });
 

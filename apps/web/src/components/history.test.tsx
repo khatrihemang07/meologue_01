@@ -1825,7 +1825,7 @@ describe("History", () => {
       // `date` has already moved on to the 29th (the NEXT occurrence) —
       // showing it on the 28th's own row would contradict the block it
       // sits in. See `TaskScheduleChips`'s own `hideDate` doc comment.
-      expect(screen.queryByText("Aug 29")).not.toBeInTheDocument();
+      expect(screen.queryByText("29 Aug")).not.toBeInTheDocument();
     });
 
     // The exact reproduction from the coordinator's own live-verification
@@ -1866,8 +1866,8 @@ describe("History", () => {
       );
 
       expect(screen.getByText("water the plants")).toBeInTheDocument();
-      expect(screen.queryByText("Sep 5")).not.toBeInTheDocument();
-      expect(screen.queryByText("Sep 4")).not.toBeInTheDocument();
+      expect(screen.queryByText("5 Sep")).not.toBeInTheDocument();
+      expect(screen.queryByText("4 Sep")).not.toBeInTheDocument();
     });
 
     // Control for the fix above: an ORDINARY completed Task's own `date`
@@ -1890,7 +1890,7 @@ describe("History", () => {
         />,
       );
 
-      expect(screen.getByText("Aug 28")).toBeInTheDocument();
+      expect(screen.getByText("28 Aug")).toBeInTheDocument();
     });
 
     // Criterion 8, the coordinator's own clarification: widening the pool

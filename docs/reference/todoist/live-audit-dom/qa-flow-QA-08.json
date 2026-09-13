@@ -1,0 +1,13 @@
+{
+  "row": "QA-08",
+  "sequence": "type 'tod' -> Home -> ArrowRight",
+  "todoist": {
+    "before_caret_move": { "hasSpan": true, "highlighted": "true" },
+    "after_home_arrowright": { "text": "tod", "hasSpan": true, "highlighted": "true" }
+  },
+  "meologue": {
+    "before_caret_move": { "hasSpan": true, "highlighted": "true" },
+    "after_home_arrowright": { "text": "tod", "hasSpan": true, "highlighted": "true" }
+  },
+  "verdict": "matched - moving the caret into a recognised span does not withdraw it, in both apps"
+}

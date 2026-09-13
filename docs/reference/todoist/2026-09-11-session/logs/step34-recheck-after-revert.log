@@ -1,0 +1,41 @@
+{
+  "sync": true,
+  "auto": false,
+  "radios": [
+    {
+      "label": "Todoist",
+      "checked": "true"
+    },
+    {
+      "label": "Dark",
+      "checked": "false"
+    },
+    {
+      "label": "Moonstone",
+      "checked": "false"
+    },
+    {
+      "label": "Tangerine",
+      "checked": "false"
+    },
+    {
+      "label": "Kale",
+      "checked": "false"
+    },
+    {
+      "label": "Blueberry",
+      "checked": "false"
+    },
+    {
+      "label": "Lavender",
+      "checked": "false"
+    },
+    {
+      "label": "Raspberry",
+      "checked": "false"
+    }
+  ],
+  "htmlClass": "theme_todoist todoist_loaded",
+  "bodyBg": "rgb(40, 28, 17)"
+}
+

@@ -1,0 +1,12 @@
+{
+  "app": "todoist",
+  "row": "ROW-05",
+  "task": "ZZ probe long wrap wrap ... (213 chars)",
+  "identityCheck": "measured getComputedStyle on the row's own div.task_content leaf",
+  "webkitLineClamp": "4",
+  "whiteSpace": "normal",
+  "fontSize": "14px",
+  "lineHeight": "21px",
+  "renderedHeightPx": 65,
+  "verdict": "wraps and clamps at 4 lines exactly as row-and-detail.md documents; font 14px/21px matches meologue's own measured value exactly (flow2-ROW-05-meologue.json) -- MATCHED"
+}

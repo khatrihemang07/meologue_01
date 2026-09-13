@@ -199,6 +199,14 @@ export function TodayView({
                     onCompleteForever={() => onCompleteForever(task.id, task.content)}
                     onRequestDelete={() => onRequestDelete(task.id)}
                     onOpenSchedule={() => onOpenSchedule(task.id)}
+                    // ROW-13 (parity-ledger.md), issue #250: every row in
+                    // this section is due today by construction (`today()`,
+                    // @meologue/core) — Todoist itself omits the date
+                    // control from the DOM here entirely
+                    // (pass2-2026-09-11.md §3), not merely hides it. The
+                    // Overdue section above does NOT pass this: an overdue
+                    // row's own date is never redundant.
+                    suppressDateBadge
                   />
                 ))}
               </ul>

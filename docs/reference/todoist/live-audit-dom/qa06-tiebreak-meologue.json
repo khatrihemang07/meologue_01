@@ -1,0 +1,159 @@
+{
+  "app": "meologue",
+  "url": "http://127.0.0.1:41999/todo/inbox",
+  "timestamp": "2026-09-11T17:21:41.503Z",
+  "fieldSelector": "[placeholder=\"Add a Task\"]",
+  "spanSelector": "[data-testid=\"natural-language-match\"]",
+  "runs": [
+    {
+      "run": 1,
+      "preState": {
+        "text": "Add a Task"
+      },
+      "tagResult": {
+        "spanFound": true,
+        "token": "probe-wmblcr2c62i-1789147298172",
+        "spanOuterHTML": "<span data-testid=\"natural-language-match\" data-match-id=\"2026-09-11\" data-highlighted-match=\"true\" class=\"td-recognition-match\">tod</span>",
+        "editorRootTag": "DIV",
+        "preText": null
+      },
+      "postResult": {
+        "heldIsConnected": true,
+        "currentSpanExists": true,
+        "sameAsHeld": true,
+        "heldHasToken": true,
+        "heldTokenValue": "probe-wmblcr2c62i-1789147298172",
+        "currentSpanHasToken": true,
+        "currentSpanTokenValue": "probe-wmblcr2c62i-1789147298172",
+        "heldOuterHTMLAfter": "<span data-testid=\"natural-language-match\" data-match-id=\"2026-09-11\">tod</span>",
+        "editorTextAfter": "tod",
+        "mutations": [
+          {
+            "type": "attributes",
+            "attributeName": "data-highlighted-match",
+            "addedNodes": [],
+            "removedNodes": []
+          },
+          {
+            "type": "attributes",
+            "attributeName": "class",
+            "addedNodes": [],
+            "removedNodes": []
+          },
+          {
+            "type": "attributes",
+            "attributeName": "class",
+            "addedNodes": [],
+            "removedNodes": []
+          },
+          {
+            "type": "attributes",
+            "attributeName": "class",
+            "addedNodes": [],
+            "removedNodes": []
+          }
+        ]
+      }
+    },
+    {
+      "run": 2,
+      "preState": {
+        "text": "Add a Task"
+      },
+      "tagResult": {
+        "spanFound": true,
+        "token": "probe-40qyiroojpj-1789147300090",
+        "spanOuterHTML": "<span data-testid=\"natural-language-match\" data-match-id=\"2026-09-11\" data-highlighted-match=\"true\" class=\"td-recognition-match\">tod</span>",
+        "editorRootTag": "DIV",
+        "preText": null
+      },
+      "postResult": {
+        "heldIsConnected": true,
+        "currentSpanExists": true,
+        "sameAsHeld": true,
+        "heldHasToken": true,
+        "heldTokenValue": "probe-40qyiroojpj-1789147300090",
+        "currentSpanHasToken": true,
+        "currentSpanTokenValue": "probe-40qyiroojpj-1789147300090",
+        "heldOuterHTMLAfter": "<span data-testid=\"natural-language-match\" data-match-id=\"2026-09-11\">tod</span>",
+        "editorTextAfter": "tod",
+        "mutations": [
+          {
+            "type": "attributes",
+            "attributeName": "data-highlighted-match",
+            "addedNodes": [],
+            "removedNodes": []
+          },
+          {
+            "type": "attributes",
+            "attributeName": "class",
+            "addedNodes": [],
+            "removedNodes": []
+          },
+          {
+            "type": "attributes",
+            "attributeName": "class",
+            "addedNodes": [],
+            "removedNodes": []
+          },
+          {
+            "type": "attributes",
+            "attributeName": "class",
+            "addedNodes": [],
+            "removedNodes": []
+          }
+        ]
+      }
+    },
+    {
+      "run": 3,
+      "preState": {
+        "text": "Add a Task"
+      },
+      "tagResult": {
+        "spanFound": true,
+        "token": "probe-a9kv4cl0sa9-1789147301077",
+        "spanOuterHTML": "<span data-testid=\"natural-language-match\" data-match-id=\"2026-09-11\" data-highlighted-match=\"true\" class=\"td-recognition-match\">tod</span>",
+        "editorRootTag": "DIV",
+        "preText": null
+      },
+      "postResult": {
+        "heldIsConnected": true,
+        "currentSpanExists": true,
+        "sameAsHeld": true,
+        "heldHasToken": true,
+        "heldTokenValue": "probe-a9kv4cl0sa9-1789147301077",
+        "currentSpanHasToken": true,
+        "currentSpanTokenValue": "probe-a9kv4cl0sa9-1789147301077",
+        "heldOuterHTMLAfter": "<span data-testid=\"natural-language-match\" data-match-id=\"2026-09-11\">tod</span>",
+        "editorTextAfter": "tod",
+        "mutations": [
+          {
+            "type": "attributes",
+            "attributeName": "data-highlighted-match",
+            "addedNodes": [],
+            "removedNodes": []
+          },
+          {
+            "type": "attributes",
+            "attributeName": "class",
+            "addedNodes": [],
+            "removedNodes": []
+          },
+          {
+            "type": "attributes",
+            "attributeName": "class",
+            "addedNodes": [],
+            "removedNodes": []
+          },
+          {
+            "type": "attributes",
+            "attributeName": "class",
+            "addedNodes": [],
+            "removedNodes": []
+          }
+        ]
+      }
+    }
+  ]
+}

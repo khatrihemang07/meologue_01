@@ -1,0 +1,50 @@
+{
+  "row": "ROW-09",
+  "claim": "date and comment-count metadata sit as adjacent flex children with a gap and no separator glyph between them",
+  "todoist": {
+    "sourceTask": "Buy mobile holder and get the bike fixed (existing real Inbox row, read-only, not clicked into or edited)",
+    "metadataContainerSelector": "[data-testid=\"task-info-tags\"]",
+    "display": "flex",
+    "gap": "normal",
+    "columnGap": "normal",
+    "alignItems": "center",
+    "children": [
+      { "tag": "BUTTON", "testid": "due-date-control", "text": "Date: Today" },
+      { "tag": "A", "ariaLabel": "1 comment", "text": "1" }
+    ],
+    "textNodesBetweenChildren": "none",
+    "separatorGlyphPresent": false
+  },
+  "meologue": {
+    "sourceTask": "ZZ probe (created this session -- the operator's original 'ZZ probe today'..'ZZ probe undated' fixtures were NOT present when this session first reached meologue's Inbox; see note below). Title text 'today' was auto-consumed by meologue's date-recognition into an actual due date of Today, and a comment 'zz probe comment' was added to produce a second metadata item (comment count) for a fair side-by-side with Todoist's two-item row.",
+    "metadataContainerSelector": "row li > ... > span.flex.flex-wrap.items-center.gap-x-2.text-muted-foreground.text-xs",
+    "display": "flex",
+    "gap": "normal 8px",
+    "columnGap": "8px",
+    "alignItems": "center",
+    "children": [
+      { "tag": "SPAN", "text": "Today", "style": "color: var(--td-date-today)" },
+      { "tag": "SPAN", "text": "1", "note": "message-square icon + count" }
+    ],
+    "textNodesBetweenChildren": "none",
+    "separatorGlyphPresent": false
+  },
+  "gapMechanism": {
+    "purpose": "The original verdict hedged past a real difference by saying Todoist's container has no set gap but the two nodes are 'simple adjacent flex children either way' without saying what actually produces the visible spacing. This re-measurement reads, for each child on the SAME rows already used (Todoist: read-only, not clicked into; meologue: recreated the same 'date + comment' two-item row used before, since it had been deleted during earlier cleanup, then measured and deleted again -- no lasting write), marginLeft/marginRight/paddingLeft/paddingRight and getBoundingClientRect(), and computes the exact pixel distance between child 1's right edge and child 2's left edge.",
+    "todoist": {
+      "child1": { "tag": "BUTTON", "text": "Date: Today", "marginLeft": "0px", "marginRight": "8px", "paddingLeft": "0px", "paddingRight": "0px", "rectRight": 506.5546875 },
+      "child2": { "tag": "A", "text": "1", "marginLeft": "0px", "marginRight": "8px", "paddingLeft": "0px", "paddingRight": "0px", "rectLeft": 514.5546875 },
+      "measuredPixelGap": 8,
+      "mechanism": "The flex container itself has NO column-gap (computed gap: normal). The 8px visual gap is produced entirely by margin-right: 8px on the FIRST child (the due-date button). This is margin-based spacing, not a flexbox gap."
+    },
+    "meologue": {
+      "child1": { "tag": "SPAN", "text": "Today", "marginLeft": "0px", "marginRight": "0px", "paddingLeft": "0px", "paddingRight": "0px", "rectRight": 559.796875 },
+      "child2": { "tag": "SPAN", "text": "1", "marginLeft": "0px", "marginRight": "0px", "paddingLeft": "0px", "paddingRight": "0px", "rectLeft": 567.796875 },
+      "measuredPixelGap": 8,
+      "mechanism": "Both children have zero margin and zero padding on every side. The 8px visual gap is produced entirely by the flex container's own column-gap: 8px (Tailwind gap-x-2). This is a real flexbox `gap`, not child margin."
+    },
+    "conclusion": "Both apps land on the identical 8px visual spacing, but via genuinely different CSS mechanisms: Todoist uses margin-right on the leading child (no container gap at all); meologue uses an actual column-gap on the flex container (no child margins at all). The claim's phrase 'adjacent flex children with a gap' is only literally true of meologue -- Todoist has no CSS gap property in play, just a spacing margin that happens to produce the same pixel result."
+  },
+  "verdict": "SPLIT INTO ITS TWO CLAUSES, per the corrected reading: (1) 'no separator glyph' -- MATCH. Neither app inserts a separator glyph (no ·, |, -, / text node) between the two metadata items; confirmed on both real rows. (2) 'adjacent flex children with a gap' -- PARTIAL/MISLEADING AS STATED. Both ARE adjacent flex children (display:flex, no separator markup) and both end up 8px apart on screen, but only meologue achieves that via an actual CSS flex `gap` (column-gap:8px, zero margins). Todoist achieves the identical 8px via margin-right:8px on the first child, with NO gap property set on the container at all. So 'with a gap' is accurate for meologue and inaccurate (as a CSS-property claim) for Todoist, even though the visual outcome is indistinguishable. The corpus document's claim should be phrased as 'with 8px of separation' rather than 'with a gap' if it means to cover both apps precisely.",
+  "noteOnFixtureState": "IMPORTANT: at the start of this session, meologue's Inbox showed a persistent 'meologue is already open in another window' lock with an empty list ('Nothing in your Inbox'), so the operator's named fixtures (ZZ probe one..ZZ probe undated) were not visible/available. Diagnosed and resolved: closed 3 leftover agent-owned task spaces (ids 42, 43, 45) from earlier flows in this same audit series that still held open meologue connections; after closing them and waiting, the lock message cleared, but the Inbox remained genuinely empty (not just locked) -- the seeded fixtures were gone, not merely inaccessible. Per the task's explicit allowance ('meologue is a disposable test origin; you may create/delete labels, filters and tasks there freely'), a substitute 'ZZ probe' task was created fresh for this reading rather than guessing at the original fixture's exact values. This is flagged here rather than silently substituted."
+}

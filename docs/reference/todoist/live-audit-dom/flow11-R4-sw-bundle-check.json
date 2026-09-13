@@ -1,0 +1,16 @@
+{
+  "round": 4,
+  "driveDate": "2026-09-13 (round 4 re-drive)",
+  "method": "Unregistered the service worker, cleared the workbox precache, reloaded once, then read the served script asset and the single-window lock text.",
+  "meologue": {
+    "swBefore": [{ "scope": "http://127.0.0.1:41999/", "active": true }],
+    "unregisteredCount": 1,
+    "cacheNamesCleared": ["workbox-precache-v2-http://127.0.0.1:41999/"],
+    "servedScript": "http://127.0.0.1:41999/assets/index-vBiblAq_.js",
+    "expectedBundle": "index-vBiblAq_.js",
+    "bundleMatches": true,
+    "locked": false,
+    "viewport": { "innerWidth": 1470, "innerHeight": 836 }
+  },
+  "verdict": "MATCH -- served bundle is the new build index-vBiblAq_.js, tab is not locked, viewport is 1470x836."
+}

@@ -11,7 +11,7 @@ Screenshots in `lifecycle-shots/`, raw DOM in `lifecycle-dom/`.
 **Three findings a replicator will otherwise get wrong:**
 
 1. **Comments do not submit on Enter.** Enter *and* Shift+Enter both insert a newline; only
-   Ctrl/Cmd+Enter or the "Comment" button posts. This is the **opposite** of the task composer,
+   Ctrl/Cmd+Enter or the "Comment" button posts. This is the **opposite** of Quick Add,
    where Shift+Enter submits. Two editors, two rules — do not unify them.
 2. **Editing is task-wide, not field-wide.** Clicking the description puts the *whole task* into
    edit mode: title and description become editors together, sharing one Cancel/Save pair. And
@@ -35,7 +35,7 @@ Screenshots in `lifecycle-shots/`, raw DOM in `lifecycle-dom/`.
 | Markdown — bare URL | Auto-linked while typing; **on Save**, Todoist fetches the target page and **replaces the visible link text with the fetched page title** (e.g. `https://example.com` → link text becomes "Example Domain", href unchanged) | Verified |
 | Markdown — italic, strikethrough, headings, numbered list, blockquote, fenced code block | Not tested | Gap |
 | Updating a description | Click directly on the **rendered description text** (a `<p>`) to re-enter edit mode with focus placed inside the Description editor; type/edit; Save | Verified |
-| ⚠️ Focus trap | Clicking a *generic* part of the combined edit block (not specifically a description paragraph) puts focus in the **Task name** field by default, not Description. Select-all+Backspace there deletes the **title**, not the description. Recovered via Cancel. | Verified (caution for replicator) |
+| ⚠️ Focus trap | Clicking a *generic* part of the combined edit block (not specifically a description paragraph) puts focus in the **Task name** field by default, not Description. Select-all+Backspace there deletes the **title**, not the description. Recovered via Cancel. **Not reproduced 2026-09-12 (`live-audit-2026-09-11.md`, flows 4 and 5):** a real mouse click at the gap between the Task name and Description editors — located from both editors' own rects — put focus on the **dialog**, not the title, in two separate runs. The region originally clicked was not recorded, so this may describe a different spot; until it is re-identified, do not treat "focuses the title" as established | Verified (caution for replicator) — contested |
 | Deleting a description (emptying) | Select-all + Backspace inside the Description editor, then Save. **No confirmation required** — empty save is allowed silently, row reverts to the idle "Description" placeholder button | Verified |
 | Cancel with unsaved changes | Clicking **Cancel** while the combined editor has unsaved edits shows a confirm dialog: title **"Discard unsaved changes?"**, body **"Your unsaved changes will be discarded."**, buttons **Cancel** / **Discard** | Verified |
 | List-row preview | `div.task_description.task_description--first-line-description` in the row DOM contains the **full rendered HTML** of the description (not text-truncated in the DOM); CSS clamps it visually to one line with an ellipsis. Confirmed screenshot shows "**bold** and normal…" with bold preserved | Verified |
@@ -45,11 +45,11 @@ Screenshots in `lifecycle-shots/`, raw DOM in `lifecycle-dom/`.
 | Behaviour | Finding | Status |
 |---|---|---|
 | Affordance | Below "Add sub-task": a row with avatar + a control labelled **"Comment"** (`aria-label="Open comment editor"`) | Verified |
-| Composer at rest (idle row) | Text **"Comment"** next to avatar, paperclip icon | Verified |
-| Composer placeholder (focused, empty) | Verbatim placeholder text: **"Comment"** | Verified |
-| Composer toolbar (focused) | Icons: attach file (`aria-label="Attach file"`), record audio (`aria-label="Record audio"`), insert emoji (`aria-label="Insert emoji"`), insert-from-integration (`aria-label="Insert from integration"`). Buttons: **Cancel**, and submit button literally labelled **"Comment"** (not "Post"/"Send") | Verified |
+| Comment box at rest (idle row) | Text **"Comment"** next to avatar, paperclip icon | Verified |
+| Comment box placeholder (focused, empty) | Verbatim placeholder text: **"Comment"** | Verified |
+| Comment box toolbar (focused) | Icons: attach file (`aria-label="Attach file"`), record audio (`aria-label="Record audio"`), insert emoji (`aria-label="Insert emoji"`), insert-from-integration (`aria-label="Insert from integration"`). Buttons: **Cancel**, and submit button literally labelled **"Comment"** (not "Post"/"Send") | Verified |
 | Enter | Inserts a newline; does **not** submit | Verified |
-| Shift+Enter | Inserts a newline; does **not** submit — **different from the task composer**, where Shift+Enter submits | Verified |
+| Shift+Enter | Inserts a newline; does **not** submit — **different from Quick Add**, where Shift+Enter submits | Verified |
 | Ctrl/Cmd+Enter | **Submits** the comment | Verified |
 | Clicking "Comment" button | Also submits | Verified |
 | Posted comment layout | Avatar (`img`), author `span.user_name` ("Hemang"), timestamp as a clickable anchor `href="#comment-<id>"` with text format **"Today 1:25 AM"** (day-word + 12h clock time; not tested how it reads after "Today" ages out) | Verified |
@@ -60,7 +60,7 @@ Screenshots in `lifecycle-shots/`, raw DOM in `lifecycle-dom/`.
 | "Edited" marker | None. Inspected the comment's outer HTML after an edit — no "edited"/"Edited" text or marker anywhere | Verified |
 | Deleting a comment | "…" → Delete opens a confirm dialog, verbatim: title **"Delete comment?"**, body **"This comment will be permanently deleted."**, buttons **Cancel** / **Delete** | Verified |
 | Ordering | **Oldest first** — new comments are appended at the bottom | Verified |
-| Empty state | When the last comment is deleted, the **"Comments N" header disappears entirely** — no header, no empty-state message; only the composer box remains | Verified |
+| Empty state | When the last comment is deleted, the **"Comments N" header disappears entirely** — no header, no empty-state message; only the comment box remains | Verified |
 | Comments header | Collapsible: **"Comments N"** with a disclosure chevron (collapse/expand not exercised) | Verified (count/label) / Gap (toggle behaviour) |
 
 ## 3. Completion and Undo
@@ -72,7 +72,7 @@ Screenshots in `lifecycle-shots/`, raw DOM in `lifecycle-dom/`.
 | Undo affordance | A **toast**, not inline. Container: `div[data-testid="toasts-container"].global-toasts-provider-container`, inner element `role="alert" aria-live="polite"` | Verified |
 | Toast wording (verbatim) | **"1 task completed"** with a separate **"Undo"** control, plus a small **"Close"** (×) icon button | Verified |
 | Toast appearance timing | Not present at 150ms; present by 300ms after the click | Verified |
-| Toast lifetime | Present continuously from ~300ms to 6000ms; gone by 8000ms on the next poll → **auto-dismisses somewhere between 6–8 seconds** | Verified (range, not exact) |
+| Toast lifetime | Present continuously from ~300ms to 6000ms; gone by 8000ms on the next poll → **auto-dismisses somewhere between 6–8 seconds** — **corrected 2026-09-12:** re-polled every ~300ms (`live-audit-2026-09-11.md`, flow 5), the "1 task completed" toast was present from 360ms through 10,775ms and gone by 11,081ms, so it lasts about **11 seconds**. The original 6–8s range came from coarse 2-second polls and does not reproduce | ~~Verified (range, not exact)~~ Re-measured |
 | Is "Undo" keyboard reachable | Yes — it is a real `<button type="button" tabIndex=0>` (not a plain span/div), inside the alert toast | Verified |
 | Does Ctrl/Cmd+Z undo completion | **Yes** — pressing it immediately after completing reverted the task to incomplete (`aria-label` back to "Mark task as complete", `--completed` class removed) | Verified |
 | Clicking the toast's "Undo" button directly | Not captured on its own — a follow-up script's round-trip latency exceeded the toast's ~6–8s lifetime so the toast was already gone by the time the click ran. Functionally equivalent behaviour was confirmed via Ctrl/Cmd+Z (same undo action) and the button's real/clickable DOM structure | Inferred (structurally verified, not captured live) |

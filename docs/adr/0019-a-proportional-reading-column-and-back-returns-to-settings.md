@@ -26,6 +26,11 @@ the window beside it. This ADR's own category argument, that a reading width is 
 mechanic rather than something the glossary names, is what 0036 reuses for the pane divider's
 stored width, for Accent and for text size.
 
+**Amended by issue #254, for Todo only** — see this ADR's own "Amendment (issue #254)" at the end.
+The column still governs Todo's content, unconditionally, below 900px; above it, Todo caps at 800px
+rather than carrying the 85% proportion further, and Todo's app bar is gone, replaced by a heading
+inside the column itself.
+
 ## Context
 
 The reading column had been capped at `max-w-2xl` (672px) since ticket 50 introduced the app shell,
@@ -125,3 +130,63 @@ different things — Nav says *where you can go*, Back says *where you were*.
 
 `CONTEXT.md` is unchanged. Nothing here introduces a domain concept; a reading column and a back
 affordance are both view mechanics, and the glossary is not the place for them.
+
+## Amendment (issue #254): Todo caps at 800px and loses its app bar
+
+The Decision section's own words are **"Both `shell.tsx`'s content column and `composer.tsx`'s
+docked bar carry the identical pair of percentages; they are a coupled pair, and the moment they
+disagree the input stops lining up with the thread above it."** That sentence is amended, for Todo
+only: Todo's content column now carries a *different* pair above 900px, capping at 800px rather
+than continuing to widen with 85% of an ever-larger pane.
+
+**Todo was never actually a member of the pair this sentence describes.** The coupling it names is
+between `shell.tsx`'s content column and `composer.tsx`'s own docked input row — the two have to
+agree because a reader's eye follows the input straight up into the thread above it, and a mismatch
+there reads as broken. Todo's docked slot (`composerSlot`) is `TodoNav` (`todo-nav.tsx`), Todo's own
+internal navigation bar, not an input — it carries no width classes of its own, proportional or
+otherwise, and never has. So capping Todo's column has nothing to disagree with: there is no second
+box this change has to keep in step with, the way `composer.tsx` has to stay in step with
+`shell.tsx` for every other Destination.
+
+**The cap.** `shell.tsx` gained one optional prop, `columnWidthClassName`, read by the content
+column's own class list in place of the hard-coded `w-[97%] ... md:w-[85%]` pair when a caller
+supplies it. Every caller but Todo passes nothing, and renders byte-for-byte as before — this is
+additive, not a second place the two percentages have to be kept in sync for the callers that still
+want them. Todo is the one caller that passes a value:
+`w-[97%] md:w-[85%] min-[900px]:w-full min-[900px]:max-w-[800px]` — proportional exactly as before
+below 900px, capped at 800px at or above it. The centring (`mx-auto`) is untouched; only the width
+mechanism changes, and Todoist's own 800px column is itself roughly centred in the space beside its
+sidebar, not flush against it, so this stays faithful rather than merely convenient.
+
+**The breakpoint is 900px, not this ADR's own `md` (768px) — a real divergence, recorded rather than
+discovered later.** Every other Destination still steps at `md`, the point their own nav collapses
+from a bottom bar to a rail (this ADR's own Decision section, above). Todo steps at 900px instead,
+reusing ADR 0036's existing `WIDE_LAYOUT_QUERY` (`use-wide-layout.ts`) rather than introducing a
+second breakpoint of its own. That number was already where Todo changes shape for an unrelated
+reason — [0076](0076-todos-navigation-is-what-the-shells-existing-pane-renders.md)'s wide layout
+swaps `TodoSidebar` in and unmounts Todo's own bottom bar there — so reusing it keeps Todo's reader
+experiencing one "Todo goes wide" moment instead of two, 132px apart, with nothing to distinguish
+them. The trade is that Todo's column now visibly disagrees with every other Destination's about
+*where* it changes shape, not only *what* it changes to. That disagreement is deliberate, not an
+oversight this file failed to catch.
+
+**Todo's app bar is gone.** Nothing in this ADR, or in any other, ever defended the app bar's
+particular shape for Todo — a 16px title in a fixed `shrink-0` header — so removing it contradicts
+no prior decision. In its place, `shell.tsx` gained a second prop, `hideAppBar`: when set, the fixed
+`<header>` is skipped entirely, and `back`, `title` (rendered as a real `<h1>`, 26px / weight 700 /
+35px line-height) and `SyncStatusIndicator` render instead as the first row inside the scrollable
+content column, ahead of Todo's own view content. `title` is repurposed for this, not duplicated —
+nothing in this app reads `title` for `document.title`, so there is no second `heading` prop to keep
+in sync with it. Todo's own `todo-page.tsx` maps the view currently on screen (Inbox, Today,
+Upcoming, a Project's or Filter's own resolved name, and every other Todo view besides) to that
+heading's text.
+
+**Accepted consequence: Back and the Sync indicator now scroll away.** They used to live in a
+`shrink-0` bar that never scrolled, on every Destination including Todo. Inside the column they
+scroll with the rest of it, so a reader deep in a long Inbox loses the always-reachable way back to
+the root screen until they scroll back up. This is not absorbed quietly: Todoist has the identical
+property — its own Back/menu control is not pinned above its scrolling task list either — so this is
+the faithful choice, not an oversight, but it is a real loss for a reader who has to scroll to leave.
+A narrow-screen bottom bar affordance that keeps a way home reachable without scrolling is a
+plausible follow-up, and is deliberately out of this change's scope rather than built ahead of being
+asked for.

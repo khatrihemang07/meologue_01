@@ -1,0 +1,26 @@
+{
+  "app": "meologue",
+  "preCheck": {
+    "activeTag": "BODY",
+    "dialogPresent": false
+  },
+  "opened": {
+    "opened": true,
+    "role": "dialog",
+    "ariaLabel": null,
+    "dataTestId": null,
+    "title": "Keyboard Shortcuts",
+    "headings": [
+      "Keyboard Shortcuts",
+      "General",
+      "Edit task",
+      "Navigate"
+    ],
+    "kbdElementCount": 0,
+    "rowCandidateCount": 0,
+    "fullTextSample": "Keyboard ShortcutsGeneralQuick find/ or F or ⌘KShow keyboard shortcuts?Edit taskMore actions.Edit task⌘ESet date…TRemove date⇧TSet deadline…DRemove deadline⇧DSet priority…YDelete task⌘⌫ or ⇧DeleteNavigateOpen task in its project⇧GGo to InboxG then IGo to TodayG then TGo to UpcomingG then UOpen project…G then PGo to Filters & LabelsG then V"
+  },
+  "afterClose": {
+    "dialogStillPresent": true
+  }
+}

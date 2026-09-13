@@ -1,0 +1,40 @@
+{
+  "driveDate": "2026-09-13 (Sunday, live clock, both apps)",
+  "method": "Todoist: 'ZZ probe' created via Quick Add typing 'ZZ probe tomorrow at 9:30am' (DATE-10) and 'ZZ probe 23 sep' (DATE-11); DATE-01 read across the whole Inbox list (existing overdue rows plus the two new fixtures) via div.task_content + [data-testid=due-date-control]. meologue: fixtures seeded through the store (taskStore.upsert / setDate), titled 'ZZ probe tomorrowTimed' (date=2026-09-14T09:30), 'ZZ probe in10' (date=2026-09-23), 'ZZ probe overdue' (date=2026-09-12), 'ZZ probe today' (date=2026-09-13); DATE-01 read from each row's date span + its child svg.",
+  "DATE-10": {
+    "row": "Row wording for a Date carrying a time -- task tomorrow at 9:30 AM",
+    "todoist": { "text": "Tomorrow 9:30 AM", "color": "rgb(255, 154, 20)" },
+    "meologue": { "text": "Tomorrow 9:30 AM", "color": "rgb(255, 154, 20)" },
+    "verdict": "MATCH",
+    "note": "meologue no longer inserts the comma. Previously it read 'Tomorrow, 9:30 AM'; the format-task-date.ts ', h:mm a' suffix has been fixed to match Todoist's space-separated form exactly, including colour."
+  },
+  "DATE-11": {
+    "row": "Row wording for a Date more than 6 days out -- task 10 days out (23 Sep)",
+    "todoist": { "text": "23 Sep", "color": "rgb(204, 204, 204)" },
+    "meologue": { "text": "23 Sep", "color": "rgb(204, 204, 204)" },
+    "verdict": "MATCH",
+    "note": "meologue now orders day-then-month ('23 Sep'). Previously it read 'Sep 21' (month-then-day, and a different day since it was captured on 2026-09-11); the describeDay fallback's formatDay ordering has been fixed to match Todoist, including colour."
+  },
+  "DATE-01": {
+    "row": "Does the date badge contain a calendar svg, on overdue AND future-dated rows -- and is the icon overdue-only?",
+    "todoist": {
+      "overdueRowsSample": [
+        { "title": "Bat fix", "dateSpanText": "Yesterday", "color": "rgb(255, 112, 102)", "hasSvgIcon": true, "svgSize": "12x12", "svgViewBox": "0 0 12 12" },
+        { "title": "add split and splid both without fail EOD", "dateSpanText": "1 Sep", "color": "rgb(204, 204, 204)", "hasSvgIcon": true, "svgSize": "12x12", "svgViewBox": "0 0 12 12" }
+      ],
+      "futureDatedRow": { "title": "ZZ probe (23 Sep)", "dateSpanText": "23 Sep", "color": "rgb(204, 204, 204)", "hasSvgIcon": true, "svgSize": "12x12", "svgViewBox": "0 0 12 12" },
+      "tomorrowDatedRow": { "title": "ZZ probe (Tomorrow 9:30 AM)", "dateSpanText": "Tomorrow 9:30 AM", "color": "rgb(255, 154, 20)", "hasSvgIcon": true, "svgSize": "12x12", "svgViewBox": "0 0 12 12" },
+      "iconIsOverdueOnly": false
+    },
+    "meologue": {
+      "undatedRow": { "title": "ZZ probe undated", "dateSpanText": null, "hasSvgIcon": false },
+      "todayRow": { "title": "ZZ probe today", "dateSpanText": "Today", "color": "rgb(37, 184, 76)", "hasSvgIcon": true, "svgComputedSize": "12x12", "svgStrokeColor": "rgb(37, 184, 76)" },
+      "overdueRow": { "title": "ZZ probe overdue", "dateSpanText": "Yesterday", "color": "rgb(255, 112, 102)", "hasSvgIcon": true, "svgComputedSize": "12x12", "svgStrokeColor": "rgb(255, 112, 102)" },
+      "tomorrowTimedRow": { "title": "ZZ probe tomorrowTimed", "dateSpanText": "Tomorrow 9:30 AM", "color": "rgb(255, 154, 20)", "hasSvgIcon": true, "svgComputedSize": "12x12", "svgStrokeColor": "rgb(255, 154, 20)" },
+      "in10Row": { "title": "ZZ probe in10", "dateSpanText": "23 Sep", "color": "rgb(204, 204, 204)", "hasSvgIcon": true, "svgComputedSize": "12x12", "svgStrokeColor": "rgb(204, 204, 204)" },
+      "iconIsOverdueOnly": false
+    },
+    "verdict": "MATCH",
+    "note": "This settles the open question: the icon is NOT overdue-only in either app. Both show the calendar svg on every DATED row (today, overdue, tomorrow-timed, far-future) and neither shows it on an undated row. Icon size matches (12x12 computed in both). Icon colour tracks the date-tone colour in both apps (icon recolors with the text: red/green/orange/grey). This is the fix -- meologue previously rendered no icon at all on any date badge."
+  }
+}

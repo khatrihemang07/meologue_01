@@ -1,0 +1,15 @@
+{
+  "row": "QA-07",
+  "sequence": "type 'tod' -> Backspace (withdraw) -> type 'x' (now 'todx') -> Backspace (remove x, back to 'tod')",
+  "todoist": {
+    "step1_withdrawn_tod": { "text": "tod", "hasSpan": true, "highlighted": null },
+    "step2_todx": { "text": "todx", "hasSpan": false },
+    "step3_back_to_tod": { "text": "tod", "hasSpan": true, "highlighted": "true", "matchId": "11 Sep" }
+  },
+  "meologue": {
+    "step1_withdrawn_tod": { "text": "tod", "hasSpan": true, "highlighted": null },
+    "step2_todx": { "text": "todx", "hasSpan": false },
+    "step3_back_to_tod": { "text": "tod", "hasSpan": true, "highlighted": "true", "matchId": "2026-09-11" }
+  },
+  "verdict": "matched - withdrawal is per-occurrence and one edit deep in both apps"
+}

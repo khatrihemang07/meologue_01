@@ -65,7 +65,7 @@
  * comment prescribes for the Composer.
  */
 import { baseKeymap } from "prosemirror-commands";
-import { redo, undo } from "prosemirror-history";
+import { history, redo, undo } from "prosemirror-history";
 import { keymap } from "prosemirror-keymap";
 import type { Node as PMNode } from "prosemirror-model";
 import { Fragment, Schema, Slice } from "prosemirror-model";
@@ -122,12 +122,30 @@ function transformPasted(slice: Slice): Slice {
  * Shown only over a genuinely empty document — a plain decoration widget,
  * not a native `placeholder` attribute (a contenteditable root has no
  * such rendering of its own; `composer-editor.ts`'s own `placeholderPlugin`
- * makes the identical choice for the same reason). None of this ticket's
- * three call sites ever activates this editor on an empty title (a rename
- * always seeds real content, and Quick Add is not converted by this
- * ticket — see `lazy-task-title-editor.ts`'s own header comment for why),
- * so nothing exercises this today; it exists so a future caller — #226's
- * own seam, or a later Quick Add conversion — doesn't have to invent it.
+ * makes the identical choice for the same reason).
+ *
+ * **This is live, and its own older comment saying otherwise was wrong.**
+ * That comment read "nothing exercises this today", on the grounds that a
+ * rename always seeds real content and the add field was not yet built on
+ * this editor. The second half stopped being true: `add-task-form.tsx`
+ * mounts this component with `value=""` and `placeholder="Add a Task"`, so
+ * the add field renders this widget every time the list is not being typed
+ * into — the single most visible instance of it in the app. The claim was
+ * left standing long enough to be believed, which is why it is corrected
+ * here rather than deleted.
+ *
+ * The size is the add row's own token, not the editor's (`index.css`'s
+ * `--td-add-task-font-size`, 14px, whose comment carries the full
+ * reasoning): Todoist rests its "+ Add task" affordance at 14px and only
+ * shows the 16px title scale once the composer is open, and this app has
+ * no open/closed distinction yet (NAV-12), so the placeholder is where that
+ * resting size has to live. Deliberately NOT a hardcoded `text-sm` beside
+ * the token — that is the dead-token defect issue #251 spent a ticket
+ * removing from the very component this widget renders inside.
+ *
+ * The two remaining callers never see it: `task-row-content.tsx` and
+ * `task-detail-view.tsx` both seed a Task's existing content, so their
+ * documents are never empty and this decoration never renders there.
  */
 function placeholderPlugin(text: string | undefined): Plugin {
   return new Plugin({
@@ -137,7 +155,13 @@ function placeholderPlugin(text: string | undefined): Plugin {
           return DecorationSet.empty;
         }
         const widget = document.createElement("span");
-        widget.className = "pointer-events-none select-none text-muted-foreground";
+        // NAV-10: the placeholder's own token, not `text-muted-foreground`.
+        // That token paints every muted label on the Todo surface, and only
+        // this widget was measured (rgb(128,128,128) in Todoist against
+        // rgb(204,204,204) here). index.css's `--td-add-task-placeholder`
+        // carries the dark-theme reading and leaves light unchanged.
+        widget.className =
+          "pointer-events-none select-none text-[length:var(--td-add-task-font-size)] text-[color:var(--td-add-task-placeholder)]";
         widget.textContent = text;
         return DecorationSet.create(state.doc, [Decoration.widget(0, widget)]);
       },
@@ -181,8 +205,16 @@ export interface TaskTitleEditorProps {
  * `composer-editor.ts`'s `buildComposerPlugins` documents the identical
  * "plugins earlier in this array are asked first" mechanism this relies
  * on.
+ *
+ * Exported for the identical reason `composer-editor.ts` exports
+ * `buildComposerPlugins`: a test that wants to prove `Mod-z`/`Mod-Shift-z`
+ * actually undo/redo typed text needs the REAL plugin list this editor
+ * mounts with — building an ad hoc `[history(), keymap({...})]` array by
+ * hand in a test would only prove `prosemirror-history` itself works, not
+ * that this file remembers to register it (`task-title-editor.test.tsx`'s
+ * own "history" suite is exactly that regression test).
  */
-function buildTitlePlugins(options: {
+export function buildTitlePlugins(options: {
   placeholder: string | undefined;
   extraPlugins: Plugin[];
   commit: () => void;
@@ -208,12 +240,44 @@ function buildTitlePlugins(options: {
       return true;
     },
   });
+  // `todo-keymap.ts` also binds a global `z`/`Mod-z` chord ("undo-complete")
+  // that undoes a Task's own last COMPLETION, not text — the two never
+  // race, because that binding carries the default `allowInField: false`
+  // (`use-todo-keymap.ts`'s own dispatch, untouched here) and so never
+  // fires while focus sits inside this editor. That default is exactly
+  // what leaves `Mod-z` free for `historyKeymap` below to mean "undo my
+  // typing" whenever a title editor is focused; outside one, the same
+  // chord means "undo my last completion" instead. Fixing the bug this
+  // file's own header comment on `history()` describes is what makes that
+  // split real rather than moot — with `undo` a no-op, `Mod-z` in a title
+  // editor used to do nothing at all, so there was nothing here to
+  // conflict with in the first place.
   const historyKeymap = keymap({
     "Mod-z": undo,
     "Shift-Mod-z": redo,
     "Mod-y": redo,
   });
   return [
+    // A genuine pre-existing bug, not something #253's rename-capture work
+    // introduced: `historyKeymap` above has always bound `undo`/`redo`, but
+    // `history()` — the plugin that actually records the done/undone step
+    // stacks those two commands read — was never registered anywhere in
+    // this list. Both commands look up that state via a fixed plugin key
+    // (`prosemirror-history`'s own `historyKey.getState`), which comes back
+    // `undefined` with no `history()` plugin present, so `undo`/`redo` were
+    // silent no-ops in every editor built on this component — the Add-a-
+    // Task composer, a row's inline rename, and this view's own title, all
+    // three. `composer-editor.ts`'s `buildComposerPlugins` registers
+    // `history()` too (last in its own list, proof this project already
+    // knows the plugin is needed here) — its own placement doesn't matter:
+    // `historyKey.getState` is a lookup into `EditorState.plugins`, keyed
+    // by plugin identity, not by array order, so `history()` only has to
+    // be present somewhere in the list, not before or after any particular
+    // keymap. It's placed first here anyway, ahead of the keymaps that
+    // dispatch `undo`/`redo`, matching the usual ProseMirror convention
+    // (most published examples register it before `keymap(baseKeymap)`)
+    // rather than after, as `composer-editor.ts` happens to.
+    history(),
     commitKeymap,
     historyKeymap,
     ...options.extraPlugins,

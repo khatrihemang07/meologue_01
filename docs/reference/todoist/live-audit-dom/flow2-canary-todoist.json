@@ -1,0 +1,52 @@
+{
+  "app": "todoist",
+  "identityCheck": "waited for li[data-item-id] to render in the Inbox, then read document.documentElement.className for theme confirmation and .task_content text per row",
+  "darkThemeConfirmed": true,
+  "htmlClassName": "theme_dark todoist_loaded",
+  "baseline": {
+    "count": 16,
+    "titles": [
+      "Bat fix",
+      "Buy mobile holder and get the bike fixed",
+      "Check for ipad cover",
+      "hair wash",
+      "Homeo medicine refil",
+      "naukri photo update",
+      "Roller thigh pain",
+      "Room clean",
+      "Thigh guard and marker order",
+      "add split and splid both without fail EOD",
+      "Apply company",
+      "Buy bluetooth for vishal",
+      "Lld",
+      "Message ashu to connect",
+      "Need to improve reflect and todo completely. They are crap right now. Specially when typing long title or updating title",
+      "Quick dsa"
+    ]
+  },
+  "afterCleanup": {
+    "count": 16,
+    "titlesEqualToBaseline": true,
+    "titles": [
+      "Bat fix",
+      "Buy mobile holder and get the bike fixed",
+      "Check for ipad cover",
+      "hair wash",
+      "Homeo medicine refil",
+      "naukri photo update",
+      "Roller thigh pain",
+      "Room clean",
+      "Thigh guard and marker order",
+      "add split and splid both without fail EOD",
+      "Apply company",
+      "Buy bluetooth for vishal",
+      "Lld",
+      "Message ashu to connect",
+      "Need to improve reflect and todo completely. They are crap right now. Specially when typing long title or updating title",
+      "Quick dsa"
+    ],
+    "gettingStartedProjectTaskCount": "14 tasks (restored to its original count after ZZ probe other project was deleted)",
+    "zzProbeLabelDeleted": true,
+    "method": "counted via a full-page scroll-and-union of li[data-item-id] to defeat Todoist's row virtualization, which silently omitted off-screen rows from a plain querySelectorAll during fixture creation (see traps in the final report)"
+  }
+}

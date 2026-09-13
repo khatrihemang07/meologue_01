@@ -1,0 +1,86 @@
+{
+  "dialogGoneBeforeStart": true,
+  "keySequence": [
+    "ArrowDown",
+    "ArrowDown",
+    "j",
+    "j",
+    "ArrowUp",
+    "k"
+  ],
+  "log": [
+    {
+      "step": "initial (after neutral click)",
+      "active": {
+        "tag": "BODY",
+        "ariaLabel": null
+      }
+    },
+    {
+      "keyPressed": "ArrowDown",
+      "activeAfter": {
+        "tag": "BODY",
+        "role": null,
+        "ariaLabel": null,
+        "textSnippet": "Add taskSearchInbox4TodayUpcomingFilters & LabelsActivityPro",
+        "hasDataTaskId": false,
+        "rowTaskTitle": null
+      }
+    },
+    {
+      "keyPressed": "ArrowDown",
+      "activeAfter": {
+        "tag": "BODY",
+        "role": null,
+        "ariaLabel": null,
+        "textSnippet": "Add taskSearchInbox4TodayUpcomingFilters & LabelsActivityPro",
+        "hasDataTaskId": false,
+        "rowTaskTitle": null
+      }
+    },
+    {
+      "keyPressed": "j",
+      "activeAfter": {
+        "tag": "BODY",
+        "role": null,
+        "ariaLabel": null,
+        "textSnippet": "Add taskSearchInbox4TodayUpcomingFilters & LabelsActivityPro",
+        "hasDataTaskId": false,
+        "rowTaskTitle": null
+      }
+    },
+    {
+      "keyPressed": "j",
+      "activeAfter": {
+        "tag": "BODY",
+        "role": null,
+        "ariaLabel": null,
+        "textSnippet": "Add taskSearchInbox4TodayUpcomingFilters & LabelsActivityPro",
+        "hasDataTaskId": false,
+        "rowTaskTitle": null
+      }
+    },
+    {
+      "keyPressed": "ArrowUp",
+      "activeAfter": {
+        "tag": "BODY",
+        "role": null,
+        "ariaLabel": null,
+        "textSnippet": "Add taskSearchInbox4TodayUpcomingFilters & LabelsActivityPro",
+        "hasDataTaskId": false,
+        "rowTaskTitle": null
+      }
+    },
+    {
+      "keyPressed": "k",
+      "activeAfter": {
+        "tag": "BODY",
+        "role": null,
+        "ariaLabel": null,
+        "textSnippet": "Add taskSearchInbox4TodayUpcomingFilters & LabelsActivityPro",
+        "hasDataTaskId": false,
+        "rowTaskTitle": null
+      }
+    }
+  ]
+}

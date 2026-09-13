@@ -1,0 +1,35 @@
+{
+  "row": "QA-14",
+  "app": "todoist",
+  "steps": [
+    "Opened Quick Add dialog",
+    "Typed 'zz probe @' character-composed via keyboard.type",
+    "role=listbox appeared immediately after '@' with 0 options (empty query state)",
+    "Typed 'urgent' -> listbox showed 1 option: 'Label not found.Create urgent' (this account has 0 labels, so any label token falls through to the fallback)",
+    "Backspaced 'urgent', typed 'zzznotalabel' (explicit nonsense label) -> listbox showed 1 option: 'Label not found.Create zzznotalabel', confirming the fallback row text and behavior",
+    "Pressed Escape twice: first Escape did not close the Quick Add dialog (listbox had already closed on its own from the state read); a 'Discard unsaved changes?' confirmation dialog appeared instead of an immediate close",
+    "Clicked 'Discard' in that confirmation dialog; Quick Add dialog closed with data-testid='quick-add' absent from DOM; no task was created"
+  ],
+  "listboxCount": 1,
+  "listboxTestId": "content-editor-suggestions-dropdown",
+  "optionCountAtBareAt": 0,
+  "optionCountAfterQuery": 1,
+  "fallbackRowText": "Label not found.Create urgent",
+  "fallbackRowTextNonsenseLabel": "Label not found.Create zzznotalabel",
+  "bodyMentionsLabelNotFound": true,
+  "escapeClosedDialogDirectly": false,
+  "discardConfirmationDialogShown": true,
+  "discardConfirmationText": "Discard unsaved changes? Your unsaved changes will be discarded.",
+  "finalState": { "quickAddDialogPresent": false, "taskCreated": false },
+  "conclusion": "Todoist DOES show an autocomplete popup (role=listbox, testid content-editor-suggestions-dropdown) after typing '@'. With this account's 0 labels, any label token (real-looking 'urgent' or nonsense 'zzznotalabel') immediately falls to a single 'Label not found. Create <name>' option -- there is no populated label list to compare against. Escape alone did NOT dismiss the dialog once text had been typed; Todoist interposed a 'Discard unsaved changes?' confirmation, which had to be explicitly confirmed (Discard) to close without creating a task.",
+  "meologueHalf_recordedVerbatimFromPriorSession": {
+    "typedText": "zz probe @urgent",
+    "listboxCount": 0,
+    "optionCount": 0,
+    "anyPopupLike": 0,
+    "bodyMentionsLabelNotFound": false,
+    "recognitionSpans": ["@urgent"],
+    "conclusion": "meologue shows NO autocomplete popup at all; it does inline-highlight the @urgent token with a .td-recognition-match span. Escape did not clear the composer draft."
+  },
+  "verdict": "DIVERGE: Todoist renders a real role=listbox autocomplete popup (with a 'Label not found / Create' fallback row) after '@'; meologue renders no popup of any kind, only an inline recognition highlight span. Also diverges on Escape behavior: meologue's Escape did not clear the draft (per recorded note), while Todoist's Escape triggered a discard-confirmation dialog rather than silently closing."
+}

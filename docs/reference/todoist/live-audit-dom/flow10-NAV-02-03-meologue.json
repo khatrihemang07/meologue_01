@@ -1,0 +1,46 @@
+{
+  "rows": ["NAV-02", "NAV-03"],
+  "flow": 10,
+  "app": "meologue",
+  "date": "2026-09-12",
+  "origin": "http://127.0.0.1:41999",
+  "referenceNote": "Both rows cite ADR 0076, not a Todoist reading. Their claims are about meologue's own shell architecture, so there is no Todoist side to drive and ADR 0077's same-session two-app rule has nothing to bite on here. They are verified against the ADR, live.",
+  "method": "Viewport driven with CDP Emulation.setDeviceMetricsOverride at 1200, 900, 899 and 600 CSS px. SPA navigation only — never reloaded, so the store was never at risk. The gate is WIDE_LAYOUT_QUERY = '(min-width: 900px)' in apps/web/src/hooks/use-wide-layout.ts.",
+  "landmarkNote": "BOTH navigations carry the identical aria-label='Todo' (todo-sidebar.tsx:203 and todo-nav.tsx:96), so nav[aria-label='Todo'] alone cannot tell them apart. They are distinguished here by rect and by link set.",
+  "NAV-02": {
+    "claim": "The sidebar renders only inside /todo/*, at >=900px, in the pane the shell already has",
+    "readings": [
+      { "width": 1200, "path": "/todo/inbox", "matchesWideQuery": true, "navCount": 1, "rect": { "x": 0, "y": 0, "w": 306, "h": 900 }, "linkTexts": ["Add task", "Search", "Inbox6", "Today1", "Upcoming1", "Filters & Labels", "Activity"], "ariaCurrent": ["Add task", "Inbox6"] },
+      { "width": 1200, "path": "/", "matchesWideQuery": true, "navCount": 0, "navs": [], "note": "Non-Todo route at the same width: no Todo nav at all." },
+      { "width": 900, "path": "/todo/inbox", "matchesWideQuery": true, "navCount": 1, "rect": { "x": 0, "y": 0, "w": 306, "h": 900 }, "note": "900px inclusive — the boundary is >=900, exactly as the query states." }
+    ],
+    "verdict": "CONFIRMED LIVE. The sidebar appears only inside /todo/*, only at >=900px, as a single 306px-wide full-height left pane. No second pane, divider or width mechanism was present.",
+    "proposedStatus": "matched",
+    "statusCaveat": "'matched' is being stretched here: the ledger defines it as 'driven in both apps side by side', and this row has no Todoist side. It means 'conforms to ADR 0076, verified live'. The status vocabulary has no word for an architecture-conformance row, which is worth the user's attention rather than silently picking one."
+  },
+  "NAV-03": {
+    "claim": "Below 900px there is no sidebar and the bottom bar remains",
+    "readings": [
+      { "width": 899, "path": "/todo/inbox", "matchesWideQuery": false, "navCount": 1, "rect": { "x": 0, "y": 847, "w": 899, "h": 53 }, "atViewportBottom": true, "linkTexts": ["Inbox", "Today", "Upcoming", "Projects", "Activity", "Filters"], "ariaCurrent": ["Inbox"] },
+      { "width": 600, "path": "/todo/inbox", "matchesWideQuery": false, "navCount": 1, "rect": { "x": 0, "y": 847, "w": 600, "h": 53 }, "atViewportBottom": true, "linkTexts": ["Inbox", "Today", "Upcoming", "Projects", "Activity", "Filters"], "ariaCurrent": ["Inbox"] }
+    ],
+    "verdict": "CONFIRMED LIVE. At 899 and 600px the sidebar is gone and a 53px-tall full-width bar sits flush with the viewport bottom. Exactly ONE nav[aria-label='Todo'] exists at every width tested — the two never coexist, they swap at the boundary.",
+    "boundaryIsExact": { "900": "wide (sidebar)", "899": "narrow (bottom bar)" },
+    "proposedStatus": "matched",
+    "statusCaveat": "Same caveat as NAV-02 — reference is ADR 0076, not Todoist."
+  },
+  "defect33": {
+    "title": "The two navigations do not cover the same destinations, and /todo/projects is unreachable at >=900px",
+    "severity": "real user-facing dead end, found while closing a row the handoff called cheap",
+    "evidence": {
+      "sidebarHrefs": ["/todo/inbox (Add task)", "/todo/search (Search)", "/todo/inbox (Inbox)", "/todo/today (Today)", "/todo/upcoming (Upcoming)", "/todo/filters (Filters & Labels)", "/todo/activity (Activity)"],
+      "bottomBarHrefs": ["/todo/inbox (Inbox)", "/todo/today (Today)", "/todo/upcoming (Upcoming)", "/todo/projects (Projects)", "/todo/activity (Activity)", "/todo/filters (Filters)"],
+      "atWide": { "projectsListLinkInNav": false, "projectsListLinkAnywhereOnPage": false, "emptyStateTextStillRendered": "No Projects yet — add one from the Projects list." },
+      "atNarrow": { "projectsListLinkInNav": true, "projectsListLinkAnywhereOnPage": true }
+    },
+    "whyItMatters": "At >=900px there is NO link to /todo/projects anywhere on the page, while the sidebar simultaneously prints 'No Projects yet — add one from the Projects list.' — naming a destination the reader cannot reach. The route itself works when typed.",
+    "exactMirrorOfAKnownBug": "NAV-03's own ledger note records that Upcoming was added to todo-sidebar.tsx alone, leaving it unreachable on touch devices. This is the same bug with the operands swapped: Projects lives in todo-nav.tsx alone and is unreachable on desktop. The principle that note states — 'Todo has two navigations, not one, and a new destination has to enter both' — is still not enforced by anything.",
+    "secondaryFinding": "The same destination is labelled differently in the two navs: '/todo/filters' reads 'Filters & Labels' in the sidebar and 'Filters' in the bottom bar. Relevant to NAV-06.",
+    "alsoSidebarOnly": ["Add task", "Search"]
+  }
+}

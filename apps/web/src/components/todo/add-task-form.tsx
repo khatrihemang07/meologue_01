@@ -54,24 +54,46 @@ export interface AddTaskFormProps {
 }
 
 // The box-model classes `Input`'s own default className carries (the
-// border, radius, height, padding, text size), centred vertically with
-// `leading-[22px]` (line-height) rather than `flex`/`items-center` — a
-// real-browser defect this file's own first pass shipped: `className`
-// here lands directly on the ProseMirror mount node, which for
-// `taskTitleSchema` (`doc` holding `text*` directly, task-title-
-// editor.tsx's own header comment) is the very element whose children are
-// the raw text nodes and this module's own recognition decorations. CSS
+// radius, height, padding), reading its type scale from the
+// `--td-composer-title-font-size`/`--td-composer-title-line-height` tokens
+// (index.css, QA-20's Quick Add row) the same way task-row-content.tsx
+// reads `--td-row-font-size`/`--td-row-line-height` — 16px/23px at every
+// width, matching Todoist's own Quick Add title (issue #251); no `md:`
+// override here because the token is not itself width-dependent. CSS
 // blockifies a flex item's own `display` — an `inline-block` decoration
 // span, once a direct child of a `display: flex` root, computes as
 // `block` regardless of what its own class says, and stray text runs
 // between flex-item children get placed in anonymous flex items rather
 // than flowing inline, which is what actually broke typing: a character
 // typed right at a match's own boundary landed at the wrong offset,
-// corrupting the text ("tod p1" -> "todp1"). `leading-[22px]` plus `py-1`
-// plus the 1px border sums to exactly `h-8`'s 32px, keeping the box the
-// same size without making its content a flex layout at all.
+// corrupting the text ("tod p1" -> "todp1"). Centring vertically with the
+// line-height (rather than `flex`/`items-center`) is why that matters
+// here.
+//
+// Issue #252 dropped the resting **border** (`border-input` → `border-
+// transparent`, the box kept rather than removed so focus doesn't shift
+// layout) — Todoist's own end-of-list affordance is borderless (NAV-10,
+// parity ledger). It deliberately did **not** touch the type-scale
+// tokens above: those are #251's fix for a *different* Todoist surface
+// (Quick Add's own dialog title, measured 16px/23px) reusing tokens that
+// had zero consumers before it. This field plays both surfaces' roles at
+// once — Todoist's quiet "+ Add task" row *and* its Quick Add title — only
+// because the click-to-reveal composer that would separate them is
+// deferred (NAV-12, parity ledger); reintroducing a hardcoded font-size
+// beside `--td-composer-title-font-size` here would restore the exact
+// dead-token defect #251 fixed. The placeholder's own colour is fixed by
+// NAV-10 in `task-title-editor.tsx`'s `placeholderPlugin` widget — a
+// literal value scoped to that widget, not the shared `text-muted-
+// foreground` this comment used to point to before the ledger's live
+// measurement caught it reading `rgb(204,204,204)` against Todoist's
+// `rgb(128,128,128)`; the composed 14px figure from quick-add.md is
+// Todoist's measurement of its
+// *static, pre-click* label, which this field has no separate state for —
+// see this ticket's own report for why narrowing the placeholder alone to
+// 14px was left undone rather than hacked around a file outside this
+// ticket's scope.
 const EDITOR_BOX_CLASSES =
-  "h-8 w-full min-w-0 rounded-lg border border-input bg-transparent px-2.5 py-1 text-base leading-[22px] outline-none transition-colors focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 md:text-sm md:leading-[22px]";
+  "h-8 w-full min-w-0 rounded-lg border border-transparent bg-transparent px-2.5 py-1 text-[length:var(--td-composer-title-font-size)] leading-[length:var(--td-composer-title-line-height)] outline-none transition-colors focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50";
 
 export function AddTaskForm({ onAdd, disabled }: AddTaskFormProps) {
   const [value, setValue] = useState("");
@@ -117,30 +139,66 @@ export function AddTaskForm({ onAdd, disabled }: AddTaskFormProps) {
   }
 
   return (
-    <div className="flex gap-2 border-t border-border p-3">
-      <div className="relative flex-1">
+    // Issue #252: was `border-t border-border p-3` — a boxed panel sitting
+    // above the list. Now a quiet, borderless row (Todoist's own end-of-
+    // list "+ Add task" affordance, NAV-10) sitting after it instead; see
+    // `EDITOR_BOX_CLASSES`'s own header comment above for what did and
+    // didn't change about the field's own type scale.
+    <div className="flex items-center gap-2 px-3 py-2">
+      {/*
+        KBD-04 (parity ledger): Todoist's own "Add task" affordance is a
+        plain `<button>` and joins the row-to-row cycle as one stop
+        (`docs/reference/todoist/live-audit-dom/flow6-KBD-04-todoist.json`'s
+        `isAddTaskBtn`). This app's own affordance is the field itself —
+        `AddTaskForm`'s own header comment on playing "Todoist's quiet
+        '+ Add task' row *and* its Quick Add title" at once — so there is
+        no separate button to mark. The live focusable element inside this
+        wrapper (`LazyTaskTitleEditor`'s own `role="textbox"` div, or the
+        disabled placeholder `Input` before Todo's store has opened) is
+        `TaskTitleEditor` (task-title-editor.tsx), the identical shared
+        component a Task's own inline rename and the detail view's editor
+        also mount — marking that component's own DOM node directly would
+        make every in-place rename a cycle stop too. Marking this wrapper
+        instead, and having `use-todo-keymap.ts`'s `focusAdjacentRow` look
+        up its one live focusable descendant, keeps the cycle's landing
+        point specific to *this* editor without touching the shared file.
+      */}
+      <div className="relative flex-1" data-add-task-field>
         {disabled ? (
           // No point mounting a live editor (and its recognition plugin)
           // while there is nowhere yet to send what it would parse —
           // matching `todo-page.tsx`'s own "store hasn't opened yet"
           // posture.
-          <Input placeholder="Add a Task" aria-label="Add a Task" disabled />
+          <Input
+            placeholder="Add task"
+            aria-label="Add task"
+            disabled
+            className="border-transparent"
+          />
         ) : (
           <Suspense
             // No `aria-label` here, deliberately: the real editor below
-            // carries the identical `aria-label="Add a Task"`, and a
+            // carries the identical `aria-label="Add task"`, and a
             // labelled fallback with the same accessible name is
             // indistinguishable from it to `findByLabelText` — a test
             // awaiting "the field is ready" would resolve on this
             // fallback the instant it mounts, before the lazy import
             // settles, rather than actually waiting.
-            fallback={<Input placeholder="Add a Task" aria-hidden="true" disabled tabIndex={-1} />}
+            fallback={
+              <Input
+                placeholder="Add task"
+                aria-hidden="true"
+                disabled
+                tabIndex={-1}
+                className="border-transparent"
+              />
+            }
           >
             <LazyTaskTitleEditor
               key={resetKey}
               value=""
-              ariaLabel="Add a Task"
-              placeholder="Add a Task"
+              ariaLabel="Add task"
+              placeholder="Add task"
               autoFocus={false}
               commitOnBlur={false}
               onChange={setValue}

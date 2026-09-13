@@ -1,0 +1,16 @@
+[
+  {
+    "idx": 0,
+    "className": "d2b5021f _56a651f6 e7RD0jj a2e85b47 _4fe2b114 _80d522a9",
+    "outerHTMLStart": "<button type=\"button\" aria-disabled=\"false\" class=\"d2b5021f _56a651f6 e7RD0jj a2e85b47 _4fe2b114 _80d522a9\"><div aria-hidden=\"true\" class=\"d2a4e4fc d2b5021f _2404d8ba _2121bb0c\"><svg xmlns=\"http://www.w3.org/2000/svg\" width=\"24\" height=\"24\" fill=\"non",
+    "rect": {},
+    "isPlusAddButton": false
+  },
+  {
+    "idx": 1,
+    "className": "plus_add_button",
+    "outerHTMLStart": "<button type=\"button\" aria-hidden=\"false\" data-supports-active-task=\"true\" class=\"plus_add_button\"><span class=\"icon_add\" aria-hidden=\"true\"><svg width=\"13\" height=\"13\"><path fill=\"currentColor\" fill-rule=\"evenodd\" d=\"M6 6V.5a.5.5 0 0 1 1 0V6h5.5a.5.",
+    "rect": {},
+    "isPlusAddButton": true
+  }
+]

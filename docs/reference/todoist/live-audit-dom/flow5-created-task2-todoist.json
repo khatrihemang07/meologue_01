@@ -1,0 +1,20 @@
+{
+  "dialogCheck": {
+    "found": true
+  },
+  "fieldCheck": {
+    "found": true,
+    "currentText": ""
+  },
+  "beforeSubmit": {
+    "finalText": "ZZ probe complete"
+  },
+  "dialogClosed": true,
+  "task2Matches": [
+    {
+      "id": "6hVV3MCFJxvxHrHp",
+      "textSnippet": "Task: ZZ probe complete"
+    }
+  ],
+  "titleTyped": "ZZ probe complete"
+}

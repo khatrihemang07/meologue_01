@@ -1,0 +1,32 @@
+{
+  "row": "QA-09 (date vocab), QA-10 (time vocab), QA-11 (recurrence vocab), QA-12 (priority vocab)",
+  "method": "each term typed ALONE into a freshly-cleared draft; data-match-id read back, both apps",
+  "reference_date": "2026-09-11 (Friday, per system clock; confirmed by 'today' and 'friday' both resolving to 2026-09-11 / '11 Sep')",
+  "results": {
+    "today":        { "todoist_matchId": "11 Sep",           "meologue_matchId": "2026-09-11" },
+    "tod":          { "todoist_matchId": "11 Sep",           "meologue_matchId": "2026-09-11" },
+    "tomorrow":     { "todoist_matchId": "12 Sep",           "meologue_matchId": "2026-09-12" },
+    "tmr":          { "todoist_matchId": "12 Sep",           "meologue_matchId": "2026-09-12" },
+    "monday":       { "todoist_matchId": "14 Sep",           "meologue_matchId": "2026-09-14" },
+    "friday":       { "todoist_matchId": "11 Sep",           "meologue_matchId": "2026-09-11" },
+    "next week":    { "todoist_matchId": "14 Sep",           "meologue_matchId": "2026-09-18", "DIVERGENT": "Todoist resolves 'next week' to Mon 14 Sep (start of next week); meologue resolves it to Fri 18 Sep (today+7). Different day of week entirely, not just format." },
+    "in 3 days":    { "todoist_matchId": "14 Sep",           "meologue_matchId": "2026-09-14" },
+    "25 dec":       { "todoist_matchId": "25 Dec",           "meologue_matchId": "2026-12-25" },
+    "12/25":        { "todoist_matchId": "25 Dec",           "meologue_matchId": null, "DIVERGENT": "Todoist recognises '12/25' as 25 Dec; meologue does NOT recognise it at all (hasSpan: false) - a real parity gap, not a formatting difference." },
+    "at 5pm":       { "todoist_matchId": "12 Sep 5:00 PM",   "meologue_matchId": "17:00", "note": "Todoist attaches a rolled-forward date (tomorrow, since 5pm today has presumably passed) plus 12h time; meologue's match-id carries only the bare 24h time with no date." },
+    "5pm":          { "todoist_matchId": "12 Sep 5:00 PM",   "meologue_matchId": "17:00" },
+    "17:00":        { "todoist_matchId": "12 Sep 5:00 PM",   "meologue_matchId": "17:00" },
+    "every day":    { "todoist_matchId": "every day",        "meologue_matchId": "every day" },
+    "every monday": { "todoist_matchId": "every monday",     "meologue_matchId": "every monday" },
+    "daily":        { "todoist_matchId": "every day",        "meologue_matchId": "daily", "note": "Todoist normalises the match-id itself to 'every day'; meologue's match-id stays 'daily' (raw token), though ledger QA-11 states the STORED phrase is normalised to 'every day' downstream - the match-id display differs." },
+    "p1":           { "todoist_matchId": "1",  "meologue_matchId": "P1" },
+    "p2":           { "todoist_matchId": "2",  "meologue_matchId": "P2" },
+    "p3":           { "todoist_matchId": "3",  "meologue_matchId": "P3" },
+    "p4":           { "todoist_matchId": "4",  "meologue_matchId": "P4" }
+  },
+  "notes": [
+    "All 20 vocabulary terms were recognised (hasSpan true, data-highlighted-match true) on the meologue side except '12/25', and all 20 were recognised on the Todoist side including '12/25'.",
+    "Priority match-id format differs structurally: Todoist uses a bare digit ('1'-'4'), meologue uses a letter+digit UI label ('P1'-'P4'). Neither is the internally-inverted stored value (P1 stored as priority 4) - both surfaces expose a UI-facing number here.",
+    "Time-only phrases differ structurally: Todoist's match-id bundles a resolved calendar date with the time ('12 Sep 5:00 PM'); meologue's match-id is time-only ('17:00'), with no date component visible in the identifier."
+  ]
+}

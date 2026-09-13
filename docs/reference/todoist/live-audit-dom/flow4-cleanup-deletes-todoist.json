@@ -1,0 +1,35 @@
+{
+  "created": {
+    "task1": {
+      "id": "6hVRqMrPmWhQ7JJG",
+      "title": "ZZ probe detail",
+      "matchesIntended": true
+    },
+    "task2": {
+      "id": "6hVRqVm5rWmMFQwG",
+      "title": "ZZ probe rename",
+      "matchesIntended": true,
+      "idSettled": true
+    }
+  },
+  "del1": {
+    "id": "6hVRqMrPmWhQ7JJG",
+    "titleCheck": "ZZ probe detail",
+    "deleted": true,
+    "confirmClicked": {
+      "ok": true,
+      "dialogText": "Delete task?The ZZ probe detail task will be permanently deleted.CancelDelete"
+    },
+    "stillPresent": false
+  },
+  "del2": {
+    "id": "6hVRqVm5rWmMFQwG",
+    "titleCheck": "ZZ probe rename",
+    "deleted": true,
+    "confirmClicked": {
+      "ok": true,
+      "dialogText": "Delete task?The ZZ probe rename task will be permanently deleted.CancelDelete"
+    },
+    "stillPresent": false
+  }
+}

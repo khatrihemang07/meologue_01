@@ -1,0 +1,22 @@
+{
+  "app": "meologue",
+  "url": "http://127.0.0.1:41999/todo/inbox",
+  "timestamp": "2026-09-12T19:35:00Z",
+  "serviceWorker": {
+    "supported": true,
+    "registrationsBefore": [
+      { "scope": "http://127.0.0.1:41999/", "active": true }
+    ],
+    "unregisteredCount": 1,
+    "cacheNamesCleared": ["workbox-precache-v2-http://127.0.0.1:41999/"]
+  },
+  "reload": "single reload after unregister+clear",
+  "servedBundle": "http://127.0.0.1:41999/assets/index-DuLZMsFu.js",
+  "expectedBundle": "index-DuLZMsFu.js",
+  "bundleMatches": true,
+  "distOnDisk": "apps/web/dist/web/assets/index-DuLZMsFu.js (worktree meologue_01.todoist-parity)",
+  "lockCheck": {
+    "locked": false,
+    "note": "store persisted through reload, not wiped; contained leftover fixtures from earlier flows (kbd one, nav one, etc.) which were left untouched"
+  }
+}

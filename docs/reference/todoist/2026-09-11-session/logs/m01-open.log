@@ -1,0 +1,62 @@
+spaceId: 32
+url: http://127.0.0.1:5188/todo/inbox
+bodyText snippet: Add task
+Search
+Inbox
+Today
+Upcoming
+Filters & Labels
+Projects
+
+No Projects yet — add one from the Projects list.
+
+Todo
+Add a Task
+
+
+Add
+
+Nothing in your Inbox. Add a Task above to get started.
+[p1 "meologue" | space "measure meologue todo UI vs todoist"(32): 1 managed, 0 untracked — p1* "meologue"]
+root
+  container
+    container "Todo"
+      anchor [ref=1, url=http://127.0.0.1:5188/todo/inbox]
+        svg_root
+        text "Add task"
+      anchor [ref=2, loc=href:/todo/search, url=http://127.0.0.1:5188/todo/search]
+        svg_root
+        text "Search"
+      container
+        anchor [ref=3, url=http://127.0.0.1:5188/todo/inbox]
+          svg_root
+          text "Inbox"
+        anchor [ref=4, loc=href:/todo/today, url=http://127.0.0.1:5188/todo/today]
+          svg_root
+          text "Today"
+        anchor [ref=5, loc=href:/todo/upcoming, url=http://127.0.0.1:5188/todo/upcoming]
+          svg_root
+          text "Upcoming"
+        anchor [ref=6, loc=href:/todo/filters, url=http://127.0.0.1:5188/todo/filters]
+          svg_root
+          text "Filters & Labels"
+      container
+        heading
+          text "Projects"
+        paragraph
+          text "No Projects yet — add one from the Projects list."
+    container "Resize the conversation list" [ref=7]
+    container
+      container
+        text "Todo"
+        image "Sync is off"
+      container
+        container
+          textfield "Add a Task" [ref=8]
+            text "Add a Task"
+          button [ref=9]
+            text "Add"
+        paragraph
+          text "Nothing in your Inbox. Add a Task above to get started."
+
+

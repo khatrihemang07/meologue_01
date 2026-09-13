@@ -1,0 +1,48 @@
+{
+  "round": 2,
+  "driveDate": "2026-09-13 (Sunday, live clock, both apps, same session)",
+  "rows": ["STR-03", "defect_32"],
+  "method": {
+    "todoist": "clicked button[aria-label='Add new label'] on /app/filters-labels, typed 'zz probe' character-by-character into the dialog's input[name=name] tracking the character counter after every keystroke, submitted, then found the label's row in the MAIN CONTENT list (not the sidebar Favorites shortcut that also appeared for it), opened its own row-level 'More actions' menu -> Delete, read the dialog verbatim, confirmed, then re-listed /app/filters-labels to verify",
+    "meologue": "clicked 'Manage Labels' from /todo/filters to reach /todo/labels, typed 'zz probe' character-by-character into input[aria-label=\"New Label's name\"] tracking a `\\d+/\\d+` counter element after every keystroke, submitted, clicked button[aria-label='Delete Label \"zz probe\"'], read the dialog verbatim, confirmed, verified the row was gone"
+  },
+  "STR-03": {
+    "todoist": {
+      "domRole": "dialog",
+      "headingText": "Delete label?",
+      "bodyFullText": "The zz probe label will be permanently deleted.",
+      "buttons": ["Cancel", "Delete"],
+      "nameIsQuoted": false,
+      "rawConcatenatedTextContent": "Delete label?The zz probe label will be permanently deleted.CancelDelete"
+    },
+    "meologue": {
+      "domRole": "alertdialog",
+      "dataState": "open",
+      "headingText": "Delete label?",
+      "bodyFullText": "The zz probe label will be permanently deleted.",
+      "buttons": ["Cancel", "Delete"],
+      "nameIsQuoted": false,
+      "rawConcatenatedTextContent": "Delete label?The zz probe label will be permanently deleted.CancelDelete"
+    },
+    "verdict": {
+      "heading": "MATCH",
+      "buttons": "MATCH, same order",
+      "body": "MATCH -- meologue now renders the label name bare, exactly as Todoist does. The 2026-09-12 reading (flow9-STR-03-meologue.json) found meologue wrapping the name in ASCII double quotes; defect 31's labels-view.tsx:150 site is fixed.",
+      "domRole": "DIVERGES, unchanged and by design -- same role=dialog vs role=alertdialog split as STR-01, already ratified by the user as an accessibility surplus in meologue's favour.",
+      "overallStatus": "MATCH on the wording defect this row was reopened for; the role difference remains a known, ratified divergence."
+    }
+  },
+  "defect_32": {
+    "todoist": {
+      "maxLength": 60,
+      "counterProgressionSample": ["0/60 (empty)", "1/60 (z)", "2/60 (zz)", "3/60 (zz )", "4/60 (zz p)", "5/60 (zz pr)", "6/60 (zz pro)", "7/60 (zz prob)", "8/60 (zz probe)"],
+      "finalCounter": "8/60"
+    },
+    "meologue": {
+      "maxLength": 60,
+      "counterProgressionSample": ["0/60 (empty)", "1/60 (z)", "2/60 (zz)", "3/60 (zz )", "4/60 (zz p)", "5/60 (zz pr)", "6/60 (zz pro)", "7/60 (zz prob)", "8/60 (zz probe)"],
+      "finalCounter": "8/60"
+    },
+    "verdict": "MATCH -- meologue's Label name field now has maxLength=60 and a live 'N/60' counter, incrementing identically to Todoist's own dialog at every keystroke (0/60 empty, 8/60 after 'zz probe'). Previously (flow9) meologue's name input had no maxLength and no counter at all."
+  }
+}

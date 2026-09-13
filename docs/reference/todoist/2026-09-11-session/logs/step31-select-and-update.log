@@ -1,0 +1,6 @@
+TypeError: page.snapshot scope must be one of full_page, only_within_viewport, subtree. Expected: await page.snapshot({ scope?, root?, includeActionMarks?, includeStableLocator? })
+    at validatePublicApiOptions (file:////[eval1]:7341:23)
+    at Page.snapshot (file:////[eval1]:18211:9)
+    at file:////[eval2]:10:24
+
+ego's nodejs process exited with code 1.

@@ -1,0 +1,29 @@
+{
+  "ZZ probe": {
+    "title": "ZZ probe",
+    "itemId": "6hVRCVpCgjPg6W9p",
+    "testid": "due-date-control",
+    "controlOuterHTML": "<button type=\"button\" data-testid=\"due-date-control\" aria-disabled=\"false\" aria-expanded=\"false\" class=\"due_date_controls xtOfDRu\"><div class=\"_618235b7 d2b5021f _7c342c9c _35b527a2\">Date:&nbsp;</div><span class=\"date date_today\"><svg xmlns=\"http://www.w3.org/2000/svg\" width=\"12\" height=\"12\" fill=\"none\" viewBox=\"0 0 12 12\" aria-hidden=\"true\"><path fill=\"currentColor\" fill-rule=\"evenodd\" d=\"M9.5 1h-7A1.5 1.5 0 0 0 1 2.5v7A1.5 1.5 0 0 0 2.5 11h7A1.5 1.5 0 0 0 11 9.5v-7A1.5 1.5 0 0 0 9.5 1M2 2.5a.5.5 0 0 1 .5-.5h7a.5.5 0 0 1 .5.5v7a.5.5 0 0 1-.5.5h-7a.5.5 0 0 1-.5-.5zM8.75 8a.75.75 0 1 1-1.5 0 .7",
+    "spanText": "Today",
+    "spanColor": "rgb(37, 184, 76)",
+    "spanFontWeight": "400"
+  },
+  "ZZ probe t": {
+    "title": "ZZ probe t",
+    "itemId": "6hVRCm4PpJfxGmxG",
+    "testid": "due-date-control",
+    "controlOuterHTML": "<button type=\"button\" data-testid=\"due-date-control\" aria-disabled=\"false\" aria-expanded=\"false\" class=\"due_date_controls xtOfDRu\"><div class=\"_618235b7 d2b5021f _7c342c9c _35b527a2\">Date:&nbsp;</div><span class=\"date date_tom\"><svg xmlns=\"http://www.w3.org/2000/svg\" width=\"12\" height=\"12\" fill=\"none\" viewBox=\"0 0 12 12\" aria-hidden=\"true\"><path fill=\"currentColor\" fill-rule=\"evenodd\" d=\"M9.5 1h-7A1.5 1.5 0 0 0 1 2.5v7A1.5 1.5 0 0 0 2.5 11h7A1.5 1.5 0 0 0 11 9.5v-7A1.5 1.5 0 0 0 9.5 1M2 2.5a.5.5 0 0 1 .5-.5h7a.5.5 0 0 1 .5.5v7a.5.5 0 0 1-.5.5h-7a.5.5 0 0 1-.5-.5zM8.75 8a.75.75 0 1 1-1.5 0 .75.",
+    "spanText": "Tomorrow",
+    "spanColor": "rgb(255, 154, 20)",
+    "spanFontWeight": "400"
+  },
+  "ZZ probe timed": {
+    "title": "ZZ probe timed",
+    "itemId": "6hVRF8gvGr7w5JQG",
+    "testid": "due-date-control",
+    "controlOuterHTML": "<button type=\"button\" data-testid=\"due-date-control\" aria-disabled=\"false\" aria-expanded=\"false\" class=\"due_date_controls xtOfDRu\"><div class=\"_618235b7 d2b5021f _7c342c9c _35b527a2\">Date:&nbsp;</div><span class=\"date date_tom\"><svg xmlns=\"http://www.w3.org/2000/svg\" width=\"12\" height=\"12\" fill=\"none\" viewBox=\"0 0 12 12\" aria-hidden=\"true\"><path fill=\"currentColor\" fill-rule=\"evenodd\" d=\"M9.5 1h-7A1.5 1.5 0 0 0 1 2.5v7A1.5 1.5 0 0 0 2.5 11h7A1.5 1.5 0 0 0 11 9.5v-7A1.5 1.5 0 0 0 9.5 1M2 2.5a.5.5 0 0 1 .5-.5h7a.5.5 0 0 1 .5.5v7a.5.5 0 0 1-.5.5h-7a.5.5 0 0 1-.5-.5zM8.75 8a.75.75 0 1 1-1.5 0 .75.",
+    "spanText": "Tomorrow 9:30 AM",
+    "spanColor": "rgb(255, 154, 20)",
+    "spanFontWeight": "400"
+  }
+}

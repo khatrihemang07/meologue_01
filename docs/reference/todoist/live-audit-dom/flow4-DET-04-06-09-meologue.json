@@ -1,0 +1,48 @@
+{
+  "clickResult": {
+    "ok": true
+  },
+  "editState": {
+    "ok": true,
+    "editables": [
+      {
+        "tag": "DIV",
+        "role": "textbox",
+        "contentEditable": "true",
+        "ariaLabel": "Task name",
+        "className": "ProseMirror tiptap font-medium text-base ProseMirror-focused",
+        "textContent": "ZZ probe detail"
+      },
+      {
+        "tag": "DIV",
+        "role": "textbox",
+        "contentEditable": "true",
+        "ariaLabel": "Description",
+        "className": "ProseMirror tiptap text-sm",
+        "textContent": "first line boldsecond line"
+      }
+    ],
+    "buttons": [
+      {
+        "text": "Cancel",
+        "ariaLabel": null
+      },
+      {
+        "text": "Save",
+        "ariaLabel": null
+      }
+    ],
+    "dialogText": "InboxZZ probe detailActivate to edit the task namefirst line boldsecond lineCancelSaveSub-tasksAddCommentsCommentProjectInboxDateDeadlinePriorityLabels"
+  },
+  "genericClickResult": {
+    "ok": true,
+    "containerTag": "DIV",
+    "containerClass": "flex items-start gap-2",
+    "rect": {
+      "x": 315,
+      "y": 123.703125,
+      "width": 600,
+      "height": 24
+    }
+  }
+}

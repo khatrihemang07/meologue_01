@@ -128,6 +128,10 @@ function renderTodoPage(context: EntryStoreOutletContext, initialPath = "/todo/i
           <Route element={<Outlet context={context} />}>
             <Route path="/todo/inbox" element={<TodoPage />} />
             <Route path="/todo/today" element={<TodoPage view="today" />} />
+            {/* Issue #254: added for the in-column heading's own tests
+                below — no earlier ticket needed Upcoming reachable through
+                this helper's router. */}
+            <Route path="/todo/upcoming" element={<TodoPage view="upcoming" />} />
             <Route path="/todo/projects" element={<TodoPage view="projects" />} />
             <Route path="/todo/projects/:projectId" element={<TodoPage view="project" />} />
             <Route path="/todo/activity" element={<TodoPage view="activity" />} />
@@ -511,7 +515,7 @@ describe("TodoPage", () => {
     const addTask = vi.fn();
     renderTodoPage(inboxContext([], { addTask }));
 
-    fireEvent.change(await screen.findByLabelText("Add a Task"), { target: { value: "call mum" } });
+    fireEvent.change(await screen.findByLabelText("Add task"), { target: { value: "call mum" } });
     fireEvent.click(screen.getByRole("button", { name: "Add" }));
 
     // handleAdd (todo-page.tsx) awaits resolveLabelIds before calling
@@ -536,7 +540,7 @@ describe("TodoPage", () => {
     const addTask = vi.fn();
     renderTodoPage(readyContext({ addTask }), "/todo/today");
 
-    fireEvent.change(await screen.findByLabelText("Add a Task"), { target: { value: "call mum" } });
+    fireEvent.change(await screen.findByLabelText("Add task"), { target: { value: "call mum" } });
     fireEvent.click(screen.getByRole("button", { name: "Add" }));
 
     await waitFor(() =>
@@ -554,7 +558,7 @@ describe("TodoPage", () => {
     const addTask = vi.fn();
     renderTodoPage(readyContext({ addTask }), "/todo/today");
 
-    fireEvent.change(await screen.findByLabelText("Add a Task"), {
+    fireEvent.change(await screen.findByLabelText("Add task"), {
       target: { value: "call mum tomorrow" },
     });
     fireEvent.click(screen.getByRole("button", { name: "Add" }));
@@ -568,7 +572,7 @@ describe("TodoPage", () => {
   it("disables the Add form while the store isn't ready", () => {
     renderTodoPage(readyContext({ disabled: true }));
 
-    expect(screen.getByLabelText("Add a Task")).toBeDisabled();
+    expect(screen.getByLabelText("Add task")).toBeDisabled();
   });
 
   // The completion toast mirrors register-service-worker.web.ts's own
@@ -586,8 +590,13 @@ describe("TodoPage", () => {
 
     expect(completeTask).toHaveBeenCalledWith("a");
     expect(toast).toHaveBeenCalledWith(
-      'Completed "call mum"',
+      // CMT-04: Todoist's own task-agnostic, count-based wording, not the
+      // task-specific `Completed "<name>"` this replaced.
+      "1 task completed",
       expect.objectContaining({
+        // CMT-05: 10s, measured live (`COMPLETION_TOAST_DURATION_MS`'s own
+        // doc comment, todo-page.tsx) — not sonner's unconfigured default.
+        duration: 10_000,
         action: expect.objectContaining({ label: "Undo", onClick: expect.any(Function) }),
       }),
     );
@@ -596,6 +605,83 @@ describe("TodoPage", () => {
     const action = toastCall?.[1]?.action as { onClick: () => void } | undefined;
     action?.onClick();
     expect(uncompleteTask).toHaveBeenCalledWith("a");
+  });
+
+  // CMT-05 (parity ledger) — `Z`/`⌘Z` reach the identical `uncompleteTask`
+  // call the toast's own "Undo" button already used above, through
+  // `todo-page.tsx`'s pending-undo ref rather than a second undo
+  // mechanism. `toast` is mocked (this file's own header comment), so
+  // there is no real toast to auto-close mid-test — these three cover the
+  // ref's own lifecycle: set on completion, fired once by either key, and
+  // silent when nothing is pending.
+  describe("keyboard undo of a completion (CMT-05)", () => {
+    it("undoes the most recent completion on 'z'", async () => {
+      const completeTask = vi.fn();
+      const uncompleteTask = vi.fn();
+      renderTodoPage(
+        inboxContext([task({ id: "a", content: "call mum" })], { completeTask, uncompleteTask }),
+      );
+
+      await waitFor(() => expect(screen.getByText("call mum")).toBeInTheDocument());
+      fireEvent.click(screen.getByRole("checkbox", { name: "call mum" }));
+      expect(completeTask).toHaveBeenCalledWith("a");
+
+      fireEvent.keyDown(document, { key: "z" });
+
+      expect(uncompleteTask).toHaveBeenCalledWith("a");
+    });
+
+    it("undoes the most recent completion on Cmd+Z", async () => {
+      const completeTask = vi.fn();
+      const uncompleteTask = vi.fn();
+      renderTodoPage(
+        inboxContext([task({ id: "a", content: "call mum" })], { completeTask, uncompleteTask }),
+      );
+
+      await waitFor(() => expect(screen.getByText("call mum")).toBeInTheDocument());
+      fireEvent.click(screen.getByRole("checkbox", { name: "call mum" }));
+
+      fireEvent.keyDown(document, { key: "z", metaKey: true });
+
+      expect(uncompleteTask).toHaveBeenCalledWith("a");
+    });
+
+    it("does nothing on 'z' or Cmd+Z when nothing has been completed", () => {
+      const uncompleteTask = vi.fn();
+      renderTodoPage(inboxContext([task({ id: "a", content: "call mum" })], { uncompleteTask }));
+
+      fireEvent.keyDown(document, { key: "z" });
+      fireEvent.keyDown(document, { key: "z", metaKey: true });
+
+      expect(uncompleteTask).not.toHaveBeenCalled();
+    });
+
+    // The highest-risk part of CMT-05: Cmd+Z inside a text field must stay
+    // native text-undo, not reach through to an unrelated completion. The
+    // Add-task field stubs to a plain `<input>` in this suite
+    // (`StubTaskTitleEditor`'s own header comment on why — jsdom can't
+    // usefully mount the real ProseMirror editor), which is also exactly
+    // the surface `use-todo-keymap.test.tsx`'s own CMT-05 tests note: a
+    // jsdom `<input>`/`<textarea>` exercises `isTypingTarget`'s tag-check
+    // arm; its `isContentEditable` arm (the real composer) is verified on
+    // screen only, jsdom not implementing that property at all.
+    it("does not undo a completion when Cmd+Z is pressed while typing in the Add task field", async () => {
+      const completeTask = vi.fn();
+      const uncompleteTask = vi.fn();
+      renderTodoPage(
+        inboxContext([task({ id: "a", content: "call mum" })], { completeTask, uncompleteTask }),
+      );
+
+      await waitFor(() => expect(screen.getByText("call mum")).toBeInTheDocument());
+      fireEvent.click(screen.getByRole("checkbox", { name: "call mum" }));
+      expect(completeTask).toHaveBeenCalledWith("a");
+
+      const addField = screen.getByLabelText("Add task");
+      addField.focus();
+      fireEvent.keyDown(addField, { key: "z", metaKey: true });
+
+      expect(uncompleteTask).not.toHaveBeenCalled();
+    });
   });
 
   it("restores a completed Task from the durable Completed section, independent of any toast", () => {
@@ -816,6 +902,109 @@ describe("TodoPage", () => {
   });
 });
 
+// Issue #247: both rename surfaces now resolve a recognised phrase through
+// `commitTaskTitle` (task-title-commit.ts), reached by `commitRename`
+// (todo-page.tsx). `toFake: ["Date"]` only, matching task-detail-view-
+// recognition.test.tsx's own reasoning — the row/detail title editors sit
+// behind `LazyTaskTitleEditor`'s `Suspense` boundary, whose resolution
+// `findByLabelText`'s internal polling needs a real `setTimeout` to observe.
+describe("TodoPage — rename resolves recognised phrases (issue #247)", () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date(2026, 8, 2, 12, 0)); // Sep 2, 2026 (Wed), local noon
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("resolves date and priority through the row editor, stripping them from the stored content", async () => {
+    const renameTask = vi.fn();
+    const setTaskDate = vi.fn();
+    const setTaskPriority = vi.fn();
+    renderTodoPage(
+      inboxContext([task({ id: "a", content: "buy milk" })], {
+        renameTask,
+        setTaskDate,
+        setTaskPriority,
+      }),
+    );
+
+    await waitFor(() => expect(screen.getByText("buy milk")).toBeInTheDocument());
+    fireEvent.click(screen.getByRole("button", { name: 'Edit "buy milk"' }));
+    const editor = await screen.findByLabelText("Task name");
+    fireEvent.change(editor, { target: { value: "buy oat milk tomorrow p1" } });
+    fireEvent.keyDown(editor, { key: "Enter" });
+
+    // Resolution is async (commitTaskTitle awaits before the last setter
+    // it needs could possibly fire) — renameTask is the one whose own
+    // resolved value proves the phrase was actually stripped, not just
+    // recognised.
+    await waitFor(() => expect(renameTask).toHaveBeenCalledWith("a", "buy oat milk"));
+    expect(setTaskDate).toHaveBeenCalledWith("a", "2026-09-03");
+    expect(setTaskPriority).toHaveBeenCalledWith("a", 4); // p1 UI == stored 4.
+  });
+
+  it("resolves date and priority through the detail view's own rename", async () => {
+    const detailTaskId = "22222222-2222-7222-8222-222222222222";
+    const renameTask = vi.fn();
+    const setTaskDate = vi.fn();
+    const setTaskPriority = vi.fn();
+    renderTodoPage(
+      inboxContext([task({ id: detailTaskId, content: "buy milk" })], {
+        renameTask,
+        setTaskDate,
+        setTaskPriority,
+      }),
+      `/todo/task/buy-milk-${detailTaskId}`,
+    );
+
+    fireEvent.click(await screen.findByRole("button", { name: "buy milk" }));
+    const editor = await screen.findByLabelText("Task name");
+    fireEvent.change(editor, { target: { value: "buy oat milk tomorrow p1" } });
+    fireEvent.keyDown(editor, { key: "Enter" });
+
+    await waitFor(() => expect(renameTask).toHaveBeenCalledWith(detailTaskId, "buy oat milk"));
+    expect(setTaskDate).toHaveBeenCalledWith(detailTaskId, "2026-09-03");
+    expect(setTaskPriority).toHaveBeenCalledWith(detailTaskId, 4);
+  });
+
+  it("leaves an existing Date, Deadline, Priority and Labels untouched when a rename contains no recognised phrase", async () => {
+    const renameTask = vi.fn();
+    const setTaskDate = vi.fn();
+    const setTaskDeadline = vi.fn();
+    const setTaskPriority = vi.fn();
+    const setTaskLabels = vi.fn();
+    renderTodoPage(
+      inboxContext(
+        [
+          task({
+            id: "a",
+            content: "buy milk",
+            date: "2026-09-10",
+            deadline: "2026-09-15",
+            priority: 3,
+            labelIds: ["label-existing"],
+          }),
+        ],
+        { renameTask, setTaskDate, setTaskDeadline, setTaskPriority, setTaskLabels },
+      ),
+    );
+
+    await waitFor(() => expect(screen.getByText("buy milk")).toBeInTheDocument());
+    fireEvent.click(screen.getByRole("button", { name: 'Edit "buy milk"' }));
+    const editor = await screen.findByLabelText("Task name");
+    fireEvent.change(editor, { target: { value: "buy oat milk" } });
+    fireEvent.keyDown(editor, { key: "Enter" });
+
+    await waitFor(() => expect(renameTask).toHaveBeenCalledWith("a", "buy oat milk"));
+    expect(setTaskDate).not.toHaveBeenCalled();
+    expect(setTaskDeadline).not.toHaveBeenCalled();
+    expect(setTaskPriority).not.toHaveBeenCalled();
+    expect(setTaskLabels).not.toHaveBeenCalled();
+  });
+});
+
 // Issue #169: `view="today"` is the same lazy chunk rendering a second,
 // co-equal view over the same Tasks — TodoPage's own doc comment on its
 // `view` prop explains why this is a prop rather than a second page
@@ -874,7 +1063,7 @@ describe("TodoPage — Today", () => {
 
     expect(completeTask).toHaveBeenCalledWith("a");
     expect(toast).toHaveBeenCalledWith(
-      'Completed "call mum"',
+      "1 task completed",
       expect.objectContaining({ action: expect.objectContaining({ label: "Undo" }) }),
     );
   });
@@ -883,38 +1072,62 @@ describe("TodoPage — Today", () => {
 // Issue #169: the schedule sheet is one instance shared by every view
 // (todo-page.tsx's own doc comment on `schedulingId`) — exercised once
 // from Inbox here, since task-schedule-sheet.test.tsx already covers the
-// sheet's own picker behaviour in isolation.
+// sheet's own picker behaviour in isolation. Issue #253 moved Date off
+// this sheet onto its own per-row anchored `TaskSchedulePopover` instance
+// (task-row-content.tsx) — the row's hover Date button opens that instead
+// now, so this describe block exercises the sheet through the
+// More-actions "Deadline…" item instead, the door that still reaches it.
 describe("TodoPage — scheduling", () => {
-  // "Schedule" was renamed "Date" on the row (issue #178's own reference
-  // behaviour) — the sheet it opens, and its own title, are unchanged.
-  it("opens the schedule sheet for the tapped Task, and a picker action calls the context's setter", async () => {
-    const setTaskPriority = vi.fn();
-    renderTodoPage(inboxContext([task({ id: "a", content: "call mum" })], { setTaskPriority }));
-
-    await waitFor(() => expect(screen.getByText("call mum")).toBeInTheDocument());
-    fireEvent.click(screen.getByRole("button", { name: 'Date "call mum"' }));
-    // `LazyTaskScheduleSheet` resolves its `import()` asynchronously
-    // (lazy-task-schedule-sheet.ts's own header comment) — `findByText`,
-    // not `getByText`, tolerates the one microtask/render that takes.
-    expect(await screen.findByText('Schedule "call mum"')).toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole("button", { name: "P1" }));
-
-    // storedPriorityOf(1) === 4.
-    expect(setTaskPriority).toHaveBeenCalledWith("a", 4);
-  });
-
   it("closing the sheet leaves no Task being scheduled", async () => {
     renderTodoPage(inboxContext([task({ id: "a", content: "call mum" })]));
 
     await waitFor(() => expect(screen.getByText("call mum")).toBeInTheDocument());
-    fireEvent.click(screen.getByRole("button", { name: 'Date "call mum"' }));
+    fireEvent.pointerDown(screen.getByRole("button", { name: 'More actions for "call mum"' }));
+    fireEvent.click(screen.getByRole("menuitem", { name: /^Deadline/ }));
     // `LazyTaskScheduleSheet` resolves its `import()` asynchronously
     // (lazy-task-schedule-sheet.ts's own header comment) — wait for the
     // dialog to actually mount before dismissing it.
     fireEvent.keyDown(await screen.findByRole("dialog"), { key: "Escape" });
 
     await waitFor(() => expect(screen.queryByText('Schedule "call mum"')).not.toBeInTheDocument());
+  });
+});
+
+// Issue #253: the row's hover Date button, the More-actions "Date…" item
+// and the `T` shortcut all open the SAME per-row anchored
+// `TaskSchedulePopover` instance rather than the shared sheet — exercised
+// once from Inbox here (task-row.test.tsx already covers the fan-in in
+// isolation, and task-schedule-popover.test.tsx the popover's own
+// internals), so this only proves TodoPage wires the popover's setters to
+// real TaskStore mutations.
+describe("TodoPage — the Date popover", () => {
+  it("the hover Date button opens this row's own anchored popover, and picking a day calls setTaskDate", async () => {
+    const setTaskDate = vi.fn();
+    renderTodoPage(inboxContext([task({ id: "a", content: "call mum" })], { setTaskDate }));
+
+    await waitFor(() => expect(screen.getByText("call mum")).toBeInTheDocument());
+    fireEvent.click(screen.getByRole("button", { name: 'Date "call mum"' }));
+
+    expect(await screen.findByTestId("scheduler-view")).toBeInTheDocument();
+    expect(screen.queryByText('Schedule "call mum"')).not.toBeInTheDocument();
+
+    // `/^Today \w{3}$/`, not a bare `/^Today/` — react-day-picker's own
+    // default aria-label for today's calendar cell also starts with
+    // "Today, " (a comma and the full weekday name), which would
+    // otherwise match too (found the hard way, in task-detail-view.test.tsx).
+    fireEvent.click(screen.getByRole("button", { name: /^Today \w{3}$/ }));
+
+    expect(setTaskDate).toHaveBeenCalledWith("a", expect.any(String));
+  });
+
+  it("the More-actions 'Date…' item opens the identical popover instance", async () => {
+    renderTodoPage(inboxContext([task({ id: "a", content: "call mum" })]));
+
+    await waitFor(() => expect(screen.getByText("call mum")).toBeInTheDocument());
+    fireEvent.pointerDown(screen.getByRole("button", { name: 'More actions for "call mum"' }));
+    fireEvent.click(screen.getByRole("menuitem", { name: /^Date/ }));
+
+    expect(await screen.findByTestId("scheduler-view")).toBeInTheDocument();
   });
 });
 
@@ -1020,7 +1233,7 @@ describe("TodoPage — Projects", () => {
     const addTask = vi.fn();
     renderTodoPage(readyContext({ projects: [project], addTask }), "/todo/projects/p1");
 
-    fireEvent.change(await screen.findByLabelText("Add a Task"), { target: { value: "buy milk" } });
+    fireEvent.change(await screen.findByLabelText("Add task"), { target: { value: "buy milk" } });
     fireEvent.click(screen.getByRole("button", { name: "Add" }));
 
     await waitFor(() =>
@@ -1140,5 +1353,86 @@ describe("TodoPage — Filters", () => {
 
     expect(screen.getByRole("alert")).toHaveTextContent(/parentheses/i);
     expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
+  });
+});
+
+// Issue #254: Todo's app bar is gone, replaced by a real `<h1>` heading
+// inside the scrollable column, pinning the view→heading mapping
+// (`todoHeading`, this file's own module). jsdom lays nothing out, so this
+// cannot confirm the *pixel* values (26px/700/35px) — only that the right
+// text lands in a real heading, and that the app bar it replaces is gone.
+// The real-browser measurement is outstanding (see the ticket's own
+// verification-honesty note).
+describe("TodoPage — in-column heading (issue #254)", () => {
+  it("shows no separate app bar for Todo", () => {
+    renderTodoPage(readyContext());
+
+    expect(screen.queryByRole("banner")).not.toBeInTheDocument();
+  });
+
+  it("renders Inbox's heading as a real h1", () => {
+    renderTodoPage(readyContext());
+
+    const heading = screen.getByRole("heading", { name: "Inbox" });
+    expect(heading.tagName).toBe("H1");
+  });
+
+  it("renders Today's heading", () => {
+    renderTodoPage(readyContext(), "/todo/today");
+
+    expect(screen.getByRole("heading", { name: "Today" })).toBeInTheDocument();
+  });
+
+  it("renders Upcoming's heading", () => {
+    renderTodoPage(readyContext(), "/todo/upcoming");
+
+    expect(screen.getByRole("heading", { name: "Upcoming" })).toBeInTheDocument();
+  });
+
+  it("renders a Project's own resolved name as the heading", () => {
+    const project = {
+      id: "p1",
+      deviceId: "device-a",
+      name: "Groceries",
+      colour: "#DC4C3E",
+      favourite: false,
+      archived: false,
+      parentId: null,
+      description: null,
+      orderKey: "A",
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+      seq: 1,
+      syncedAt: "2026-01-01T00:00:00.000Z",
+      deletedAt: null,
+    };
+    renderTodoPage(readyContext({ projects: [project] }), "/todo/projects/p1");
+
+    expect(screen.getByRole("heading", { name: "Groceries" })).toBeInTheDocument();
+  });
+
+  it("renders a Filter's own resolved name as the heading", () => {
+    const filter = {
+      id: "f1",
+      deviceId: "device-a",
+      name: "Due today",
+      colour: "#DC4C3E",
+      query: "today",
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+      seq: 1,
+      syncedAt: "2026-01-01T00:00:00.000Z",
+      deletedAt: null,
+    };
+    renderTodoPage(readyContext({ filters: [filter] }), "/todo/filters/f1");
+
+    expect(screen.getByRole("heading", { name: "Due today" })).toBeInTheDocument();
+  });
+
+  it("keeps Back reachable and the Sync dot present alongside the heading", () => {
+    renderTodoPage(readyContext());
+
+    expect(screen.getByRole("link", { name: "Back to chats" })).toBeInTheDocument();
+    expect(screen.getByTestId("sync-status-indicator")).toBeInTheDocument();
   });
 });

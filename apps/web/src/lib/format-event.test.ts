@@ -1,6 +1,11 @@
 import type { Event, Project, Task } from "@meologue/core";
 import { describe, expect, it } from "vitest";
-import { describeEventLine, eventDayHeading, groupEventsByDay } from "./format-event";
+import {
+  describeEventLine,
+  eventDayHeading,
+  groupEventsByDay,
+  isRenderableEvent,
+} from "./format-event";
 import { taskDetailPath } from "./task-detail-route";
 
 function event(overrides: Partial<Event> = {}): Event {
@@ -159,7 +164,12 @@ describe("describeEventLine", () => {
       { tasks: [], projects: [] },
     );
     expect(line.lead).toBe("Set the date on");
-    expect(line.detail).toBe("to Feb 1");
+    // format-task-date.ts's formatDay now reads day-then-month (DATE-11,
+    // parity-ledger.md) — this Activity surface was never itself measured
+    // against Todoist, but day-then-month is Todoist's order everywhere
+    // else, so the fix reaches here too rather than leaving one date
+    // phrase in the app spelled the old way.
+    expect(line.detail).toBe("to 1 Feb");
     expect(line.subject?.label).toBe("Buy milk");
   });
 
@@ -194,13 +204,18 @@ describe("describeEventLine", () => {
     expect(line.detail).toBeUndefined();
   });
 
-  it("CMT-06: Description templates — added, changed, removed", () => {
+  // CMT-06, re-driven live (flow 5): `{content}` renders as an unquoted
+  // chip in Todoist's own DOM, not the quoted `detail` string this module
+  // used to build — so it rides in `contentPreview`, never wrapped in
+  // literal quote marks.
+  it("CMT-06: Description templates — added, changed, removed, content unquoted", () => {
     const added = describeEventLine(
       event({ eventType: "updated", extra: { description: "buy milk", lastDescription: null } }),
       { tasks: [task()], projects: [] },
     );
     expect(added.lead).toBe("You added a description");
-    expect(added.detail).toBe('"buy milk"');
+    expect(added.contentPreview).toBe("buy milk");
+    expect(added.detail).toBeUndefined();
     expect(added.trailingLead).toBe("to");
     expect(added.trailingSubject?.label).toBe("Buy milk");
 
@@ -213,14 +228,16 @@ describe("describeEventLine", () => {
     );
     expect(changed.lead).toBe("You changed the description of");
     expect(changed.subject?.label).toBe("Buy milk");
-    expect(changed.detail).toBe('to "get the good milk"');
+    expect(changed.detail).toBe("to");
+    expect(changed.contentPreview).toBe("get the good milk");
 
     const removed = describeEventLine(
       event({ eventType: "updated", extra: { description: null, lastDescription: "buy milk" } }),
       { tasks: [task()], projects: [] },
     );
     expect(removed.lead).toBe("You removed the description");
-    expect(removed.detail).toBe('"buy milk"');
+    expect(removed.contentPreview).toBe("buy milk");
+    expect(removed.detail).toBeUndefined();
     expect(removed.trailingLead).toBe("from");
     expect(removed.trailingSubject?.label).toBe("Buy milk");
   });
@@ -243,7 +260,10 @@ describe("describeEventLine", () => {
     });
   });
 
-  it("CMT-06: You commented {content} on {task}", () => {
+  // CMT-06, re-driven live (flow 5): `{content}` is an unquoted, clickable
+  // preview chip in Todoist's own DOM — `contentPreview`, never a quoted
+  // `detail` string.
+  it("CMT-06: You commented {content} on {task}, content unquoted", () => {
     const line = describeEventLine(
       event({
         objectType: "comment",
@@ -255,7 +275,8 @@ describe("describeEventLine", () => {
       { tasks: [task()], projects: [] },
     );
     expect(line.lead).toBe("You commented");
-    expect(line.detail).toBe('"sounds good"');
+    expect(line.contentPreview).toBe("sounds good");
+    expect(line.detail).toBeUndefined();
     expect(line.trailingLead).toBe("on");
     expect(line.trailingSubject?.label).toBe("Buy milk");
   });
@@ -294,7 +315,13 @@ describe("describeEventLine", () => {
     expect(line.detail).toBeUndefined();
   });
 
-  it("describes a Comment being edited — the one deliberate divergence from the reference", () => {
+  // CMT-06 (re-driven live, flow 5) reverses this: Todoist records no
+  // Event at all for a comment edit, so use-comments.ts no longer records
+  // one either. This shape can still turn up from an old store or a
+  // restored backup written before that fix — `describeEventLine` still
+  // renders it safely rather than crashing, but `isRenderableEvent` below
+  // is what actually keeps it out of the feed a reader sees.
+  it("still renders a comment 'updated' Event safely, for an old stored shape this app no longer writes", () => {
     const line = describeEventLine(
       event({ objectType: "comment", objectId: "c1", eventType: "updated" }),
       { tasks: [], projects: [] },
@@ -329,6 +356,26 @@ describe("describeEventLine", () => {
       { tasks: [], projects: [project()] },
     );
     expect(line.subject).toEqual({ glyph: "▭", label: "Errands", href: "/todo/projects/p1" });
+  });
+});
+
+describe("isRenderableEvent", () => {
+  // CMT-06: the one Event shape this app must hide from a reader entirely
+  // — Todoist has no equivalent line to show for a comment edit, so an old
+  // "updated" comment Event (from a store or backup written before this
+  // fix) renders nothing rather than the "Edited a comment" line this app
+  // used to show.
+  it("is false for a comment's 'updated' Event", () => {
+    expect(isRenderableEvent(event({ objectType: "comment", eventType: "updated" }))).toBe(false);
+  });
+
+  it("is true for every other comment Event", () => {
+    expect(isRenderableEvent(event({ objectType: "comment", eventType: "added" }))).toBe(true);
+    expect(isRenderableEvent(event({ objectType: "comment", eventType: "deleted" }))).toBe(true);
+  });
+
+  it("is true for a Task's own 'updated' Event — only a Comment's is suppressed", () => {
+    expect(isRenderableEvent(event({ objectType: "task", eventType: "updated" }))).toBe(true);
   });
 });
 

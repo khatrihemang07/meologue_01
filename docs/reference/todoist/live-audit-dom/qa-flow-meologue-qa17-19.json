@@ -1,0 +1,17 @@
+{
+  "qa17": {
+    "count": 1,
+    "roles": [
+      {
+        "role": "textbox",
+        "ariaLabel": "Add a Task"
+      }
+    ]
+  },
+  "canaryBefore": 0,
+  "afterShiftEnter": {
+    "itemCount": 0,
+    "taskCreated": false,
+    "composerTextAfter": ""
+  }
+}

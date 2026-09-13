@@ -1,0 +1,6 @@
+{
+  "url": "http://127.0.0.1:41999/todo/inbox",
+  "htmlClass": "dark",
+  "dataSurface": "todo",
+  "isDark": true
+}

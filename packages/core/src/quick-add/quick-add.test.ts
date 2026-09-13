@@ -45,10 +45,11 @@ describe("dates", () => {
     // Date arithmetic.
     ["buy milk in 3 days", "2026-09-05"],
     ["buy milk in 2 weeks", "2026-09-16"],
-    // `next week` — issue #226's own recognised-vocabulary evidence;
-    // see ./date-rules.ts's matchNextWeek doc comment for why this stays
-    // narrow to "week" rather than generalising to every arithmetic unit.
-    ["buy milk next week", "2026-09-09"],
+    // `next week` — resolves to the *next Monday*, not today+7 (QA-09:
+    // see ./date-rules.ts's matchNextWeek doc comment for the live
+    // measurements this is pinned to). NOW here is 2026-09-02, a
+    // Wednesday; the next Monday is 2026-09-07.
+    ["buy milk next week", "2026-09-07"],
     // Weekday + arithmetic combined: advance the reference point first, then find that weekday.
     ["buy milk monday in 2 weeks", "2026-09-21"],
     // Absolute, worded, no year — rolls forward to next year once the date has already passed this year.
@@ -59,10 +60,37 @@ describe("dates", () => {
     ["buy milk 25 Dec", "2026-12-25"], // still ahead this year
     // Absolute, numeric, day-first (issue #170's own example convention).
     ["buy milk 5/9/2026", "2026-09-05"],
+    // Absolute, numeric, bare month/day, no year (QA-09): hardcoded
+    // month-first regardless of `dayMonthOrder` — see
+    // ./date-rules.ts's matchAbsoluteDate doc comment on the
+    // `monthDayNoYear` loop for why this is a separate convention from
+    // the three-part form directly above.
+    ["buy milk 12/25", "2026-12-25"], // still ahead this year
+    ["buy milk 1/15", "2027-01-15"], // 15 Jan already passed (today is 2 Sep) — rolls forward
   ])("%s", (input, expectedDate) => {
     it(`resolves to ${expectedDate}`, () => {
       expect(parse(input).date).toBe(expectedDate);
     });
+  });
+
+  // QA-09's own live-audit scenario, pinned with its own `now` rather
+  // than this file's shared Wednesday `NOW`: driven live on Sat 12 Sep
+  // 2026, Todoist resolved "next week" to Mon 14 Sep — 2 days ahead, not
+  // the 7 the old `today+7` implementation gave (which would have landed
+  // on 19 Sep).
+  it("'next week' resolves to the next Monday, matching the live-audit measurement (QA-09)", () => {
+    expect(parseQuickAdd("buy milk next week", { now: "2026-09-12" }).date).toBe("2026-09-14");
+  });
+
+  it("'next week' typed on a Monday is the Monday after, never today", () => {
+    expect(parseQuickAdd("buy milk next week", { now: "2026-09-14" }).date).toBe("2026-09-21");
+  });
+
+  it("does not read 25/12 as day=12 month=25 — the numeric form QA-09's fix reads month-first", () => {
+    // Confirms the new bare two-part form is hardcoded month-first, never
+    // day-first: "25/12" has no valid month=25, so this must stay
+    // unrecognised rather than silently reading it the other way round.
+    expect(parseQuickAdd("do it 25/12", { now: "2026-09-02" }).date).toBeNull();
   });
 });
 

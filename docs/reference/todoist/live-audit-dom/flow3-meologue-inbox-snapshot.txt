@@ -1,0 +1,213 @@
+[p1 "meologue" | space "flow3 scheduler comparison meologue+todoist"(42): 1 managed, 0 untracked — p1* "meologue"]
+root
+  container "Notifications alt+T" [ref=1]
+  container
+    container "Todo"
+      anchor [ref=2, url=http://127.0.0.1:41999/todo/inbox]
+        svg_root
+        text "Add task"
+      anchor [ref=3, loc=href:/todo/search, url=http://127.0.0.1:41999/todo/search]
+        svg_root
+        text "Search"
+      container
+        anchor [ref=4, url=http://127.0.0.1:41999/todo/inbox]
+          svg_root
+          text "Inbox"
+          text "10"
+        anchor [ref=5, loc=href:/todo/today, url=http://127.0.0.1:41999/todo/today]
+          svg_root
+          text "Today"
+          text "1"
+        anchor [ref=6, loc=href:/todo/upcoming, url=http://127.0.0.1:41999/todo/upcoming]
+          svg_root
+          text "Upcoming"
+          text "5"
+        anchor [ref=7, loc=href:/todo/filters, url=http://127.0.0.1:41999/todo/filters]
+          svg_root
+          text "Filters & Labels"
+        anchor [ref=8, loc=href:/todo/activity, url=http://127.0.0.1:41999/todo/activity]
+          svg_root
+          text "Activity"
+      container
+        heading
+          text "Projects"
+        paragraph
+          text "No Projects yet — add one from the Projects list."
+    container "Resize the conversation list" [ref=9]
+    container
+      container
+        anchor "Back to chats" [ref=10, loc=css:a[aria-label="Back to chats"], url=http://127.0.0.1:41999/]
+          svg_root
+        heading
+          text "Inbox"
+        image "Sync is off"
+      unordered_list
+        list_item
+          button "Reorder or reparent "ZZ probe today" — arrow keys to move, Alt+arrow keys to indent or outdent" [ref=11]
+            svg_root
+          checkbox "ZZ probe today" [ref=12, loc=css:input[aria-label="ZZ probe today"]]
+          container
+            button [ref=13]
+              text "ZZ probe today"
+            text "Today"
+          button "Edit "ZZ probe today"" [ref=14, loc=css:button[aria-label="Edit \"ZZ probe today\""]]
+            svg_root
+          button "Date "ZZ probe today"" [ref=15, loc=css:button[aria-label="Date \"ZZ probe today\""]]
+            svg_root
+          button "Comment on "ZZ probe today"" [ref=16, loc=css:button[aria-label="Comment on \"ZZ probe today\""]]
+            svg_root
+          button "More actions for "ZZ probe today"" [ref=17, loc=css:button[aria-label="More actions for \"ZZ probe today\""]]
+            svg_root
+        list_item
+          button "Reorder or reparent "ZZ probe tomorrow" — arrow keys to move, Alt+arrow keys to indent or outdent" [ref=18]
+            svg_root
+          checkbox "ZZ probe tomorrow" [ref=19, loc=css:input[aria-label="ZZ probe tomorrow"]]
+          container
+            button [ref=20]
+              text "ZZ probe tomorrow"
+            text "Tomorrow"
+          button "Edit "ZZ probe tomorrow"" [ref=21, loc=css:button[aria-label="Edit \"ZZ probe tomorrow\""]]
+            svg_root
+          button "Date "ZZ probe tomorrow"" [ref=22, loc=css:button[aria-label="Date \"ZZ probe tomorrow\""]]
+            svg_root
+          button "Comment on "ZZ probe tomorrow"" [ref=23, loc=css:button[aria-label="Comment on \"ZZ probe tomorrow\""]]
+            svg_root
+          button "More actions for "ZZ probe tomorrow"" [ref=24, loc=css:button[aria-label="More actions for \"ZZ probe tomorrow\""]]
+            svg_root
+        list_item
+          button "Reorder or reparent "ZZ probe timed" — arrow keys to move, Alt+arrow keys to indent or outdent" [ref=25]
+            svg_root
+          checkbox "ZZ probe timed" [ref=26, loc=css:input[aria-label="ZZ probe timed"]]
+          container
+            button [ref=27]
+              text "ZZ probe timed"
+            text "Tomorrow, 9:30 AM"
+          button "Edit "ZZ probe timed"" [ref=28, loc=css:button[aria-label="Edit \"ZZ probe timed\""]]
+            svg_root
+          button "Date "ZZ probe timed"" [ref=29, loc=css:button[aria-label="Date \"ZZ probe timed\""]]
+            svg_root
+          button "Comment on "ZZ probe timed"" [ref=30, loc=css:button[aria-label="Comment on \"ZZ probe timed\""]]
+            svg_root
+          button "More actions for "ZZ probe timed"" [ref=31, loc=css:button[aria-label="More actions for \"ZZ probe timed\""]]
+            svg_root
+        list_item
+          button "Reorder or reparent "ZZ probe undated" — arrow keys to move, Alt+arrow keys to indent or outdent" [ref=32]
+            svg_root
+          checkbox "ZZ probe undated" [ref=33, loc=css:input[aria-label="ZZ probe undated"]]
+          button [ref=34]
+            text "ZZ probe undated"
+          button "Edit "ZZ probe undated"" [ref=35, loc=css:button[aria-label="Edit \"ZZ probe undated\""]]
+            svg_root
+          button "Date "ZZ probe undated"" [ref=36, loc=css:button[aria-label="Date \"ZZ probe undated\""]]
+            svg_root
+          button "Comment on "ZZ probe undated"" [ref=37, loc=css:button[aria-label="Comment on \"ZZ probe undated\""]]
+            svg_root
+          button "More actions for "ZZ probe undated"" [ref=38, loc=css:button[aria-label="More actions for \"ZZ probe undated\""]]
+            svg_root
+        list_item
+          button "Reorder or reparent "ZZ probe busy A" — arrow keys to move, Alt+arrow keys to indent or outdent" [ref=39]
+            svg_root
+          checkbox "ZZ probe busy A" [ref=40, loc=css:input[aria-label="ZZ probe busy A"]]
+          container
+            button [ref=41]
+              text "ZZ probe busy A"
+            text "Tuesday"
+          button "Edit "ZZ probe busy A"" [ref=42, loc=css:button[aria-label="Edit \"ZZ probe busy A\""]]
+            svg_root
+          button "Date "ZZ probe busy A"" [ref=43, loc=css:button[aria-label="Date \"ZZ probe busy A\""]]
+            svg_root
+          button "Comment on "ZZ probe busy A"" [ref=44, loc=css:button[aria-label="Comment on \"ZZ probe busy A\""]]
+            svg_root
+          button "More actions for "ZZ probe busy A"" [ref=45, loc=css:button[aria-label="More actions for \"ZZ probe busy A\""]]
+            svg_root
+        list_item
+          button "Reorder or reparent "ZZ probe busy B" — arrow keys to move, Alt+arrow keys to indent or outdent" [ref=46]
+            svg_root
+          checkbox "ZZ probe busy B" [ref=47, loc=css:input[aria-label="ZZ probe busy B"]]
+          container
+            button [ref=48]
+              text "ZZ probe busy B"
+            text "Tuesday"
+          button "Edit "ZZ probe busy B"" [ref=49, loc=css:button[aria-label="Edit \"ZZ probe busy B\""]]
+            svg_root
+          button "Date "ZZ probe busy B"" [ref=50, loc=css:button[aria-label="Date \"ZZ probe busy B\""]]
+            svg_root
+          button "Comment on "ZZ probe busy B"" [ref=51, loc=css:button[aria-label="Comment on \"ZZ probe busy B\""]]
+            svg_root
+          button "More actions for "ZZ probe busy B"" [ref=52, loc=css:button[aria-label="More actions for \"ZZ probe busy B\""]]
+            svg_root
+        list_item
+          button "Reorder or reparent "ZZ probe P1" — arrow keys to move, Alt+arrow keys to indent or outdent" [ref=53]
+            svg_root
+          checkbox "ZZ probe P1" [ref=54, loc=css:input[aria-label="ZZ probe P1"]]
+          container
+            button [ref=55]
+              text "ZZ probe P1"
+            container
+              text "P"
+              text "1"
+          button "Edit "ZZ probe P1"" [ref=56, loc=css:button[aria-label="Edit \"ZZ probe P1\""]]
+            svg_root
+          button "Date "ZZ probe P1"" [ref=57, loc=css:button[aria-label="Date \"ZZ probe P1\""]]
+            svg_root
+          button "Comment on "ZZ probe P1"" [ref=58, loc=css:button[aria-label="Comment on \"ZZ probe P1\""]]
+            svg_root
+          button "More actions for "ZZ probe P1"" [ref=59, loc=css:button[aria-label="More actions for \"ZZ probe P1\""]]
+            svg_root
+        list_item
+          button "Reorder or reparent "ZZ probe P2" — arrow keys to move, Alt+arrow keys to indent or outdent" [ref=60]
+            svg_root
+          checkbox "ZZ probe P2" [ref=61, loc=css:input[aria-label="ZZ probe P2"]]
+          container
+            button [ref=62]
+              text "ZZ probe P2"
+            container
+              text "P"
+              text "2"
+          button "Edit "ZZ probe P2"" [ref=63, loc=css:button[aria-label="Edit \"ZZ probe P2\""]]
+            svg_root
+          button "Date "ZZ probe P2"" [ref=64, loc=css:button[aria-label="Date \"ZZ probe P2\""]]
+            svg_root
+          button "Comment on "ZZ probe P2"" [ref=65, loc=css:button[aria-label="Comment on \"ZZ probe P2\""]]
+            svg_root
+          button "More actions for "ZZ probe P2"" [ref=66, loc=css:button[aria-label="More actions for \"ZZ probe P2\""]]
+            svg_root
+        list_item
+          button "Reorder or reparent "ZZ probe P3" — arrow keys to move, Alt+arrow keys to indent or outdent" [ref=67]
+            svg_root
+          checkbox "ZZ probe P3" [ref=68, loc=css:input[aria-label="ZZ probe P3"]]
+          container
+            button [ref=69]
+              text "ZZ probe P3"
+            container
+              text "P"
+              text "3"
+          button "Edit "ZZ probe P3"" [ref=70, loc=css:button[aria-label="Edit \"ZZ probe P3\""]]
+            svg_root
+          button "Date "ZZ probe P3"" [ref=71, loc=css:button[aria-label="Date \"ZZ probe P3\""]]
+            svg_root
+          button "Comment on "ZZ probe P3"" [ref=72, loc=css:button[aria-label="Comment on \"ZZ probe P3\""]]
+            svg_root
+          button "More actions for "ZZ probe P3"" [ref=73, loc=css:button[aria-label="More actions for \"ZZ probe P3\""]]
+            svg_root
+        list_item
+          button "Reorder or reparent "ZZ probe P4" — arrow keys to move, Alt+arrow keys to indent or outdent" [ref=74]
+            svg_root
+          checkbox "ZZ probe P4" [ref=75, loc=css:input[aria-label="ZZ probe P4"]]
+          button [ref=76]
+            text "ZZ probe P4"
+          button "Edit "ZZ probe P4"" [ref=77, loc=css:button[aria-label="Edit \"ZZ probe P4\""]]
+            svg_root
+          button "Date "ZZ probe P4"" [ref=78, loc=css:button[aria-label="Date \"ZZ probe P4\""]]
+            svg_root
+          button "Comment on "ZZ probe P4"" [ref=79, loc=css:button[aria-label="Comment on \"ZZ probe P4\""]]
+            svg_root
+          button "More actions for "ZZ probe P4"" [ref=80, loc=css:button[aria-label="More actions for \"ZZ probe P4\""]]
+            svg_root
+        list_item
+      container
+        textfield "Add a Task" [ref=81]
+          text "Add a Task"
+          image
+        button [ref=82]
+          text "Add"

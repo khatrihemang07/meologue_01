@@ -1,5 +1,6 @@
 import type { Label, Project, Task } from "@meologue/core";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { useState } from "react";
 import { describe, expect, it, vi } from "vitest";
 import { TaskCommandMenu } from "./task-command-menu";
 
@@ -65,24 +66,45 @@ function label(overrides: Partial<Label> = {}): Label {
   };
 }
 
+// A real, stateful `open` — not a fixed prop with only a spy for
+// `onOpenChange` — because issue #255's fix makes "Date…" open its popover
+// only once this menu's own Content has genuinely closed (Radix's
+// `onCloseAutoFocus`, fired when `Presence` actually tears the Content
+// down). A fixed `open={true}` would never let that happen: Radix would
+// have no `open` transition to react to at all.
 function renderMenu(overrides: Partial<Parameters<typeof TaskCommandMenu>[0]> = {}) {
+  const { open: initialOpen = true, onOpenChange: onOpenChangeSpy, ...rest } = overrides;
   const props = {
     task: task(),
     projects: [project()],
     labels: [label()],
-    open: true,
-    onOpenChange: vi.fn(),
     trigger: <button type="button">More</button>,
     onOpenDetail: vi.fn(),
+    onOpenDate: vi.fn(),
     onOpenSchedule: vi.fn(),
     onSetPriority: vi.fn(),
     onSetProject: vi.fn(),
     onSetLabels: vi.fn(),
     onCopyLink: vi.fn(),
     onRequestDelete: vi.fn(),
-    ...overrides,
+    ...rest,
   };
-  render(<TaskCommandMenu {...props} />);
+
+  function Wrapper() {
+    const [open, setOpen] = useState(initialOpen);
+    return (
+      <TaskCommandMenu
+        {...props}
+        open={open}
+        onOpenChange={(next) => {
+          setOpen(next);
+          onOpenChangeSpy?.(next);
+        }}
+      />
+    );
+  }
+
+  render(<Wrapper />);
   return props;
 }
 
@@ -96,14 +118,38 @@ describe("TaskCommandMenu", () => {
     expect(onOpenDetail).toHaveBeenCalledTimes(1);
   });
 
-  it("Date and Deadline both open the shared TaskScheduleSheet, not a picker of their own", () => {
+  // Issue #253: Date and Deadline now open genuinely different surfaces —
+  // Date the row's own anchored `TaskSchedulePopover` instance
+  // (`onOpenDate`), Deadline the shared `TaskScheduleSheet` (`onOpenSchedule`,
+  // unchanged) — where before this ticket both opened the identical sheet.
+  //
+  // Issue #255: `onOpenDate` no longer fires synchronously from `onSelect`
+  // — it now waits for this menu's own `onCloseAutoFocus`, which only
+  // fires once Radix's `Presence` actually finishes closing the Content
+  // (see that item's own doc comment in task-command-menu.tsx for why).
+  // jsdom runs no real CSS animation, so `Presence` resolves quickly, but
+  // still asynchronously — hence `waitFor` rather than a synchronous
+  // assertion right after the click.
+  it("Date opens the row's own scheduler popover through onOpenDate, not onOpenSchedule", async () => {
+    const onOpenDate = vi.fn();
     const onOpenSchedule = vi.fn();
-    renderMenu({ onOpenSchedule });
+    renderMenu({ onOpenDate, onOpenSchedule });
 
     fireEvent.click(screen.getByRole("menuitem", { name: /^Date/ }));
+
+    await waitFor(() => expect(onOpenDate).toHaveBeenCalledTimes(1));
+    expect(onOpenSchedule).not.toHaveBeenCalled();
+  });
+
+  it("Deadline still opens the shared TaskScheduleSheet through onOpenSchedule", () => {
+    const onOpenDate = vi.fn();
+    const onOpenSchedule = vi.fn();
+    renderMenu({ onOpenDate, onOpenSchedule });
+
     fireEvent.click(screen.getByRole("menuitem", { name: /^Deadline/ }));
 
-    expect(onOpenSchedule).toHaveBeenCalledTimes(2);
+    expect(onOpenSchedule).toHaveBeenCalledTimes(1);
+    expect(onOpenDate).not.toHaveBeenCalled();
   });
 
   it("Priority's own submenu writes the stored (inverted) value, never the UI number", () => {

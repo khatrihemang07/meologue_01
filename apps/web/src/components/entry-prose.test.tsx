@@ -1,8 +1,8 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { describe, expect, it, vi } from "vitest";
 import { formatTaskReference } from "@/lib/inline-markdown";
-import { entryProse, type TaskReferenceRenderer } from "./entry-prose";
+import { type EntryProseMode, entryProse, type TaskReferenceRenderer } from "./entry-prose";
 import type { ReferenceRenderers } from "./inline-prose";
 
 const TASK_ID = "0192abcd-1234-7890-abcd-0123456789ac";
@@ -17,13 +17,15 @@ function Harness({
   query,
   refs,
   renderTaskReference,
+  mode,
 }: {
   body: string;
   query?: string;
   refs?: ReferenceRenderers;
   renderTaskReference?: TaskReferenceRenderer;
+  mode?: EntryProseMode;
 }): ReactNode {
-  return <div data-testid="prose">{entryProse(body, query, refs, renderTaskReference)}</div>;
+  return <div data-testid="prose">{entryProse(body, query, refs, renderTaskReference, mode)}</div>;
 }
 
 describe("entryProse", () => {
@@ -447,5 +449,174 @@ describe("entryProse", () => {
 
     expect(screen.getByText("[label](http://x)")).toBeInTheDocument();
     expect(screen.queryByRole("link")).not.toBeInTheDocument();
+  });
+
+  // CMT-02/CMT-08 (docs/reference/todoist/parity-ledger.md): a Task
+  // comment (`entryProse(body, ..., "comment")`) renders four forms an
+  // Entry's own default mode deliberately leaves as literal text — a
+  // heading, a blockquote, a fenced code block, and a bare URL. Every case
+  // below also re-runs the identical body through the default "entry" mode
+  // in the SAME test, which is what makes this a regression guard for
+  // journal Entry rendering, not just a feature test for comments: a
+  // change that accidentally widened `parseEntryMarkdown` itself, or
+  // dropped the `mode` branch in `entryProse`, would fail the "entry"
+  // half right beside the "comment" half it's paired with.
+  describe('"comment" mode — CMT-02/CMT-08', () => {
+    it("renders `# heading` as a real <h1>, but leaves it literal in default (entry) mode", () => {
+      const comment = render(<Harness body="# heading" mode="comment" />);
+      expect(
+        within(comment.container).getByRole("heading", { level: 1, name: "heading" }),
+      ).toBeInTheDocument();
+      comment.unmount();
+
+      const { container } = render(<Harness body="# heading" />);
+      expect(container.querySelectorAll("h1")).toHaveLength(0);
+      expect(container).toHaveTextContent("# heading");
+    });
+
+    it("renders `> quote` as a real <blockquote>, but leaves it literal in default (entry) mode", () => {
+      const { container: comment } = render(<Harness body="> quote" mode="comment" />);
+      const quote = comment.querySelector("blockquote");
+      expect(quote).not.toBeNull();
+      expect(quote).toHaveTextContent("quote");
+
+      const { container: entry } = render(<Harness body="> quote" />);
+      expect(entry.querySelectorAll("blockquote")).toHaveLength(0);
+      expect(entry).toHaveTextContent("> quote");
+    });
+
+    it("renders a fenced block as a real <pre><code>, but leaves it literal in default (entry) mode", () => {
+      const body = "```js\nconsole.log(1)\n```";
+      const { container: comment } = render(<Harness body={body} mode="comment" />);
+      const pre = comment.querySelector("pre");
+      expect(pre).not.toBeNull();
+      expect(pre?.querySelector("code")).toHaveTextContent("console.log(1)");
+
+      const { container: entry } = render(<Harness body={body} />);
+      expect(entry.querySelectorAll("pre")).toHaveLength(0);
+    });
+
+    it("linkifies a bare https URL as a real, safe <a>, but leaves it literal in default (entry) mode", () => {
+      const comment = render(<Harness body="see https://example.com now" mode="comment" />);
+      const link = within(comment.container).getByRole("link", { name: "https://example.com" });
+      expect(link).toHaveAttribute("href", "https://example.com");
+      expect(link).toHaveAttribute("target", "_blank");
+      expect(link).toHaveAttribute("rel", "noopener noreferrer");
+      comment.unmount();
+
+      const entry = render(<Harness body="see https://example.com now" />);
+      expect(within(entry.container).queryByRole("link")).not.toBeInTheDocument();
+      expect(within(entry.container).getByText(/https:\/\/example\.com/)).toBeInTheDocument();
+    });
+
+    // CMT-02's own safety requirement. `javascript:` never even reaches
+    // `Autolink`'s own recognition (verified directly against the parser in
+    // inline-markdown.test.ts), so this is the render-side proof that
+    // nothing in this component's own path could turn it into an `<a>`
+    // either.
+    it("never turns a javascript: URL into a link", () => {
+      render(<Harness body="javascript:alert(1)" mode="comment" />);
+
+      expect(screen.queryByRole("link")).not.toBeInTheDocument();
+      expect(screen.getByText("javascript:alert(1)")).toBeInTheDocument();
+    });
+
+    it("injects no HTML in comment mode either — a script tag renders as visible text", () => {
+      const { container } = render(<Harness body="<script>alert(1)</script>" mode="comment" />);
+
+      expect(container.querySelector("script")).not.toBeInTheDocument();
+      expect(screen.getByText("<script>alert(1)</script>")).toBeInTheDocument();
+    });
+
+    it("still renders a real bulleted list in comment mode, same as entry mode", () => {
+      const { container } = render(<Harness body={"- milk\n- eggs"} mode="comment" />);
+
+      const list = container.querySelector("ul");
+      expect(list).not.toBeNull();
+      const items = list?.querySelectorAll(":scope > li") ?? [];
+      expect(Array.from(items).map((li) => li.textContent)).toEqual(["milk", "eggs"]);
+    });
+
+    // CMT-08's own "gap runs the other way" half: Todoist leaves `1. first`
+    // literal in a comment, but this app's own `<ol>` support (issue #152)
+    // is explicitly kept, not removed to chase that particular parity gap.
+    it("keeps rendering a real ordered list in comment mode — the numbered-list gap is left alone on purpose", () => {
+      const { container } = render(<Harness body={"1. first\n2. second"} mode="comment" />);
+
+      expect(container.querySelector("ol")).not.toBeNull();
+    });
+
+    it("still renders bold/italic/inline-code the same as entry mode", () => {
+      render(<Harness body="**bold** and *italic* and `code`" mode="comment" />);
+
+      expect(screen.getByText("bold", { selector: "strong" })).toBeInTheDocument();
+      expect(screen.getByText("italic", { selector: "em" })).toBeInTheDocument();
+      expect(screen.getByText("code", { selector: "code" })).toBeInTheDocument();
+    });
+
+    // Live re-drive gaps (docs/reference/todoist/parity-ledger.md's CMT-08
+    // row): strikethrough tag, one-`\n`-stays-in-one-paragraph, and a tight
+    // list's unwrapped `<li>` text — each pinned against entry mode staying
+    // exactly as it was, in the same test that pins the comment behaviour.
+    it("renders strikethrough as <del> in comment mode, but keeps <s> in default (entry) mode", () => {
+      const { container: comment } = render(<Harness body="~~struck~~" mode="comment" />);
+      expect(comment.querySelector("del")).toHaveTextContent("struck");
+      expect(comment.querySelector("s")).toBeNull();
+
+      const { container: entry } = render(<Harness body="~~struck~~" />);
+      expect(entry.querySelector("s")).toHaveTextContent("struck");
+      expect(entry.querySelector("del")).toBeNull();
+    });
+
+    it("keeps consecutive single-newline lines in one <p>, joined by <br>, but still splits them into separate <p>s in default (entry) mode", () => {
+      const body = "*italic*\n~~strike~~";
+      const { container: comment } = render(<Harness body={body} mode="comment" />);
+      const paragraphs = comment.querySelectorAll("p");
+      expect(paragraphs).toHaveLength(1);
+      expect(paragraphs[0]?.querySelector("br")).not.toBeNull();
+      expect(paragraphs[0]?.querySelector("em")).toHaveTextContent("italic");
+      expect(paragraphs[0]?.querySelector("del")).toHaveTextContent("strike");
+
+      const { container: entry } = render(<Harness body={body} />);
+      expect(entry.querySelectorAll("p")).toHaveLength(2);
+      expect(entry.querySelectorAll("br")).toHaveLength(0);
+    });
+
+    it("renders a tight list's item text directly inside <li>, with no wrapping <p>", () => {
+      const { container } = render(<Harness body={"1. first"} mode="comment" />);
+
+      const list = container.querySelector("ol");
+      expect(list).not.toBeNull();
+      // No `start` attribute either — Todoist omits it at the default of 1.
+      expect(list?.getAttribute("start")).toBeNull();
+      const item = list?.querySelector("li");
+      expect(item).toHaveTextContent("first");
+      expect(item?.querySelector("p")).toBeNull();
+    });
+
+    it("keeps a loose list's item wrapped in <p> — items separated by a blank line", () => {
+      const { container } = render(<Harness body={"- one\n\n- two"} mode="comment" />);
+
+      const items = container.querySelectorAll("li");
+      expect(items).toHaveLength(2);
+      for (const item of Array.from(items)) {
+        expect(item.querySelector("p")).not.toBeNull();
+      }
+    });
+
+    it("still wraps a tight list item's text in <p> in default (entry) mode — this mode's own list behaviour is unchanged", () => {
+      const { container } = render(<Harness body={"1. first"} />);
+
+      const item = container.querySelector("ol li");
+      expect(item?.querySelector("p")).not.toBeNull();
+      expect(container.querySelector("ol")).toHaveAttribute("start", "1");
+    });
+
+    it("keeps a fenced code block's own trailing newline, matching Todoist", () => {
+      const { container } = render(<Harness body={"```\ncode block\n```"} mode="comment" />);
+
+      expect(container.querySelector("pre code")).toHaveTextContent("code block");
+      expect(container.querySelector("pre code")?.textContent).toBe("code block\n");
+    });
   });
 });

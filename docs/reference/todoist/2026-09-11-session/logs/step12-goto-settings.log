@@ -1,0 +1,359 @@
+[p1 "Account – Settings – Todoist" | space "todoist capture pass 2"(30): 1 managed, 0 untracked — p1* "Account – Settings – Todoist"]
+root
+  container
+    container
+      container
+        button "Settings" [ref=1, loc=css:button[aria-label="Settings"]]
+          image
+          svg_root
+          text "Hemang"
+          svg_root
+        container
+          anchor "Notifications" [ref=2, loc=css:a[aria-label="Notifications"], url=https://app.todoist.com/app/notifications]
+            svg_root
+          button "Open/close sidebar" [ref=3, loc=css:button[aria-label="Open/close sidebar"]]
+            svg_root
+      container
+        button [ref=4]
+          svg_root
+          text "Add task"
+        button "Dictate tasks with Ramble" [ref=5, loc=css:button[aria-label="Dictate tasks with Ramble"]]
+          svg_root
+      navigation "Main Navigation: contains Projects, Labels, and Filters"
+        unordered_list "Main filters"
+          list_item "Search" [ref=6]
+            button "Search" [ref=7, loc=css:button[aria-label="Search"]]
+              svg_root
+              text "Search"
+          button [ref=8]
+            list_item "Inbox7" [ref=9]
+              anchor "Inbox, 7 tasks" [ref=10, loc=css:a[aria-label="Inbox, 7 tasks"], url=https://app.todoist.com/app/inbox]
+                svg_root
+                text "Inbox"
+              text "7"
+          list_item "11Today2" [ref=11]
+            anchor "Today, 2 tasks" [ref=12, loc=css:a[aria-label="Today, 2 tasks"], url=https://app.todoist.com/app/today]
+              svg_root "11"
+                text "11"
+              text "Today"
+            text "2"
+          list_item "Upcoming" [ref=13]
+            anchor "Upcoming" [ref=14, loc=css:a[aria-label="Upcoming"], url=https://app.todoist.com/app/upcoming]
+              svg_root
+              text "Upcoming"
+          list_item "Filters & Labels" [ref=15]
+            anchor "Filters & Labels" [ref=16, loc=css:a[aria-label="Filters & Labels"], url=https://app.todoist.com/app/filters-labels]
+              svg_root
+              text "Filters & Labels"
+          list_item "Reporting" [ref=17]
+            anchor "Reporting" [ref=18, loc=css:a[aria-label="Reporting"], url=https://app.todoist.com/app/activity]
+              svg_root
+              text "Reporting"
+        container
+          container
+            anchor [ref=19, loc=href:/app/projects, url=https://app.todoist.com/app/projects]
+              text "My Projects"
+            button "My projects menu" [ref=20, loc=css:button[aria-label="My projects menu"]]
+              svg_root
+            button "Toggle list of My Projects" [ref=21, loc=css:button[aria-label="Toggle list of My Projects"]]
+              svg_root
+          unordered_list "Projects"
+            button [ref=22]
+              list_item "Getting Started 👋14" [ref=23]
+                anchor "Getting Started 👋, 14 tasks" [ref=24, loc=css:a[aria-label="Getting Started 👋, 14 tasks"], url=https://app.todoist.com/app/project/getting-started-6h5pC9QRMFgm375m]
+                  svg_root
+                  container
+                    text "Getting Started"
+                    text "👋"
+                container
+                  text "14"
+                  button "More actions" [ref=25, loc=css:button[aria-label="More actions"]]
+                    svg_root
+      button [ref=26]
+        svg_root
+        text "Help & resources"
+    container "Main Content" [ref=27]
+      container [ref=28]
+        container
+          button "View Options Menu" [ref=29, loc=css:button[aria-label="View Options Menu"]]
+            svg_root
+            text "Display: 2"
+          anchor "Comments" [ref=30, loc=css:a[aria-label="Comments"], url=https://app.todoist.com/app/inbox/comments]
+            svg_root
+          button "Project options menu" [ref=31, loc=css:button[aria-label="Project options menu"]]
+            svg_root
+        heading
+          text "Inbox"
+        list_item
+          container "(No Section)"
+            unordered_list
+              container
+                container [ref=32]
+                  list_item
+                    button "Task: Room clean" [ref=33]
+                      container
+                        svg_root
+                        checkbox "Mark task as complete" [ref=34]
+                          svg_root
+                        container
+                          text "Room clean"
+                          button [ref=35]
+                            container
+                              svg_root
+                              text "Today"
+                container [ref=36]
+                  list_item
+                    button "Task: Roller thigh pain" [ref=37]
+                      container
+                        svg_root
+                        checkbox "Mark task as complete" [ref=38]
+                          svg_root
+                        container
+                          text "Roller thigh pain"
+                          button [ref=39]
+                            container
+                              svg_root
+                              text "Today"
+                container [ref=40]
+                  list_item
+                    button "Task: hair wash" [ref=41]
+                      container
+                        svg_root
+                        checkbox "Mark task as complete" [ref=42]
+                          svg_root
+                        container
+                          text "hair wash"
+                          button [ref=43]
+                            container
+                              svg_root
+                              text "Tomorrow"
+                              svg_root
+                container [ref=44]
+                  list_item
+                    button "Task: naukri photo update" [ref=45]
+                      container
+                        svg_root
+                        checkbox "Mark task as complete" [ref=46]
+                          svg_root
+                        container
+                          text "naukri photo update"
+                          button [ref=47]
+                            container
+                              svg_root
+                              text "Tomorrow"
+                container [ref=48]
+                  list_item
+                    button "Task: Buy mobile holder and get the bike fixed" [ref=49]
+                      container
+                        svg_root
+                        checkbox "Mark task as complete" [ref=50]
+                          svg_root
+                        container
+                          text "Buy mobile holder and get the bike fixed"
+                          container
+                            button [ref=51]
+                              container
+                                svg_root
+                                text "Tomorrow"
+                            anchor "1 comment" [ref=52, loc=href:/app/task/buy-mobile-holder-and-get-the-bike-fixed-6hMc452X7r23VX2G?intent=reply, url=https://app.todoist.com/app/task/buy-mobile-holder-and-get-the-bike-fixed-6hMc452X7r23VX2G?intent=reply]
+                              svg_root
+                              text "1"
+                container [ref=53]
+                  list_item
+                    button "Task: Check for ipad cover" [ref=54]
+                      container
+                        svg_root
+                        checkbox "Mark task as complete" [ref=55]
+                          svg_root
+                        container
+                          text "Check for ipad cover"
+                          container
+                            button [ref=56]
+                              container
+                                svg_root
+                                text "Tomorrow"
+                            anchor "1 comment" [ref=57, loc=href:/app/task/check-for-ipad-cover-6hMfJ27p678RC43G?intent=reply, url=https://app.todoist.com/app/task/check-for-ipad-cover-6hMfJ27p678RC43G?intent=reply]
+                              svg_root
+                              text "1"
+                container [ref=58]
+                  list_item
+                    button "Task: Buy bluetooth for vishalAmazon.in" [ref=59]
+                      container
+                        svg_root
+                        checkbox "Mark task as complete" [ref=60]
+                          svg_root
+                        container
+                          container
+                            text "Buy bluetooth for vishal"
+                            paragraph
+                              anchor [ref=61, loc=href:https://www.amazon.in/dp/B0DHVH4S77?th=1, url=https://www.amazon.in/dp/B0DHVH4S77?th=1]
+                                text "Amazon.in"
+                          button [ref=62]
+                            container
+                              svg_root
+                              text "Tomorrow"
+              list_item
+                button [ref=63]
+                  svg_root
+                  text "Add task"
+            unordered_list
+              container [ref=64]
+                list_item
+                  button "Task: add split and splid both without fail EOD" [ref=65]
+                    container
+                      checkbox "Mark task as incomplete" [ref=66]
+                        svg_root
+                      container
+                        text "add split and splid both without fail EOD"
+                        button [ref=67]
+                          container
+                            svg_root
+                            text "1 Sep"
+              container [ref=68]
+                list_item
+                  button "Task: Need to improve reflect and todo completely. They are crap right now. Specially when typing long title or updating titlePlus date keeper is crap Shift enter is also counting just like enter. Wr..." [ref=69]
+                    container
+                      checkbox "Mark task as incomplete" [ref=70]
+                        svg_root
+                      container
+                        container
+                          text "Need to improve reflect and todo completely. They are crap right now. Specially when typing long title or updating title"
+                          paragraph
+                            text "Plus date keeper is crap"
+                            text "…"
+                        button [ref=71]
+                          container
+                            svg_root
+                            text "9 Sep"
+              container [ref=72]
+                list_item
+                  button "Task: Apply company" [ref=73]
+                    container
+                      checkbox "Mark task as incomplete" [ref=74]
+                        svg_root
+                      container
+                        text "Apply company"
+                        button [ref=75]
+                          container
+                            svg_root
+                            text "Yesterday"
+              container [ref=76]
+                list_item
+                  button "Task: Quick dsa" [ref=77]
+                    container
+                      checkbox "Mark task as incomplete" [ref=78]
+                        svg_root
+                      container
+                        text "Quick dsa"
+                        button [ref=79]
+                          container
+                            svg_root
+                            text "Yesterday"
+  dialog "Settings" [ref=80, loc=role:dialog[name="Settings"]]
+    container
+      container
+        heading
+          text "Settings"
+        container
+          svg_root
+          comboboxgrouping "Search" [ref=81, loc=css:input[placeholder="Search"]]
+            text "Search"
+      navigation "Settings" [ref=82, loc=role:navigation[name="Settings"]]
+        group
+          tab [ref=83, loc=href:/app/settings/account, url=https://app.todoist.com/app/settings/account]
+            svg_root
+            text "Account"
+          tab [ref=84, loc=href:/app/settings/general, url=https://app.todoist.com/app/settings/general]
+            svg_root
+            text "General"
+          tab [ref=85, url=https://app.todoist.com/app/settings/subscription]
+            svg_root
+            text "Subscription"
+          tab [ref=86, loc=href:/app/settings/theme, url=https://app.todoist.com/app/settings/theme]
+            svg_root
+            text "Theme"
+          tab [ref=87, loc=href:/app/settings/sidebar, url=https://app.todoist.com/app/settings/sidebar]
+            svg_root
+            text "Sidebar"
+          tab [ref=88, loc=href:/app/settings/quick-customization, url=https://app.todoist.com/app/settings/quick-customization]
+            svg_root
+            text "Quick Add"
+          tab [ref=89, loc=href:/app/settings/productivity, url=https://app.todoist.com/app/settings/productivity]
+            svg_root
+            text "Productivity"
+          tab [ref=90, loc=href:/app/settings/reminders, url=https://app.todoist.com/app/settings/reminders]
+            svg_root
+            text "Reminders"
+          tab [ref=91, loc=href:/app/settings/notifications, url=https://app.todoist.com/app/settings/notifications]
+            svg_root
+            text "Notifications"
+          tab [ref=92, loc=href:/app/settings/backups, url=https://app.todoist.com/app/settings/backups]
+            svg_root
+            text "Backups"
+          tab [ref=93, loc=href:/app/settings/integrations, url=https://app.todoist.com/app/settings/integrations]
+            svg_root
+            text "Integrations"
+          tab [ref=94, loc=href:/app/settings/calendars, url=https://app.todoist.com/app/settings/calendars]
+            svg_root
+            text "Calendars"
+      button [ref=95]
+        svg_root
+        text "Add team"
+    tabpanel "Account" [ref=96, loc=role:tabpanel[name="Account"]]
+      form
+        container
+          heading
+            text "Account"
+          button "Close settings" [ref=97, loc=css:button[aria-label="Close settings"]]
+            svg_root
+        container [ref=98]
+          container
+            container
+              heading
+                text "Plan"
+              text "Beginner"
+            anchor [ref=99, url=https://app.todoist.com/app/settings/subscription]
+              text "Manage plan"
+          container
+            container
+              heading
+                text "Photo"
+              container
+                image
+                container
+                  container
+                    button [ref=100]
+                      text "Change photo"
+                    button [ref=101]
+                      text "Remove photo"
+                  container
+                    text "Pick a photo up to 4MB."
+                    text "Your avatar photo will be public."
+            container
+              container
+                text "Name"
+                textbox [ref=102, loc=css:input[name="name"]]
+                  text "Hemang"
+              text "6/255"
+            container
+              heading
+                text "Email"
+              text "khatrihemang07@gmail.com"
+              anchor [ref=103, loc=href:/app/settings/account/email, url=https://app.todoist.com/app/settings/account/email]
+                text "Change email"
+            container
+              heading
+                text "Password"
+              anchor [ref=104, loc=href:/app/settings/account/password, url=https://app.todoist.com/app/settings/account/password]
+                text "Change password"
+            container
+              heading
+                text "Two-factor authentication"
+              paragraph
+                text "2FA is disabled on your Todoist account."
+          container
+            heading
+              text "Connected accounts"
+            text "Log in to Todoist with your Google, Facebook, or Apple account."
+
+

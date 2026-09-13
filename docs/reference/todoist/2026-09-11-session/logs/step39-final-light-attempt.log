@@ -1,0 +1,7 @@
+ElementResolutionError: page.click timed out after 3000ms: Locator text="Update" matched 0 elements
+    at #retryElementAction (file:////[eval1]:18814:27)
+    at async file:////[eval1]:18903:29
+    at async file:////[eval1]:16705:28
+sync re-enabled: {"found":false}
+
+ego's nodejs process exited with code 1.

@@ -1,0 +1,184 @@
+{
+  "clickInfo": {
+    "found": true,
+    "checkboxFound": true,
+    "cbTag": "BUTTON",
+    "cbAriaLabel": "Mark task as complete",
+    "cbRole": "checkbox"
+  },
+  "toastInfo": {
+    "firstSeenAt": 360,
+    "text": "1 task completedUndo",
+    "role": "alert",
+    "ariaLive": "polite",
+    "hasUndo": true,
+    "undoTag": "BUTTON",
+    "undoType": "button"
+  },
+  "pollLog": [
+    {
+      "t": 0,
+      "present": false
+    },
+    {
+      "t": 360,
+      "present": true
+    },
+    {
+      "t": 692,
+      "present": true
+    },
+    {
+      "t": 997,
+      "present": true
+    },
+    {
+      "t": 1327,
+      "present": true
+    },
+    {
+      "t": 1632,
+      "present": true
+    },
+    {
+      "t": 1936,
+      "present": true
+    },
+    {
+      "t": 2240,
+      "present": true
+    },
+    {
+      "t": 2543,
+      "present": true
+    },
+    {
+      "t": 2846,
+      "present": true
+    },
+    {
+      "t": 3149,
+      "present": true
+    },
+    {
+      "t": 3454,
+      "present": true
+    },
+    {
+      "t": 3758,
+      "present": true
+    },
+    {
+      "t": 4068,
+      "present": true
+    },
+    {
+      "t": 4375,
+      "present": true
+    },
+    {
+      "t": 4681,
+      "present": true
+    },
+    {
+      "t": 4986,
+      "present": true
+    },
+    {
+      "t": 5292,
+      "present": true
+    },
+    {
+      "t": 5595,
+      "present": true
+    },
+    {
+      "t": 5903,
+      "present": true
+    },
+    {
+      "t": 6208,
+      "present": true
+    },
+    {
+      "t": 6513,
+      "present": true
+    },
+    {
+      "t": 6818,
+      "present": true
+    },
+    {
+      "t": 7121,
+      "present": true
+    },
+    {
+      "t": 7425,
+      "present": true
+    },
+    {
+      "t": 7730,
+      "present": true
+    },
+    {
+      "t": 8033,
+      "present": true
+    },
+    {
+      "t": 8338,
+      "present": true
+    },
+    {
+      "t": 8642,
+      "present": true
+    },
+    {
+      "t": 8947,
+      "present": true
+    },
+    {
+      "t": 9252,
+      "present": true
+    },
+    {
+      "t": 9556,
+      "present": true
+    },
+    {
+      "t": 9861,
+      "present": true
+    },
+    {
+      "t": 10167,
+      "present": true
+    },
+    {
+      "t": 10472,
+      "present": true
+    },
+    {
+      "t": 10775,
+      "present": true
+    },
+    {
+      "t": 11081,
+      "present": false
+    },
+    {
+      "t": 11383,
+      "present": false
+    },
+    {
+      "t": 11694,
+      "present": false
+    },
+    {
+      "t": 11999,
+      "present": false
+    }
+  ],
+  "disappearedBetween": {
+    "lastPresentT": 10775,
+    "firstAbsentT": 11081
+  }
+}

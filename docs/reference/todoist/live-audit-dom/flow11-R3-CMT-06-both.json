@@ -1,0 +1,45 @@
+{
+  "round": 3,
+  "driveDate": "2026-09-13 (round 3 re-drive, both apps, same session)",
+  "row": "CMT-06",
+  "method": "On the same task in each app (with the CMT-02 and CMT-08 comments already added): (1) edited the CMT-02 comment (appended ' edited') and saved, to test whether an edit event appears; (2) deleted the CMT-08 comment via its confirmation; (3) completed then uncompleted the task; (4) opened the task's own activity (Todoist: More actions -> View activity; meologue: the Activity panel in the detail view) and read every line verbatim, noting whether each line names the task.",
+  "todoist": {
+    "activityLines": [
+      "You uncompleted ZZ probe comments -- 59 seconds ago",
+      "You completed ZZ probe comments -- 59 seconds ago",
+      "You deleted a comment from ZZ probe comments -- 1 minute ago",
+      "You commented italic strike # heading > quote code block 1. first on ZZ probe comments -- 2 minutes ago",
+      "You commented bold and https://example.com on ZZ probe comments -- 4 minutes ago",
+      "You added ZZ probe comments -- 5 minutes ago"
+    ],
+    "endOfListLine": "That's it. No more history to load.",
+    "editEventAppeared": false,
+    "everyLineNamesTask": true,
+    "commentContentFormat": "rendered plain text (markdown syntax stripped -- e.g. '**bold**' shows as 'bold', '*italic*' shows as 'italic')"
+  },
+  "meologue": {
+    "activityLines": [
+      "You uncompleted ○ ZZ probe comments -- less than a minute ago",
+      "You completed ○ ZZ probe comments -- less than a minute ago",
+      "You deleted a comment from ○ ZZ probe comments -- less than a minute ago",
+      "You commented *italic*\\n~~strike~~\\n# heading\\n> quote\\n```\\ncode block\\n```\\n1. first on ○ ZZ probe comments -- 2 minutes ago",
+      "You commented **bold** and https://example.com on ○ ZZ probe comments -- 3 minutes ago"
+    ],
+    "headingText": "Activity (5)",
+    "editEventAppeared": false,
+    "everyLineNamesTask": true,
+    "commentContentFormat": "raw markdown source, unrendered (e.g. '**bold**' and '*italic*' with syntax characters intact)",
+    "missingAddedEvent": "No 'You added' line -- this task was seeded directly through the store (taskStore.upsert), which records no creation event, matching the ledger's own note that this is a seeding artifact rather than a product gap.",
+    "taskNameGlyph": "Each line's task-name mention is preceded by a small circle glyph (○), which is not present in Todoist's activity text."
+  },
+  "verdict": {
+    "result": "MOSTLY MATCH on template wording, DIFFERS on content formatting",
+    "notes": [
+      "'You added {task}' / 'You completed {task}' / 'You uncompleted {task}' / 'You deleted a comment from {task}' / 'You commented {content} on {task}': all five templates are now structurally present with the task name included in meologue (previously: no task names in per-task entries, and 'You deleted a comment' lacked 'from {task}'). This is a real fix from the ledger's prior 'quoted content, no task names' divergence.",
+      "Neither app shows an 'Edited a comment' event after a real comment edit -- MATCH, and this also fixes the ledger's prior overclaim that meologue always adds a spurious 'Edited a comment' event.",
+      "DIFFERS: the {content} portion is Todoist's rendered/stripped plain text ('bold and https://example.com') vs meologue's raw markdown source ('**bold** and https://example.com', with literal newlines for the CMT-08 comment). Todoist also shows content as an unquoted chip (per the ledger); this round's read did not re-confirm chip-vs-plain-text structurally, only the text content.",
+      "DIFFERS (cosmetic): meologue prefixes each task mention with a small circle (○) glyph; Todoist has none.",
+      "meologue is missing 'You added {task}' only because this fixture was seeded through the store rather than created via the UI -- a test-method artifact, not a product gap (same conclusion as the original ledger note)."
+    ]
+  }
+}

@@ -1,0 +1,24 @@
+{
+  "ok": true,
+  "upsertError": null,
+  "invalidateOk": true,
+  "deviceId": "01a091c4-89e6-72b5-b391-73774f19d3e2",
+  "dates": {
+    "todayStr": "2026-09-12",
+    "tomorrowStr": "2026-09-13",
+    "busyStr": "2026-09-15",
+    "nowIso": "2026-09-11T18:41:00.586Z"
+  },
+  "ids": {
+    "today": "32d2e664-f4cc-4b72-a5b0-b2d286ac9cf1",
+    "tomorrow": "4eebf0e1-3efa-4634-9760-c972dcbd4c25",
+    "timed": "2d62ff57-cfe4-4168-8c0d-5b7d6d1360a8",
+    "undated": "867bcb8b-c028-4a53-9c7e-cca0394f603c",
+    "busyA": "f2d39cb7-a2eb-42a0-b4e6-3192fccfd236",
+    "busyB": "f986dfbf-b9ec-436d-bed0-9fdc077485a7",
+    "p1": "661e9f13-f1d1-48ca-a820-53d9df4177a9",
+    "p2": "200a6d15-b6ef-4111-b47f-c231d27df610",
+    "p3": "1b34740c-a70c-42d6-ac9d-6835eae4a33e",
+    "p4": "755ed853-a267-4a7d-9bad-07bdb6de6ae0"
+  }
+}

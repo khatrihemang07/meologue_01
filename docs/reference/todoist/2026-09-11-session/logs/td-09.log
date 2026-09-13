@@ -1,0 +1,105 @@
+=== DOM evidence of an injected restyler ===
+{
+ "totalStyleNodes": 23,
+ "suspicious": [],
+ "htmlAttrs": [
+  "dir=\"ltr\"",
+  "data-viewer-country=\"IN\"",
+  "data-cdns=\"https://todoist.b-cdn.net/|https://d3ptyyxy2at9ui.cloudfront\"",
+  "data-csp-nonce=\"GjcuCZ-+1lldikUbRolpHIDzB00M0D67FwZbgLx7Qis\"",
+  "data-ramble-audio-capture-url=\"ramble-audio-capture.521e12a7b4e5954d.js\"",
+  "class=\"theme_dark todoist_loaded\"",
+  "data-darkreader-proxy-injected=\"true\"",
+  "data-platform=\"mac\"",
+  "data-is-electron=\"false\"",
+  "lang=\"en\"",
+  "data-browser=\"chromium\"",
+  "style=\"--main-view-header-height: calc(56px + 0px);\""
+ ],
+ "hasDarkReaderMeta": false,
+ "drVars": [
+  {
+   "v": "--darkreader-neutral-background",
+   "value": ""
+  },
+  {
+   "v": "--darkreader-neutral-text",
+   "value": ""
+  }
+ ]
+}
+
+=== extension targets known to the browser ===
+[
+ {
+  "type": "service_worker",
+  "title": "Service Worker chrome-extension://eimadpbcbfnmbkopoojfekhnkhdbieeh/background/index.js",
+  "url": "chrome-extension://eimadpbcbfnmbkopoojfekhnkhdbieeh/background/index.js"
+ },
+ {
+  "type": "service_worker",
+  "title": "Service Worker https://app.todoist.com/app/service-worker.js?cdn=https://todoist.b-cdn.net/",
+  "url": "https://app.todoist.com/app/service-worker.js?cdn=https://todoist.b-cdn.net/"
+ },
+ {
+  "type": "worker",
+  "title": "",
+  "url": ""
+ },
+ {
+  "type": "worker",
+  "title": "https://app.todoist.com/app/680c080bca0bd5e2.worker.js",
+  "url": "https://app.todoist.com/app/680c080bca0bd5e2.worker.js"
+ },
+ {
+  "type": "worker",
+  "title": "",
+  "url": ""
+ },
+ {
+  "type": "worker",
+  "title": "https://app.todoist.com/app/e33d6e89b9d78f3c.worker.js",
+  "url": "https://app.todoist.com/app/e33d6e89b9d78f3c.worker.js"
+ },
+ {
+  "type": "worker",
+  "title": "",
+  "url": ""
+ },
+ {
+  "type": "worker",
+  "title": "https://app.todoist.com/app/9058ca0ade8649f2.worker.js",
+  "url": "https://app.todoist.com/app/9058ca0ade8649f2.worker.js"
+ },
+ {
+  "type": "browser_ui",
+  "title": "Omnibox Popup",
+  "url": "chrome://omnibox-popup.top-chrome/"
+ },
+ {
+  "type": "browser_ui",
+  "title": "Omnibox Popup",
+  "url": "chrome://omnibox-popup.top-chrome/omnibox_popup_aim.html"
+ },
+ {
+  "type": "browser_ui",
+  "title": "Omnibox Popup",
+  "url": "chrome://omnibox-popup.top-chrome/omnibox_popup_aim.html"
+ },
+ {
+  "type": "browser_ui",
+  "title": "Omnibox Popup",
+  "url": "chrome://omnibox-popup.top-chrome/omnibox_popup_aim.html"
+ },
+ {
+  "type": "browser_ui",
+  "title": "Omnibox Popup",
+  "url": "chrome://omnibox-popup.top-chrome/"
+ },
+ {
+  "type": "browser_ui",
+  "title": "Omnibox Popup",
+  "url": "chrome://omnibox-popup.top-chrome/"
+ }
+]
+

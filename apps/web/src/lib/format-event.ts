@@ -28,10 +28,31 @@
 import type { Event, Project, Task } from "@meologue/core";
 import { format, formatDistanceToNow, isToday, isYesterday } from "date-fns";
 import { formatDay } from "@/lib/format-task-date";
+import { flattenCommentPreview } from "@/lib/inline-markdown";
 import { taskDetailPath } from "@/lib/task-detail-route";
 
 /** How long an Event reads as "5 minutes ago" rather than an absolute time — a day, matching the day-grouping headers themselves. */
 const RECENT_THRESHOLD_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * Whether an Event belongs in a rendered feed at all — `false` for exactly
+ * one shape: a comment's `"updated"` Event, the "Edited a comment" line
+ * CMT-06 (re-driven live, flow 5) found Todoist never shows. use-comments.ts's
+ * `editComment` no longer records this Event going forward (the fix at the
+ * source), but an existing store or a restored backup can still carry ones
+ * recorded before that change (backups defeat "migrated everywhere") —
+ * this is how the feed tolerates that old shape without ever showing a
+ * line Todoist itself would never have. `activity-feed.tsx` filters with
+ * this before grouping (`groupEventsByDay`) and before calling
+ * `describeEventLine`, so a day made up only of old edit Events shows no
+ * empty heading, and any caller that needs an accurate count of what will
+ * actually render (`task-detail-view.tsx`'s own "Activity (N)" badge)
+ * should filter through this first too, rather than counting `events`
+ * itself.
+ */
+export function isRenderableEvent(event: Event): boolean {
+  return !(event.objectType === "comment" && event.eventType === "updated");
+}
 
 /**
  * The calendar-day heading an Event's row is grouped under — "Today",
@@ -192,8 +213,23 @@ export interface EventLine {
    * and still renders a label).
    */
   subject?: EventSubject;
-  /** Plain text between the subject and any trailing subject — "from "old" to "new"", "not done". */
+  /** Plain text between the subject and any trailing subject/contentPreview — "from "old" to "new"", "not done", or the bare lead-in word "to" that precedes a `contentPreview` (see CMT-06's changed-description template). */
   detail?: string;
+  /**
+   * CMT-06: the `{content}` a comment's own text, or a description's own
+   * text, carries — rendered by `activity-feed.tsx` as an unquoted,
+   * non-interactive preview chip (Todoist's own live DOM, re-driven for
+   * this row, shows a clickable content-preview chip in this exact
+   * position; the artifacts this ticket measured against never captured
+   * that chip's markup or click target, so this app's own chip stays
+   * inert rather than guess at a destination). Renders after `detail` and
+   * before `trailingLead`/`trailingSubject` — "You changed the
+   * description of [task chip] to [content chip]" reads `subject`,
+   * `detail: "to"`, `contentPreview`, in that order. Literal quote marks
+   * around `{content}` (this module's own pre-CMT-06 shape) are exactly
+   * what this field replaces: Todoist never quotes it.
+   */
+  contentPreview?: string;
   /** The lead-in word before a second, trailing subject — "to", for "Moved [Task] to [Project]". */
   trailingLead?: string;
   /** A second named object, when an Event's own detail names one too — the destination Project of a "moved" Event. */
@@ -233,10 +269,21 @@ export function describeEventLine(
       : resolveTaskSubject(event.taskId ?? event.objectId, extra.taskContent, context);
     switch (event.eventType) {
       case "updated":
-        // Not one of CMT-06's own nine verbatim templates — Todoist's own
-        // activity log never records a comment edit at all (lifecycle.md's
-        // "Edited marker: None" finding), so this wording is this app's
-        // own deliberate divergence, unchanged by issue #229.
+        // Re-driven live (flow 5, CMT-06): Todoist's own activity log
+        // never records a comment edit at all, so use-comments.ts's
+        // `editComment` no longer calls `recordCommentEvent` — this branch
+        // can no longer be produced by a fresh edit. It stays only as a
+        // safe, non-crashing rendering for an "updated" comment Event an
+        // *old* store or restored backup still carries from before that
+        // fix (backups defeat "migrated everywhere"). `activity-feed.tsx`
+        // filters every such Event out of the feed entirely via
+        // `isRenderableEvent` below — Todoist has no equivalent line to
+        // show, so the closest parity is no row at all, not a visible
+        // "Edited a comment" — which makes this switch case unreachable
+        // through that one caller today. It is kept anyway so
+        // `describeEventLine` itself never has to crash or fall through
+        // to the wrong template if something ever calls it directly with
+        // an old-shaped Event, bypassing that filter.
         return { lead: onThisTask ? "Edited a comment" : "Edited a comment on", subject };
       case "deleted":
         // CMT-06: `You deleted a comment from {task}` — the comment body
@@ -247,18 +294,24 @@ export function describeEventLine(
           ? { lead: "You deleted a comment" }
           : { lead: "You deleted a comment", trailingLead: "from", trailingSubject: subject };
       default: {
-        // CMT-06: `You commented {content} on {task}` — `{content}` (the
-        // Comment's own text, cached at record time the same way every
-        // other event's own subject label is) sits between the lead and
-        // `{task}`, so it rides in `detail` rather than `subject`, which
-        // this module's own EventLine shape always renders immediately
-        // after `lead`.
-        const text = typeof extra.text === "string" ? extra.text : "";
+        // CMT-06 (re-driven live, flow 5): `You commented {content} on
+        // {task}`, with `{content}` an unquoted, clickable preview chip in
+        // Todoist's own DOM — not the quoted plain text this module used
+        // to emit. The Comment's own text (cached at record time the same
+        // way every other event's own subject label is) rides in
+        // `contentPreview`, which `activity-feed.tsx` renders as an inert
+        // chip between `lead` and `trailingLead`/`trailingSubject`.
+        // CMT-06's own measured chip is a plain-text flattening of the
+        // comment's raw markdown, not the source itself — `flattenCommentPreview`
+        // (inline-markdown.ts) is what reproduces both of its measured
+        // strings exactly (that function's own comment has the full
+        // account).
+        const text = typeof extra.text === "string" ? flattenCommentPreview(extra.text) : "";
         return onThisTask
-          ? { lead: "You commented", detail: `"${text}"` }
+          ? { lead: "You commented", contentPreview: text }
           : {
               lead: "You commented",
-              detail: `"${text}"`,
+              contentPreview: text,
               trailingLead: "on",
               trailingSubject: subject,
             };
@@ -369,25 +422,34 @@ export function describeEventLine(
         // `setDescriptionMutation` recorded no Event at all until this
         // ticket). `content`/`removedContent` read the cached text the
         // identical way `lastContent` above already does for a rename.
-        const content = typeof extra.description === "string" ? extra.description : "";
+        //
+        // Re-driven live (flow 5, CMT-06): `{content}` is an unquoted chip
+        // in Todoist's own DOM here too, the same finding as the comment
+        // templates above — so it rides in `contentPreview`, never the
+        // quoted `detail` string this module used to build. Flattened the
+        // same way the comment templates' own `{content}` is above.
+        const content =
+          typeof extra.description === "string" ? flattenCommentPreview(extra.description) : "";
         if (extra.description === null) {
           const removedContent =
-            typeof extra.lastDescription === "string" ? extra.lastDescription : "";
+            typeof extra.lastDescription === "string"
+              ? flattenCommentPreview(extra.lastDescription)
+              : "";
           return onThisTask
-            ? { lead: "You removed the description", detail: `"${removedContent}"` }
+            ? { lead: "You removed the description", contentPreview: removedContent }
             : {
                 lead: "You removed the description",
-                detail: `"${removedContent}"`,
+                contentPreview: removedContent,
                 trailingLead: "from",
                 trailingSubject: subject,
               };
         }
         if (extra.lastDescription == null) {
           return onThisTask
-            ? { lead: "You added a description", detail: `"${content}"` }
+            ? { lead: "You added a description", contentPreview: content }
             : {
                 lead: "You added a description",
-                detail: `"${content}"`,
+                contentPreview: content,
                 trailingLead: "to",
                 trailingSubject: subject,
               };
@@ -395,7 +457,8 @@ export function describeEventLine(
         return {
           lead: onThisTask ? "You changed the description" : "You changed the description of",
           subject,
-          detail: `to "${content}"`,
+          detail: "to",
+          contentPreview: content,
         };
       }
       if ("date" in extra) {

@@ -1,0 +1,22 @@
+{
+  "opened": {
+    "editorFound": true,
+    "ariaLabel": "Comment",
+    "active": true
+  },
+  "afterType": {
+    "text": "line one",
+    "innerHTML": "<p>line one</p>"
+  },
+  "afterEnter": {
+    "editorText": "<p>line one</p><p data-placeholder=\"Comment\" class=\"is-empty\"><br class=\"ProseMirror-trailingBreak\"></p>",
+    "editorStillPresent": true
+  },
+  "afterShiftEnter": {
+    "editorHTML": "<p>line one</p><p><br><br class=\"ProseMirror-trailingBreak\"></p>"
+  },
+  "afterCmdEnter": {
+    "editorTextAfter": "",
+    "commentElsFound": 3
+  }
+}

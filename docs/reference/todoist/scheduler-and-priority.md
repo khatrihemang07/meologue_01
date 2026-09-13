@@ -6,7 +6,7 @@ ground truth, not by reasoning about it:
 - **Todoist web**, `app.todoist.com`, dark theme, **Free plan**, captured 2026-09-10 with "today" =
   10 Sep 2026 (Thursday). Driven through ego-browser, with `getComputedStyle()` for every styling
   figure — never inferred from class names, which are content-hashed here.
-- Every picker was opened from the **composer's unsaved draft**, never from a real task, and the
+- Every picker was opened from **Quick Add's unsaved draft**, never from a real task, and the
   draft was cancelled and discarded at the end. Nothing was submitted, completed, rescheduled or
   deleted; a before/after canary over the Inbox showed no change.
 - Account at capture time: Inbox holding 6 active tasks and 1 completed, plus one "Getting Started"
@@ -77,7 +77,7 @@ All VERIFIED. "No Date" (capital D) **only appears once a date is already set** 
 | Accepts | Natural language dates ("21 Sep") and recurrence phrases ("every monday") in the same box | VERIFIED |
 | Resolved-date preview | A `button.scheduler-preview-content[data-testid="scheduler-date-preview"]` appears above the quick options once text resolves. For "every monday" it rendered: recurring icon + `Mon 14 Sep` + ` → Forever` + secondary line `No tasks` (task count on the resolved date) | VERIFIED |
 | Clicking the preview | Commits the value and closes the scheduler | VERIFIED |
-| Side effect | Selecting a date (via calendar click **or** the input) also inserts the matched phrase into the composer's title as a highlighted inline token: `<span data-testid="natural-language-match" data-match-id="21 Sep">21 Sep</span>` — i.e. the picker and Todoist's "type a date into the title" quick-add parser share the same highlighting mechanism | VERIFIED (unexpected but genuine finding) |
+| Side effect | Selecting a date (via calendar click **or** the input) also inserts the matched phrase into Quick Add's title as a highlighted inline token: `<span data-testid="natural-language-match" data-match-id="21 Sep">21 Sep</span>` — i.e. the picker and Todoist's "type a date into the title" quick-add parser share the same highlighting mechanism | VERIFIED (unexpected but genuine finding) |
 | Clear button | Once text is present, an `aria-label="Clear"` (X) button appears inside the input | VERIFIED |
 
 ---
@@ -120,7 +120,7 @@ Screenshot: `scheduler-shots/time-picker.png`; DOM: `scheduler-dom/time-panel.js
 
 | Aspect | Value | Status |
 |---|---|---|
-| Location from composer | Not on the main toolbar — reached via composer's **"More actions"** menu → **Deadline** row (icon: gold sparkle, keyboard-shortcut hint `{`) | VERIFIED |
+| Location from Quick Add | Not on the main toolbar — reached via Quick Add's **"More actions"** menu → **Deadline** row (icon: gold sparkle, keyboard-shortcut hint `{`) | VERIFIED |
 | Behaviour on this account | Clicking it opens a **full-page Pro-upgrade paywall modal** ("Try Pro for free…"), not a deadline date-picker. Deadline is entirely gated behind the paid plan; no deadline UI could be captured | VERIFIED |
 | Existing-task detail view | Sidebar also shows a "Deadline" field/button, separate from "Date", carrying the same gold `upgrade-icon` — confirms it is a distinct field from Date, gated identically, everywhere it appears | VERIFIED |
 | Deadline picker internals (calendar shape, wording, etc.) | Not observable on a Free account | **GAP** |
@@ -135,7 +135,7 @@ Screenshot: `scheduler-shots/deadline-picker.png`, `scheduler-shots/more-actions
 |---|---|---|
 | Entry via typing | Typing a recurrence phrase ("every monday") directly into the "Type a date" input is recognized live; the "Repeat" button disappears from the panel and is replaced by the resolved preview (icon + `Mon 14 Sep → Forever` + `No tasks`) | VERIFIED |
 | Entry via dedicated button | A `Repeat` button sits at the bottom of the scheduler when no recurrence phrase is active. Its own dialog contents were **not opened/inspected** this run | **GAP** |
-| Display once set (composer) | Date pill becomes the weekday/date text (e.g. `Monday`) plus a small circular-arrow (↻) icon appended, in the same purple family as the "next 7 days" date colour | VERIFIED |
+| Display once set (Quick Add) | Date pill becomes the weekday/date text (e.g. `Monday`) plus a small circular-arrow (↻) icon appended, in the same purple family as the "next 7 days" date colour | VERIFIED |
 | Display on existing rows | Task "hair wash" (real recurring task) shows `Saturday ↻` — weekday text followed by the same ↻ glyph, purple `rgb(169,112,255)` | VERIFIED |
 
 ---
@@ -145,7 +145,7 @@ Screenshot: `scheduler-shots/deadline-picker.png`, `scheduler-shots/more-actions
 | Action | Wording | Status |
 |---|---|---|
 | From the scheduler | Quick option **"No Date"** (only shown once a date exists) | VERIFIED |
-| From the composer pill directly | A small **"Remove date"** (×) button appended to the date pill once a date is set | VERIFIED |
+| From the Quick Add pill directly | A small **"Remove date"** (×) button appended to the date pill once a date is set | VERIFIED |
 
 ---
 
@@ -170,7 +170,7 @@ Raw data: `scheduler-dom/../inbox-dates.json` (relative path: `ev2/inbox-dates.j
 
 ## 10. Priority
 
-### 10a. Picker (opened from composer → "Set priority")
+### 10a. Picker (opened from Quick Add → "Set priority")
 
 `<li role="option" class="priority_picker_item">` × 4. Internal `data-value` is **inverted** from the displayed label:
 
@@ -183,7 +183,7 @@ Raw data: `scheduler-dom/../inbox-dates.json` (relative path: `ev2/inbox-dates.j
 
 All VERIFIED, all four confirmed genuinely distinct by reading `getComputedStyle` on all four `<li>` icons in one `page.evaluate()` call in the same picker instance (the earlier "four byte-identical captures" failure mode does **not** reproduce here — see raw values above, no two match). Full DOM: `scheduler-dom/priority-picker.json`.
 
-### 10b. Display once chosen (composer)
+### 10b. Display once chosen (Quick Add)
 
 Selecting "Priority 1" replaces the plain "Priority" button with a pill: a coloured flag icon (`rgb(209,69,59)`, matching the picker) + a neutral-grey text label `P1` (`rgb(204,204,204)` — the text itself is **not** coloured, only the flag icon is) + a "Remove priority" (×) button. VERIFIED (screenshot `composer-after-p1.png`).
 
@@ -194,14 +194,37 @@ Read from the task checkbox (`.task_checkbox`), not the flag icon — rows use a
 | Row | Internal class | Displayed priority | Ring/fill colour | Checkmark colour |
 |---|---|---|---|---|
 | "hair wash" (real task, genuinely prioritized) | `priority_4` | **Priority 1** (per the inverted mapping above) | `rgb(255,112,102)` filled ring, 2px | `rgb(255,112,102)` |
-| All other active Inbox tasks | `priority_1` | Priority 4 (default) | fully transparent ring/border | `rgb(169,169,169)` grey checkmark, invisible-ish |
+| All other active Inbox tasks | `priority_1` | Priority 4 (default) | ~~fully transparent ring/border~~ **`1px solid rgb(169,169,169)` — corrected, see below** | `rgb(169,169,169)` grey checkmark, invisible-ish |
 | Completed task | `priority_1` | Priority 4 (default), but completed | `rgb(87,87,87)` grey fill | `rgb(38,38,38)` (same as page bg — checkmark not visually distinguishable once complete) |
 
 VERIFIED for P1 and P4 (default) — both exist for real in this account (`hair wash` is genuinely P1). **P2 and P3 do not exist on any row in this account — their row-rendering colour is INFERRED only (not verified) from the picker's flag colours** (`rgb(235,137,9)` orange, `rgb(36,111,224)` blue) — stated as a gap.
 
+> **Corrected 2026-09-11 (`live-audit-2026-09-11.md`, ledger ROW-03 / PRI-03 / PRI-05 / PRI-06).**
+> Measured live on disposable P1–P4 fixtures, reading the ring from the **second** span inside
+> `button.task_checkbox` (the first is a fill layer, transparent at rest — almost certainly what this
+> table's P4 row originally read):
+>
+> | Priority | Class | Ring |
+> |---|---|---|
+> | P1 | `priority_4` | `2px solid rgb(255,112,102)` |
+> | P2 | `priority_3` | `2px solid rgb(255,154,19)` |
+> | P3 | `priority_2` | `2px solid rgb(82,151,255)` |
+> | P4 | `priority_1` | `1px solid rgb(169,169,169)` |
+>
+> Two consequences. **The P4 ring is opaque grey, not transparent.** And **the P2/P3 inference above
+> was wrong on both axes**: the rings are 2px, and their colours are row-specific, *not* the picker's
+> flag colours — the same row-vs-picker split this section already noted for red. meologue built the
+> inference as written, which is where its P2/P3 ring defect comes from. A flagged guess still gets
+> implemented; the flag has to reach the ledger as a blocker, not a footnote.
+
 ### 10d. Is P4 the invisible default?
 
-**Yes, confirmed.** An untouched composer shows a plain unlabeled "Priority" button (no pill, no colour) until something else is picked; the picker itself pre-checks "Priority 4"; and on real rows, "Priority 4" tasks render a fully transparent checkbox ring identical to "no priority set at all" — i.e. P4 is not merely low-visibility, it renders with **zero** colour, same as the checkbox's own neutral resting state. VERIFIED.
+**Yes, confirmed.** An untouched Quick Add shows a plain unlabeled "Priority" button (no pill, no colour) until something else is picked; the picker itself pre-checks "Priority 4"; ~~and on real rows, "Priority 4" tasks render a fully transparent checkbox ring identical to "no priority set at all" — i.e. P4 is not merely low-visibility, it renders with **zero** colour, same as the checkbox's own neutral resting state.~~ VERIFIED.
+
+> **Corrected 2026-09-11.** The pre-selection half stands, re-read live (`aria-selected="true"` on
+> Priority 4). The struck half does not: a P4 row's ring is `1px solid rgb(169,169,169)`, and its
+> picker swatch is a different opaque grey, `rgb(102,102,102)`. P4 is the default and the quietest
+> level, but it is not colourless. `row-and-detail.md` §1's grey reading was the correct one.
 
 Note the checkbox-ring red (`rgb(255,112,102)`) and the picker/pill flag red (`rgb(209,69,59)`) are **not byte-identical** — same red family, two different exact values depending on which control renders it. Flagged explicitly so a replicator doesn't assume one colour token covers both surfaces.
 

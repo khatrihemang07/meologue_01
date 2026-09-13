@@ -1,0 +1,38 @@
+{
+  "method": "real page.mouse.click at the computed gap point, NOT synthetic dispatchEvent (an earlier attempt using dispatchEvent never moved focus at all, landing on <body> — synthetic MouseEvents don't trigger native focus-follows-click)",
+  "titleRect": {
+    "top": 128,
+    "left": 354,
+    "width": 513,
+    "height": 22,
+    "bottom": 150
+  },
+  "descRect": {
+    "top": 158,
+    "left": 374,
+    "width": 493,
+    "height": 23.09375,
+    "bottom": 181.09375
+  },
+  "gapPoint": {
+    "x": 610.5,
+    "y": 154
+  },
+  "elementAtPointBeforeClick": {
+    "tag": "DIV",
+    "className": "T5MTmRF d2b5021f _2404d8ba d429865c c68f8bf6",
+    "ariaLabel": null
+  },
+  "focusResult": {
+    "active": {
+      "tag": "DIV",
+      "role": "dialog",
+      "ariaLabel": "ZZ probe comments",
+      "className": "DPhTS8Z _5905d2f3 d2b5021f _2404d8ba d429865c _8461c9bc _35b527a2 _2ce4563f b0e82bbe f287db91",
+      "contentEditable": null
+    },
+    "activeIsTitleEditor": false,
+    "activeIsDescEditor": false,
+    "activeTextSnippet": "InboxZZ probe commentsCancelSaveAdd sub-taskComments 4HemangToday 2:54 AMline one EDITEDHemangToday "
+  }
+}

@@ -1,0 +1,20 @@
+{
+  "app": "todoist",
+  "rows": ["ROW-06", "ROW-07", "ROW-08"],
+  "identityCheck": "read the row's own .task_description leaf (getComputedStyle for clamp) for ROW-07, and the row's own <a aria-label='N comments'> leaf for ROW-08, both inside the real li[data-item-id]",
+  "row07": {
+    "task": "ZZ probe desc",
+    "descriptionInput": "first line **bold**\\nsecond line",
+    "previewHTML": "<div class=\"task_description task_description--first-line-description\"><p>first line <strong>bold</strong></p>\\n<p>second line</p></div>",
+    "computedClamp": { "overflow": "hidden", "webkitLineClamp": "1", "renderedHeightPx": 18 },
+    "verdict": "description renders as real HTML (**bold** -> <strong>), first line only (line-clamp 1, DOM keeps the second <p> but it is clipped) -- more precise than row-and-detail.md's original capture, which inferred one line from an existing task rather than measuring the clamp value directly"
+  },
+  "row08": {
+    "task": "ZZ probe comments (2 comments posted)",
+    "badgeHTML": "<a aria-label=\"2 comments\" href=\"/app/task/zz-probe-comments-6hVR28vhfqmXQ7PG?intent=reply\"><svg>...</svg><span aria-hidden=\"true\">2</span></a>",
+    "isLink": true,
+    "verdict": "confirms row-and-detail.md exactly: real <a href=...?intent=reply>, icon + count. meologue's own equivalent is a plain non-link <span> badge (see flow2-ROW-08-09-10-meologue.json) -- ROW-08's already-recorded divergence reconfirmed live on both sides in the same session"
+  },
+  "row06_note": "title stays literal by construction (div.task_content is a plain text container observed structurally in row-and-detail.md); not independently re-typed with markdown chars in a title this session since our own P1-P4 fixture titles already demonstrated the parser only fires on QUICK ADD recognition tokens, never on arbitrary markdown syntax like ** or []()",
+  "traps_hit": "Ctrl+Enter did NOT submit the comment composer on this platform/session -- it left the two comment texts concatenated in an unsent 'Draft:' state. Meta+Enter (Cmd+Enter) is what actually submits, matching macOS's native modifier despite CMT-01 being documented as 'Ctrl/Cmd+Enter'. Recovered by selecting-all with Meta+A (not Control+A, which is emacs-style line-start on this app) and clearing the draft before retrying."
+}

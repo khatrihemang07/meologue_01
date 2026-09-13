@@ -1,0 +1,183 @@
+{
+  "toastInfo": {
+    "firstSeenAt": 386,
+    "text": "Completed \"ZZ probe complete\"Undo",
+    "liOwnRole": null,
+    "ancestorAriaLiveRole": null,
+    "ancestorAriaLive": "polite",
+    "buttons": [
+      {
+        "text": "Undo",
+        "ariaLabel": null,
+        "tag": "BUTTON",
+        "type": "submit"
+      }
+    ]
+  },
+  "pollLog": [
+    {
+      "t": 386,
+      "present": true
+    },
+    {
+      "t": 690,
+      "present": true
+    },
+    {
+      "t": 994,
+      "present": true
+    },
+    {
+      "t": 1298,
+      "present": true
+    },
+    {
+      "t": 1602,
+      "present": true
+    },
+    {
+      "t": 1906,
+      "present": true
+    },
+    {
+      "t": 2210,
+      "present": true
+    },
+    {
+      "t": 2515,
+      "present": true
+    },
+    {
+      "t": 2820,
+      "present": true
+    },
+    {
+      "t": 3126,
+      "present": true
+    },
+    {
+      "t": 3429,
+      "present": true
+    },
+    {
+      "t": 3734,
+      "present": true
+    },
+    {
+      "t": 4042,
+      "present": true
+    },
+    {
+      "t": 4346,
+      "present": true
+    },
+    {
+      "t": 4651,
+      "present": false
+    },
+    {
+      "t": 4959,
+      "present": false
+    },
+    {
+      "t": 5264,
+      "present": false
+    },
+    {
+      "t": 5570,
+      "present": false
+    },
+    {
+      "t": 5875,
+      "present": false
+    },
+    {
+      "t": 6180,
+      "present": false
+    },
+    {
+      "t": 6485,
+      "present": false
+    },
+    {
+      "t": 6791,
+      "present": false
+    },
+    {
+      "t": 7096,
+      "present": false
+    },
+    {
+      "t": 7399,
+      "present": false
+    },
+    {
+      "t": 7705,
+      "present": false
+    },
+    {
+      "t": 8008,
+      "present": false
+    },
+    {
+      "t": 8313,
+      "present": false
+    },
+    {
+      "t": 8619,
+      "present": false
+    },
+    {
+      "t": 8924,
+      "present": false
+    },
+    {
+      "t": 9228,
+      "present": false
+    },
+    {
+      "t": 9534,
+      "present": false
+    },
+    {
+      "t": 9840,
+      "present": false
+    },
+    {
+      "t": 10143,
+      "present": false
+    },
+    {
+      "t": 10448,
+      "present": false
+    },
+    {
+      "t": 10753,
+      "present": false
+    },
+    {
+      "t": 11060,
+      "present": false
+    },
+    {
+      "t": 11366,
+      "present": false
+    },
+    {
+      "t": 11670,
+      "present": false
+    },
+    {
+      "t": 11975,
+      "present": false
+    },
+    {
+      "t": 12282,
+      "present": false
+    }
+  ],
+  "disappearedBetween": {
+    "lastPresentT": 4346,
+    "firstAbsentT": 4651
+  }
+}

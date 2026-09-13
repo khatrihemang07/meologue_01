@@ -1,7 +1,7 @@
-import type { Project, Section, Task } from "@meologue/core";
+import type { Filter, Project, Section, Task } from "@meologue/core";
 import { today, upcoming } from "@meologue/core";
 import { useQuery } from "@tanstack/react-query";
-import { Suspense, useMemo, useState } from "react";
+import { Suspense, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate, useParams } from "react-router";
 import { toast } from "sonner";
 import { BackToChats } from "@/components/back-to-chats";
@@ -30,7 +30,9 @@ import { commentCountForTask, commentsForTask } from "@/lib/comment-counts";
 import { localDayKey } from "@/lib/local-day-key";
 import { sectionsQueryKey, tasksInProjectQueryKey } from "@/lib/query-keys";
 import type { QuickAddTaskFields } from "@/lib/quick-add-task";
+import { useSettingsStore } from "@/lib/settings";
 import { taskDetailPath, taskIdFromParam } from "@/lib/task-detail-route";
+import { commitTaskTitle } from "@/lib/task-title-commit";
 import { useEntryStore } from "@/pages/entry-store-layout";
 
 /**
@@ -94,6 +96,82 @@ function backgroundPath(background: TodoBackgroundView): string {
     return `/todo/activity${background.search ?? ""}`;
   }
   return `/todo/${background.view}`;
+}
+
+/**
+ * Issue #254: the in-column heading's text for every `TodoBackgroundView`
+ * that isn't a Project's or a Filter's own (those two read their resolved
+ * `name` instead — see `todoHeading` below). Covers every view Shell's
+ * `hideAppBar` chrome now renders for, not only the four the ticket names
+ * explicitly (Inbox/Today/Upcoming/a Project's or Filter's own name):
+ * Todo's app bar is gone for the whole Destination, not gated per view, so
+ * every view needs *some* heading rather than the four unnamed ones
+ * falling back to nothing. Wording follows this app's own existing
+ * surfaces where one already exists — `todo-sidebar.tsx`'s row labels for
+ * "Filters & Labels", `todo-nav.tsx`'s "Activity" — rather than inventing
+ * new copy.
+ */
+const VIEW_HEADINGS: Record<Exclude<TodoBackgroundView["view"], "project" | "filter">, string> = {
+  inbox: "Inbox",
+  today: "Today",
+  upcoming: "Upcoming",
+  projects: "Projects",
+  search: "Search",
+  activity: "Activity",
+  filters: "Filters & Labels",
+  labels: "Labels",
+};
+
+/**
+ * CMT-05 (parity ledger) — how long a completion toast stays up, measured
+ * live rather than trusted from `docs/reference/todoist/lifecycle.md`'s own
+ * once-coarse estimate. That doc's "6-8 seconds" came from 2-second polling
+ * and doesn't reproduce; a 300ms re-poll (flow 5,
+ * `docs/reference/todoist/live-audit-dom/flow5-CMT-05-todoist.json`) found
+ * Todoist's own toast still present at 10,775ms and gone by 11,081ms.
+ * meologue's matching toast (`flow5-CMT-05-meologue.json`) was gone between
+ * 4,346ms and 4,651ms — sonner's own unconfigured default, not a value
+ * anyone chose. ADR 0077 makes the live reading the reference over the
+ * dated capture, so this targets Todoist's measured ~11s rather than the
+ * ledger row's own nuance text.
+ *
+ * **Corrected to 10s by flow 11 R3 (Sun 13 Sep).** Measured from when the
+ * toast *appears*, both Todoist readings are about 10s plus an exit animation:
+ * flow 5 first saw it at 360ms, gone 10,775–11,081ms; R3 at 388ms, gone
+ * 10,469–10,774ms, so "~11s" folded the appearance delay and the exit into
+ * the duration. R3 read meologue at 11s as gone 11,068–11,372ms, about
+ * 600ms late. Todoist's "Date updated" toast (DET-16) reads the same ~10s, and meologue's 10s copy
+ * of it landed within 50ms of Todoist's in the same session.
+ *
+ * Applied to the two completion toasts below only (`handleComplete`,
+ * `handleCompleteForever`) — every other toast on this page (`copyTaskLink`'s
+ * "Link copied", the error toasts) keeps sonner's default, unmeasured and
+ * unaffected by this ticket.
+ */
+const COMPLETION_TOAST_DURATION_MS = 10_000;
+
+/**
+ * A Project's or a Filter's own resolved name (acceptance criterion: "The
+ * heading reflects the current view, including a Project's or Filter's own
+ * name"). `project`/`filter` are looked up by the caller (`currentProject`/
+ * `currentFilter` below, already resolved for the row highlighting and
+ * breadcrumbs elsewhere on this page) rather than re-found here, so this
+ * stays a pure mapping with no store access of its own. `null` — the id
+ * hasn't resolved yet, or `/todo/filters/new` — falls back to a generic
+ * label rather than rendering an empty `<h1>`.
+ */
+function todoHeading(
+  background: TodoBackgroundView,
+  project: Project | null,
+  filter: Filter | null,
+): string {
+  if (background.view === "project") {
+    return project?.name ?? "Project";
+  }
+  if (background.view === "filter") {
+    return filter?.name ?? "New filter";
+  }
+  return VIEW_HEADINGS[background.view];
 }
 
 export interface TodoPageProps {
@@ -163,7 +241,15 @@ export interface TodoPageProps {
  * know which scope it came from.
  *
  * The Add form is shared too, but it is **not** context-free — see
- * `captureDate`/`captureProjectId` below.
+ * `captureDate`/`captureProjectId` below. It renders once, but not first:
+ * issue #252 moved its render to just before `CompletedTasks` (near the
+ * bottom of the JSX below) so it lands after whichever list is on screen
+ * rather than above it, matching Todoist's own end-of-list "+ Add task"
+ * row (NAV-10, parity ledger) — position only. The elements themselves are
+ * unchanged: the field stays always-mounted and the Add button stays
+ * rendered-but-disabled rather than either unmounting until a click, the
+ * click-to-reveal composer with its own pickers being a deliberately
+ * deferred, separate ticket (NAV-12, parity ledger).
  */
 export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
   const {
@@ -319,6 +405,49 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
   const [quickFindOpen, setQuickFindOpen] = useState(false);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
 
+  // CMT-05 (parity ledger) — the one thing `Z`/`⌘Z` (`use-todo-keymap.ts`'s
+  // `undo-complete` binding) has to act on: the most recent completion's
+  // own `uncompleteTask` call, live only while its toast is still showing.
+  // A `ref`, not `useState`, deliberately — this never drives a render,
+  // only `fire()`'s later, out-of-band read of it, the same reason
+  // `document.activeElement` (`focusedTaskId()`, todo-keymap.ts) is read
+  // fresh rather than tracked in state. `toastId` guards against a stale
+  // write: if a second completion happens before the first toast's
+  // `onAutoClose`/`onDismiss` fires, that older callback must not clear
+  // the ref out from under the newer completion it no longer describes.
+  const pendingUndoRef = useRef<{ toastId: string | number; undo: () => void } | null>(null);
+
+  /** The one place a completion toast is raised (`handleComplete`,
+   * `handleCompleteForever` below share it) — the toast's own "Undo"
+   * button and the `undo-complete` keyboard binding both end up calling
+   * the identical `undo` callback, so there is exactly one way a
+   * completion gets reversed, not two implementations that could drift.
+   * `duration`/`onAutoClose`/`onDismiss` are the CMT-05 pieces: a 10s
+   * lifetime (`COMPLETION_TOAST_DURATION_MS`'s own doc comment has the
+   * measurement) and clearing `pendingUndoRef` the moment this exact toast
+   * stops being on screen, by either path sonner offers for "it's gone." */
+  function raiseCompletionToast(taskId: string, message: string) {
+    const undo = () => {
+      uncompleteTask(taskId);
+      pendingUndoRef.current = null;
+    };
+    const toastId = toast(message, {
+      duration: COMPLETION_TOAST_DURATION_MS,
+      action: { label: "Undo", onClick: undo },
+      onAutoClose: () => {
+        if (pendingUndoRef.current?.toastId === toastId) {
+          pendingUndoRef.current = null;
+        }
+      },
+      onDismiss: () => {
+        if (pendingUndoRef.current?.toastId === toastId) {
+          pendingUndoRef.current = null;
+        }
+      },
+    });
+    pendingUndoRef.current = { toastId, undo };
+  }
+
   // Issue #184: "completed work is reached by narrowing the log to
   // completions, not from a separate destination of its own" — a plain
   // toggle above the Activity view rather than a second route.
@@ -381,18 +510,20 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
   // nothing here for the Undo toast to reverse and none is offered; the
   // row itself already shows the next occurrence the moment this
   // component re-renders.
-  function handleComplete(taskId: string, content: string, dateString: string | null) {
+  // CMT-04 (parity ledger) — Todoist's own wording is task-agnostic and
+  // count-based ("1 task completed"), not `Completed "<name>"`; matched
+  // verbatim rather than kept as the more informative original. `content`
+  // stays in the signature even though this branch no longer reads it:
+  // `onComplete` below is bound directly to this function, and its shared
+  // type (task-row-content.tsx/task-row.tsx, outside this ticket) still
+  // passes it.
+  function handleComplete(taskId: string, _content: string, dateString: string | null) {
     if (dateString !== null) {
       advanceRecurringTask(taskId);
       return;
     }
     completeTask(taskId);
-    toast(`Completed "${content}"`, {
-      action: {
-        label: "Undo",
-        onClick: () => uncompleteTask(taskId),
-      },
-    });
+    raiseCompletionToast(taskId, "1 task completed");
   }
 
   // Ends a recurring Task's series (TaskStore.completeForever's own doc
@@ -405,14 +536,18 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
   // ended (`uncomplete`'s own doc comment never claims otherwise). The
   // toast's own wording says so, rather than promising more than Undo
   // actually gives back.
-  function handleCompleteForever(taskId: string, content: string) {
+  //
+  // CMT-04 (parity ledger): "1 task completed" replaces this row's own
+  // `Completed "<name>"`, matching `handleComplete` above — Todoist's own
+  // wording, verbatim. Todoist has no equivalent "series ended" variant to
+  // match against, so " — the recurrence has ended" is kept, appended to
+  // the same base, rather than dropped: losing it would silently hide the
+  // one piece of information this toast alone carries. `content` stays
+  // in the signature for the same shared-callback reason as
+  // `handleComplete`'s own comment above.
+  function handleCompleteForever(taskId: string, _content: string) {
     completeForeverTask(taskId);
-    toast(`Completed "${content}" — the recurrence has ended`, {
-      action: {
-        label: "Undo",
-        onClick: () => uncompleteTask(taskId),
-      },
-    });
+    raiseCompletionToast(taskId, "1 task completed — the recurrence has ended");
   }
 
   function handleRequestDelete(taskId: string) {
@@ -599,7 +734,43 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
     onOpenQuickFind: () => setQuickFindOpen(true),
     onShowShortcuts: () => setShortcutsOpen(true),
     onNavigate: navigate,
+    // CMT-05 — the pending-undo ref's one door (`pendingUndoRef`'s own doc
+    // comment above has the full reasoning). Nothing pending is this
+    // callback's own no-op to make, not a `null` `use-todo-keymap.ts` has
+    // to branch on.
+    onUndoComplete: () => {
+      pendingUndoRef.current?.undo();
+    },
   });
+
+  // Issue #247: both rename surfaces resolve a typed phrase through this
+  // one wrapper — the row's `detailActions.onRename` below and the detail
+  // view's own `onRename` prop (~:984) both call it, exactly the
+  // composition `handleAdd` already does for the add field just below.
+  // `commitTaskTitle` (task-title-commit.ts) carries the actual guards; this
+  // function is only what binds it to this page's own Task lists and store
+  // setters.
+  const smartDates = useSettingsStore((state) => state.smartDatesEnabled);
+  function commitRename(id: string, content: string) {
+    const task = tasks.find((t) => t.id === id) ?? completedTasks.find((t) => t.id === id);
+    if (task === undefined) {
+      return;
+    }
+    void commitTaskTitle(
+      task,
+      content,
+      { now: localDayKey(new Date()), smartDates },
+      {
+        renameTask,
+        setTaskDate,
+        setTaskDeadline,
+        setTaskPriority,
+        setTaskDateString,
+        setTaskLabels,
+        resolveLabelIds,
+      },
+    );
+  }
 
   // Every row on this page renders through `TaskRow`, and every one of
   // them needs this identical bundle — see `TaskDetailActions`'s own doc
@@ -610,13 +781,20 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
     labels,
     onOpenDetail: openTaskDetail,
     onSetPriority: setTaskPriority,
+    // Issue #253: bundled here so every row's own per-instance
+    // `TaskSchedulePopover` (task-row-content.tsx) reaches these without a
+    // sixth prop threaded through TaskList/TaskTree/TodayView/ProjectView.
+    onSetDate: setTaskDate,
+    onSetDateString: setTaskDateString,
+    datesWithTasks,
     onSetProject: setTaskProject,
     onSetLabels: setTaskLabels,
     onCopyLink: copyTaskLink,
-    // Issue #225: the row's own new inline rename reaches the identical
-    // `renameTask` door `TaskDetailView`'s own `onRename` prop below
-    // already calls — one rename path, two places to reach it.
-    onRename: renameTask,
+    // Issue #225 built this door; issue #247 is what made it resolve a
+    // recognised phrase rather than commit verbatim — see `commitRename`
+    // just above, the identical door `TaskDetailView`'s own `onRename`
+    // prop below already calls.
+    onRename: commitRename,
     commentCountFor: (taskId) => commentCountForTask(comments, taskId),
   };
 
@@ -682,24 +860,21 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
   }
 
   return (
-    <Shell title="Todo" back={<BackToChats />} message={message} composerSlot={<TodoNav />}>
-      {/* Shared by Inbox, Today and a Project's own view — the Projects
-          list (`view === "projects"`) has nothing to add a Task to, and
-          gets its own "New Project" form instead (`ProjectsView`); the
-          full search page (`view === "search"`, issue #183) is a results
-          list with no "current view" for a captured Task to inherit
-          either, the identical reasoning. Upcoming (issue #223) is the
-          same shape again — it spans every future day at once, so there
-          is no single date for a captured Task to inherit the way Today
-          inherits today's own. */}
-      {backgroundView.view !== "projects" &&
-        backgroundView.view !== "search" &&
-        backgroundView.view !== "activity" &&
-        backgroundView.view !== "filters" &&
-        backgroundView.view !== "filter" &&
-        backgroundView.view !== "labels" &&
-        backgroundView.view !== "upcoming" && <AddTaskForm onAdd={handleAdd} disabled={disabled} />}
-
+    <Shell
+      title={todoHeading(backgroundView, currentProject, currentFilter)}
+      back={<BackToChats />}
+      message={message}
+      composerSlot={<TodoNav />}
+      // Issue #254: Todo reads like Todoist's own page now — an 800px
+      // column above the existing 900px wide-layout breakpoint (reused
+      // rather than inventing a second one; see `use-wide-layout.ts`'s
+      // `WIDE_LAYOUT_QUERY`), staying proportional below it exactly like
+      // every other Destination, and its own in-column heading in place of
+      // the app bar (ADR 0019's amendment has both, and the accepted
+      // scrolling-Back consequence).
+      columnWidthClassName="w-[97%] md:w-[85%] min-[900px]:w-full min-[900px]:max-w-[800px]"
+      hideAppBar
+    >
       {backgroundView.view === "today" && (
         <TodayView
           tasks={tasks}
@@ -882,6 +1057,28 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
         </div>
       )}
 
+      {/* Issue #252: moved here, from before the view switch above, so it
+          renders *after* whichever list is showing rather than above every
+          one of them — Todoist's own "+ Add task" affordance sits at the
+          end of the list (NAV-10, parity ledger), not above it. Inbox,
+          Today and a Project's own view are mutually exclusive branches
+          (only one of the blocks above ever actually renders something),
+          so one render, placed once here, lands after the list in all
+          three with no per-view duplication — the identical trick this
+          file's own header comment already relies on for `AddTaskForm`
+          being "shared... once." Guard condition is unchanged from
+          before the move: the Projects list, full search, Activity,
+          Filters, a saved Filter, Labels and Upcoming still get none (this
+          component's own next paragraph explains why each one specifically
+          has no "current view" for a captured Task to inherit). */}
+      {backgroundView.view !== "projects" &&
+        backgroundView.view !== "search" &&
+        backgroundView.view !== "activity" &&
+        backgroundView.view !== "filters" &&
+        backgroundView.view !== "filter" &&
+        backgroundView.view !== "labels" &&
+        backgroundView.view !== "upcoming" && <AddTaskForm onAdd={handleAdd} disabled={disabled} />}
+
       {/* The Completed disclosure is Inbox-specific — Today's own Tasks
           are never completed *from* Today in a way that would need a
           second copy of this list; completing a Task from either view
@@ -912,11 +1109,8 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
                 setSchedulingId(null);
               }
             }}
-            onSetDate={setTaskDate}
             onSetDeadline={setTaskDeadline}
             onSetPriority={setTaskPriority}
-            onSetDateString={setTaskDateString}
-            datesWithTasks={datesWithTasks}
           />
         </Suspense>
       )}
@@ -981,7 +1175,7 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
             nextTask={nextTask}
             onClose={closeTaskDetail}
             onNavigate={stepTaskDetail}
-            onRename={(content) => renameTask(openTask.id, content)}
+            onRename={(content) => commitRename(openTask.id, content)}
             // Issue #184's own gap-fix report: the detail view now resolves
             // (and must render actionable) a completed Task too — reuses
             // `handleComplete`'s own recurring-Task/toast handling, the
@@ -991,6 +1185,9 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
             onComplete={() => handleComplete(openTask.id, openTask.content, openTask.dateString)}
             onUncomplete={() => uncompleteTask(openTask.id)}
             onOpenSchedule={() => handleOpenSchedule(openTask.id)}
+            onSetDate={setTaskDate}
+            onSetDateString={setTaskDateString}
+            datesWithTasks={datesWithTasks}
             onSetProject={(projectId) => setTaskProject(openTask.id, projectId)}
             onSetLabels={(labelIds) => setTaskLabels(openTask.id, labelIds)}
             onSetDescription={(description) => setTaskDescription(openTask.id, description)}

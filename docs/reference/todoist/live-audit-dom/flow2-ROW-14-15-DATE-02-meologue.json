@@ -1,0 +1,19 @@
+{
+  "app": "meologue",
+  "rows": ["ROW-14", "ROW-15", "DATE-02"],
+  "task": "ZZ probe completed",
+  "identityCheck": "opened the collapsed <details> (clicked its <summary>) below the Inbox active list, then measured getComputedStyle on the two leaf <span> nodes it renders: span.completed-task-text (title) and its nextElementSibling (date)",
+  "row14": {
+    "verdict": "confirmed: completed Task segregated into a collapsed <details><summary>Completed (1)</summary> below the active list, not interleaved -- ledger's already-recorded structural divergence from Todoist's inline aria-checked interleaving",
+    "detailsSummaryText": "Completed (1)",
+    "rowOuterHTML": "<li class=\"flex items-center gap-2 border-border border-b px-3 py-2 last:border-b-0\"><span class=\"completed-task-text min-w-0 flex-1 truncate text-sm\">ZZ probe completed</span><span class=\"shrink-0 text-xs\" style=\"color: var(--td-date-muted);\">Yesterday</span><button aria-label=\"Restore &quot;ZZ probe completed&quot;\">...</button></li>"
+  },
+  "row15_date02": {
+    "titleText": "ZZ probe completed",
+    "titleColor": "rgb(128, 128, 128)",
+    "titleTextDecoration": "line-through",
+    "dateText": "Yesterday",
+    "dateColor": "rgb(204, 204, 204)",
+    "verdict": "matches ledger's built values exactly, now confirmed live: title rgb(128,128,128)+line-through, date muted rgb(204,204,204) despite the underlying date being overdue -- DATE-02's completion-overrides-tone rule holds"
+  }
+}

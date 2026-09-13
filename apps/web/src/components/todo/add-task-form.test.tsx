@@ -64,7 +64,7 @@ async function getInput(): Promise<HTMLInputElement> {
   // immediately, hence `findBy` rather than `getBy` — the same await
   // `task-row.test.tsx`/`task-detail-view.test.tsx` need for their own
   // lazy-loaded title editors.
-  return (await screen.findByLabelText("Add a Task")) as HTMLInputElement;
+  return (await screen.findByLabelText("Add task")) as HTMLInputElement;
 }
 
 describe("AddTaskForm", () => {

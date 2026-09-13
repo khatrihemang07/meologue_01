@@ -1,0 +1,19 @@
+{
+  "state": {
+    "editorText": "ZZ probe busy B in 3 days ",
+    "hasMatch": true,
+    "matchId": "15 Sep",
+    "matchText": "in 3 days"
+  },
+  "after": {
+    "dlgStillOpen": false,
+    "zzTexts": [
+      "Task: ZZ probeDate: Today",
+      "Task: ZZ probe busy ADate: Tuesday",
+      "Task: ZZ probe busy BDate: Tuesday",
+      "Task: ZZ probe tDate: Tomorrow",
+      "Task: ZZ probe timedDate: Tomorrow 9:30 AM",
+      "Task: ZZ probe undated"
+    ]
+  }
+}

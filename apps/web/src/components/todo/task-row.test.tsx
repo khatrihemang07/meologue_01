@@ -1,8 +1,8 @@
 import type { Label, Project, Task } from "@meologue/core";
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { useState } from "react";
 import { describe, expect, it, vi } from "vitest";
-import { OPEN_COMMAND_MENU_EVENT } from "@/lib/todo-keymap";
+import { OPEN_COMMAND_MENU_EVENT, OPEN_SCHEDULE_EVENT } from "@/lib/todo-keymap";
 import { TaskRow } from "./task-row";
 
 /**
@@ -132,6 +132,9 @@ function renderRow(overrides: Partial<Parameters<typeof TaskRow>[0]> = {}) {
       labels: [],
       onOpenDetail: vi.fn(),
       onSetPriority: vi.fn(),
+      onSetDate: vi.fn(),
+      onSetDateString: vi.fn(),
+      datesWithTasks: new Map(),
       onSetProject: vi.fn(),
       onSetLabels: vi.fn(),
       onCopyLink: vi.fn(),
@@ -256,6 +259,31 @@ describe("TaskRow", () => {
     renderRow({ task: task({ content: "pay rent", dateString: null }) });
 
     expect(screen.queryByRole("button", { name: /Complete and archive/ })).not.toBeInTheDocument();
+  });
+
+  // ROW-03/PRI-06 (parity-ledger.md), issue #250 then a later fix pass:
+  // pass2-2026-09-11.md §2 first measured the checkbox ring at 2px for P1,
+  // 1px everywhere else — flow 2's live P1-P4 fixtures (PRI-06) then showed
+  // that "everywhere else" was wrong for P2/P3 too: the ring is 2px for
+  // EVERY non-default priority (P1, P2, P3) and 1px only at P4 ("no
+  // priority"). `priority` below is the STORED value; UI P1/P2/P3/P4 are
+  // stored 4/3/2/1 (task-types.ts's own `uiPriorityOf`'s `5 - x`
+  // inversion) — this suite always states the UI level in the test name
+  // and the stored number in the fixture, never the reverse.
+  it.each([
+    ["P1", 4],
+    ["P2", 3],
+    ["P3", 2],
+  ])("thickens the checkbox ring to 2px at %s", (_uiLabel, storedPriority) => {
+    renderRow({ task: task({ priority: storedPriority }) });
+
+    expect(screen.getByRole("checkbox").style.boxShadow).toContain("2px");
+  });
+
+  it("keeps the checkbox ring at 1px for P4 ('no priority'), the one default level", () => {
+    renderRow({ task: task({ priority: 1 }) });
+
+    expect(screen.getByRole("checkbox").style.boxShadow).toContain("1px");
   });
 
   it("shows the recurrence exactly as typed, not a paraphrase", () => {
@@ -387,18 +415,86 @@ describe("TaskRow", () => {
     expect(box).not.toHaveClass("ring-primary");
   });
 
-  // Issue #169: the schedule button is the one door onto Date/Deadline/
-  // Priority pickers from any row, in either Inbox or Today
-  // (TaskRow's own doc comment on `onOpenSchedule`).
+  // Issue #253: the Date button now anchors its own `TaskSchedulePopover`
+  // instance directly — it no longer opens the shared bottom sheet
+  // (`onOpenSchedule`), which now only opens from the More-actions
+  // "Deadline…" item. `scheduler-view` is the popover's own `data-testid`
+  // (task-schedule-popover.tsx) — jsdom lays nothing out, so this proves
+  // the popover opens, not that it anchors under the button; see this
+  // ticket's own report for why anchoring itself needs a real browser.
   // "Schedule" was renamed "Date" (issue #178's own reference behaviour —
   // the row's four hover actions read Edit, Date, Comment, More).
-  it("the Date button calls onOpenSchedule", () => {
+  it("the Date button opens this row's own anchored scheduler popover, not the shared sheet", () => {
     const onOpenSchedule = vi.fn();
     renderRow({ task: task({ content: "call mum" }), onOpenSchedule });
 
+    expect(screen.queryByTestId("scheduler-view")).not.toBeInTheDocument();
+
     fireEvent.click(screen.getByRole("button", { name: 'Date "call mum"' }));
 
+    expect(screen.getByTestId("scheduler-view")).toBeInTheDocument();
+    expect(onOpenSchedule).not.toHaveBeenCalled();
+  });
+
+  // Issue #253: the More-actions "Date…" item is a second entry point onto
+  // the identical per-row popover instance the hover button above opens —
+  // both flip the same `scheduleOpen` flag `task-row.tsx` owns.
+  //
+  // Issue #255: opening the popover now waits for the More-actions menu's
+  // own `onCloseAutoFocus` (fired once Radix's `Presence` actually finishes
+  // closing the menu's Content) rather than happening synchronously inside
+  // `onSelect` — see task-command-menu.tsx's own doc comment on the "Date…"
+  // item for why. jsdom runs no real CSS animation, so this still resolves
+  // quickly, but asynchronously — hence `waitFor` rather than an immediate
+  // assertion.
+  it("the More-actions 'Date…' item opens the identical scheduler popover", async () => {
+    renderRow({ task: task({ content: "call mum" }) });
+
+    fireEvent.pointerDown(screen.getByRole("button", { name: 'More actions for "call mum"' }));
+    fireEvent.click(screen.getByRole("menuitem", { name: /^Date/ }));
+
+    await waitFor(() => expect(screen.getByTestId("scheduler-view")).toBeInTheDocument());
+  });
+
+  // Issue #253: the `T` shortcut's own fan-in — `use-todo-keymap.ts`
+  // dispatches `OPEN_SCHEDULE_EVENT` (todo-keymap.ts) rather than calling
+  // this row directly, the identical document-level mechanism
+  // `OPEN_COMMAND_MENU_EVENT` already uses for `.` below.
+  it("opens the scheduler popover when todo-keymap.ts's own OPEN_SCHEDULE_EVENT names this Task", () => {
+    renderRow({ task: task({ id: "1", content: "call mum" }) });
+
+    expect(screen.queryByTestId("scheduler-view")).not.toBeInTheDocument();
+
+    act(() => {
+      document.dispatchEvent(new CustomEvent(OPEN_SCHEDULE_EVENT, { detail: { taskId: "1" } }));
+    });
+
+    expect(screen.getByTestId("scheduler-view")).toBeInTheDocument();
+  });
+
+  it("ignores OPEN_SCHEDULE_EVENT when it names a different Task", () => {
+    renderRow({ task: task({ id: "1", content: "call mum" }) });
+
+    act(() => {
+      document.dispatchEvent(
+        new CustomEvent(OPEN_SCHEDULE_EVENT, { detail: { taskId: "other-task" } }),
+      );
+    });
+
+    expect(screen.queryByTestId("scheduler-view")).not.toBeInTheDocument();
+  });
+
+  // Issue #253: "Deadline…" is unchanged by this ticket — it still opens
+  // the shared `TaskScheduleSheet`, not the Date popover.
+  it("the More-actions 'Deadline…' item still calls onOpenSchedule, not the scheduler popover", () => {
+    const onOpenSchedule = vi.fn();
+    renderRow({ task: task({ content: "call mum" }), onOpenSchedule });
+
+    fireEvent.pointerDown(screen.getByRole("button", { name: 'More actions for "call mum"' }));
+    fireEvent.click(screen.getByRole("menuitem", { name: /^Deadline/ }));
+
     expect(onOpenSchedule).toHaveBeenCalledTimes(1);
+    expect(screen.queryByTestId("scheduler-view")).not.toBeInTheDocument();
   });
 
   it("on a hover-capable pointer, a row's actions render in the fixed order Edit, Date, Comment, More", () => {
@@ -533,15 +629,83 @@ describe("TaskRow", () => {
       }),
     });
 
-    expect(screen.getByText("Sep 3")).toBeInTheDocument();
-    expect(screen.getByText("Due Sep 10")).toBeInTheDocument();
+    expect(screen.getByText("3 Sep")).toBeInTheDocument();
+    expect(screen.getByText("Due 10 Sep")).toBeInTheDocument();
     expect(screen.getByText("P1")).toBeInTheDocument();
   });
 
   it("summarises a timed date with its time of day", () => {
     renderRow({ task: task({ content: "call mum", date: "2026-09-03T09:30" }) });
 
-    expect(screen.getByText("Sep 3, 9:30 AM")).toBeInTheDocument();
+    expect(screen.getByText("3 Sep 9:30 AM")).toBeInTheDocument();
+  });
+
+  // DATE-01 (parity-ledger.md): Todoist's own date control carries an
+  // inline 12×12 calendar `<svg>` beside the date text
+  // (`live-audit-dom/flow8-DATE-01-todoist.json`), which meologue rendered
+  // no icon for at all before this fix. That artifact only ever sampled
+  // an OVERDUE row ("Yesterday", four captures in flow8-DATE-01-debug.json)
+  // — whether Todoist's non-overdue dates also carry the icon was never
+  // settled either way, so this is on every dated row, not gated to
+  // overdue, per this fix's own instruction for an unsettled artifact.
+  // jsdom paints no pixels, so this only proves the icon element is in the
+  // DOM next to the date text, not that it renders at 12×12 on screen.
+  it("shows a calendar icon beside the date text — DATE-01", () => {
+    renderRow({ task: task({ content: "call mum", date: "2026-09-03" }) });
+
+    const dateText = screen.getByText("3 Sep");
+    expect(dateText.querySelector("svg.lucide-calendar")).not.toBeNull();
+  });
+
+  // ROW-01 (parity-ledger.md): a title-only row (no date, deadline,
+  // priority, recurrence, Label, Project, sub-task or comment count) is
+  // 43px in Todoist; a row carrying one metadata line is 59px, +16px. This
+  // used to be a single `minHeight: "59px"` floor that held every
+  // title-only row at 59 regardless. jsdom computes no layout, so this
+  // only proves the inline `minHeight` style switches with `hasMetadata`
+  // — it cannot measure the row's actual painted height. Flow 11 R2 did:
+  // the 44px action buttons held a title-only row at 47px, so they now lay
+  // out at 36px through `-my-1`, which the last test here pins.
+  describe("ROW-01: row height follows whether the row has a metadata line", () => {
+    it("lays the 44px row actions out at 36px so they cannot hold a title-only row above 43px", () => {
+      renderRow({ task: task({ content: "call mum" }) });
+
+      const more = screen.getByRole("button", { name: 'More actions for "call mum"' });
+      expect(more).toHaveClass("size-11", "-my-1");
+    });
+
+    it("floors a title-only row at 43px", () => {
+      renderRow({ task: task({ content: "call mum" }) });
+
+      expect(rowBox().style.minHeight).toBe("43px");
+    });
+
+    it("floors a row with a date badge at 59px", () => {
+      renderRow({ task: task({ content: "call mum", date: "2026-09-03" }) });
+
+      expect(rowBox().style.minHeight).toBe("59px");
+    });
+
+    it("floors a row with a non-default priority (and no date) at 59px", () => {
+      renderRow({ task: task({ content: "call mum", priority: 4 }) });
+
+      expect(rowBox().style.minHeight).toBe("59px");
+    });
+
+    it("floors a row whose only metadata is a sub-task count at 59px", () => {
+      renderRow({ task: task({ content: "call mum" }), subtaskCount: 2 });
+
+      expect(rowBox().style.minHeight).toBe("59px");
+    });
+
+    it("floors a row at 43px when its date badge is suppressed and nothing else qualifies as metadata", () => {
+      renderRow({
+        task: task({ content: "call mum", date: "2026-09-03" }),
+        suppressDateBadge: true,
+      });
+
+      expect(rowBox().style.minHeight).toBe("43px");
+    });
   });
 
   // Issue #224's own "must gain" list: Labels, the Project a Task lives
@@ -556,6 +720,9 @@ describe("TaskRow", () => {
           labels: [label({ id: "label-1", name: "urgent" })],
           onOpenDetail: vi.fn(),
           onSetPriority: vi.fn(),
+          onSetDate: vi.fn(),
+          onSetDateString: vi.fn(),
+          datesWithTasks: new Map(),
           onSetProject: vi.fn(),
           onSetLabels: vi.fn(),
           onCopyLink: vi.fn(),
@@ -575,6 +742,9 @@ describe("TaskRow", () => {
           labels: [],
           onOpenDetail: vi.fn(),
           onSetPriority: vi.fn(),
+          onSetDate: vi.fn(),
+          onSetDateString: vi.fn(),
+          datesWithTasks: new Map(),
           onSetProject: vi.fn(),
           onSetLabels: vi.fn(),
           onCopyLink: vi.fn(),
@@ -642,7 +812,7 @@ describe("TaskRow", () => {
         commentCount: 3,
       });
 
-      expect(screen.getByText("Sep 3")).toBeInTheDocument();
+      expect(screen.getByText("3 Sep")).toBeInTheDocument();
       expect(screen.getByText("3")).toBeInTheDocument();
     });
 
@@ -752,6 +922,9 @@ describe("TaskRow", () => {
           labels: [],
           onOpenDetail,
           onSetPriority: vi.fn(),
+          onSetDate: vi.fn(),
+          onSetDateString: vi.fn(),
+          datesWithTasks: new Map(),
           onSetProject: vi.fn(),
           onSetLabels: vi.fn(),
           onCopyLink: vi.fn(),
@@ -774,6 +947,9 @@ describe("TaskRow", () => {
           labels: [],
           onOpenDetail: vi.fn(),
           onSetPriority: vi.fn(),
+          onSetDate: vi.fn(),
+          onSetDateString: vi.fn(),
+          datesWithTasks: new Map(),
           onSetProject: vi.fn(),
           onSetLabels: vi.fn(),
           onCopyLink: vi.fn(),
@@ -808,6 +984,9 @@ describe("TaskRow", () => {
           labels: [],
           onOpenDetail: vi.fn(),
           onSetPriority: vi.fn(),
+          onSetDate: vi.fn(),
+          onSetDateString: vi.fn(),
+          datesWithTasks: new Map(),
           onSetProject: vi.fn(),
           onSetLabels: vi.fn(),
           onCopyLink: vi.fn(),
@@ -837,6 +1016,9 @@ describe("TaskRow", () => {
           labels: [],
           onOpenDetail: vi.fn(),
           onSetPriority: vi.fn(),
+          onSetDate: vi.fn(),
+          onSetDateString: vi.fn(),
+          datesWithTasks: new Map(),
           onSetProject: vi.fn(),
           onSetLabels: vi.fn(),
           onCopyLink: vi.fn(),

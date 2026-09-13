@@ -1,0 +1,36 @@
+{
+  "ok": true,
+  "dialogInfo": {
+    "testid": "task-details-modal",
+    "role": "dialog",
+    "ariaLabel": null,
+    "ariaModal": null,
+    "width": 820.800048828125,
+    "height": 675.0640869140625,
+    "top": 80.46797180175781,
+    "left": 324.6000061035156,
+    "borderRadius": "10px",
+    "background": "rgb(31, 31, 31)",
+    "border": "0px solid rgb(61, 61, 61)",
+    "boxShadow": "rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0.16) 0px 2px 8px 0px",
+    "outerHTMLSnippet": "<div role=\"dialog\" id=\"radix-_r_1b_\" data-state=\"open\" data-testid=\"task-details-modal\" class=\"fixed z-50 flex flex-col overflow-hidden bg-popover text-popover-foreground shadow-[var(--td-modal-shadow)] outline-hidden duration-150 top-1/2 left-1/2 h-[min(48.25rem,85vh)] w-[min(54rem,calc(100%-2rem))] -translate-x-1/2 -translate-y-1/2 rounded-lg data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95\" tabindex=\"-1\" aria-"
+  },
+  "titleInfo": {
+    "tag": "BUTTON",
+    "role": null,
+    "contentEditable": "inherit",
+    "isContentEditable": false,
+    "ariaDescribedby": "task-detail-title-hint",
+    "hintText": "Activate to edit the task name",
+    "hintTag": "SPAN",
+    "hintVisuallyHiddenStyle": {
+      "position": "absolute",
+      "width": "1px",
+      "height": "1px",
+      "overflow": "hidden",
+      "clip": "auto",
+      "whiteSpace": "nowrap"
+    },
+    "outerHTMLSnippet": "<button type=\"button\" aria-describedby=\"task-detail-title-hint\" class=\"w-full text-left font-medium text-base\" id=\"radix-_r_1c_\">ZZ probe detail</button>"
+  }
+}

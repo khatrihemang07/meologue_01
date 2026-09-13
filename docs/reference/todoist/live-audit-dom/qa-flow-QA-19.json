@@ -1,0 +1,11 @@
+{
+  "row": "QA-19 - Shift+Enter",
+  "safety_note": "Per explicit task instructions, Shift+Enter was NOT driven in Todoist live (it submits and would create a real task there). Only meologue was driven. Todoist's side is recorded as already-captured from quick-add.md (Shift+Enter submits in Todoist), not independently re-verified this session.",
+  "meologue_driven_live": {
+    "canary_before": 0,
+    "action": "typed a unique marker string into the empty Quick Add title, then pressed Shift+Enter",
+    "result": "a new task was created immediately with the marker text as its title; the composer field cleared back to empty; Inbox item count went from 0 to 1",
+    "cleanup": "the test task was deleted via More actions > Delete > confirm Delete immediately after capture; canary returned to 0"
+  },
+  "verdict": "matched (behavioural) - Shift+Enter submits in meologue exactly as documented for Todoist. Todoist side not independently re-driven this session per safety instructions."
+}

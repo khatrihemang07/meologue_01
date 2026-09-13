@@ -1,0 +1,22 @@
+{
+  "app": "meologue",
+  "url": "http://127.0.0.1:41999/todo/inbox",
+  "round": 2,
+  "serviceWorker": {
+    "supported": true,
+    "registrationsBefore": [
+      { "scope": "http://127.0.0.1:41999/", "active": true }
+    ],
+    "unregisteredCount": 1,
+    "cacheNamesCleared": ["workbox-precache-v2-http://127.0.0.1:41999/"]
+  },
+  "reload": "single reload after unregister+clear",
+  "servedBundle": "http://127.0.0.1:41999/assets/index-Cg-TNiXR.js",
+  "expectedBundle": "index-Cg-TNiXR.js",
+  "bundleMatches": true,
+  "lockCheck": {
+    "locked": false,
+    "note": "body text does not contain 'already open in another window'; store persisted through reload with leftover non-ZZ-probe fixtures from earlier sessions (e.g. 'kbd one'), left untouched"
+  },
+  "viewport": { "innerWidth": 1270, "innerHeight": 706, "note": "same viewport used for the Todoist tab in this session, >=900px so meologue renders its sidebar" }
+}

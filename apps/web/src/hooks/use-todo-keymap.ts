@@ -1,10 +1,14 @@
 import type { Task } from "@meologue/core";
 import { useEffect, useRef } from "react";
 import {
+  canLeaveAddTaskField,
   chordFor,
+  focusAdjacentRow,
   focusedTaskId,
+  isInsideOverlay,
   isTypingTarget,
   OPEN_COMMAND_MENU_EVENT,
+  OPEN_SCHEDULE_EVENT,
   TODO_KEY_BINDINGS,
   type TodoKeyBinding,
 } from "@/lib/todo-keymap";
@@ -13,6 +17,7 @@ export interface UseTodoKeymapOptions {
   /** Looks a Task up by id — `todo-page.tsx`'s own `tasks`/`completedTasks` two-list lookup (`openTask`'s own doc comment there gives the reason both lists matter), handed in rather than duplicated here. */
   resolveTask: (taskId: string) => Task | null;
   onOpenTaskDetail: (task: Task) => void;
+  /** Opens the shared `TaskScheduleSheet` — reached from `D`/`Y` (Deadline/Priority) only, since issue #253 moved `T` (Date) onto `OPEN_SCHEDULE_EVENT` instead (that constant's own doc comment, todo-keymap.ts). */
   onOpenSchedule: (taskId: string) => void;
   onSetTaskDate: (taskId: string, date: string | null) => void;
   onSetTaskDeadline: (taskId: string, deadline: string | null) => void;
@@ -20,6 +25,19 @@ export interface UseTodoKeymapOptions {
   onOpenQuickFind: () => void;
   onShowShortcuts: () => void;
   onNavigate: (path: string) => void;
+  /**
+   * CMT-05 (parity ledger) — fired for `undo-complete` (`Z`/`⌘Z`,
+   * `@/lib/todo-keymap`'s own doc comment on that binding has the fuller
+   * reasoning). `todo-page.tsx` owns the one thing there is to undo — a
+   * ref holding the most recent completion's own `uncompleteTask` call,
+   * set when its toast is raised and cleared the moment it is used or the
+   * toast closes — and this option is that ref's single door, called
+   * unconditionally. When nothing is pending it is `todo-page.tsx`'s own
+   * no-op to make, not a lookup this hook performs, matching every other
+   * binding here whose target can come back absent (`fire()`'s own
+   * `taskId !== null` guards just below).
+   */
+  onUndoComplete: () => void;
 }
 
 // Every sequence's own first key (currently just `"g"`, from `TODO_KEY_
@@ -90,6 +108,20 @@ export function useTodoKeymap(options: UseTodoKeymapOptions): void {
         case "show-shortcuts":
           opts.onShowShortcuts();
           return;
+        case "undo-complete":
+          opts.onUndoComplete();
+          return;
+        // KBD-03/04: row-to-row focus movement — `focusAdjacentRow`
+        // (todo-keymap.ts) owns the whole cycle (DOM order, wrap, the
+        // "Add task" affordance, completed rows), so this case is a bare
+        // fan-out, the same shape every other single-purpose binding here
+        // already takes.
+        case "focus-next-row":
+          focusAdjacentRow("next");
+          return;
+        case "focus-previous-row":
+          focusAdjacentRow("previous");
+          return;
         case "command-menu":
           if (taskId !== null) {
             document.dispatchEvent(
@@ -104,7 +136,18 @@ export function useTodoKeymap(options: UseTodoKeymapOptions): void {
           }
           return;
         }
+        // Issue #253: `T` now opens the row's own anchored
+        // `TaskSchedulePopover` instance rather than the shared bottom
+        // sheet — `OPEN_SCHEDULE_EVENT`'s own doc comment (todo-keymap.ts)
+        // has the reasoning for why this fires an event instead of calling
+        // `onOpenSchedule` the way `set-deadline`/`set-priority` below
+        // still do (the sheet still holds Deadline and Priority, unchanged
+        // by this ticket).
         case "set-date":
+          if (taskId !== null) {
+            document.dispatchEvent(new CustomEvent(OPEN_SCHEDULE_EVENT, { detail: { taskId } }));
+          }
+          return;
         case "set-deadline":
         case "set-priority":
           if (taskId !== null) {
@@ -201,6 +244,43 @@ export function useTodoKeymap(options: UseTodoKeymapOptions): void {
         return;
       }
       if (typing && binding.allowInField !== true) {
+        // One exception, and only for the arrow keys: the "Add task"
+        // composer is itself a stop in the row-navigation cycle
+        // (`rowNavTargets`, todo-keymap.ts), so suppressing these two
+        // bindings there unconditionally trapped focus inside it — in
+        // both directions. An arrow already at the edge it points at
+        // leaves the field and continues the cycle; anywhere else in the
+        // text it keeps native caret movement
+        // (`canLeaveAddTaskField` carries the full reasoning).
+        //
+        // Gated on the arrow chords, NOT on `binding.id` alone: `j`/`k`
+        // share these bindings' `keys` and are ordinary characters, so
+        // they must always type into the composer and never navigate.
+        const escapeDirection =
+          chord === "arrowdown" && binding.id === "focus-next-row"
+            ? "next"
+            : chord === "arrowup" && binding.id === "focus-previous-row"
+              ? "previous"
+              : null;
+        if (escapeDirection === null || !canLeaveAddTaskField(event.target, escapeDirection)) {
+          return;
+        }
+      }
+      // `focus-next-row`/`focus-previous-row` are the only bindings whose
+      // own keys (ArrowDown/ArrowUp/j/k) an open Radix overlay might
+      // already be using for its own purpose — `TaskSchedulePopover`'s
+      // day-picker grid, `TaskCommandMenu`'s own item navigation — and
+      // neither is a text field `isTypingTarget` above would catch. Every
+      // other binding here is either `task-focused` (already a no-op
+      // once focus leaves a row for a portalled overlay, since
+      // `focusedTaskId()` finds no `[data-task-id]` ancestor there) or
+      // doesn't touch focus at all, so this check is scoped to just these
+      // two rather than added as a blanket rule for every binding
+      // (`isInsideOverlay`, todo-keymap.ts, has the full reasoning).
+      if (
+        (binding.id === "focus-next-row" || binding.id === "focus-previous-row") &&
+        isInsideOverlay(event.target)
+      ) {
         return;
       }
       event.preventDefault();

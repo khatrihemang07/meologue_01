@@ -1,0 +1,237 @@
+PRE theme class: theme_dark todoist_loaded
+[p1 "Inbox – Todoist" | space "todoist capture pass 2"(30): 1 managed, 0 untracked — p1* "Inbox – Todoist"]
+root
+  container
+    button "Settings" [ref=1, loc=css:button[aria-label="Settings"]]
+      image
+      svg_root
+      text "Hemang"
+      svg_root
+    anchor "Notifications" [ref=2, loc=css:a[aria-label="Notifications"], url=https://app.todoist.com/app/notifications]
+      svg_root
+    button "Open/close sidebar" [ref=3, loc=css:button[aria-label="Open/close sidebar"]]
+      svg_root
+    button [ref=4]
+      svg_root
+      text "Add task"
+    button "Dictate tasks with Ramble" [ref=5, loc=css:button[aria-label="Dictate tasks with Ramble"]]
+      svg_root
+    navigation "Main Navigation: contains Projects, Labels, and Filters"
+      unordered_list "Main filters"
+        list_item "Search"
+          button "Search" [ref=6, loc=css:button[aria-label="Search"]]
+            svg_root
+            text "Search"
+        list_item "Inbox7"
+          anchor "Inbox, 7 tasks" [ref=7, loc=css:a[aria-label="Inbox, 7 tasks"], url=https://app.todoist.com/app/inbox]
+            svg_root
+            text "Inbox"
+          text "7"
+        list_item "11Today2"
+          anchor "Today, 2 tasks" [ref=8, loc=css:a[aria-label="Today, 2 tasks"], url=https://app.todoist.com/app/today]
+            svg_root "11"
+              text "11"
+            text "Today"
+          text "2"
+        list_item "Upcoming"
+          anchor "Upcoming" [ref=9, loc=css:a[aria-label="Upcoming"], url=https://app.todoist.com/app/upcoming]
+            svg_root
+            text "Upcoming"
+        list_item "Filters & Labels"
+          anchor "Filters & Labels" [ref=10, loc=css:a[aria-label="Filters & Labels"], url=https://app.todoist.com/app/filters-labels]
+            svg_root
+            text "Filters & Labels"
+        list_item "Reporting"
+          anchor "Reporting" [ref=11, loc=css:a[aria-label="Reporting"], url=https://app.todoist.com/app/activity]
+            svg_root
+            text "Reporting"
+      container
+        anchor [ref=12, loc=href:/app/projects, url=https://app.todoist.com/app/projects]
+          text "My Projects"
+        button "My projects menu" [ref=13, loc=css:button[aria-label="My projects menu"]]
+          svg_root
+        button "Toggle list of My Projects" [ref=14, loc=css:button[aria-label="Toggle list of My Projects"]]
+          svg_root
+      unordered_list "Projects"
+        list_item "Getting Started 👋14"
+          anchor "Getting Started 👋, 14 tasks" [ref=15, loc=css:a[aria-label="Getting Started 👋, 14 tasks"], url=https://app.todoist.com/app/project/getting-started-6h5pC9QRMFgm375m]
+            svg_root
+            text "Getting Started"
+            text "👋"
+          text "14"
+          button "More actions" [ref=16, loc=css:button[aria-label="More actions"]]
+            svg_root
+    button [ref=17]
+      svg_root
+      text "Help & resources"
+  container "Main Content"
+    container
+      button "View Options Menu" [ref=18, loc=css:button[aria-label="View Options Menu"]]
+        svg_root
+        text "Display: 2"
+      anchor "Comments" [ref=19, loc=css:a[aria-label="Comments"], url=https://app.todoist.com/app/inbox/comments]
+        svg_root
+      button "Project options menu" [ref=20, loc=css:button[aria-label="Project options menu"]]
+        svg_root
+    heading
+      text "Inbox"
+    list_item
+      container "(No Section)"
+        unordered_list
+          list_item
+            svg_root
+            checkbox "Mark task as complete" [ref=21]
+              svg_root
+            text "Room clean"
+            button [ref=22]
+              svg_root
+              text "Today"
+          list_item
+            svg_root
+            checkbox "Mark task as complete" [ref=23]
+              svg_root
+            text "Roller thigh pain"
+            button [ref=24]
+              svg_root
+              text "Today"
+          list_item
+            svg_root
+            checkbox "Mark task as complete" [ref=25]
+              svg_root
+            text "hair wash"
+            button [ref=26]
+              svg_root
+              text "Tomorrow"
+              svg_root
+          list_item
+            svg_root
+            checkbox "Mark task as complete" [ref=27]
+              svg_root
+            text "naukri photo update"
+            button [ref=28]
+              svg_root
+              text "Tomorrow"
+          list_item
+            svg_root
+            checkbox "Mark task as complete" [ref=29]
+              svg_root
+            text "Buy mobile holder and get the bike fixed"
+            button [ref=30]
+              svg_root
+              text "Tomorrow"
+            anchor "1 comment" [ref=31, loc=href:/app/task/buy-mobile-holder-and-get-the-bike-fixed-6hMc452X7r23VX2G?intent=reply, url=https://app.todoist.com/app/task/buy-mobile-holder-and-get-the-bike-fixed-6hMc452X7r23VX2G?intent=reply]
+              svg_root
+              text "1"
+          list_item
+            svg_root
+            checkbox "Mark task as complete" [ref=32]
+              svg_root
+            text "Check for ipad cover"
+            button [ref=33]
+              svg_root
+              text "Tomorrow"
+            anchor "1 comment" [ref=34, loc=href:/app/task/check-for-ipad-cover-6hMfJ27p678RC43G?intent=reply, url=https://app.todoist.com/app/task/check-for-ipad-cover-6hMfJ27p678RC43G?intent=reply]
+              svg_root
+              text "1"
+          list_item
+            svg_root
+            checkbox "Mark task as complete" [ref=35]
+              svg_root
+            text "Buy bluetooth for vishal"
+            paragraph
+              anchor [ref=36, loc=href:https://www.amazon.in/dp/B0DHVH4S77?th=1, url=https://www.amazon.in/dp/B0DHVH4S77?th=1]
+                text "Amazon.in"
+            button [ref=37]
+              svg_root
+              text "Tomorrow"
+          list_item
+            button [ref=38]
+              svg_root
+              text "Add task"
+        unordered_list
+          list_item
+            checkbox "Mark task as incomplete" [ref=39]
+              svg_root
+            text "add split and splid both without fail EOD"
+            button [ref=40]
+              svg_root
+              text "1 Sep"
+          list_item
+            checkbox "Mark task as incomplete" [ref=41]
+              svg_root
+            text "Need to improve reflect and todo completely. They are crap right now. Specially when typing long title or updating title"
+            paragraph
+              text "Plus date keeper is crap"
+              text "…"
+            button [ref=42]
+              svg_root
+              text "9 Sep"
+          list_item
+            checkbox "Mark task as incomplete" [ref=43]
+              svg_root
+            text "Apply company"
+            button [ref=44]
+              svg_root
+              text "Yesterday"
+          list_item
+            checkbox "Mark task as incomplete" [ref=45]
+              svg_root
+            text "Quick dsa"
+            button [ref=46]
+              svg_root
+              text "Yesterday"
+  menu "Settings menu" [ref=47, loc=role:menu[name="Settings menu"]]
+    menuitem [ref=48]
+      svg_root
+      container
+        text "Hemang"
+        text "0/5 tasks"
+      container
+        text "O"
+        text "then"
+        text "P"
+    menuitem [ref=49, loc=href:/app/settings/account, url=https://app.todoist.com/app/settings/account]
+      svg_root
+      text "Settings"
+      container
+        text "O"
+        text "then"
+        text "S"
+    menuitem [ref=50]
+      svg_root
+      text "Add a team"
+    menuitem [ref=51, url=https://app.todoist.com/app/activity]
+      svg_root
+      text "Reporting"
+      container
+        text "G"
+        text "then"
+        text "A"
+    menuitem [ref=52]
+      svg_root
+      text "Print"
+      container
+        text "⌘"
+        text "P"
+    menuitem [ref=53, loc=href:https://www.todoist.com/help/categories/product-updates/whats-new, url=https://www.todoist.com/help/categories/product-updates/whats-new]
+      svg_root
+      text "What's new"
+    menuitem [ref=54]
+      svg_root
+      text "Try Pro for free"
+    menuitem [ref=55]
+      svg_root
+      text "Sync"
+      text "Just now"
+    menuitem [ref=56]
+      svg_root
+      text "Log out"
+    container "Todoist version info"
+      menuitem "Version v11488" [ref=57, loc=role:menuitem[name="Version v11488"]]
+        container [ref=58]
+          text "v11488"
+      text "·"
+      menuitem [ref=59, loc=href:https://todoist.com/help/articles/changelog-HD3jJAtLd, url=https://todoist.com/help/articles/changelog-HD3jJAtLd]
+        text "Changelog"
+
+

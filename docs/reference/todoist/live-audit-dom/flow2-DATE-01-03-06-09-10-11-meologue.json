@@ -1,0 +1,12 @@
+{
+  "app": "meologue",
+  "rows": ["DATE-01", "DATE-03", "DATE-06", "DATE-09", "DATE-10", "DATE-11"],
+  "identityCheck": "for each seeded task's row, read the meta-line span whose inline style is color:var(--td-date-*), the painted leaf that actually carries the date text and colour",
+  "referenceDate": "2026-09-11 (Friday), live system clock at seed time",
+  "overdue_DATE01": { "task": "ZZ probe overdue (dated 2026-09-10)", "text": "Yesterday", "color": "rgb(255, 112, 102)" },
+  "today_DATE06_DATE09": { "task": "ZZ probe today (dated 2026-09-11)", "text": "Today", "color": "rgb(37, 184, 76)" },
+  "tomorrow_DATE06_DATE09": { "task": "ZZ probe tomorrow (dated 2026-09-12)", "text": "Tomorrow", "color": "rgb(255, 154, 20)" },
+  "in4_DATE03": { "task": "ZZ probe in4 (dated 2026-09-15, Tuesday)", "text": "Tuesday", "color": "rgb(169, 112, 255)", "verdict": "weekday-name-only within next 7 days, purple -- reconfirms ledger's already-matched DATE-03 value" },
+  "in10_DATE11": { "task": "ZZ probe in10 (dated 2026-09-21, 10 days out)", "text": "Sep 21", "color": "rgb(204, 204, 204)", "verdict": "falls back to plain absolute wording ('Sep 21') as DATE-11 predicts for >6 days out; colour reads as --td-date-muted rgb(204,204,204) rather than the default row text colour" },
+  "timed_DATE10": { "task": "ZZ probe timed (2026-09-12T09:30)", "text": "Tomorrow, 9:30 AM", "color": "rgb(255, 154, 20)", "verdict": "day word + ', h:mm a' suffix as DATE-10 predicts, using Tomorrow's own tone colour" }
+}

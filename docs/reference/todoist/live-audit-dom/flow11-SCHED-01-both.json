@@ -1,0 +1,47 @@
+{
+  "row": "SCHED-01",
+  "flow": 11,
+  "drivenBothSidesSameSession": "2026-09-12",
+  "todoist": {
+    "popoverSelector": "div[data-testid='scheduler-view']",
+    "onDatedTask": {
+      "task": "naukri photo update (the user's own, read-only, closed with Escape)",
+      "width": 250, "height": 555, "top": 162, "left": 1097,
+      "triggerRect": { "x": 1210, "y": 138, "w": 24, "h": 24 }
+    },
+    "onUndatedTask": {
+      "task": "ZZ probe redrive (the run's own disposable task)",
+      "width": 250, "height": 525, "top": 154, "left": 960,
+      "triggerRect": { "x": 1210, "y": 405, "w": 24, "h": 24 },
+      "borderRadius": "10px",
+      "backgroundColor": "rgb(38, 38, 38)",
+      "border": "1px solid rgb(61, 61, 61)",
+      "boxShadow": "rgba(0, 0, 0, 0.19) 0px 10px 20px 0px, rgba(0, 0, 0, 0.23) 0px 6px 6px 0px",
+      "stable": true
+    }
+  },
+  "meologue": {
+    "build": "index-BdhptNmi.js (after issue #256's refactor of this very wiring)",
+    "task": "rd one (undated)",
+    "width": 250, "height": 525, "top": 444, "left": 1086,
+    "triggerRect": { "x": 1086, "y": 396, "w": 44, "h": 44 },
+    "borderRadius": "10px",
+    "backgroundColor": "rgb(38, 38, 38)",
+    "border": "1px solid rgb(61, 61, 61)",
+    "boxShadow": "rgba(0, 0, 0, 0.19) 0px 10px 20px 0px, rgba(0, 0, 0, 0.23) 0px 6px 6px 0px",
+    "stable": true,
+    "anchoring": "popover top 444 against a trigger whose bottom is 440, and left edges flush at 1086 — directly below its trigger, not at the viewport origin"
+  },
+  "theFindingThatAlmostBecameAFalseDivergence": {
+    "observed": "Todoist's popover first measured 250x555, not the 250x525 this row records and that flows 3 and 8 both measured.",
+    "hypothesis": "The height depends on whether the task already has a date — a dated task's scheduler carries an extra affordance for removing it.",
+    "test": "Re-measured on an UNDATED task (the run's own disposable one) and got exactly 250x525.",
+    "conclusion": "CONFIRMED. 250x525 is correct, and is the UNDATED case; a dated task's scheduler is 30px taller. Flow 8 measured 'ZZ probe undated', which is why it agreed. The row records the number without the condition, which is the gap this flow closes — recording a divergence here would have been wrong."
+  },
+  "verdict": {
+    "geometry": "AGREES — 250x525, radius 10px, rgb(38,38,38), 1px solid rgb(61,61,61), and the identical two-layer shadow, on both sides, for an undated task.",
+    "anchoring": "AGREES — both anchor to their trigger rather than the viewport origin.",
+    "statusStands": true,
+    "note": "Issue #256 refactored meologue's day/time wiring after this row was last measured; these readings are from the post-refactor build, so they also serve as that refactor's re-verification."
+  }
+}

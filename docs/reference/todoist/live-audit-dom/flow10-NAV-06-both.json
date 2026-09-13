@@ -1,0 +1,36 @@
+{
+  "row": "NAV-06",
+  "openQuestion": "does the sidebar 'Filters & Labels' entry render a count, and what number",
+  "todoist": {
+    "state": "3 filters (Assigned to me, Priority 1, All my Routines), 0 labels -- read-only, untouched",
+    "sidebarEntry": {
+      "ariaLabel": "Filters & Labels",
+      "visibleText": "Filters & Labels",
+      "rendersCount": false,
+      "count": null
+    },
+    "destinationPageHeadings": ["Filters & Labels (h1)", "My Filters (h2)", "Labels (h2)"]
+  },
+  "meologue": {
+    "steps": [
+      "Baseline (0 filters, 0 labels): sidebar entry = 'Filters & Labels' with NO count span",
+      "Created filter 'zz probe f' (query: today). Sidebar count -> '1'",
+      "Created label 'zz probe l'. Sidebar count -> '2' (combined, live-updating sum of filters+labels, not per-category)",
+      "Removed the filter (Filters & Labels page -> filter -> Remove Filter -> confirmed 'Remove this Filter?' alertdialog). Sidebar count -> '1' (now just the 1 remaining label) -- this is a NEW data point beyond what the operator asked for: confirms 1 label alone also renders '1', consistent with a combined-count model",
+      "Deleted the label (Manage Labels -> Delete Label -> confirmed 'Delete label?' alertdialog). Sidebar returned to 'Filters & Labels' with NO count -- matches the 0/0 baseline exactly",
+      "Destination page (/todo/filters) headings while populated: h1 'Filters & Labels', h2 'Labels'. NO 'My Filters' heading exists anywhere on the page."
+    ],
+    "countByState": {
+      "0filters_0labels": { "rendersCount": false, "count": null },
+      "1filter_0labels": { "rendersCount": true, "count": "1" },
+      "1filter_1label": { "rendersCount": true, "count": "2" },
+      "0filters_1label": { "rendersCount": true, "count": "1" },
+      "0filters_0labels_afterCleanup": { "rendersCount": false, "count": null }
+    },
+    "destinationPageHeadings": ["Filters & Labels (h1)", "Labels (h2)"],
+    "myFiltersHeadingPresent": false,
+    "cleanupStatus": "COMPLETE -- both the filter 'zz probe f' and label 'zz probe l' were deleted; sidebar confirmed back to 0/0 with no count rendered.",
+    "sessionNote": "Mid-task, an accidental page.goto() reload of meologue (a mistake, done while trying to route around an unrelated stale accessibility-ref click issue) retriggered a 'meologue is already open in another window' single-window lock that persisted for roughly 5 minutes before clearing on its own. No data was lost from this; the filter and label were still present and gettable once the lock cleared, and cleanup completed normally using only SPA link clicks from that point on."
+  },
+  "verdict": "RESOLVED: Todoist's 'Filters & Labels' entry never renders a count (confirmed with 3 filters / 0 labels). meologue's entry renders NO count at 0/0, and renders a LIVE COMBINED count (filters + labels summed) as soon as either category is non-empty -- 1 filter alone -> '1', 1 filter + 1 label -> '2', 1 label alone -> '1'. This corrects/refines the operator's parenthetical guess ('I observed the entry render 1 with 1 label and nothing with 0') into a fuller, confirmed model: zero at 0/0, and a running sum otherwise. On headings: confirmed meologue still lacks a 'My Filters' heading (matches the operator's suspicion) while Todoist has 'Filters & Labels' + 'My Filters' + 'Labels'."
+}

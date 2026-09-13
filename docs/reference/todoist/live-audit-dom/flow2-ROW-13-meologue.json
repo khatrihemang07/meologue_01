@@ -1,0 +1,9 @@
+{
+  "app": "meologue",
+  "row": "ROW-13",
+  "view": "http://127.0.0.1:41999/todo/today",
+  "identityCheck": "queried each row's li for a span.flex.flex-wrap metadata-line element; absence of that element entirely (not merely hidden) is what ROW-13 requires",
+  "dueTodayRow": { "task": "ZZ probe today", "hasMetaLine": false, "verdict": "date control absent from the DOM entirely on Today view for a due-today row" },
+  "overdueRow": { "task": "ZZ probe overdue", "hasMetaLine": true, "metaLineHTML": "<span class=\"flex flex-wrap items-center gap-x-2 text-muted-foreground text-xs\"><span style=\"color: var(--td-date-overdue);\">Yesterday</span></span>", "verdict": "Overdue row's date badge is NOT suppressed, as the rule requires" },
+  "recurringDueTodayRow": { "task": "ZZ probe recurring", "hasMetaLine": true, "metaLineHTML": "<span class=\"flex flex-wrap items-center gap-x-2 text-muted-foreground text-xs\"><span>every day</span></span>", "verdict": "the resolved-date half of the badge (would have read 'Today ↻') is suppressed; the separate literal-dateString badge ('every day') is unaffected -- consistent with DATE-04's 'additive, not a replacement' badge model" }
+}

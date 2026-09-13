@@ -1,8 +1,19 @@
-import type { Comment, Label, Project, Section, Task } from "@meologue/core";
-import { fireEvent, render, screen } from "@testing-library/react";
+import type { Comment, Event, Label, Project, Section, Task } from "@meologue/core";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import { useEffect, useRef, useState } from "react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { MemoryRouter } from "react-router";
+import { toast } from "sonner";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { TaskDetailView } from "./task-detail-view";
+
+// DET-16 — mirrors `todo-page.test.tsx`'s own `vi.mock("sonner", ...)` shape
+// (that file's own header comment on why): `toast` is a plain callable here
+// (no `.error`, unlike that file), since this view never raises an error
+// toast of its own.
+vi.mock("sonner", () => {
+  const toast = vi.fn() as unknown as typeof import("sonner").toast;
+  return { toast };
+});
 
 /**
  * Stands in for the real `TaskTitleEditor` — see `task-title-editor.tsx`'s
@@ -228,6 +239,9 @@ function renderView(overrides: Partial<Parameters<typeof TaskDetailView>[0]> = {
     onComplete: vi.fn(),
     onUncomplete: vi.fn(),
     onOpenSchedule: vi.fn(),
+    onSetDate: vi.fn(),
+    onSetDateString: vi.fn(),
+    datesWithTasks: new Map(),
     onSetProject: vi.fn(),
     onSetLabels: vi.fn(),
     onSetDescription: vi.fn(),
@@ -242,8 +256,27 @@ function renderView(overrides: Partial<Parameters<typeof TaskDetailView>[0]> = {
     events: [],
     ...overrides,
   };
-  render(<TaskDetailView {...props} />);
-  return props;
+  // MemoryRouter: an Activity line links its subject, as it does in the app.
+  const view = render(<TaskDetailView {...props} />, { wrapper: MemoryRouter });
+  return {
+    ...props,
+    /**
+     * DET-16: the real app never hands this view a changed `task` prop
+     * synchronously — `onRename`'s own resolution (`commitTaskTitle`,
+     * task-title-commit.ts) reaches the store through a `useMutation`, and
+     * this component only learns the result once its parent re-renders it
+     * with the updated Task (task-detail-view.tsx's own `pendingRenameDateRef`
+     * doc comment has the full account). `rerender` stands in for that
+     * later, external re-render — tests below use it to simulate the
+     * store's own write landing, the same way the real page eventually
+     * would.
+     */
+    rerender: (nextOverrides: Partial<Parameters<typeof TaskDetailView>[0]> = {}) => {
+      const nextProps = { ...props, ...nextOverrides };
+      view.rerender(<TaskDetailView {...nextProps} />);
+      return nextProps;
+    },
+  };
 }
 
 describe("TaskDetailView", () => {
@@ -257,6 +290,41 @@ describe("TaskDetailView", () => {
     expect(screen.getByRole("dialog")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "call mum" })).toBeInTheDocument();
     expect(screen.queryByLabelText("Task name")).not.toBeInTheDocument();
+  });
+
+  // CMT-06: Todoist's own per-task activity names the task in every line
+  // (flow 5), so this view no longer suppresses its subject; and an old
+  // "Edited a comment" event is neither shown nor counted.
+  it("names the task in its own Activity lines, and counts only lines it shows", () => {
+    const base = {
+      deviceId: "device-a",
+      objectType: "task",
+      objectId: "1",
+      taskId: "1",
+      projectId: null,
+      occurredAt: "2026-09-10T09:00:00.000Z",
+      extra: null,
+      syncedAt: "2026-09-10T09:00:00.000Z",
+    } as const;
+    const events: Event[] = [
+      { ...base, id: "e1", seq: 1, eventType: "completed" },
+      {
+        ...base,
+        id: "e2",
+        seq: 2,
+        eventType: "updated",
+        objectType: "comment",
+        objectId: "c1",
+        extra: { text: "old" },
+      },
+    ];
+    renderView({ task: task({ content: "call mum" }), events });
+
+    expect(screen.getByText("Activity (1)")).toBeInTheDocument();
+    const lines = screen.getAllByRole("listitem").map((item) => item.textContent ?? "");
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toContain("You completed");
+    expect(lines[0]).toContain("call mum");
   });
 
   it("carries DET-05's own data-testid (keyboard.md §1) on the dialog content", () => {
@@ -317,6 +385,39 @@ describe("TaskDetailView", () => {
       expect(await screen.findByLabelText("Task name")).toHaveFocus();
     });
 
+    // DET-10: live Todoist's own finding (`parity-ledger.md`) is that a
+    // generic click in the gap between the title and Description editors
+    // focuses neither field — it moves focus to the dialog itself. jsdom
+    // never performs a real pointer click's own "move focus to whatever's
+    // under the cursor" step (it only dispatches the synthetic `click`
+    // this fires), and has no `isContentEditable` at all, so this proves
+    // the code's OWN reaction to a generic click (it calls
+    // `contentRef.current?.focus()`) lands where intended — not that a
+    // real click at that screen position would reach this handler rather
+    // than land inside a ProseMirror box first, which needs a real
+    // browser to confirm (this ticket's own report has that caveat).
+    it("DET-10: a generic click in the gap between the title and Description editors focuses the dialog, not either field", async () => {
+      renderView({ task: task({ content: "call mum", description: "existing text" }) });
+
+      fireEvent.click(screen.getByRole("button", { name: "call mum" }));
+      const titleField = await screen.findByLabelText("Task name");
+      expect(titleField).toHaveFocus();
+
+      fireEvent.click(screen.getByTestId("task-detail-edit-column"));
+
+      expect(titleField).not.toHaveFocus();
+      expect(screen.getByLabelText("Description")).not.toHaveFocus();
+      expect(screen.getByRole("dialog")).toHaveFocus();
+    });
+
+    it("DET-10: clicking a descendant of the shared edit column (the title button, the Description block) does not re-target focus to the dialog", async () => {
+      renderView({ task: task({ content: "call mum", description: "existing text" }) });
+
+      fireEvent.click(screen.getByText("existing text"));
+
+      expect(await screen.findByLabelText("Description")).toHaveFocus();
+    });
+
     it("saves both the title and the description together from one Save click", async () => {
       const onRename = vi.fn();
       const onSetDescription = vi.fn();
@@ -339,7 +440,7 @@ describe("TaskDetailView", () => {
       expect(onSetDescription).toHaveBeenCalledWith("new text");
     });
 
-    it("Cancel discards both drafts and returns to the display state", async () => {
+    it("Cancel with unsaved changes discards both drafts and returns to the display state, once Discard is confirmed", async () => {
       const onRename = vi.fn();
       const onSetDescription = vi.fn();
       renderView({
@@ -354,9 +455,237 @@ describe("TaskDetailView", () => {
       });
       fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
 
+      // DET-15: not discarded yet — the confirm dialog is open, not the
+      // discard itself, exactly like CMT-03's own delete confirm above.
+      const confirmDialog = await screen.findByRole("alertdialog");
+      fireEvent.click(within(confirmDialog).getByRole("button", { name: "Discard" }));
+
       expect(onRename).not.toHaveBeenCalled();
       expect(onSetDescription).not.toHaveBeenCalled();
       expect(screen.getByRole("button", { name: "old title" })).toBeInTheDocument();
+    });
+  });
+
+  describe("DET-15 — Cancel/Escape confirm first when there are unsaved changes", () => {
+    it("Cancel with an unsaved title change asks before discarding, with Todoist's own wording and a Cancel/Discard pair", async () => {
+      renderView({ task: task({ content: "old title" }) });
+
+      fireEvent.click(screen.getByRole("button", { name: "old title" }));
+      fireEvent.change(await screen.findByLabelText("Task name"), {
+        target: { value: "discard me" },
+      });
+      fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+
+      const confirmDialog = await screen.findByRole("alertdialog");
+      expect(within(confirmDialog).getByText("Discard unsaved changes?")).toBeInTheDocument();
+      expect(
+        within(confirmDialog).getByText("Your unsaved changes will be discarded."),
+      ).toBeInTheDocument();
+      expect(within(confirmDialog).getByRole("button", { name: "Cancel" })).toBeInTheDocument();
+      expect(within(confirmDialog).getByRole("button", { name: "Discard" })).toBeInTheDocument();
+
+      // Nothing discarded yet — the draft is still sitting in the field
+      // underneath, unlike the pre-fix behaviour this replaces.
+      expect(screen.getByLabelText("Task name")).toHaveValue("discard me");
+    });
+
+    it("Cancelling the discard-confirmation dialog leaves the draft intact, still editing", async () => {
+      renderView({ task: task({ content: "old title" }) });
+
+      fireEvent.click(screen.getByRole("button", { name: "old title" }));
+      fireEvent.change(await screen.findByLabelText("Task name"), {
+        target: { value: "discard me" },
+      });
+      fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+      const confirmDialog = await screen.findByRole("alertdialog");
+      fireEvent.click(within(confirmDialog).getByRole("button", { name: "Cancel" }));
+
+      expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+      expect(screen.getByLabelText("Task name")).toHaveValue("discard me");
+      expect(screen.queryByRole("button", { name: "old title" })).not.toBeInTheDocument();
+    });
+
+    // The regression test for the keyboard-trap bug a first version of
+    // this guard had: that version intercepted Escape at the `window`,
+    // in capture phase, unconditionally while `editing` — which ran
+    // ahead of EVERY layer, including this confirm dialog's own, so
+    // Escape here just re-opened the same confirm instead of dismissing
+    // it. Radix's `DismissableLayer` only wires its own `document`
+    // Escape listener while a layer is topmost (this ticket's own report
+    // has the source citation), so once the confirm is open, this
+    // Content's `onEscapeKeyDown` above stops being called at all —
+    // Escape reaches only the confirm's own (default) handling.
+    it("Escape while the discard-confirmation is open dismisses ONLY the confirmation, not the whole view, leaving the draft intact", async () => {
+      const onClose = vi.fn();
+      renderView({ task: task({ content: "old title" }), onClose });
+
+      fireEvent.click(screen.getByRole("button", { name: "old title" }));
+      fireEvent.change(await screen.findByLabelText("Task name"), {
+        target: { value: "discard me" },
+      });
+      fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+      const confirmDialog = await screen.findByRole("alertdialog");
+
+      fireEvent.keyDown(confirmDialog, { key: "Escape" });
+
+      expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+      // Still editing, draft intact — the confirm closed, the edit form
+      // underneath did not.
+      expect(screen.getByLabelText("Task name")).toHaveValue("discard me");
+      expect(onClose).not.toHaveBeenCalled();
+    });
+
+    it("clicking Discard in the confirmation ends editing and discards the draft, without closing the whole view", async () => {
+      const onClose = vi.fn();
+      const onRename = vi.fn();
+      renderView({ task: task({ content: "old title" }), onClose, onRename });
+
+      fireEvent.click(screen.getByRole("button", { name: "old title" }));
+      fireEvent.change(await screen.findByLabelText("Task name"), {
+        target: { value: "discard me" },
+      });
+      fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+      const confirmDialog = await screen.findByRole("alertdialog");
+      fireEvent.click(within(confirmDialog).getByRole("button", { name: "Discard" }));
+
+      expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+      expect(screen.queryByLabelText("Task name")).not.toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "old title" })).toBeInTheDocument();
+      expect(onRename).not.toHaveBeenCalled();
+      expect(onClose).not.toHaveBeenCalled();
+    });
+
+    it("Cancel with nothing changed discards immediately, with no confirmation", async () => {
+      renderView({ task: task({ content: "old title" }) });
+
+      fireEvent.click(screen.getByRole("button", { name: "old title" }));
+      await screen.findByLabelText("Task name");
+      fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+
+      expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "old title" })).toBeInTheDocument();
+    });
+
+    it("Cancel with an unsaved Description-only change also asks first", async () => {
+      renderView({ task: task({ content: "old title", description: "old text" }) });
+
+      fireEvent.click(screen.getByText("old text"));
+      fireEvent.change(await screen.findByLabelText("Description"), {
+        target: { value: "discard me" },
+      });
+      fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+
+      expect(await screen.findByRole("alertdialog")).toBeInTheDocument();
+    });
+
+    // "Clicking away" is the third path named in this ticket's own
+    // report, alongside Cancel and Escape. What this proves: this file's
+    // own window-capture pointerdown guard (mirroring `CommentRow`'s
+    // identical, already-shipped Escape guard, see that component's own
+    // header comment) intercepts a pointerdown outside the whole panel
+    // and routes it through the identical confirm-first door, rather
+    // than reaching `TaskDetailView`'s `onClose`. It does NOT prove that
+    // clicking Radix's own overlay in a real browser reaches this
+    // listener before Radix's own outside-dismiss handling decides to
+    // close — that's the same document-vs-window capture-order argument
+    // `CommentRow`'s header comment already makes for Escape, and this
+    // guard is built the identical way for the identical reason, but a
+    // real browser (or at least a non-jsdom outside-click harness) would
+    // be needed to confirm Radix's own detection actually fires here the
+    // way `flow5-DET-10-meologue.json`'s click-target capture showed it
+    // does elsewhere in this same view.
+    // Radix's own outside-pointerdown detection
+    // (`usePointerDownOutside`, `@radix-ui/react-dismissable-layer`) is a
+    // two-part real-browser sequence, not one event: (1) its `document`
+    // `pointerdown` listener is registered behind a `setTimeout(0)` — a
+    // genuine detail of Radix's own implementation, not a jsdom
+    // shortcoming — so a pointerdown fired in the SAME tick a dialog
+    // mounts is dispatched before that listener exists yet; and (2)
+    // `Dialog.Content` (unlike `AlertDialog.Content`) passes
+    // `deferPointerDownOutside: true`, so the actual dismiss dispatch
+    // waits for a subsequent `click` on the same target rather than
+    // firing on `pointerdown` alone (`@radix-ui/react-dialog`'s own
+    // `DialogContentModal`, `deferPointerDownOutside: true` — this is
+    // what a real mouse click already produces as pointerdown-then-click,
+    // so a test has to fire both, not shortcut to just the one that
+    // looked sufficient at a glance).
+    async function clickOutside(target: Element) {
+      // Lets Radix's own mount-time `setTimeout(0)` (registering its
+      // `document` pointerdown listener) run before the pointerdown below
+      // — otherwise this dispatches into a listener that doesn't exist
+      // yet, the identical race a real browser has for a click in the
+      // same tick a dialog opens.
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      fireEvent.pointerDown(target);
+      fireEvent.click(target);
+    }
+
+    it("clicking away from the whole panel with unsaved changes asks first, and does not close the view", async () => {
+      const onClose = vi.fn();
+      renderView({ task: task({ content: "old title" }), onClose });
+
+      fireEvent.click(screen.getByRole("button", { name: "old title" }));
+      fireEvent.change(await screen.findByLabelText("Task name"), {
+        target: { value: "discard me" },
+      });
+      await clickOutside(document.body);
+
+      expect(await screen.findByRole("alertdialog")).toBeInTheDocument();
+      expect(onClose).not.toHaveBeenCalled();
+      expect(screen.getByLabelText("Task name")).toHaveValue("discard me");
+    });
+
+    it("clicking away from the whole panel with nothing changed cancels the edit silently, with no confirmation and no view-close", async () => {
+      const onClose = vi.fn();
+      renderView({ task: task({ content: "old title" }), onClose });
+
+      fireEvent.click(screen.getByRole("button", { name: "old title" }));
+      await screen.findByLabelText("Task name");
+      await clickOutside(document.body);
+
+      expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "old title" })).toBeInTheDocument();
+      expect(onClose).not.toHaveBeenCalled();
+    });
+
+    it("a pointerdown INSIDE the panel while editing is left alone — DET-09's own 'clicking away inside does nothing' stays true", async () => {
+      renderView({ task: task({ content: "old title" }) });
+
+      fireEvent.click(screen.getByRole("button", { name: "old title" }));
+      await screen.findByLabelText("Task name");
+      fireEvent.pointerDown(screen.getByTestId("task-detail-edit-column"));
+
+      expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+      expect(screen.getByLabelText("Task name")).toBeInTheDocument();
+    });
+
+    // DET-15 round 3 (`flow11-R3-DET-15-both.json`'s
+    // `attempt3_clickOutsideModal`, re-driven live against both apps):
+    // Discard after an OUTSIDE-CLICK trigger closes the whole detail
+    // modal in Todoist, because the click's own original intent — leave
+    // the task — completes once the discard is confirmed. This is new
+    // behaviour meologue didn't have before this fix: it used to only
+    // ever end editing, whichever gesture asked. Contrast the
+    // Cancel-button case (`clickDiscardAfterCancelTrigger` in the same
+    // artifact, and this file's own "clicking Discard in the
+    // confirmation ends editing... without closing the whole view" test
+    // above) and the Escape case just below — both keep `onClose`
+    // un-called, matching Todoist on every trigger but this one.
+    it("clicking Discard after an outside-click trigger closes the whole view too, matching Todoist", async () => {
+      const onClose = vi.fn();
+      const onRename = vi.fn();
+      renderView({ task: task({ content: "old title" }), onClose, onRename });
+
+      fireEvent.click(screen.getByRole("button", { name: "old title" }));
+      fireEvent.change(await screen.findByLabelText("Task name"), {
+        target: { value: "discard me" },
+      });
+      await clickOutside(document.body);
+      const confirmDialog = await screen.findByRole("alertdialog");
+      fireEvent.click(within(confirmDialog).getByRole("button", { name: "Discard" }));
+
+      expect(onRename).not.toHaveBeenCalled();
+      expect(onClose).toHaveBeenCalledTimes(1);
     });
   });
 
@@ -434,7 +763,23 @@ describe("TaskDetailView", () => {
     expect(onRename).toHaveBeenCalledWith("new title");
   });
 
-  it("Escape cancels the in-progress edit and returns to the display title, without renaming", async () => {
+  it("Escape with no unsaved changes cancels the in-progress edit and returns to the display title, without renaming", async () => {
+    const onRename = vi.fn();
+    renderView({ task: task({ content: "old title" }), onRename });
+
+    fireEvent.click(screen.getByRole("button", { name: "old title" }));
+    const titleField = await screen.findByLabelText("Task name");
+    fireEvent.keyDown(titleField, { key: "Escape" });
+
+    expect(onRename).not.toHaveBeenCalled();
+    expect(await screen.findByRole("button", { name: "old title" })).toBeInTheDocument();
+    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+  });
+
+  // DET-15: Escape used to discard an in-progress, unsaved title/
+  // description edit immediately — see the `DET-15` describe block above
+  // for the Cancel-button equivalent of this same guard.
+  it("Escape with an unsaved title change asks first instead of discarding immediately", async () => {
     const onRename = vi.fn();
     renderView({ task: task({ content: "old title" }), onRename });
 
@@ -443,8 +788,103 @@ describe("TaskDetailView", () => {
     fireEvent.change(titleField, { target: { value: "discard me" } });
     fireEvent.keyDown(titleField, { key: "Escape" });
 
+    const confirmDialog = await screen.findByRole("alertdialog");
+    expect(within(confirmDialog).getByText("Discard unsaved changes?")).toBeInTheDocument();
     expect(onRename).not.toHaveBeenCalled();
+    // Still editing underneath — nothing was discarded by the Escape itself.
+    expect(screen.getByLabelText("Task name")).toHaveValue("discard me");
+
+    fireEvent.click(within(confirmDialog).getByRole("button", { name: "Discard" }));
+
     expect(await screen.findByRole("button", { name: "old title" })).toBeInTheDocument();
+  });
+
+  // DET-15 (a second, previously-unguarded bug found while fixing the
+  // one above): Escape while editing used to ALSO bubble to Radix's own
+  // Dialog Escape handling and close the whole view in the same
+  // keystroke — verified directly (before this file's own window-capture
+  // guard existed) by asserting `onClose` here and watching it fail.
+  // `TaskDetailView`'s `open` is hardcoded `true`, so nothing about the
+  // dialog visually disappearing would have caught this; only asserting
+  // `onClose` itself does.
+  it("Escape while editing does not also close the whole Task view, whether or not there are unsaved changes", async () => {
+    const onClose = vi.fn();
+    renderView({ task: task({ content: "old title" }), onClose });
+
+    fireEvent.click(screen.getByRole("button", { name: "old title" }));
+    const titleField = await screen.findByLabelText("Task name");
+    fireEvent.keyDown(titleField, { key: "Escape" });
+    expect(onClose).not.toHaveBeenCalled();
+
+    fireEvent.click(await screen.findByRole("button", { name: "old title" }));
+    fireEvent.change(screen.getByLabelText("Task name"), { target: { value: "discard me" } });
+    fireEvent.keyDown(screen.getByLabelText("Task name"), { key: "Escape" });
+    await screen.findByRole("alertdialog");
+
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  // DET-15 round 3: unlike the outside-click trigger (its own describe
+  // block above), Discard after an Escape-raised confirmation still only
+  // ends editing — Todoist's own re-drive never exercised Escape-then-
+  // Discard's scope directly, but `clickDiscardAfterCancelTrigger` in
+  // `flow11-R3-DET-15-both.json` groups "a Cancel-button or Escape-key
+  // trigger" together as one case, both leaving the modal open, and this
+  // is the spec's own explicit instruction: only the outside-click
+  // trigger changes scope.
+  it("clicking Discard after an Escape trigger ends editing but does not close the whole view", async () => {
+    const onClose = vi.fn();
+    const onRename = vi.fn();
+    renderView({ task: task({ content: "old title" }), onClose, onRename });
+
+    fireEvent.click(screen.getByRole("button", { name: "old title" }));
+    const titleField = await screen.findByLabelText("Task name");
+    fireEvent.change(titleField, { target: { value: "discard me" } });
+    fireEvent.keyDown(titleField, { key: "Escape" });
+    const confirmDialog = await screen.findByRole("alertdialog");
+    fireEvent.click(within(confirmDialog).getByRole("button", { name: "Discard" }));
+
+    expect(onRename).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: "old title" })).toBeInTheDocument();
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  // DET-15 round 3, gap 2 (`flow11-R3-DET-15-both.json`'s own
+  // `escapeInsideConfirmation`): live Todoist returns focus to the Task
+  // name editor, draft intact, once the confirmation itself is dismissed
+  // WITHOUT discarding. meologue previously dropped focus to
+  // `document.body` here, because the confirmation was opened
+  // programmatically (`requestCancelEditing`, not a click on a real
+  // trigger element), so Radix had nothing of its own to restore focus
+  // to. `lastFocusedEditorRef`/`onCloseAutoFocus` (task-detail-view.tsx)
+  // are what fix this — this test proves it inside jsdom, which is
+  // enough here: this suite's own `toHaveFocus` assertions elsewhere
+  // (e.g. the DET-10 focus-trap tests above) already rely on jsdom's
+  // focus tracking behaving like a real browser's for exactly this kind
+  // of check, so this is the same class of proof this file already
+  // leans on, not a new or weaker one.
+  it("Escape inside the open confirmation returns focus to the Task name editor, with the draft intact", async () => {
+    renderView({ task: task({ content: "old title" }) });
+
+    fireEvent.click(screen.getByRole("button", { name: "old title" }));
+    const titleField = await screen.findByLabelText("Task name");
+    fireEvent.change(titleField, { target: { value: "discard me" } });
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    const confirmDialog = await screen.findByRole("alertdialog");
+
+    fireEvent.keyDown(confirmDialog, { key: "Escape" });
+
+    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+    const titleFieldAfter = screen.getByLabelText("Task name");
+    expect(titleFieldAfter).toHaveValue("discard me");
+
+    // Radix's own `FocusScope` defers the close-autofocus dispatch by one
+    // tick (`setTimeout(..., 0)` in its unmount cleanup, so the closing
+    // container is fully out of the DOM first) — the identical async gap
+    // this file's own `clickOutside` helper above already waits out for
+    // Radix's outside-pointerdown listener, for the identical reason.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(titleFieldAfter).toHaveFocus();
   });
 
   it("prev/next chevrons are disabled when there's nothing further, and call onNavigate when there is", () => {
@@ -476,15 +916,48 @@ describe("TaskDetailView", () => {
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 
-  it("Date, Deadline and Priority all open the identical shared schedule sheet", () => {
+  // Issue #253: Deadline and Priority still open the identical shared
+  // schedule sheet; Date left it for its own anchored `TaskSchedulePopover`
+  // instance instead — see the next test.
+  it("Deadline and Priority open the identical shared schedule sheet", () => {
     const onOpenSchedule = vi.fn();
     renderView({ onOpenSchedule });
 
-    fireEvent.click(screen.getByRole("button", { name: "Date" }));
     fireEvent.click(screen.getByRole("button", { name: "Deadline" }));
     fireEvent.click(screen.getByRole("button", { name: "Priority" }));
 
-    expect(onOpenSchedule).toHaveBeenCalledTimes(3);
+    expect(onOpenSchedule).toHaveBeenCalledTimes(2);
+  });
+
+  // Issue #253: Date anchors its own `TaskSchedulePopover` instance
+  // directly under the attribute pill/row — `scheduler-view` is the
+  // popover's own `data-testid` (task-schedule-popover.tsx). jsdom lays
+  // nothing out, so this proves the popover opens, not that it anchors;
+  // see this ticket's own report for why anchoring needs a real browser.
+  it("Date opens its own anchored scheduler popover, not the shared sheet", () => {
+    const onOpenSchedule = vi.fn();
+    renderView({ onOpenSchedule });
+
+    expect(screen.queryByTestId("scheduler-view")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Date" }));
+
+    expect(screen.getByTestId("scheduler-view")).toBeInTheDocument();
+    expect(onOpenSchedule).not.toHaveBeenCalled();
+  });
+
+  it("picking a day from the Date popover calls onSetDate", () => {
+    const onSetDate = vi.fn();
+    renderView({ onSetDate });
+
+    fireEvent.click(screen.getByRole("button", { name: "Date" }));
+    // The popover's own "Today" quick option — `/^Today \w{3}$/`, not a bare
+    // `/^Today/`, because react-day-picker's default day-cell aria-label
+    // for today's own calendar cell also starts with "Today, " (a comma
+    // and the full weekday name), which would otherwise match too.
+    fireEvent.click(screen.getByRole("button", { name: /^Today \w{3}$/ }));
+
+    expect(onSetDate).toHaveBeenCalledWith("1", expect.any(String));
   });
 
   it("an unset Date/Deadline/Priority renders a pill; once set, each is promoted into its own row", () => {
@@ -493,7 +966,7 @@ describe("TaskDetailView", () => {
     });
 
     // Date is set — a promoted row naming its value, not a bare pill.
-    expect(screen.getByRole("button", { name: /Date.*Sep 3/s })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Date.*3 Sep/s })).toBeInTheDocument();
     // Deadline is still unset — a pill, exactly the word "Deadline".
     expect(screen.getByRole("button", { name: "Deadline" })).toBeInTheDocument();
     // Priority is set — a promoted row naming P1.
@@ -541,6 +1014,156 @@ describe("TaskDetailView", () => {
     });
 
     expect(screen.getByRole("button", { name: /Labels.*Home, Errands/s })).toBeInTheDocument();
+  });
+
+  describe("DET-16 — a toast when a rename resolves a Date", () => {
+    // Pinned the same way task-detail-view-recognition.test.tsx's own
+    // `beforeEach` is (that file's own comment on why `toFake: ["Date"]`
+    // alone, not every timer: entering title-edit mode below goes through
+    // `findByLabelText`, which polls with a REAL `setTimeout` — faking
+    // every timer would hang that poll instead of resolving it).
+    beforeEach(() => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(new Date(2026, 8, 13, 12, 0));
+      vi.mocked(toast).mockClear();
+    });
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    // This view's own contract (`onRename: (content: string) => void`)
+    // never hands resolution back — `commitTaskTitle` (task-title-commit.ts)
+    // runs one layer up, through a `useMutation` (hooks/use-tasks.ts's
+    // `setDateMutation`), so this view only learns a Date resolved once its
+    // parent re-renders it with the changed Task. `renderView`'s own
+    // `rerender` (this file's header comment on it) stands in for that
+    // later, external re-render.
+    it("raises a toast naming the resolved Date, with a 10s duration, once the store's own write lands", async () => {
+      const onRename = vi.fn();
+      const { rerender } = renderView({
+        task: task({ id: "1", content: "buy milk", date: null }),
+        onRename,
+      });
+
+      fireEvent.click(screen.getByRole("button", { name: "buy milk" }));
+      const titleField = await screen.findByLabelText("Task name");
+      fireEvent.change(titleField, { target: { value: "buy milk tomorrow" } });
+      fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+      expect(onRename).toHaveBeenCalledWith("buy milk tomorrow");
+      // Nothing has resolved yet — `onRename` is a bare mock here, exactly
+      // as it is in every other test in this file; no toast until the
+      // Task prop itself changes.
+      expect(toast).not.toHaveBeenCalled();
+
+      rerender({ task: task({ id: "1", content: "buy milk", date: "2026-09-14" }) });
+
+      expect(toast).toHaveBeenCalledWith(
+        "Date updated to Tomorrow",
+        expect.objectContaining({
+          // DET-16 (parity-ledger.md): measured live, 9,609ms present and
+          // gone by 10,119ms — 10s, not the completion toast's own 11s.
+          duration: 10_000,
+          action: expect.objectContaining({ label: "Undo", onClick: expect.any(Function) }),
+        }),
+      );
+    });
+
+    it("raises no toast when a rename does not change the Date", async () => {
+      const onRename = vi.fn();
+      const { rerender } = renderView({
+        task: task({ id: "1", content: "buy milk", date: "2026-09-20" }),
+        onRename,
+      });
+
+      fireEvent.click(screen.getByRole("button", { name: "buy milk" }));
+      const titleField = await screen.findByLabelText("Task name");
+      fireEvent.change(titleField, { target: { value: "buy bread" } });
+      fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+      expect(onRename).toHaveBeenCalledWith("buy bread");
+
+      // The store's own write lands, but the rename never touched Date —
+      // only `content` differs from the render before Save.
+      rerender({ task: task({ id: "1", content: "buy bread", date: "2026-09-20" }) });
+
+      expect(toast).not.toHaveBeenCalled();
+    });
+
+    // "If that is not recorded, restore only the date, and say so"
+    // (this ticket's own brief): `rename-capture-2026-09-11.md` records
+    // that Todoist's own toast carries an Undo, but never drove it, so
+    // what it restores there is unmeasured. This view's own Undo restores
+    // only the Date — day and time together, as one `Task.date` string —
+    // never the title, and this test is the record of that choice.
+    it("Undo restores the previous Date and time, and never the title", async () => {
+      const onRename = vi.fn();
+      const onSetDate = vi.fn();
+      const { rerender } = renderView({
+        task: task({ id: "1", content: "buy milk", date: "2026-09-01T08:00" }),
+        onRename,
+        onSetDate,
+      });
+
+      fireEvent.click(screen.getByRole("button", { name: "buy milk" }));
+      const titleField = await screen.findByLabelText("Task name");
+      fireEvent.change(titleField, { target: { value: "buy milk tomorrow" } });
+      fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+      rerender({
+        task: task({ id: "1", content: "buy milk", date: "2026-09-14" }),
+        onSetDate,
+      });
+
+      const toastCall = vi.mocked(toast).mock.calls[0];
+      const action = toastCall?.[1]?.action as { onClick: () => void } | undefined;
+      action?.onClick();
+
+      // The exact previous string, time-of-day included — never just the
+      // day, and never a second call touching `content`.
+      expect(onSetDate).toHaveBeenCalledWith("1", "2026-09-01T08:00");
+      expect(onRename).toHaveBeenCalledTimes(1);
+    });
+
+    // Regression guard for the misattribution risk this file's own
+    // `pendingRenameDateRef` doc comment names: a rename that never
+    // touched the Date leaves that ref sitting unconsumed (`task.date`
+    // never changed to not-match its snapshot), so a LATER, unrelated
+    // Date edit must not be misread as the earlier rename's own effect.
+    // `onPickDay` (task-detail-view.tsx, the Date attribute's own
+    // popover) clears the ref before calling `onSetDate` specifically to
+    // guard against this.
+    it("does not raise a toast for an unrelated Date pick that follows a non-Date-changing rename", async () => {
+      const onRename = vi.fn();
+      const onSetDate = vi.fn();
+      const { rerender } = renderView({
+        task: task({ id: "1", content: "buy milk", date: null }),
+        onRename,
+        onSetDate,
+      });
+
+      fireEvent.click(screen.getByRole("button", { name: "buy milk" }));
+      const titleField = await screen.findByLabelText("Task name");
+      fireEvent.change(titleField, { target: { value: "buy bread" } });
+      fireEvent.click(screen.getByRole("button", { name: "Save" }));
+      expect(onRename).toHaveBeenCalledWith("buy bread");
+
+      // Store update lands: only `content` changed, Date stays null.
+      rerender({ task: task({ id: "1", content: "buy bread", date: null }), onSetDate });
+      expect(toast).not.toHaveBeenCalled();
+
+      // The reader now picks a Date explicitly, through this view's own
+      // Date attribute — a wholly separate action from the rename above.
+      fireEvent.click(screen.getByRole("button", { name: "Date" }));
+      fireEvent.click(screen.getByRole("button", { name: /^Today \w{3}$/ }));
+      expect(onSetDate).toHaveBeenCalled();
+
+      const pickedDay = vi.mocked(onSetDate).mock.calls[0]?.[1] as string;
+      rerender({ task: task({ id: "1", content: "buy bread", date: pickedDay }), onSetDate });
+
+      expect(toast).not.toHaveBeenCalled();
+    });
   });
 
   describe("Description — issue #180", () => {
@@ -602,7 +1225,22 @@ describe("TaskDetailView", () => {
       expect(onSetDescription).not.toHaveBeenCalled();
     });
 
-    it("Escape reverts an in-progress edit without committing", async () => {
+    it("Escape with no unsaved changes reverts an in-progress edit without committing", async () => {
+      const onSetDescription = vi.fn();
+      renderView({ task: task({ description: "original" }), onSetDescription });
+
+      fireEvent.click(screen.getByText("original"));
+      const field = await screen.findByLabelText("Description");
+      fireEvent.keyDown(field, { key: "Escape" });
+
+      expect(onSetDescription).not.toHaveBeenCalled();
+      expect(screen.getByText("original")).toBeInTheDocument();
+      expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+    });
+
+    // DET-15: same guard as the title's own Escape test above, exercised
+    // through the Description editor's `onCancel` instead.
+    it("Escape with an unsaved Description change asks first instead of discarding immediately", async () => {
       const onSetDescription = vi.fn();
       renderView({ task: task({ description: "original" }), onSetDescription });
 
@@ -611,8 +1249,13 @@ describe("TaskDetailView", () => {
       fireEvent.change(field, { target: { value: "discard me" } });
       fireEvent.keyDown(field, { key: "Escape" });
 
+      const confirmDialog = await screen.findByRole("alertdialog");
       expect(onSetDescription).not.toHaveBeenCalled();
-      expect(screen.getByText("original")).toBeInTheDocument();
+      expect(screen.getByLabelText("Description")).toHaveValue("discard me");
+
+      fireEvent.click(within(confirmDialog).getByRole("button", { name: "Discard" }));
+
+      expect(await screen.findByText("original")).toBeInTheDocument();
     });
   });
 
@@ -635,6 +1278,24 @@ describe("TaskDetailView", () => {
       expect(screen.getByText("Comments (2)")).toBeInTheDocument();
       expect(screen.getByText("reply", { selector: "em" })).toBeInTheDocument();
       expect(screen.getByText("second reply")).toBeInTheDocument();
+    });
+
+    // CMT-02/CMT-08: `CommentRow` now renders through `entryProse`'s own
+    // `"comment"` mode (entry-prose.tsx's own doc comment on the parameter)
+    // rather than the default `"entry"` mode `task.description` still uses
+    // below — a bare URL only linkifies in `"comment"` mode
+    // (entry-prose.test.tsx's own "linkifies a bare https URL" case is the
+    // direct proof of that gate; this is the same behaviour reached through
+    // this file's own real caller).
+    it("CMT-02: a Comment's own bare URL renders as a real link, opened safely in a new tab", () => {
+      renderView({
+        comments: [comment({ id: "c1", text: "see https://example.com now" })],
+      });
+
+      const link = screen.getByRole("link", { name: "https://example.com" });
+      expect(link).toHaveAttribute("href", "https://example.com");
+      expect(link).toHaveAttribute("target", "_blank");
+      expect(link).toHaveAttribute("rel", "noopener noreferrer");
     });
 
     it("the composer is always visible, and submitting adds a Comment and clears the field", () => {
@@ -685,17 +1346,118 @@ describe("TaskDetailView", () => {
       expect(onAddComment).not.toHaveBeenCalled();
     });
 
-    it("editing a Comment opens a textarea seeded with its text, and commits on blur", () => {
+    it("editing a Comment opens a textarea seeded with its text", () => {
+      renderView({ comments: [comment({ id: "c1", text: "original" })] });
+
+      fireEvent.click(screen.getByRole("button", { name: "Edit comment" }));
+      const field = screen.getByLabelText("Edit comment");
+      expect(field).toHaveValue("original");
+    });
+
+    it("CMT-03: blurring the editor (clicking away) leaves it open with the draft intact, and saves nothing — Todoist's model, where only Cancel/Update decide the edit's fate", () => {
       const onEditComment = vi.fn();
       renderView({ comments: [comment({ id: "c1", text: "original" })], onEditComment });
 
       fireEvent.click(screen.getByRole("button", { name: "Edit comment" }));
       const field = screen.getByLabelText("Edit comment");
-      expect(field).toHaveValue("original");
+      field.focus();
       fireEvent.change(field, { target: { value: "changed" } });
       fireEvent.blur(field);
 
+      expect(onEditComment).not.toHaveBeenCalled();
+      expect(screen.getByLabelText("Edit comment")).toHaveValue("changed");
+    });
+
+    it("CMT-03: Escape discards the draft and closes the editor without saving (regression — see this commit's own message for the bug this replaced)", () => {
+      const onEditComment = vi.fn();
+      renderView({ comments: [comment({ id: "c1", text: "original" })], onEditComment });
+
+      fireEvent.click(screen.getByRole("button", { name: "Edit comment" }));
+      const field = screen.getByLabelText("Edit comment");
+      // Focused, exactly like a reader who has actually been typing —
+      // the bug this guards against only shows up once the textarea is
+      // the real `document.activeElement`, which is what makes the
+      // Escape handler's own `.blur()` call fire a genuine blur event.
+      field.focus();
+      fireEvent.change(field, { target: { value: "changed" } });
+      fireEvent.keyDown(field, { key: "Escape" });
+
+      expect(onEditComment).not.toHaveBeenCalled();
+      expect(screen.queryByRole("textbox", { name: "Edit comment" })).not.toBeInTheDocument();
+      expect(screen.getByText("original")).toBeInTheDocument();
+    });
+
+    it("Escape cancelling a Comment edit closes only the inline editor, not the whole task-detail dialog (regression — the keydown used to bubble to Radix Dialog's own close handler)", () => {
+      const onClose = vi.fn();
+      renderView({ comments: [comment({ id: "c1", text: "original" })], onClose });
+
+      fireEvent.click(screen.getByRole("button", { name: "Edit comment" }));
+      const field = screen.getByLabelText("Edit comment");
+      field.focus();
+      fireEvent.change(field, { target: { value: "changed" } });
+      fireEvent.keyDown(field, { key: "Escape" });
+
+      // The editor closed (the same assertion the test above already
+      // makes) — what this test adds is that the DIALOG survived it: the
+      // exact same `role="dialog"` node is still on screen, and `onClose`
+      // (this view's own signal that Radix decided to dismiss it) was
+      // never called.
+      expect(screen.queryByRole("textbox", { name: "Edit comment" })).not.toBeInTheDocument();
+      expect(screen.getByRole("dialog")).toBeInTheDocument();
+      expect(onClose).not.toHaveBeenCalled();
+    });
+
+    it("Escape still closes the dialog when no Comment editor is open — the fix above is scoped to editing, not a blanket swallow of every Escape in this view", () => {
+      const onClose = vi.fn();
+      renderView({ comments: [comment({ id: "c1", text: "original" })], onClose });
+
+      fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" });
+
+      expect(onClose).toHaveBeenCalledTimes(1);
+    });
+
+    it("CMT-03: Cancel discards the draft and closes the editor without saving", () => {
+      const onEditComment = vi.fn();
+      renderView({ comments: [comment({ id: "c1", text: "original" })], onEditComment });
+
+      fireEvent.click(screen.getByRole("button", { name: "Edit comment" }));
+      const field = screen.getByLabelText("Edit comment");
+      fireEvent.change(field, { target: { value: "changed" } });
+      fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+
+      expect(onEditComment).not.toHaveBeenCalled();
+      expect(screen.queryByRole("textbox", { name: "Edit comment" })).not.toBeInTheDocument();
+      expect(screen.getByText("original")).toBeInTheDocument();
+    });
+
+    it("CMT-03: Update commits the trimmed draft and closes the editor", () => {
+      const onEditComment = vi.fn();
+      renderView({ comments: [comment({ id: "c1", text: "original" })], onEditComment });
+
+      fireEvent.click(screen.getByRole("button", { name: "Edit comment" }));
+      const field = screen.getByLabelText("Edit comment");
+      fireEvent.change(field, { target: { value: "  changed  " } });
+      fireEvent.click(screen.getByRole("button", { name: "Update" }));
+
       expect(onEditComment).toHaveBeenCalledWith("c1", "changed");
+      expect(screen.queryByRole("textbox", { name: "Edit comment" })).not.toBeInTheDocument();
+    });
+
+    it("CMT-03: Update saves nothing for a blank draft or one identical to the original", () => {
+      const onEditComment = vi.fn();
+      renderView({ comments: [comment({ id: "c1", text: "original" })], onEditComment });
+
+      fireEvent.click(screen.getByRole("button", { name: "Edit comment" }));
+      fireEvent.click(screen.getByRole("button", { name: "Update" }));
+      expect(onEditComment).not.toHaveBeenCalled();
+      expect(screen.getByText("original")).toBeInTheDocument();
+
+      fireEvent.click(screen.getByRole("button", { name: "Edit comment" }));
+      const field = screen.getByLabelText("Edit comment");
+      fireEvent.change(field, { target: { value: "   " } });
+      fireEvent.click(screen.getByRole("button", { name: "Update" }));
+      expect(onEditComment).not.toHaveBeenCalled();
+      expect(screen.getByText("original")).toBeInTheDocument();
     });
 
     it("CMT-03: deleting a Comment asks for confirmation first, and does not remove until confirmed", () => {

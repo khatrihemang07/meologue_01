@@ -1,0 +1,17 @@
+{
+  "row": "QA-13 (# project popup), QA-14 (@ label popup) - Todoist-only chrome",
+  "todoist": {
+    "hash_popup": {
+      "structure": "data-testid=\"content-editor-suggestions-dropdown\", role=\"listbox\", tippy.js portal, options as role=\"option\" rows (e.g. 'Inbox' with an icon, then a shared project with an avatar image)",
+      "role_of_composer_while_open": "combobox (was 'textbox' before typing '#')",
+      "filtered_fallback_text_for_nonexistent_project": "Project not found.Create zzznonexistent"
+    },
+    "at_popup": {
+      "structure": "same data-testid=\"content-editor-suggestions-dropdown\" component reused for labels",
+      "at_rest_text": "(empty - no labels exist in this account)",
+      "filtered_fallback_text_for_nonexistent_label": "Label not found.Create zzznonexistent"
+    }
+  },
+  "meologue": "No autocomplete popup UI exists for either sigil. Per row scope, meologue's parser recognises the '#'/'@' sigils positionally (per ledger QA-13/QA-14 code citations) but the popup chrome itself is unbuilt - not invented or measured here.",
+  "verdict": "blocked-by-design for meologue (chrome not built); Todoist side fully measured live"
+}

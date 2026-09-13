@@ -145,7 +145,7 @@ separately marked.
 | ⇧Enter | Save task and create another one below |
 | ⌃Enter | Save task and create another one above |
 
-Note: this section documents the Quick Add composer's own Enter/⇧Enter/⌃Enter
+Note: this section documents Quick Add's own Enter/⇧Enter/⌃Enter
 behavior — none of these were pressed during this capture (per the
 Shift+Enter-submits trap), so they are transcription-only.
 
@@ -278,7 +278,7 @@ and after each key press (script outputs preserved in
   aria-label="Mark task as complete" aria-describedby="task-{id}-content">`.
   In the task-detail view the same control's label becomes
   `"Checkbox for {task title}"` instead of the generic row label.
-- **Composer** (Quick Add, opened with `Q` for inspection only, then closed
+- **Quick Add** (opened with `Q` for inspection only, then closed
   with `Escape` — no text typed, canary confirmed unaffected): the dialog is
   `role="dialog"`, `data-testid="quick-add"`, `aria-modal` **not set**
   (absent, not `"false"`). Its title field is a

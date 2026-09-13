@@ -27,7 +27,7 @@ function uniqueTaskContent(label: string): string {
 }
 
 async function addTask(page: import("@playwright/test").Page, content: string): Promise<void> {
-  await page.getByLabel("Add a Task").fill(content);
+  await page.getByLabel("Add task").fill(content);
   await page.getByRole("button", { name: "Add" }).click();
 }
 
@@ -65,7 +65,8 @@ test("adding, completing (with Undo), reordering and reloading all leave Todo ex
   // so the Task lands right back where its own orderKey already puts it.
   await page.getByRole("checkbox", { name: first }).click();
   await expect(page.getByRole("checkbox", { name: first })).toHaveCount(0);
-  await expect(page.getByText(`Completed "${first}"`)).toBeVisible();
+  // CMT-04: Todoist's own task-agnostic, count-based wording.
+  await expect(page.getByText("1 task completed")).toBeVisible();
 
   await page.getByRole("button", { name: "Undo" }).click();
   await expect(page.getByRole("checkbox", { name: first })).toBeVisible();

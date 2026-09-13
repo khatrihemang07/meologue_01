@@ -1,0 +1,5 @@
+$ vite --host 127.0.0.1 --port 5188 --strictPort
+
+  VITE v8.2.1  ready in 272 ms
+
+  ➜  Local:   http://127.0.0.1:5188/

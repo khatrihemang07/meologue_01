@@ -1,0 +1,5 @@
+sync toggle: {"found":true,"checked":true}
+immediately after Update: {"htmlClass":"todoist_loaded theme_todoist","bodyBg":"rgb(40, 28, 17)","bodyColor":"rgb(212, 208, 202)"}
+after closing settings dialog: {"htmlClass":"todoist_loaded theme_todoist","bodyBg":"rgb(40, 28, 17)","bodyColor":"rgb(212, 208, 202)","url":"/app/today"}
+after SPA nav to inbox: {"htmlClass":"todoist_loaded theme_todoist","bodyBg":"rgb(40, 28, 17)","bodyColor":"rgb(212, 208, 202)","url":"/app/inbox"}
+

@@ -53,6 +53,9 @@ function renderProjectView(overrides: Partial<Parameters<typeof ProjectView>[0]>
       labels: [],
       onOpenDetail: vi.fn(),
       onSetPriority: vi.fn(),
+      onSetDate: vi.fn(),
+      onSetDateString: vi.fn(),
+      datesWithTasks: new Map(),
       onSetProject: vi.fn(),
       onSetLabels: vi.fn(),
       onCopyLink: vi.fn(),
@@ -113,7 +116,7 @@ describe("ProjectView — colour and delete (issue #229)", () => {
     expect(screen.getByText("Delete project?")).toBeInTheDocument();
     expect(
       screen.getByText(
-        'The "Groceries" project and all its tasks will be permanently deleted. This action cannot be undone.',
+        "The Groceries project and all its tasks will be permanently deleted. This action cannot be undone.",
       ),
     ).toBeInTheDocument();
   });

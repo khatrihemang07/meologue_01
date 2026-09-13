@@ -1,0 +1,142 @@
+{
+  "today": {
+    "text": "today",
+    "hasSpan": true,
+    "matchId": "11 Sep",
+    "highlighted": "true",
+    "spanText": "today"
+  },
+  "tod": {
+    "text": "tod",
+    "hasSpan": true,
+    "matchId": "11 Sep",
+    "highlighted": "true",
+    "spanText": "tod"
+  },
+  "tomorrow": {
+    "text": "tomorrow",
+    "hasSpan": true,
+    "matchId": "12 Sep",
+    "highlighted": "true",
+    "spanText": "tomorrow"
+  },
+  "tmr": {
+    "text": "tmr",
+    "hasSpan": true,
+    "matchId": "12 Sep",
+    "highlighted": "true",
+    "spanText": "tmr"
+  },
+  "monday": {
+    "text": "monday",
+    "hasSpan": true,
+    "matchId": "14 Sep",
+    "highlighted": "true",
+    "spanText": "monday"
+  },
+  "friday": {
+    "text": "friday",
+    "hasSpan": true,
+    "matchId": "11 Sep",
+    "highlighted": "true",
+    "spanText": "friday"
+  },
+  "next week": {
+    "text": "next week",
+    "hasSpan": true,
+    "matchId": "14 Sep",
+    "highlighted": "true",
+    "spanText": "next week"
+  },
+  "in 3 days": {
+    "text": "in 3 days",
+    "hasSpan": true,
+    "matchId": "14 Sep",
+    "highlighted": "true",
+    "spanText": "in 3 days"
+  },
+  "25 dec": {
+    "text": "25 dec",
+    "hasSpan": true,
+    "matchId": "25 Dec",
+    "highlighted": "true",
+    "spanText": "25 dec"
+  },
+  "12/25": {
+    "text": "12/25",
+    "hasSpan": true,
+    "matchId": "25 Dec",
+    "highlighted": "true",
+    "spanText": "12/25"
+  },
+  "at 5pm": {
+    "text": "at 5pm",
+    "hasSpan": true,
+    "matchId": "12 Sep 5:00 PM",
+    "highlighted": "true",
+    "spanText": "at 5pm"
+  },
+  "5pm": {
+    "text": "5pm",
+    "hasSpan": true,
+    "matchId": "12 Sep 5:00 PM",
+    "highlighted": "true",
+    "spanText": "5pm"
+  },
+  "17:00": {
+    "text": "17:00",
+    "hasSpan": true,
+    "matchId": "12 Sep 5:00 PM",
+    "highlighted": "true",
+    "spanText": "17:00"
+  },
+  "every day": {
+    "text": "every day",
+    "hasSpan": true,
+    "matchId": "every day",
+    "highlighted": "true",
+    "spanText": "every day"
+  },
+  "every monday": {
+    "text": "every monday",
+    "hasSpan": true,
+    "matchId": "every monday",
+    "highlighted": "true",
+    "spanText": "every monday"
+  },
+  "daily": {
+    "text": "daily",
+    "hasSpan": true,
+    "matchId": "every day",
+    "highlighted": "true",
+    "spanText": "daily"
+  },
+  "p1": {
+    "text": "p1",
+    "hasSpan": true,
+    "matchId": "1",
+    "highlighted": "true",
+    "spanText": "p1"
+  },
+  "p2": {
+    "text": "p2",
+    "hasSpan": true,
+    "matchId": "2",
+    "highlighted": "true",
+    "spanText": "p2"
+  },
+  "p3": {
+    "text": "p3",
+    "hasSpan": true,
+    "matchId": "3",
+    "highlighted": "true",
+    "spanText": "p3"
+  },
+  "p4": {
+    "text": "p4",
+    "hasSpan": true,
+    "matchId": "4",
+    "highlighted": "true",
+    "spanText": "p4"
+  }
+}

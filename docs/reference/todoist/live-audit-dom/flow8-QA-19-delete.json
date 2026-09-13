@@ -1,0 +1,15 @@
+{
+  "titleBefore": {
+    "found": true,
+    "title": "ZZ probe shiftenter",
+    "id": "task-6hVWF7XQVrMhVhQp"
+  },
+  "confirmDialog": {
+    "found": true,
+    "text": "Delete task?The ZZ probe shiftenter task will be permanently deleted.CancelDelete"
+  },
+  "confirmClicked": true,
+  "goneCheck": {
+    "stillPresent": false
+  }
+}

@@ -1,0 +1,15 @@
+{
+  "clicked": {
+    "found": true,
+    "firstCommentText": "line one"
+  },
+  "menuItems": {
+    "found": true,
+    "items": [
+      "Edit",
+      "Copy text",
+      "Copy link to comment",
+      "Delete"
+    ]
+  }
+}

@@ -22,9 +22,10 @@
  * a direct child of the `<li>`, sibling to `children`, never a level
  * deeper.
  */
-import type { Label, Task } from "@meologue/core";
+import type { Label, QuickAddOptions, Task } from "@meologue/core";
 import { uiPriorityOf } from "@meologue/core";
 import {
+  Calendar,
   CalendarClock,
   CheckCheck,
   GripVertical,
@@ -34,14 +35,19 @@ import {
   Pencil,
 } from "lucide-react";
 import type { MouseEvent, PointerEvent } from "react";
-import { Suspense, useState } from "react";
+import { Suspense, useRef, useState } from "react";
 import { inlineProse } from "@/components/inline-prose";
 import { LazyTaskTitleEditor } from "@/components/todo/lazy-task-title-editor";
 import { TaskCommandMenu } from "@/components/todo/task-command-menu";
 import type { TaskDetailActions } from "@/components/todo/task-row";
+import { TaskSchedulePopover } from "@/components/todo/task-schedule-popover";
+import { useTaskDateState } from "@/hooks/use-task-date-state";
 import { formatDay, formatTaskDate } from "@/lib/format-task-date";
+import { localDayKey } from "@/lib/local-day-key";
 import { projectNameFor } from "@/lib/project-name";
+import { useSettingsStore } from "@/lib/settings";
 import { priorityColour } from "@/lib/task-priority-colors";
+import { quickAddRecognitionPlugin } from "@/lib/todo-quick-add-recognition";
 import { cn } from "@/lib/utils";
 
 export interface TaskRowContentProps {
@@ -60,6 +66,13 @@ export interface TaskRowContentProps {
   onComplete: () => void;
   onCompleteForever: () => void;
   onRequestDelete: () => void;
+  /**
+   * Opens the shared `TaskScheduleSheet` (Deadline and Priority) — narrowed
+   * by issue #253, which moved Date onto its own anchored
+   * `TaskSchedulePopover` instance (`scheduleOpen`/`onScheduleOpenChange`
+   * above) rather than the sheet's own "Pick a date" button. This prop is
+   * now reached only from `TaskCommandMenu`'s "Deadline…" item.
+   */
   onOpenSchedule: () => void;
   isDropTarget: boolean;
   isNestTarget: boolean;
@@ -77,6 +90,30 @@ export interface TaskRowContentProps {
   /** The full command set's own open state — owned by `task-row.tsx` (its `<li>`'s own `onContextMenu`/`onKeyDown` also set it), threaded down here only because the trigger button lives in this file. */
   commandMenuOpen: boolean;
   onCommandMenuOpenChange: (open: boolean) => void;
+  /**
+   * This row's own `TaskSchedulePopover` open state (issue #253) — owned by
+   * `task-row.tsx` for the identical reason `commandMenuOpen` above is: the
+   * hover Date button (this file), the More-actions "Date…" item (also
+   * this file, via `TaskCommandMenu`) and the `T` shortcut
+   * (`task-row.tsx`'s own `OPEN_SCHEDULE_EVENT` listener) all have to flip
+   * the same flag regardless of which one fires.
+   */
+  scheduleOpen: boolean;
+  onScheduleOpenChange: (open: boolean) => void;
+  /**
+   * ROW-13 (parity-ledger.md), issue #250: Today's own "Due today" section
+   * shows every row due today, so the tone-coloured date badge below says
+   * nothing there a reader doesn't already know from the section heading.
+   * pass2-2026-09-11.md §3 measured Todoist omitting the date control from
+   * the DOM entirely on such a row, not merely hiding it with CSS — this
+   * prop is that same suppression, threaded down from whichever caller
+   * knows it is rendering a "due today, and only today" list (today-view.tsx's
+   * own `dueToday` section; its `overdue` section leaves this unset, since
+   * an overdue Task's own date is not redundant there). Defaults to
+   * `false` — every other caller (Inbox, a Project's own view, Today's own
+   * Overdue section) keeps the badge exactly as before.
+   */
+  suppressDateBadge?: boolean;
 }
 
 /**
@@ -138,6 +175,9 @@ export function TaskRowContent({
   onMoveToSection,
   commandMenuOpen,
   onCommandMenuOpenChange,
+  scheduleOpen,
+  onScheduleOpenChange,
+  suppressDateBadge = false,
 }: TaskRowContentProps) {
   // Issue #225: inline row editing, which did not exist before this
   // ticket. Driven on the live app after the ticket's first pass shipped
@@ -168,6 +208,22 @@ export function TaskRowContent({
   // either way).
   const [editingTitle, setEditingTitle] = useState(false);
 
+  // Issue #247: the identical recognition plugin add-task-form.tsx and
+  // task-detail-view.tsx already attach to their own title editors — this
+  // row had none at all before now, so a phrase typed while renaming here
+  // highlighted nothing even though the rename itself has, since this
+  // ticket, started resolving it (task-title-commit.ts, wired one layer up
+  // by whichever page builds `detailActions.onRename`). A ref, not plain
+  // state, matching both of those files' own reasoning: `extraPlugins` is
+  // read once, at the editor's mount, while `smartDates`/`now` are read
+  // live on every decoration pass through `getOptions` below. A ref PER
+  // ROW is correct here and must not be hoisted above this component: the
+  // editor only mounts while `editingTitle` is true, so each edit is a
+  // fresh mount with nothing stale to carry over from the last one.
+  const smartDates = useSettingsStore((state) => state.smartDatesEnabled);
+  const optionsRef = useRef<QuickAddOptions>({ now: localDayKey(new Date()), smartDates });
+  optionsRef.current = { now: localDayKey(new Date()), smartDates };
+
   function commitTitle(next: string) {
     setEditingTitle(false);
     const trimmed = next.trim();
@@ -176,6 +232,16 @@ export function TaskRowContent({
     }
     detailActions.onRename(task.id, trimmed);
   }
+
+  // Issue #256: this row's own `TaskSchedulePopover` reads `task.date` split
+  // into its day/time components through `useTaskDateState` — the
+  // identical hook `task-detail-view.tsx`'s own popover instance also
+  // consumes, replacing what used to be a byte-identical local split and
+  // combine in both files (that duplication is what #256 exists to close).
+  const { dateDay, dateTime, setScheduleDay, setScheduleTime } = useTaskDateState(
+    task,
+    detailActions.onSetDate,
+  );
 
   const isRecurring = task.dateString !== null;
   const isCompleted = task.completedAt !== null;
@@ -204,7 +270,7 @@ export function TaskRowContent({
   // Date/Deadline/Priority/recurrence/comment checks, so a plain Task
   // with none of these still renders no empty, gap-holding line.
   const hasMetadata =
-    task.date !== null ||
+    (dateDisplay !== null && !suppressDateBadge) ||
     task.deadline !== null ||
     task.priority !== 1 ||
     isRecurring ||
@@ -264,16 +330,44 @@ export function TaskRowContent({
         isNestTarget && "bg-primary/10 ring-2 ring-primary ring-inset",
       )}
       // ROW-01: 59px is the row's own baseline height for a single-line
-      // title plus one metadata line — `min-h`, not a fixed `h`, because a
-      // title long enough to wrap (ROW-05's own 4-line clamp, below) has
-      // to be allowed to grow the row rather than clip against a hard
-      // ceiling the reference itself never measured against a wrapped
-      // title. "No padding on the row itself" is why this box carries
-      // none of its own: the checkbox, title and metadata line supply
-      // whatever internal spacing they need, and centring via
-      // `items-center` is what keeps a short, unwrapped title vertically
-      // balanced inside the 59px floor rather than pinned to its top.
-      style={{ minHeight: "59px", paddingLeft: `${12 + (depth - 1) * 20}px`, paddingRight: "12px" }}
+      // title plus one metadata line; a title-only row (no date, deadline,
+      // priority, recurrence, Label, Project, sub-task or comment count —
+      // `hasMetadata`, above, the SAME boolean that decides whether the
+      // metadata `<span>` below renders at all) is 43px, +16px shorter.
+      // Restated live (`live-audit-2026-09-11.md`): the corpus's original
+      // 59px was measured on "hair wash," which carries a date badge, so it
+      // was always the one-metadata-line height, never a fixed one; a
+      // disposable title-only fixture measured 43px instead. This used to
+      // be a single hard-coded `minHeight: "59px"` floor that held every
+      // title-only row at 59 regardless — keying the floor to `hasMetadata`
+      // ties it to the actual rendered content instead of a second,
+      // independent guess at whether this row has a metadata line.
+      //
+      // Still `min-h`, not a fixed `h`, for the reason it always was: a
+      // title long enough to wrap (ROW-05's own 4-line clamp, below) has to
+      // be allowed to grow the row rather than clip against a hard ceiling
+      // the reference itself never measured against a wrapped title. "No
+      // padding on the row itself" is why this box carries none of its
+      // own: the checkbox, title and metadata line supply whatever internal
+      // spacing they need, and centring via `items-center` is what keeps a
+      // short, unwrapped title vertically balanced inside whichever floor
+      // applies, rather than pinned to its top.
+      //
+      // Two measured literals switched on `hasMetadata`, not a formula: the
+      // row has no padding of its own to derive one from.
+      //
+      // The row actions (Edit, Date, Comment, More, and the recurring
+      // archive button) are `size-11`, a 44px touch target that stays in the
+      // layout at `opacity: 0`. Flow 11 R2 read a title-only row at 47px
+      // against Todoist's 43: that 44px button plus this box's 2px
+      // drop-target top border and 1px divider. Each action carries `-my-1`,
+      // so it keeps its full 44px hit area but lays out at 36px, and the 43px
+      // floor is what sets the row.
+      style={{
+        minHeight: hasMetadata ? "59px" : "43px",
+        paddingLeft: `${12 + (depth - 1) * 20}px`,
+        paddingRight: "12px",
+      }}
     >
       {draggable && (
         <button
@@ -326,6 +420,18 @@ export function TaskRowContent({
         itself is still the box-shadow `priorityColour` already produced
         pre-#224 (issue #223's own token work) — only the two sizes
         changed to match the measured pair.
+
+        The ring's own WIDTH (issue #250, ROW-03's own "dimensionally
+        incomplete" caveat) is a second axis pass2-2026-09-11.md §2
+        measured and this used to flatten to a fixed 1px everywhere.
+
+        Restated again by PRI-06 (flow 2, driven live with P1-P4 fixtures):
+        the ring is 2px for EVERY non-default priority — P1 `rgb(255,112,
+        102)`, P2 `rgb(255,154,19)`, P3 `rgb(82,151,255)` — and 1px only at
+        P4 ("no priority", `rgb(169,169,169)`). This used to test
+        `uiPriorityOf(...) === 1`, so only P1 got the 2px ring and P2/P3
+        fell through to the 1px branch alongside P4 — testing "not the
+        default level" (`!== 4`) instead is what covers all three.
       */}
       <label className="flex size-6 shrink-0 cursor-pointer items-center justify-center">
         <input
@@ -345,7 +451,9 @@ export function TaskRowContent({
             }
           }}
           aria-label={task.content}
-          style={{ boxShadow: `0 0 0 1px ${priorityColour(uiPriorityOf(task.priority))}` }}
+          style={{
+            boxShadow: `0 0 0 ${uiPriorityOf(task.priority) === 4 ? "1px" : "2px"} ${priorityColour(uiPriorityOf(task.priority))}`,
+          }}
           // `appearance-none` is what makes `rounded-full` mean anything at
           // all here (ROW-03). A native checkbox paints the platform widget
           // and ignores border-radius entirely, so this rendered as a square
@@ -391,6 +499,7 @@ export function TaskRowContent({
               className={cn(
                 "text-[length:var(--td-row-font-size)] leading-[length:var(--td-row-line-height)]",
               )}
+              extraPlugins={[quickAddRecognitionPlugin(() => optionsRef.current)]}
             />
           </Suspense>
         ) : (
@@ -407,6 +516,18 @@ export function TaskRowContent({
               "line-clamp-4 block w-full text-left hover:underline",
               "text-[length:var(--td-row-font-size)] leading-[length:var(--td-row-line-height)]",
             )}
+            // KBD-03/04 (parity ledger): this button, not the `<li data-
+            // task-id>` it lives inside, is what Todoist's own measured
+            // target actually is — a `role="button"` element carrying the
+            // task title (`docs/reference/todoist/live-audit-dom/flow6-
+            // KBD-03-todoist.json`). `use-todo-keymap.ts`'s `focusAdjacentRow`
+            // walks every `[data-row-nav-target]` in one live `querySelectorAll`
+            // to build the row-to-row cycle straight from the DOM, so a
+            // future row type only needs this one attribute to join it —
+            // no second, hand-maintained list to fall out of sync with
+            // (exactly the parity defect a destination added to one nav
+            // but not the other already produced once in this repo).
+            data-row-nav-target
           >
             {task.content}
           </button>
@@ -433,8 +554,21 @@ export function TaskRowContent({
           // than inventing a comma/pipe/dot the reference never showed
           // for the two fields it did observe (date, comment count).
           <span className="flex flex-wrap items-center gap-x-2 text-muted-foreground text-xs">
-            {dateDisplay !== null && (
-              <span style={{ color: dateDisplay.colour }}>{dateDisplay.text}</span>
+            {/* DATE-01 (parity-ledger.md), issue #257: an inline 12×12
+                calendar `<svg>` beside the date text, measured live on an
+                overdue row (`live-audit-dom/flow8-DATE-01-todoist.json`) —
+                `hasSvgIconInsideDateControl: true`, `svgViewBox: "0 0 12
+                12"`. That artifact only ever sampled overdue rows (four
+                "Yesterday" captures, `flow8-DATE-01-debug.json`), so
+                whether Todoist's non-overdue dates (Today, a weekday, "21
+                Sep") also carry the icon was NOT settled either way — put
+                here on every dated row, per this fix's own instruction for
+                an unsettled artifact, rather than gated to overdue only. */}
+            {dateDisplay !== null && !suppressDateBadge && (
+              <span className="flex items-center gap-0.5" style={{ color: dateDisplay.colour }}>
+                <Calendar aria-hidden="true" className="size-3" />
+                {dateDisplay.text}
+              </span>
             )}
             {task.deadline !== null && <span>Due {formatDay(task.deadline)}</span>}
             {task.priority !== 1 && <span>P{uiPriorityOf(task.priority)}</span>}
@@ -471,7 +605,7 @@ export function TaskRowContent({
           aria-label={`Complete and archive recurring task "${task.content}"`}
           onClick={onCompleteForever}
           className={cn(
-            "flex size-11 shrink-0 items-center justify-center rounded-md text-muted-foreground transition hover:bg-muted hover:text-foreground",
+            "flex -my-1 size-11 shrink-0 items-center justify-center rounded-md text-muted-foreground transition hover:bg-muted hover:text-foreground",
             HOVER_REVEAL_CLASSES,
           )}
         >
@@ -517,29 +651,66 @@ export function TaskRowContent({
         aria-label={`Edit "${task.content}"`}
         onClick={() => setEditingTitle(true)}
         className={cn(
-          "hidden pointer-fine:flex size-11 shrink-0 items-center justify-center rounded-md text-muted-foreground transition hover:bg-muted hover:text-foreground",
+          "hidden pointer-fine:flex -my-1 size-11 shrink-0 items-center justify-center rounded-md text-muted-foreground transition hover:bg-muted hover:text-foreground",
           HOVER_REVEAL_CLASSES,
         )}
       >
         <Pencil aria-hidden="true" className="size-4" />
       </button>
-      <button
-        type="button"
-        aria-label={`Date "${task.content}"`}
-        onClick={onOpenSchedule}
-        className={cn(
-          "hidden pointer-fine:flex size-11 shrink-0 items-center justify-center rounded-md text-muted-foreground transition hover:bg-muted hover:text-foreground",
-          HOVER_REVEAL_CLASSES,
-        )}
-      >
-        <CalendarClock aria-hidden="true" className="size-4" />
-      </button>
+      {/*
+        Issue #253: Todoist's own scheduler — an anchored popover, not the
+        bottom sheet this button used to open (`onOpenSchedule`, now reached
+        only from Deadline/Priority). One `TaskSchedulePopover` instance per
+        row (`scheduleOpen`/`onScheduleOpenChange`'s own doc comment above),
+        anchored to this very button — a plain `<button>`, not `<Button>`
+        (ui/button.tsx): Radix's `asChild` clones this element and attaches
+        a ref to it to measure where to anchor, and `Button` is a plain
+        function component with no `forwardRef`, so that ref would silently
+        go nowhere (found the hard way, in a real browser, not by this
+        file's own test suite — jsdom never lays anything out to notice).
+        This button was already a plain native element before this ticket,
+        so it needs no change to be a valid trigger.
+      */}
+      <TaskSchedulePopover
+        open={scheduleOpen}
+        onOpenChange={onScheduleOpenChange}
+        dateDay={dateDay}
+        dateTime={dateTime}
+        onSetTime={setScheduleTime}
+        dateString={task.dateString}
+        datesWithTasks={detailActions.datesWithTasks}
+        onPickDay={(day) => {
+          setScheduleDay(day);
+          // A plain date (or "No Date") ends any Recurrence the Task
+          // already had — TaskSchedulePopover's own doc comment names
+          // this a deliberate, disclosed design decision, mirrored here
+          // from task-schedule-sheet.tsx's own former identical wiring.
+          if (task.dateString !== null) {
+            detailActions.onSetDateString(task.id, null, new Date().toISOString());
+          }
+        }}
+        onPickRecurrence={(dateString) =>
+          detailActions.onSetDateString(task.id, dateString, new Date().toISOString())
+        }
+        trigger={
+          <button
+            type="button"
+            aria-label={`Date "${task.content}"`}
+            className={cn(
+              "hidden pointer-fine:flex -my-1 size-11 shrink-0 items-center justify-center rounded-md text-muted-foreground transition hover:bg-muted hover:text-foreground",
+              HOVER_REVEAL_CLASSES,
+            )}
+          >
+            <CalendarClock aria-hidden="true" className="size-4" />
+          </button>
+        }
+      />
       <button
         type="button"
         aria-label={`Comment on "${task.content}"`}
         onClick={() => detailActions.onOpenDetail(task)}
         className={cn(
-          "hidden pointer-fine:flex size-11 shrink-0 items-center justify-center rounded-md text-muted-foreground transition hover:bg-muted hover:text-foreground",
+          "hidden pointer-fine:flex -my-1 size-11 shrink-0 items-center justify-center rounded-md text-muted-foreground transition hover:bg-muted hover:text-foreground",
           HOVER_REVEAL_CLASSES,
         )}
       >
@@ -556,7 +727,7 @@ export function TaskRowContent({
             type="button"
             aria-label={`More actions for "${task.content}"`}
             className={cn(
-              "flex size-11 shrink-0 items-center justify-center rounded-md text-muted-foreground transition hover:bg-muted hover:text-foreground",
+              "flex -my-1 size-11 shrink-0 items-center justify-center rounded-md text-muted-foreground transition hover:bg-muted hover:text-foreground",
               HOVER_REVEAL_CLASSES,
               "aria-expanded:opacity-100",
             )}
@@ -565,6 +736,7 @@ export function TaskRowContent({
           </button>
         }
         onOpenDetail={() => detailActions.onOpenDetail(task)}
+        onOpenDate={() => onScheduleOpenChange(true)}
         onOpenSchedule={onOpenSchedule}
         onSetPriority={(priority) => detailActions.onSetPriority(task.id, priority)}
         onSetProject={(projectId) => detailActions.onSetProject(task.id, projectId)}

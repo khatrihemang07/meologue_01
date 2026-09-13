@@ -1,0 +1,22 @@
+{
+  "clickResult": {
+    "found": true,
+    "checkedAfter": false
+  },
+  "preSaveState": {
+    "sync": false,
+    "auto": false,
+    "bodyBg": "rgb(40, 28, 17)"
+  },
+  "postSaveState": {
+    "htmlClass": "todoist_loaded theme_todoist",
+    "bodyBg": "rgb(40, 28, 17)",
+    "bodyColor": "rgb(212, 208, 202)",
+    "dialogOpen": false
+  },
+  "afterReload": {
+    "htmlClass": "theme_todoist todoist_loaded",
+    "bodyBg": "rgb(40, 28, 17)",
+    "bodyColor": "rgb(212, 208, 202)"
+  }
+}

@@ -210,9 +210,37 @@ const CHUNK_BUDGETS = {
   // modal/project/label/filter management, both still landing on this
   // route). Measured 27,170 bytes gzip (own chunk + 11 shared)
   // immediately after landing.
+  //
+  // Issues #247-#254 took this to **58,089 gzip (own chunk + 11 shared)**,
+  // and the shape of that number matters more than its size: **this
+  // chunk's own code is only 4,266 bytes.** Everything else is shared
+  // chunks the walk now reaches — chiefly
+  // `todo-quick-add-recognition-*.js` (17,615) and `calendar-*.js`
+  // (15,049), which together account for essentially the whole rise. Both
+  // are ALSO reached by `src/pages/todo-page.tsx` below, and this table
+  // bills a shared chunk to every entry that reaches it, so these bytes
+  // are counted twice across this file while existing once in the
+  // artifact. Verified against `.vite/manifest.json` rather than assumed:
+  // exactly one `calendar-*.js` and one `todo-quick-add-recognition-*.js`
+  // are emitted.
+  //
+  // Ceiling raised to 62,000 rather than splitting anything, because there
+  // is nothing here a split would remove: the detail view genuinely needs
+  // recognition (the rename door, #247) and the scheduler (its anchored
+  // Date attribute, #253), and both already live in shared chunks another
+  // surface pulls in regardless. A `lazy()` around either would move bytes
+  // between budgets without removing one byte from what a reader
+  // downloads.
+  //
+  // **Deliberately NOT attributed to a single ticket.** One reading of
+  // this number blamed popover duplication and the manifest disproved it;
+  // a second blamed #247's recognition import, but the reachability trace
+  // behind that claim used a shared visited-set, so it showed one path
+  // rather than the cause. What was measured is recorded; what was not,
+  // is not.
   "src/components/todo/task-detail-view.tsx": {
-    ceilingBytes: 35_300,
-    baselineBytes: 27_170,
+    ceilingBytes: 62_000,
+    baselineBytes: 58_089,
   },
   // Not a route — `TaskScheduleSheet` (components/todo/task-schedule-
   // sheet.tsx), lazy from `todo-page.tsx` (issue #229 onward's own
@@ -283,7 +311,7 @@ const CHUNK_BUDGETS = {
     baselineBytes: 1_703,
   },
   // Not a route — `TodoSidebar` (components/todo/todo-sidebar.tsx), lazy
-  // from chat-shell-layout.tsx (issue #223, ADR 0070). It has to be lazy
+  // from chat-shell-layout.tsx (issue #223, ADR 0076). It has to be lazy
   // for the reason that file's own comment gives: the layout renders on
   // every route including `/`, so a static import would drag the Entry
   // store onto the one path App.tsx's cold-start boundary exists to keep
@@ -398,7 +426,40 @@ const CHUNK_BUDGETS = {
   // 83,540 gzip bytes against the unchanged ceiling — +592 bytes over
   // that 82,948 starting point, still 4,060 bytes of headroom to spare,
   // so no lazy split was needed for this ticket's own surface after all.
-  "src/pages/todo-page.tsx": { ceilingBytes: 87_600, baselineBytes: 83_540 },
+  //
+  // Issues #247-#254 (the Todoist-parity programme) spent the rest of that
+  // headroom and 485 bytes more: measured 88,085 gzip against the 87,600
+  // ceiling, +4,545 over the 83,540 baseline above. **Ceiling raised to
+  // 89,000 deliberately, and the reason matters more than the number.**
+  //
+  // Of that, this route's OWN chunk is 26,891; the rest is shared chunks
+  // this walk reaches, and the growth is spread across the programme
+  // rather than attributable to one ticket. **No bytes are duplicated in
+  // the artifact** — checked against `dist/*/.vite/manifest.json`, not
+  // assumed: there is exactly one `calendar-*.js` and one
+  // `todo-quick-add-recognition-*.js` emitted, and both are reached by
+  // this route and by `task-detail-view.tsx` below, so this table bills
+  // each of them to both entries by the deliberate double-count rule
+  // `measureChunk`'s own comment states.
+  //
+  // **A lazy boundary was considered for the scheduler and rejected on
+  // its merits.** `lazy-task-schedule-sheet.ts` works because
+  // `todo-page.tsx` gates it on `schedulingTask !== null` — nothing
+  // renders until a reader asks to schedule. Issue #253's popover has no
+  // such gate: it renders on every row, because `TaskSchedulePopover`
+  // takes that row's Date button as its `trigger` prop. Putting it behind
+  // `lazy()` takes the trigger down with it until the chunk resolves, and
+  // substituting a placeholder trigger breaks exactly the `asChild` ref
+  // anchoring #253 exists to fix — anchoring that was verified by
+  // measuring trigger and popover rects in a real browser
+  // (`docs/reference/todoist/verification-2026-09-11.md`), and which no
+  // test in this repo can see. Trading a measured, verified behaviour for
+  // 485 bytes is a bad trade; paying the bytes and recording why is not.
+  //
+  // If this route needs reclaiming, the candidate is a shared boundary
+  // owning the whole scheduler family INCLUDING its trigger, not another
+  // per-component `lazy()`.
+  "src/pages/todo-page.tsx": { ceilingBytes: 89_000, baselineBytes: 88_085 },
 };
 
 /**

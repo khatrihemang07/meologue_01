@@ -4,8 +4,8 @@ Captured 2026-09-10 by driving the shipped web application, `app.todoist.com`, d
 plan, against the user's own Inbox.
 
 **The single most consequential finding is in §2:** the detail view's title is a plain,
-non-editable `div.task_content` — the *same display component the list row uses*, not the
-composer's `contenteditable`. It carries the hint "Activate to edit the task name". So Todoist
+non-editable `div.task_content` — the *same display component the list row uses*, not Quick
+Add's `contenteditable`. It carries the hint "Activate to edit the task name". So Todoist
 splits display from editing, and what is shared with creating a task is the **editor**, not the
 element sitting there at rest. **What the activated editor becomes was not verified** — that would
 have meant typing into a real task — and it is the open question for the ticket that unifies the
@@ -33,6 +33,11 @@ identical); hovered `outerHTML` is in `row-dom/row_hover.html`.
 
 - Computed height: **59px** (measured on `<li data-item-id>`, no visible
   content wrapping to a 2nd line).
+  > **Corrected 2026-09-11 (`live-audit-2026-09-11.md`, ledger ROW-01).** 59px is the height of a row
+  > carrying **one metadata line** — "hair wash", the task this was measured on, has a date badge. It
+  > is not a fixed row height. A **title-only row renders at 43px**, measured live on a disposable
+  > fixture with no date, label, comment or priority text; every account task observed here carried
+  > at least a date, so the title-only case was never visible before.
 - Padding: **0px on all sides** (top/bottom/left/right all `0px`) on the
   `<li>` itself — internal spacing comes from the children's own padding,
   not the row.
@@ -147,6 +152,44 @@ completely…":
   stated as a gap for the literal claim, though the structural evidence is
   strong).
 
+> **Correction, 2026-09-12 (flow 10).** The claim immediately above — "Markdown
+> in the title stays literal" — is **false**, and it failed in exactly the gap
+> this passage names. Todoist **parses markdown in a task title at render time**
+> and shows real formatting.
+>
+> It was tested the hard way, because the obvious tests do not work. Todoist's
+> Quick Add is a ProseMirror field whose input rules convert `**bold**` as you
+> type, and its *paste* handler converts a pasted markdown string too, so both
+> routes destroy the literal delimiters before the task is ever created — and a
+> single undo does not surgically revert the auto-format, it reverts the whole
+> typing burst. The route that worked: type the pattern **one character short**
+> of completion (`**bold2*`, an odd delimiter count the input-rule regex cannot
+> match), then paste **only the single closing character**, which completes the
+> pattern without triggering conversion. The composer was then verified as a
+> single plain text node with zero marks (its innerHTML was the literal
+> `<p>ZZ probe ` plus the raw delimiters `**bold2** _em2_` plus a backtick-wrapped
+> `code2`, with no `<strong>`, `<em>` or `<code>` element in the document) — and
+> submitted.
+>
+> The created row rendered
+> `<div class="task_content">ZZ probe <strong>bold2</strong> <em>em2</em> <code>code2</code></div>`.
+> So `div.task_content` is **not** a plain-text container; it is a rendered one.
+> Corroboration that these are two separate mechanisms: this task's tab title
+> preserved `_em2_` unnormalized, whereas a task whose markdown was converted at
+> compose time had its tab title normalized to `*em*`.
+>
+> **Why the original inference failed.** It reasoned from `div.task_content`
+> carrying no nested markup across the 7 observed tasks — but none of those 7
+> had markdown in its title, which is the gap the passage itself declared. A
+> plain div is what a rendered container looks like when there is nothing to
+> render. The structural argument was sound and the conclusion was wrong.
+>
+> This is the clearest case yet for ADR 0077: a plausible, carefully-hedged,
+> pinned capture claim stood until somebody typed the characters. Note that
+> **meologue does keep title markdown literal** — so meologue implements what
+> this document predicted of Todoist, and `ROW-06` is `divergent` because of it.
+> Evidence: `live-audit-dom/flow10-ROW-06-both.json`.
+
 ## 2. The task detail view
 
 Opened via keyboard only: focus a row (`ArrowDown`), then `Enter`
@@ -191,7 +234,7 @@ returns the URL to `.../app/inbox`.
 ### Title element — answers the sibling-ticket question
 
 **The detail-view title, at rest, is a plain non-editable `<div>`, the same
-`task_content` component class used in the list row — not the composer's
+`task_content` component class used in the list row — not Quick Add's
 contenteditable, and not a `<textarea>`.**
 
 Verified directly:
@@ -205,11 +248,11 @@ title becomes editable only after an explicit activation step (a click or
 Enter-to-edit), which was **not performed** (per the "never type into it"
 rule), so what it turns into on activation is a **gap**.
 
-For contrast, the Quick Add composer's title field (opened separately,
+For contrast, Quick Add's title field (opened separately,
 never typed into, then closed with Escape) is a different component
 entirely: `<div role="textbox" contenteditable="true" aria-label="Task
 name">` — always-editable, `role="textbox"`. So: **the detail-view title at
-rest is the row's display component, not the composer's input component.**
+rest is the row's display component, not Quick Add's input component.**
 Whether they converge into the same editable widget once the detail title
 is activated is unverified (gap).
 
@@ -247,7 +290,7 @@ instead renders the description's markdown content as-is (verified in
 `<button data-testid="open-comment-editor-button" aria-label="Open comment
 editor">` showing the text "Comment" next to the current user's avatar and a
 paperclip (attachment) icon. There is no separate "No comments yet" heading
-above it in this state; the collapsed composer button *is* the empty state.
+above it in this state; the collapsed comment button *is* the empty state.
 Not clicked (would open a live comment editor).
 
 ## Files
@@ -268,5 +311,5 @@ Not clicked (would open a live comment editor).
 - `row-shots/detail_view_01.png` — detail view, task with description.
 - `row-shots/detail_no_description.png` — detail view, task with no
   description (shows the "Description" placeholder).
-- `row-shots/composer_open.png` — Quick Add composer, opened for inspection
+- `row-shots/composer_open.png` — Quick Add, opened for inspection
   only, closed without typing.

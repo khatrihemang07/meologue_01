@@ -1,0 +1,5 @@
+{
+  "urlBefore": "http://127.0.0.1:41999/todo/inbox",
+  "urlOpen": "http://127.0.0.1:41999/todo/task/zz-probe-detail-bfcd03e4-eed4-4f39-8fc9-94e8b589df92",
+  "urlAfterEscape": "http://127.0.0.1:41999/todo/inbox"
+}

@@ -413,7 +413,7 @@ export function ProjectView({
         title="Delete project?"
         description={
           <>
-            The "{project.name}" project and all its tasks will be permanently deleted. This action
+            The {project.name} project and all its tasks will be permanently deleted. This action
             cannot be undone.
           </>
         }

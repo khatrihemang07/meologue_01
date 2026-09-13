@@ -1,0 +1,30 @@
+{
+  "state": {
+    "found": true,
+    "value": "line one EDITED"
+  },
+  "blurResult": {
+    "blurred": true
+  },
+  "afterEdit": {
+    "stillEditing": false,
+    "firstCommentOuterHTML": "<li class=\"group flex items-start gap-1 rounded-md p-1.5 text-sm transition hover:bg-muted\"><div class=\"min-w-0 flex-1 [&amp;_p]:my-0 [&amp;_ul]:my-0\"><p class=\"mt-0\">line one EDITED</p></div><button type=\"button\" aria-label=\"Edit comment\" class=\"flex size-6 shrink-0 items-center justify-center rounded text-muted-foreground opacity-0 transition hover:text-foreground group-hover:opacity-100 focus-v",
+    "firstCommentRenderedText": "line one EDITED",
+    "hasEditedMarker": true,
+    "headingText": "Comments (4)"
+  },
+  "deleteClickResult": {
+    "clicked": true
+  },
+  "confirmDialog": {
+    "found": true,
+    "role": "alertdialog",
+    "ariaLabel": null,
+    "titleText": "Delete comment?",
+    "bodyText": "This comment will be permanently deleted.",
+    "buttons": [
+      "Cancel",
+      "Delete"
+    ]
+  }
+}

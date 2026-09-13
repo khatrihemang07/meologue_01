@@ -439,6 +439,28 @@
   --muted: rgb(246, 246, 246);
   --muted-foreground: rgb(110, 110, 110);
   /*
+   * A completed row's own look (issue #250, ROW-15) — re-pointing the
+   * identical pair `[data-completed-style]` above resolves
+   * (`--checked-list-text-decoration`/`-color`), the same "RE-POINT,
+   * DON'T RENAME" move this scope already makes for `--background` et al.
+   * Todo's own completed rows are NOT one of the four Settings-driven
+   * looks that pair otherwise names: pass2-2026-09-11.md §1 measured
+   * Todoist always striking a completed title through, in its own grey
+   * `rgb(128,128,128)` — distinct from `--muted-foreground` above, which
+   * is Todoist's DATE colour, not its title colour — regardless of any
+   * app preference, so this scope overrides both custom properties
+   * unconditionally rather than reading whichever of the four
+   * `data-completed-style` resolved on `<html>`. Doing it here, on the
+   * nearer ancestor, is what wins over `<html>`'s own value without
+   * touching `data-completed-style` itself: History and the Composer,
+   * outside this scope, keep obeying the Settings option exactly as
+   * before — only Todo's own completed rows (`completed-tasks.tsx`,
+   * `task-detail-view.tsx`, `filter-view.tsx`, `task-search-page.tsx`, all
+   * consumers of `.completed-task-text`) always render struck-through.
+   */
+  --checked-list-text-decoration: line-through;
+  --checked-list-text-color: rgb(128, 128, 128);
+  /*
    * `--card` and `--popover` are re-pointed alongside `--background`, and
    * leaving them out was a real defect rather than an omission of detail.
    * Every overlay in Todo — the task detail dialog, the command menu, the
@@ -490,21 +512,30 @@
      assumed to share a value just because neither was contradicted). */
   --td-checkbox-ring-default: rgb(169, 169, 169);
   --td-focus-ring: rgb(23, 91, 194);
+  /* The measured tint (dark block below) is a WHITE wash — correct on
+     Todoist's dark ground, invisible on this block's white one. Todoist's
+     light theme was never reachable on the captured account
+     (parity-ledger.md's THEME-01, blocked), so there is no light tint to
+     carry forward; `transparent` invents nothing, and the inset ring above
+     is still clearly visible against white on its own. */
+  --td-focus-tint: transparent;
 
   /* Priority picker swatches (PRI-01), all four independently measured. */
   --td-priority-picker-1: rgb(209, 69, 59);
   --td-priority-picker-2: rgb(235, 137, 9);
   --td-priority-picker-3: rgb(36, 111, 224);
   --td-priority-picker-4: rgb(102, 102, 102);
-  /* The row/checkbox ring's own P1 (PRI-05) — measured, and DELIBERATELY
-     different from `--td-priority-picker-1` above; see task-priority-
-     colors.ts's own header comment before "fixing" these into one value.
-     P2/P3's row rendering was never observed (PRI-06, blocked — no P2/P3
-     Task exists in the captured account), so those two fall back to the
-     picker's own swatch below rather than a third, wholly invented number. */
+  /* The row/checkbox ring's own P1-P3 (PRI-05/PRI-06) — measured, and
+     DELIBERATELY different from `--td-priority-picker-1/2/3` above; see
+     task-priority-colors.ts's own header comment before "fixing" these
+     into one value per level. P2/P3's row rendering was blocked for a
+     while (PRI-06 — no P2/P3 Task existed in the captured account) and
+     these two used to fall back to the picker's own swatch below; both
+     are now measured directly (flow 2, disposable P2/P3 fixtures) and
+     hold their own literals, no longer a fallback onto the picker. */
   --td-priority-row-1: rgb(255, 112, 102);
-  --td-priority-row-2: var(--td-priority-picker-2);
-  --td-priority-row-3: var(--td-priority-picker-3);
+  --td-priority-row-2: rgb(255, 154, 19);
+  --td-priority-row-3: rgb(82, 151, 255);
 
   /* The Date family's tones (DATE-01/02/03), reused verbatim by
      `--td-date-muted` rather than a second literal — DATE-02's own point is
@@ -513,6 +544,22 @@
   --td-date-overdue: rgb(255, 112, 102);
   --td-date-upcoming: rgb(169, 112, 255);
   --td-date-muted: var(--muted-foreground);
+  /*
+   * Today/Tomorrow (issue #250, DATE-09) — closing the falsified guess
+   * that Today reused `--td-date-upcoming` above. Measured live,
+   * pass2-2026-09-11.md §1: green for Today, orange for Tomorrow, neither
+   * the overdue red nor the upcoming purple. **Dark theme only** — that
+   * same section measured these two as theme-dependent (the "Todoist"
+   * named theme reads `rgb(113,250,149)`/`rgb(255,180,83)` for the
+   * identical two states), unlike every other `--td-*` colour above,
+   * which pass2 never re-checked under a second theme. DATE-12
+   * (parity-ledger.md) tracks that un-closed gap; carried into the light
+   * block below unchanged anyway, the same "carried forward, not
+   * re-invented" call this whole block already makes for every other
+   * hue-bearing accent (see this scope's own header comment).
+   */
+  --td-date-today: rgb(37, 184, 76);
+  --td-date-tomorrow: rgb(255, 154, 20);
 
   /* A recognised natural-language match (README's own "one fact that
      shapes the rebuild") — an inline-block span, not a text colour, hence
@@ -573,6 +620,31 @@
   --td-chrome-font-size: 13px;
   --td-composer-title-font-size: 16px;
   --td-composer-title-line-height: 23px;
+
+  /* A fourth size, and the one that makes the three above insufficient
+     (NAV-10, issue #252). Todoist has TWO add-task surfaces at two sizes:
+     a quiet "+ Add task" row resting at the end of the list, 14px, and the
+     Quick Add dialog's own title editor at the 16px/23px pair above. This
+     app collapses both into one always-mounted field, because the
+     click-to-reveal composer that would separate them is deliberately
+     deferred (NAV-12) — so the single widget has to be 14px at rest and
+     16px once there is text in it, which is exactly what the two tokens
+     describe.
+
+     The consequence, recorded rather than discovered later: typing into an
+     empty add field steps the text from 14px to 16px, because the
+     placeholder widget and the document it sits over are styled
+     independently. Todoist has the same two sizes, but hides the step
+     behind a click; here it happens on the first keystroke. That is the
+     honest cost of deferring the composer, and it is the thing to look at
+     first if the field ever reads as jumpy. */
+  --td-add-task-font-size: 14px;
+  /* NAV-10: the add-task placeholder's own colour, split from
+     `--muted-foreground` because that token paints every muted label on this
+     surface and only this widget was measured. Todoist was read only in dark
+     theme (THEME-01), so light keeps the colour it already had rather than
+     inventing a value; the dark block carries the measurement. */
+  --td-add-task-placeholder: var(--muted-foreground);
 }
 
 /*
@@ -604,6 +676,13 @@
   --muted: rgb(38, 38, 38);
   --muted-foreground: rgb(204, 204, 204);
   --td-composer-background: rgb(40, 40, 40);
+  /* KBD-05/THEME-03: the measured keyboard-focus tint
+     (flow6-KBD-05-06-todoist.json), a white wash only correct on this
+     dark ground — see the light block's own `--td-focus-tint` for why
+     light gets `transparent` instead of a second, invented value. */
+  --td-focus-tint: rgba(255, 255, 255, 0.14);
+  /* NAV-10, measured on Todoist's placeholder leaf (flow8-NAV-10). */
+  --td-add-task-placeholder: rgb(128, 128, 128);
 }
 
 @layer base {
@@ -939,5 +1018,64 @@
     border-radius: var(--td-recognition-radius);
     background-color: var(--td-recognition-background);
     color: var(--td-recognition-foreground);
+  }
+}
+
+/*
+ * Keyboard focus (KBD-05/THEME-03), matched against a keyboard-focused
+ * Todoist row (docs/reference/todoist/live-audit-dom/flow6-KBD-05-06-
+ * todoist.json): an inset ring plus a background tint, with `outline`
+ * itself unset — Todoist's own `outline` computed to `none` on the same
+ * element, `box-shadow` doing all the work instead. `:focus-visible`, not
+ * `:focus`, so a mouse click paints nothing, matching the browser default
+ * this replaces. `--td-focus-ring` was declared above long before this
+ * rule existed to read it (the THIRD `--td-*` "dead token" this ledger
+ * has caught — KBD-05's own note names QA-16 and QA-20 as the first two); `--td-focus-tint` is genuinely per-theme, not just
+ * unverified, so it is declared once per theme block instead of here —
+ * see where each is set for why.
+ */
+@layer base {
+  [data-surface="todo"] :focus-visible {
+    outline: none;
+    box-shadow: 0 0 0 1px var(--td-focus-ring) inset;
+    background-color: var(--td-focus-tint);
+  }
+}
+
+/*
+ * Three kinds of element inside this scope keep their own focus styling, and
+ * in each case that is correct rather than a shortfall:
+ *
+ *  - The completion checkbox. Its `box-shadow` is set as an INLINE style
+ *    (task-row-content.tsx), so no stylesheet rule can reach it — but that
+ *    shadow is the PRIORITY ring (`--td-priority-row-*`, rows PRI-05/PRI-06),
+ *    not decoration. Replacing it with a focus ring would destroy a different
+ *    measured behaviour to satisfy this one. It takes the tint and keeps its
+ *    ring, which is the right trade.
+ *  - The "Add a Task" composer and the buttons inside dialogs/popovers. These
+ *    are built from the shared shadcn `Button`/`Input` recipes, whose
+ *    `focus-visible:ring-*` classes live in `@layer utilities` — declared
+ *    AFTER `base` by Tailwind v4, so a later layer wins on those properties
+ *    regardless of selector specificity. They keep their existing, perfectly
+ *    visible Tailwind ring.
+ *
+ * Left as-is deliberately, not merely because the cascade makes it awkward:
+ * the audit measured Todoist's ring on a task ROW (KBD-05, flow 6). It never
+ * measured Todoist's own composer or dialog-button focus, so painting this
+ * ring onto those would be extrapolation past the evidence — exactly the move
+ * ADR 0077 exists to stop. If Todoist's counterparts are ever measured, the
+ * rule can be widened then, with a reading behind it.
+ */
+
+/*
+ * forced-colors (Windows High Contrast) does not render `box-shadow`, so
+ * the rule above would leave keyboard focus with no visible indicator at
+ * all in that mode once `outline` is unset. This is not part of the
+ * Todoist parity measurement — it is a correctness guard so matching
+ * Todoist does not make Todo unusable under forced colors.
+ */
+@media (forced-colors: active) {
+  [data-surface="todo"] :focus-visible {
+    outline: 2px solid;
   }
 }

@@ -1,0 +1,12 @@
+{
+  "before": {
+    "text": "ZZ probe today "
+  },
+  "after": {
+    "dlgStillOpen": false,
+    "zzItemCount": 1,
+    "zzTexts": [
+      "Task: ZZ probeDate: Today"
+    ]
+  }
+}

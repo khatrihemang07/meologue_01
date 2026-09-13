@@ -34,12 +34,17 @@ export interface UseCommentsResult {
  * per-Project surface (../../../packages/core/src/event-types.ts's own
  * `projectId` doc comment), and `CommentStore` alone has no way to
  * answer that. `eventStore` is Todo's activity log itself — recording
- * add/edit is issue #184's own acceptance criterion; recording delete is
- * this app's own deliberate divergence from a reference that records
- * neither (task-detail-view.tsx's own header comment named this seam
- * before this ticket built it: "the activity log — this view's own
- * Comment edit/delete doors are left wired straight to the store, with
- * no event recorded").
+ * add and delete matches Todoist's own activity log verbatim (CMT-06,
+ * re-driven live, flow 5: `You commented {content} on {task}` /
+ * `You deleted a comment from {task}`). Editing a comment records
+ * *nothing* — also CMT-06's own live finding, and the opposite of this
+ * hook's first cut, which logged an "Edited a comment" Event Todoist has
+ * no equivalent for; `editComment` below no longer calls
+ * `recordCommentEvent` at all, so Todoist's "no event" is matched at the
+ * source rather than papered over at render time. (An "updated" comment
+ * Event can still turn up from an old store or a restored backup written
+ * before this fix — `format-event.ts`'s `isRenderableEvent` is what
+ * keeps a stale one like that out of the feed.)
  */
 export function useComments(
   commentStore: CommentStore,
@@ -109,12 +114,13 @@ export function useComments(
   }
 
   const editMutation = useMutation({
+    // CMT-06 (re-driven live, flow 5): Todoist's own activity log records
+    // no Event at all for a comment edit, so this mutation no longer calls
+    // `recordCommentEvent` the way `upsertMutation`/`removeMutation` still
+    // do — the fix belongs here, at the source, rather than in how the
+    // feed renders an "updated" comment Event after the fact.
     mutationFn: async ({ id, text }: { id: string; text: string }) => {
-      const before = await commentStore.get(id);
       await commentStore.edit(id, text);
-      if (before) {
-        await recordCommentEvent(before, "updated", { text, lastText: before.text });
-      }
     },
     onSuccess: afterLocalWrite,
   });

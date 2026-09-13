@@ -1,0 +1,334 @@
+{
+  "app": "todoist",
+  "url": "https://app.todoist.com/app/inbox",
+  "timestamp": "2026-09-11T17:27:33.056Z",
+  "dialogSelector": "[role=\"dialog\"][aria-label=\"Quick Add\"]",
+  "spanSelector": "[data-testid=\"natural-language-match\"]",
+  "note": "Quick Add opened via the sidebar's real 'Add task' button (text match, aria-label null); button.plus_add_button on this account/build is the in-list inline add-task trigger, not the dialog.",
+  "runs": [
+    {
+      "run": 1,
+      "dialogAssertion": {
+        "dialogFound": true,
+        "role": "dialog",
+        "ariaLabel": "Quick Add",
+        "testid": "quick-add"
+      },
+      "fieldInfo": {
+        "found": true,
+        "isActive": true,
+        "activeTag": "DIV",
+        "activeAriaLabel": "Task name",
+        "textContent": "",
+        "ariaLabel": "Task name"
+      },
+      "keystrokeChecks": [
+        {
+          "char": "t",
+          "expectedText": "t",
+          "activeIsField": true,
+          "activeTag": "DIV",
+          "textContent": "t",
+          "matchesExpected": true
+        },
+        {
+          "char": "o",
+          "expectedText": "to",
+          "activeIsField": true,
+          "activeTag": "DIV",
+          "textContent": "to",
+          "matchesExpected": true
+        },
+        {
+          "char": "d",
+          "expectedText": "tod",
+          "activeIsField": true,
+          "activeTag": "DIV",
+          "textContent": "tod",
+          "matchesExpected": true
+        }
+      ],
+      "tagResult": {
+        "spanFound": true,
+        "token": "probe-vwdvvv35hfa-1789147641347",
+        "spanOuterHTML": "<span data-match-id=\"11 Sep\" class=\"xKV6aZZRBPE399i5L33M1cjNVQHbGoo4\" data-highlighted-match=\"true\" data-testid=\"natural-language-match\">tod</span>",
+        "editorRootTag": "DIV"
+      },
+      "postKeyFocusCheck": {
+        "activeIsField": true,
+        "activeTag": "DIV"
+      },
+      "postResult": {
+        "heldIsConnected": false,
+        "currentSpanExists": true,
+        "sameAsHeld": false,
+        "heldHasToken": true,
+        "heldTokenValue": "probe-vwdvvv35hfa-1789147641347",
+        "currentSpanHasToken": false,
+        "heldOuterHTMLAfter": "<span data-match-id=\"11 Sep\" class=\"xKV6aZZRBPE399i5L33M1cjNVQHbGoo4\" data-highlighted-match=\"true\" data-testid=\"natural-language-match\">tod</span>",
+        "editorTextAfter": "tod",
+        "mutations": [
+          {
+            "type": "childList",
+            "attributeName": null,
+            "addedNodes": [
+              {
+                "tag": "SPAN",
+                "testid": "natural-language-match"
+              }
+            ],
+            "removedNodes": []
+          },
+          {
+            "type": "childList",
+            "attributeName": null,
+            "addedNodes": [
+              {
+                "tag": "#text",
+                "testid": null
+              }
+            ],
+            "removedNodes": []
+          },
+          {
+            "type": "childList",
+            "attributeName": null,
+            "addedNodes": [],
+            "removedNodes": [
+              {
+                "tag": "SPAN",
+                "testid": "natural-language-match"
+              }
+            ]
+          },
+          {
+            "type": "attributes",
+            "attributeName": "class",
+            "addedNodes": [],
+            "removedNodes": []
+          }
+        ]
+      },
+      "closeInfo": {
+        "discardDialogSeen": true,
+        "quickAddStillOpen": false
+      }
+    },
+    {
+      "run": 2,
+      "dialogAssertion": {
+        "dialogFound": true,
+        "role": "dialog",
+        "ariaLabel": "Quick Add",
+        "testid": "quick-add"
+      },
+      "fieldInfo": {
+        "found": true,
+        "isActive": true,
+        "activeTag": "DIV",
+        "activeAriaLabel": "Task name",
+        "textContent": "",
+        "ariaLabel": "Task name"
+      },
+      "keystrokeChecks": [
+        {
+          "char": "t",
+          "expectedText": "t",
+          "activeIsField": true,
+          "activeTag": "DIV",
+          "textContent": "t",
+          "matchesExpected": true
+        },
+        {
+          "char": "o",
+          "expectedText": "to",
+          "activeIsField": true,
+          "activeTag": "DIV",
+          "textContent": "to",
+          "matchesExpected": true
+        },
+        {
+          "char": "d",
+          "expectedText": "tod",
+          "activeIsField": true,
+          "activeTag": "DIV",
+          "textContent": "tod",
+          "matchesExpected": true
+        }
+      ],
+      "tagResult": {
+        "spanFound": true,
+        "token": "probe-pr9e592khlq-1789147646325",
+        "spanOuterHTML": "<span data-match-id=\"11 Sep\" class=\"xKV6aZZRBPE399i5L33M1cjNVQHbGoo4\" data-highlighted-match=\"true\" data-testid=\"natural-language-match\">tod</span>",
+        "editorRootTag": "DIV"
+      },
+      "postKeyFocusCheck": {
+        "activeIsField": true,
+        "activeTag": "DIV"
+      },
+      "postResult": {
+        "heldIsConnected": false,
+        "currentSpanExists": true,
+        "sameAsHeld": false,
+        "heldHasToken": true,
+        "heldTokenValue": "probe-pr9e592khlq-1789147646325",
+        "currentSpanHasToken": false,
+        "heldOuterHTMLAfter": "<span data-match-id=\"11 Sep\" class=\"xKV6aZZRBPE399i5L33M1cjNVQHbGoo4\" data-highlighted-match=\"true\" data-testid=\"natural-language-match\">tod</span>",
+        "editorTextAfter": "tod",
+        "mutations": [
+          {
+            "type": "childList",
+            "attributeName": null,
+            "addedNodes": [
+              {
+                "tag": "SPAN",
+                "testid": "natural-language-match"
+              }
+            ],
+            "removedNodes": []
+          },
+          {
+            "type": "childList",
+            "attributeName": null,
+            "addedNodes": [
+              {
+                "tag": "#text",
+                "testid": null
+              }
+            ],
+            "removedNodes": []
+          },
+          {
+            "type": "childList",
+            "attributeName": null,
+            "addedNodes": [],
+            "removedNodes": [
+              {
+                "tag": "SPAN",
+                "testid": "natural-language-match"
+              }
+            ]
+          },
+          {
+            "type": "attributes",
+            "attributeName": "class",
+            "addedNodes": [],
+            "removedNodes": []
+          }
+        ]
+      },
+      "closeInfo": {
+        "discardDialogSeen": true,
+        "quickAddStillOpen": false
+      }
+    },
+    {
+      "run": 3,
+      "dialogAssertion": {
+        "dialogFound": true,
+        "role": "dialog",
+        "ariaLabel": "Quick Add",
+        "testid": "quick-add"
+      },
+      "fieldInfo": {
+        "found": true,
+        "isActive": true,
+        "activeTag": "DIV",
+        "activeAriaLabel": "Task name",
+        "textContent": "",
+        "ariaLabel": "Task name"
+      },
+      "keystrokeChecks": [
+        {
+          "char": "t",
+          "expectedText": "t",
+          "activeIsField": true,
+          "activeTag": "DIV",
+          "textContent": "t",
+          "matchesExpected": true
+        },
+        {
+          "char": "o",
+          "expectedText": "to",
+          "activeIsField": true,
+          "activeTag": "DIV",
+          "textContent": "to",
+          "matchesExpected": true
+        },
+        {
+          "char": "d",
+          "expectedText": "tod",
+          "activeIsField": true,
+          "activeTag": "DIV",
+          "textContent": "tod",
+          "matchesExpected": true
+        }
+      ],
+      "tagResult": {
+        "spanFound": true,
+        "token": "probe-wfys6b70li8-1789147651320",
+        "spanOuterHTML": "<span data-match-id=\"11 Sep\" class=\"xKV6aZZRBPE399i5L33M1cjNVQHbGoo4\" data-highlighted-match=\"true\" data-testid=\"natural-language-match\">tod</span>",
+        "editorRootTag": "DIV"
+      },
+      "postKeyFocusCheck": {
+        "activeIsField": true,
+        "activeTag": "DIV"
+      },
+      "postResult": {
+        "heldIsConnected": false,
+        "currentSpanExists": true,
+        "sameAsHeld": false,
+        "heldHasToken": true,
+        "heldTokenValue": "probe-wfys6b70li8-1789147651320",
+        "currentSpanHasToken": false,
+        "heldOuterHTMLAfter": "<span data-match-id=\"11 Sep\" class=\"xKV6aZZRBPE399i5L33M1cjNVQHbGoo4\" data-highlighted-match=\"true\" data-testid=\"natural-language-match\">tod</span>",
+        "editorTextAfter": "tod",
+        "mutations": [
+          {
+            "type": "childList",
+            "attributeName": null,
+            "addedNodes": [
+              {
+                "tag": "SPAN",
+                "testid": "natural-language-match"
+              }
+            ],
+            "removedNodes": []
+          },
+          {
+            "type": "childList",
+            "attributeName": null,
+            "addedNodes": [
+              {
+                "tag": "#text",
+                "testid": null
+              }
+            ],
+            "removedNodes": []
+          },
+          {
+            "type": "childList",
+            "attributeName": null,
+            "addedNodes": [],
+            "removedNodes": [
+              {
+                "tag": "SPAN",
+                "testid": "natural-language-match"
+              }
+            ]
+          },
+          {
+            "type": "attributes",
+            "attributeName": "class",
+            "addedNodes": [],
+            "removedNodes": []
+          }
+        ]
+      },
+      "closeInfo": {
+        "discardDialogSeen": true,
+        "quickAddStillOpen": false
+      }
+    }
+  ]
+}

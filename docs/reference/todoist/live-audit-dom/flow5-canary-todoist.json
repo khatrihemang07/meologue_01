@@ -1,0 +1,143 @@
+{
+  "beforeCount": 16,
+  "afterCount": 16,
+  "setEqual": true,
+  "onlyInBefore": [],
+  "onlyInAfter": [],
+  "deletedTitles": [
+    "ZZ probe comments",
+    "ZZ probe complete"
+  ],
+  "before": [
+    {
+      "id": "6hVPRX45mpP7CxgG",
+      "title": "Task: Bat fixDate: Today"
+    },
+    {
+      "id": "6hMc452X7r23VX2G",
+      "title": "Task: Buy mobile holder and get the bike fixedDate: Today1"
+    },
+    {
+      "id": "6hMfJ27p678RC43G",
+      "title": "Task: Check for ipad coverDate: Today1"
+    },
+    {
+      "id": "6h666qC9ghpFvf8p",
+      "title": "Task: hair washDate: Today"
+    },
+    {
+      "id": "6hVMVpW3QR4GVqxG",
+      "title": "Task: Homeo medicine refilDate: Yesterday"
+    },
+    {
+      "id": "6hCPCRhH2cMWx4pp",
+      "title": "Task: naukri photo updateDate: Today"
+    },
+    {
+      "id": "6hV7GWGPGhCQWX7G",
+      "title": "Task: Roller thigh painDate: Yesterday"
+    },
+    {
+      "id": "6hV5rM8Fw65WRWFp",
+      "title": "Task: Room cleanDate: Yesterday"
+    },
+    {
+      "id": "6hVPRW9qRGqMpJPG",
+      "title": "Task: Thigh guard and marker orderDate: Yesterday"
+    },
+    {
+      "id": "6hQ6cCF8vh259c2G",
+      "title": "Task: add split and splid both without fail EODDate: 1 Sep"
+    },
+    {
+      "id": "6hV5rPw76xRrxCQG",
+      "title": "Task: Apply companyDate: 10 Sep"
+    },
+    {
+      "id": "6hMhq2vmWxwJ7Qgp",
+      "title": "Task: Buy bluetooth for vishalAmazon.inDate: Today"
+    },
+    {
+      "id": "6hV8W5Vp9wVVw93G",
+      "title": "Task: LldDate: 10 Sep"
+    },
+    {
+      "id": "6hV5rgJFmJX79jFG",
+      "title": "Task: Message ashu to connectDate: 10 Sep"
+    },
+    {
+      "id": "6hRwF8R8HMPhmqjG",
+      "title": "Task: Need to improve reflect and todo completely. They are crap right now. Specially when typing long title or updating titlePlus date keeper is crap\nShift enter is also counting just like enter. WrongDate: 9 Sep"
+    },
+    {
+      "id": "6hV5rQcWhP2CVmqp",
+      "title": "Task: Quick dsaDate: 10 Sep"
+    }
+  ],
+  "after": [
+    {
+      "id": "6hVPRX45mpP7CxgG",
+      "title": "Task: Bat fixDate: Today"
+    },
+    {
+      "id": "6hMc452X7r23VX2G",
+      "title": "Task: Buy mobile holder and get the bike fixedDate: Today1"
+    },
+    {
+      "id": "6hMfJ27p678RC43G",
+      "title": "Task: Check for ipad coverDate: Today1"
+    },
+    {
+      "id": "6h666qC9ghpFvf8p",
+      "title": "Task: hair washDate: Today"
+    },
+    {
+      "id": "6hVMVpW3QR4GVqxG",
+      "title": "Task: Homeo medicine refilDate: Yesterday"
+    },
+    {
+      "id": "6hCPCRhH2cMWx4pp",
+      "title": "Task: naukri photo updateDate: Today"
+    },
+    {
+      "id": "6hV7GWGPGhCQWX7G",
+      "title": "Task: Roller thigh painDate: Yesterday"
+    },
+    {
+      "id": "6hV5rM8Fw65WRWFp",
+      "title": "Task: Room cleanDate: Yesterday"
+    },
+    {
+      "id": "6hVPRW9qRGqMpJPG",
+      "title": "Task: Thigh guard and marker orderDate: Yesterday"
+    },
+    {
+      "id": "6hQ6cCF8vh259c2G",
+      "title": "Task: add split and splid both without fail EODDate: 1 Sep"
+    },
+    {
+      "id": "6hV5rPw76xRrxCQG",
+      "title": "Task: Apply companyDate: 10 Sep"
+    },
+    {
+      "id": "6hMhq2vmWxwJ7Qgp",
+      "title": "Task: Buy bluetooth for vishalAmazon.inDate: Today"
+    },
+    {
+      "id": "6hV8W5Vp9wVVw93G",
+      "title": "Task: LldDate: 10 Sep"
+    },
+    {
+      "id": "6hV5rgJFmJX79jFG",
+      "title": "Task: Message ashu to connectDate: 10 Sep"
+    },
+    {
+      "id": "6hRwF8R8HMPhmqjG",
+      "title": "Task: Need to improve reflect and todo completely. They are crap right now. Specially when typing long title or updating titlePlus date keeper is crap\nShift enter is also counting just like enter. WrongDate: 9 Sep"
+    },
+    {
+      "id": "6hV5rQcWhP2CVmqp",
+      "title": "Task: Quick dsaDate: 10 Sep"
+    }
+  ]
+}

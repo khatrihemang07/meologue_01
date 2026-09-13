@@ -1,0 +1,17 @@
+{
+  "footerAfterDate": {
+    "allButtonLabels": [
+      "More actions",
+      "Remove date",
+      "Cancel",
+      "Add task"
+    ],
+    "dateButtonLabel": "Remove date",
+    "dateButtonText": ""
+  },
+  "afterTab": {
+    "tag": "BUTTON",
+    "ariaLabel": "More actions",
+    "text": ""
+  }
+}

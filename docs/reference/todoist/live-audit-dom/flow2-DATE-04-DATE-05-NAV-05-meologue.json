@@ -1,0 +1,21 @@
+{
+  "app": "meologue",
+  "rows": ["DATE-04", "DATE-05", "NAV-05"],
+  "date04": {
+    "task": "ZZ probe recurring (setDateString 'every day')",
+    "identityCheck": "read the row's meta-line span outerHTML on the Inbox view",
+    "metaLineHTML": "<span class=\"flex flex-wrap items-center gap-x-2 text-muted-foreground text-xs\"><span style=\"color: var(--td-date-today);\">Today ↻</span><span>every day</span></span>",
+    "verdict": "resolved date badge appends '↻' in the same tone colour (Today, green); the literal dateString ('every day') renders as its OWN separate adjacent badge -- additive, not a replacement, reconfirming the ledger's built note"
+  },
+  "date05_nav05": {
+    "view": "http://127.0.0.1:41999/todo/upcoming",
+    "identityCheck": "read each day-section <h2> heading's textContent directly",
+    "headings": [
+      "11 Sep ‧ Today ‧ Friday",
+      "12 Sep ‧ Tomorrow ‧ Saturday",
+      "15 Sep ‧ Tuesday",
+      "21 Sep ‧ Monday"
+    ],
+    "verdict": "format 'D Mon ‧ [Today/Tomorrow] ‧ Weekday' for near dates, 'D Mon ‧ Weekday' otherwise, separator U+2027 (‧) -- matches scheduler-and-priority.md §9's captured wording exactly, live-confirmed on meologue"
+  }
+}

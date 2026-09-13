@@ -1,0 +1,36 @@
+{
+  "opened": {
+    "editorFound": true,
+    "ariaLabel": "Comment",
+    "active": true
+  },
+  "afterType": {
+    "text": "line one",
+    "innerHTML": "<p>line one</p>"
+  },
+  "afterEnter": {
+    "editorText": "<p>line one</p><p data-placeholder=\"Comment\" class=\"is-empty\"><br class=\"ProseMirror-trailingBreak\"></p>",
+    "editorStillPresent": true
+  },
+  "afterShiftEnter": {
+    "editorHTML": "<p>line one</p><p><br><br class=\"ProseMirror-trailingBreak\"></p>"
+  },
+  "afterCmdEnter": {
+    "editorTextAfter": "",
+    "commentElsFound": 3
+  },
+  "enterInsertsNewline_doesNotSubmit": true,
+  "shiftEnterInsertsNewline_doesNotSubmit": true,
+  "cmdEnterSubmits": true,
+  "cmdEnterPostedText": "line one",
+  "buttonSubmit": {
+    "before": {
+      "toggleText": "Comments 1"
+    },
+    "after": {
+      "toggleText": "Comments 2",
+      "commentCount": 0,
+      "lastCommentText": null
+    }
+  }
+}

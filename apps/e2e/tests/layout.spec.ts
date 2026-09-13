@@ -206,6 +206,137 @@ test("the chat list pins beside the open destination only at the wide breakpoint
   await expect(page.getByRole("link", { name: "Back to chats" })).toHaveCount(0);
 });
 
+// Issue #248 / ADR 0076: Todo's own pane shows TodoSidebar instead of the
+// chat list at the wide breakpoint — unlike Composer above, that pane never
+// shows the root screen, and TodoSidebar carries no link back to it. So
+// Back has to keep rendering there even though it disappears for every
+// other Destination at this width, and it has to be a real link that works
+// with no history entry (a fresh page load, not a navigation).
+test("Back stays reachable from Todo at the wide breakpoint, unlike every other destination", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1200, height: 900 });
+  await page.goto("/todo/inbox");
+
+  await expect(page.getByRole("navigation", { name: "Todo" })).toBeVisible();
+  const back = page.getByRole("link", { name: "Back to chats" });
+  await expect(back).toBeVisible();
+  await expect(back).toHaveAttribute("href", "/");
+
+  await back.click();
+  await expect(page).toHaveURL("/");
+});
+
+// Issue #254 / ADR 0019's amendment: Todo's own content column caps at
+// 800px above the existing 900px wide-layout breakpoint (ADR 0036's
+// `WIDE_LAYOUT_QUERY`, reused rather than a second one — this is *not*
+// the 768px `md` breakpoint `measureColumns` above checks for every other
+// Destination, and that divergence is deliberate and recorded in the ADR,
+// not a bug in this spec). Below 900px Todo's column is identical to
+// every other Destination's, unchanged from `measureColumns`'s own
+// per-viewport assertions above.
+//
+// A separate helper rather than reusing `measureColumns`: Todo's docked
+// `composerSlot` is `TodoNav` (todo-nav.tsx), not a composer input, and it
+// carries no width classes of its own — Todo was never a member of ADR
+// 0019's coupled pair (shell.tsx's own `columnWidthClassName` doc comment
+// makes the same point) — so there is no second box here that has to line
+// up with the first the way Composer's docked bar has to.
+async function measureTodoColumn(
+  page: Page,
+): Promise<{ containerWidth: number; column: ColumnBox }> {
+  // Waits for the in-column heading specifically (issue #254: Inbox is the
+  // one view every call site below actually loads) rather than a bare
+  // `getByRole("heading")`, so this stays unambiguous even if a future
+  // view under test grows a second heading of its own.
+  await expect(page.getByRole("heading", { name: "Inbox" })).toBeVisible();
+  await page.evaluate(() => document.fonts.ready);
+
+  let measured: { containerWidth: number; column: ColumnBox } | null = null;
+  await expect
+    .poll(async () => {
+      measured = await page.evaluate(() => {
+        const region = document.querySelector("[data-testid='shell-scroll-region']");
+        const column = region?.firstElementChild;
+        const rect = column?.getBoundingClientRect();
+        return {
+          containerWidth: region?.clientWidth ?? 0,
+          column: { x: rect?.x ?? 0, width: rect?.width ?? 0 },
+        };
+      });
+      return Math.min(measured.containerWidth, measured.column.width);
+    })
+    .toBeGreaterThan(0);
+
+  if (!measured) {
+    throw new Error("unreachable: the poll above only resolves with a measurement in hand");
+  }
+  return measured;
+}
+
+const TODO_WIDE_BREAKPOINT = 900;
+const TODO_MAX_WIDTH = 800;
+
+const TODO_VIEWPORTS = [
+  { name: "phone, below md", width: 390, height: 844, expectCapped: false },
+  {
+    name: "just below the 900px wide-layout breakpoint (above md, still proportional)",
+    width: TODO_WIDE_BREAKPOINT - 1,
+    height: 1024,
+    expectCapped: false,
+  },
+  {
+    name: "the 900px wide-layout breakpoint itself",
+    width: TODO_WIDE_BREAKPOINT,
+    height: 900,
+    expectCapped: true,
+  },
+  { name: "well above the breakpoint", width: 1512, height: 982, expectCapped: true },
+] as const;
+
+for (const viewport of TODO_VIEWPORTS) {
+  test(`Todo's content column ${viewport.expectCapped ? "caps at 800px" : "stays proportional"} at ${viewport.name} (${viewport.width}px)`, async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: viewport.width, height: viewport.height });
+    await page.goto("/todo/inbox");
+
+    const { containerWidth, column } = await measureTodoColumn(page);
+
+    if (viewport.expectCapped) {
+      expect(column.width).toBeGreaterThan(TODO_MAX_WIDTH - TOLERANCE_PX);
+      expect(column.width).toBeLessThan(TODO_MAX_WIDTH + TOLERANCE_PX);
+    } else {
+      // Identical to every other Destination below 900px: 97% under `md`
+      // (768px), 85% at or above it — `measureColumns`'s own per-viewport
+      // assertions check the same fractions on `/composer`.
+      const expectedFraction = viewport.width < 768 ? 0.97 : 0.85;
+      const expectedWidth = containerWidth * expectedFraction;
+      expect(column.width).toBeGreaterThan(expectedWidth - TOLERANCE_PX);
+      expect(column.width).toBeLessThan(expectedWidth + TOLERANCE_PX);
+    }
+  });
+}
+
+// The step itself, the same direct-comparison shape as "the reading column
+// steps down, not up, across the 768px breakpoint" above, but at Todo's own
+// 900px breakpoint rather than `md` — proving the cap actually engages
+// right at the boundary rather than merely landing in the right ballpark on
+// either side of it.
+test("Todo's content column steps down to the 800px cap, not up, across the 900px breakpoint", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: TODO_WIDE_BREAKPOINT - 1, height: 1024 });
+  await page.goto("/todo/inbox");
+  const belowBreakpoint = await measureTodoColumn(page);
+
+  await page.setViewportSize({ width: TODO_WIDE_BREAKPOINT, height: 900 });
+  const atBreakpoint = await measureTodoColumn(page);
+
+  expect(atBreakpoint.column.width).toBeLessThan(belowBreakpoint.column.width);
+  expect(atBreakpoint.column.width).toBeLessThan(TODO_MAX_WIDTH + TOLERANCE_PX);
+});
+
 // The divider is draggable and its width is remembered per Device, on every
 // platform. Keyboard stepping is what this asserts rather than a pointer
 // drag: it exercises the same clamp and the same persistence through a route

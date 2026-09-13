@@ -1,0 +1,36 @@
+{
+  "row": "STR-02",
+  "flow": 9,
+  "drivenLiveBothSidesSameSession": "2026-09-12",
+  "nuance": "A Project's colour is changeable after creation, not fixed at creation time",
+  "todoist": {
+    "createSurface": "INLINE editor at the foot of the project tree on /app/projects/active — a 'Project color' combobox plus a tiptap/ProseMirror contenteditable div[aria-label='Project name'], with 'Add project' and 'Close add project editor' buttons. NOT a modal dialog — unlike Todoist's own label create, which is.",
+    "editSurface": "Project options menu -> Edit -> modal role=dialog",
+    "editDialogFields": ["Name (8/120 counter, contenteditable)", "Description", "Color combobox (aria-haspopup=listbox)", "Parent project combobox", "Access combobox", "Add to favorites checkbox", "Layout List/Board/Calendar", "Move project button"],
+    "colourChangedAfterCreation": true,
+    "colourChangeMethod": "Edit dialog -> Color combobox -> role=listbox -> option 'Teal' -> Save",
+    "colourBefore": "Charcoal",
+    "colourAfter": "Teal",
+    "persistenceCheck": "Edit dialog reopened from the project options menu after saving; the combobox read 'Teal'.",
+    "paletteOptionCount": 20,
+    "paletteOptions": ["Berry Red","Red","Orange","Yellow","Olive Green","Lime Green","Green","Mint Green","Teal","Sky Blue","Light Blue","Blue","Grape","Violet","Lavender","Magenta","Salmon","Charcoal","Grey","Taupe"]
+  },
+  "meologue": {
+    "createSurface": "inline form on /todo/projects — select[aria-label=\"New Project's colour\"] plus input[aria-label=\"New Project's name\"] and an Add button",
+    "editSurface": "the project's own route /todo/projects/:projectId — everything inline, no dialog: select[aria-label='Project colour'], input[aria-label='Project name'], Favourite, Archive, an activity link, and the Delete button",
+    "colourChangedAfterCreation": true,
+    "colourChangeMethod": "select[aria-label='Project colour'] -> 'teal'",
+    "colourBefore": { "value": "#B8255F", "label": "berry red" },
+    "colourAfter": { "value": "#148FAD", "label": "teal" },
+    "persistenceCheck": "SPA-navigated to /todo/today and back to the project; the select still read 'teal' (#148FAD).",
+    "paletteOptionCount": 20,
+    "paletteOptions": ["berry red","red","orange","yellow","olive green","lime green","green","mint green","teal","sky blue","light blue","blue","grape","violet","lavender","magenta","salmon","charcoal","grey","taupe"]
+  },
+  "verdict": {
+    "nuanceItself": "MATCH — the colour is changeable after creation in both apps, and the change persists in both.",
+    "palette": "MATCH, and a strong one: 20 colours for 20, identical names in identical order. Only the casing differs (Todoist title-cases, meologue lowercases).",
+    "surface": "DIVERGENT — Todoist recolours through a modal Edit dialog reached from an options menu; meologue recolours from a select sitting on the project's own page. Todoist also carries a name counter (8/120), a Description, a Parent project, an Access level and a Layout choice in that dialog; meologue has a Description field but no counter, no parent, no access, no layout.",
+    "status": "divergent",
+    "reason": "The nuance's own claim is satisfied on both sides; the row is divergent only in how the change is reached, which is recorded rather than treated as a defect."
+  }
+}

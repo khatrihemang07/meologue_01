@@ -1,0 +1,101 @@
+{
+  "listTag": "UL",
+  "chain": [
+    {
+      "depth": 0,
+      "tag": "UL",
+      "className": "items",
+      "width": 800,
+      "left": 467.5,
+      "right": 1267.5
+    },
+    {
+      "depth": 1,
+      "tag": "DIV",
+      "className": "list_holder",
+      "width": 800,
+      "left": 467.5,
+      "right": 1267.5
+    },
+    {
+      "depth": 2,
+      "tag": "SECTION",
+      "className": "section section__default",
+      "width": 800,
+      "left": 467.5,
+      "right": 1267.5
+    },
+    {
+      "depth": 3,
+      "tag": "LI",
+      "className": "",
+      "width": 800,
+      "left": 467.5,
+      "right": 1267.5
+    },
+    {
+      "depth": 4,
+      "tag": "DIV",
+      "className": "section_list",
+      "width": 800,
+      "left": 467.5,
+      "right": 1267.5
+    },
+    {
+      "depth": 5,
+      "tag": "DIV",
+      "className": "list_editor view_content",
+      "width": 1175,
+      "left": 280,
+      "right": 1455
+    },
+    {
+      "depth": 6,
+      "tag": "DIV",
+      "className": "project_view project_editor_instance current_editor",
+      "width": 1175,
+      "left": 280,
+      "right": 1455
+    },
+    {
+      "depth": 7,
+      "tag": "DIV",
+      "className": "project_view__file_drop_target GeOxwr9",
+      "width": 1175,
+      "left": 280,
+      "right": 1455
+    },
+    {
+      "depth": 8,
+      "tag": "DIV",
+      "className": "W8rBu9M main-view-layout i_TMTDC main-view-layout--narrow d2b5021f _2404d8ba d429865c _559341e0 _8461c9bc _926e4b71",
+      "width": 1190,
+      "left": 280,
+      "right": 1470
+    },
+    {
+      "depth": 9,
+      "tag": "DIV",
+      "className": "TGcY7vK d2b5021f _2404d8ba _2121bb0c _1b564ce4 _8c75067a _2ce4563f",
+      "width": 1190,
+      "left": 280,
+      "right": 1470
+    },
+    {
+      "depth": 10,
+      "tag": "DIV",
+      "className": "hiGMgHg d2b5021f _2ce4563f",
+      "width": 1190,
+      "left": 280,
+      "right": 1470
+    },
+    {
+      "depth": 11,
+      "tag": "MAIN",
+      "className": "",
+      "width": 1190,
+      "left": 280,
+      "right": 1470
+    }
+  ]
+}

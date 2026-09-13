@@ -1,0 +1,19 @@
+{
+  "app": "todoist",
+  "rows": ["ROW-14", "ROW-15", "DATE-02"],
+  "task": "ZZ probe completed (dated yesterday via the scheduler popover's 'yesterday' preview, then completed via the detail view's own checkbox aria-label='Checkbox for ZZ probe completed')",
+  "identityCheck": "queried the SAME li[data-item-id] query used for every other active row in the Inbox list -- the completed row was found inside that single list, not a separate one",
+  "row14": {
+    "foundInMainList": true,
+    "ariaChecked": "true",
+    "liClassName": "task_list_item task_list_item--completed task_list_item--project_hidden",
+    "verdict": "CONFIRMED interleaved: the completed row sits in the exact same <ul> as active rows, carries aria-checked=true, distinguished only by an added --completed class. meologue instead segregates completed tasks into a separate collapsed <details> (see flow2-ROW-14-15-DATE-02-meologue.json) -- ROW-14's already-recorded structural divergence, now reconfirmed live with a fresh fixture."
+  },
+  "row15_date02": {
+    "titleColor": "rgb(128, 128, 128)",
+    "titleTextDecoration": "line-through",
+    "dateText": "Date: Yesterday",
+    "dateColor": "rgb(204, 204, 204)",
+    "verdict": "MATCHED: identical to meologue's own measured values (rgb(128,128,128)+line-through title, rgb(204,204,204) date) despite the underlying date being overdue -- DATE-02's completion-overrides-tone rule holds on both sides, byte for byte."
+  }
+}
