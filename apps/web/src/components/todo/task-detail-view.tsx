@@ -64,6 +64,7 @@ import type * as React from "react";
 import { forwardRef, Suspense, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { entryProse } from "@/components/entry-prose";
+import { inlineProse } from "@/components/inline-prose";
 import { ActivityFeed } from "@/components/todo/activity-feed";
 import { LazyTaskDescriptionEditor } from "@/components/todo/lazy-task-description-editor";
 import { LazyTaskTitleEditor } from "@/components/todo/lazy-task-title-editor";
@@ -1113,7 +1114,18 @@ function TaskDetailBody({
                     task.completedAt !== null && "completed-task-text",
                   )}
                 >
-                  {task.content}
+                  {/* ROW-06 (parity-ledger.md): row-and-detail.md §2's own
+                      "single most consequential finding" is that this div
+                      IS the row's own display component, `div.task_content`
+                      — so the same live-measured markdown rendering
+                      (`live-audit-dom/flow10-ROW-06-both.json`) applies here
+                      at rest, through the same inline-only `inlineProse`
+                      task-row-content.tsx now uses. `task.content` itself is
+                      unread by anything else here — clicking still opens
+                      `LazyTaskTitleEditor` on the raw, unformatted value
+                      above, `data-testid`/`tabIndex`/`aria-describedby` are
+                      untouched. */}
+                  {inlineProse(task.content)}
                 </div>
               )}
             </DialogPrimitive.Title>

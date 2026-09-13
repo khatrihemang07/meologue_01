@@ -743,6 +743,32 @@ describe("TodoPage", () => {
     expect(removeTask).toHaveBeenCalledWith("a");
   });
 
+  // ROW-06 (parity-ledger.md): flow 10's decisive test quoted Todoist's
+  // own delete-confirmation dialog as "The ZZ probe bold em code task
+  // will be permanently deleted." for a title verified to hold only
+  // literal `**bold** _em_ `code`` characters
+  // (`live-audit-dom/flow10-ROW-06-both.json`) — meologue's own dialog
+  // used to quote the raw markdown verbatim instead. Only the
+  // interpolated name renders through `inlineProse`; the surrounding
+  // sentence is this app's own copy, not part of the Task.
+  it("renders markdown in the delete confirmation's quoted title — ROW-06", async () => {
+    renderTodoPage(inboxContext([task({ id: "a", content: "ZZ probe **bold** _em_ `code`" })]));
+
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "ZZ probe bold em code" })).toBeInTheDocument(),
+    );
+    fireEvent.pointerDown(
+      screen.getByRole("button", { name: 'More actions for "ZZ probe **bold** _em_ `code`"' }),
+    );
+    fireEvent.click(screen.getByRole("menuitem", { name: /Delete/ }));
+
+    const dialog = screen.getByRole("alertdialog");
+    expect(within(dialog).getByText("bold")?.tagName).toBe("STRONG");
+    expect(within(dialog).getByText("em")?.tagName).toBe("EM");
+    expect(within(dialog).getByText("code")?.tagName).toBe("CODE");
+    expect(dialog).toHaveTextContent("The ZZ probe bold em code task will be permanently deleted.");
+  });
+
   it("cancelling the delete confirmation leaves the Task untouched", async () => {
     const removeTask = vi.fn();
     renderTodoPage(inboxContext([task({ id: "a", content: "call mum" })], { removeTask }));

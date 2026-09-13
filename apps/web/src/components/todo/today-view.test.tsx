@@ -131,6 +131,41 @@ describe("TodayView", () => {
     expect(within(dueTodayRow!).queryByText("Today")).not.toBeInTheDocument();
   });
 
+  // DATE-04 (parity-ledger.md): driven live on Today (flow 2) — a
+  // recurring Task due today is not fully suppressed the way a plain
+  // due-today row is. Todoist keeps the `due-date-control` button but
+  // empties its text, leaving an icon-only badge tinted the Today green
+  // (`live-audit-dom/flow2-ROW-13-todoist.json`'s own
+  // `recurringDueTodayRow`). meologue used to suppress the resolved date
+  // entirely here, same as a non-recurring row, and rely solely on the
+  // separate `task.dateString` text badge — this pins the icon-only badge
+  // instead.
+  it("shows an icon-only recurrence badge, not the full suppression, on a recurring due-today row", () => {
+    renderTodayView({
+      tasks: [
+        task({
+          id: "recurring-today",
+          content: "water plants",
+          date: "2026-09-02",
+          dateString: "every day",
+        }),
+      ],
+    });
+
+    const dueTodayRow = screen.getByText("water plants").closest("li");
+    expect(dueTodayRow).not.toBeNull();
+    // biome-ignore lint/style/noNonNullAssertion: asserted non-null above
+    const row = dueTodayRow!;
+    // Neither the resolved "Today" word nor the "↻" it would otherwise
+    // carry shows up — the badge is icon-only, not text-plus-icon.
+    expect(within(row).queryByText("Today")).not.toBeInTheDocument();
+    expect(within(row).queryByText(/↻/)).not.toBeInTheDocument();
+    expect(row.querySelector("svg.lucide-repeat")).not.toBeNull();
+    // The separate literal `task.dateString` badge is untouched — only
+    // ROW-13's Today view was re-driven, not this app's own additive badge.
+    expect(within(row).getByText("every day")).toBeInTheDocument();
+  });
+
   // The union rule task-views.ts's own today() implements: an undated Task
   // whose deadline has already passed still surfaces, in Overdue.
   it("surfaces an undated Task once its deadline has arrived, in Overdue", () => {

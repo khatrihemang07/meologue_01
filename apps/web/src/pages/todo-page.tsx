@@ -5,6 +5,7 @@ import { Suspense, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate, useParams } from "react-router";
 import { toast } from "sonner";
 import { BackToChats } from "@/components/back-to-chats";
+import { inlineProse } from "@/components/inline-prose";
 import { Shell } from "@/components/shell";
 import { ActivityFeed } from "@/components/todo/activity-feed";
 import { AddTaskForm } from "@/components/todo/add-task-form";
@@ -1151,8 +1152,19 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
          * clearer copy turns out to matter more than the match.
          */
         title="Delete task?"
+        // ROW-06 (parity-ledger.md): Todoist's own delete-confirmation
+        // dialog also renders a title's markdown — flow 10's decisive test
+        // quoted it as "The ZZ probe bold em code task will be permanently
+        // deleted." for a title verified to hold only literal `**bold**
+        // _em_ `code`` characters (`live-audit-dom/flow10-ROW-06-both.
+        // json`), where meologue's own dialog used to quote the raw
+        // markdown verbatim. Only the interpolated name gets `inlineProse`
+        // — the surrounding sentence ("The … task will be permanently
+        // deleted.") is this app's own copy, not part of the Task's title.
         description={
-          confirmingTask && <>The {confirmingTask.content} task will be permanently deleted.</>
+          confirmingTask && (
+            <>The {inlineProse(confirmingTask.content)} task will be permanently deleted.</>
+          )
         }
         confirmLabel="Delete"
         onConfirm={() => {

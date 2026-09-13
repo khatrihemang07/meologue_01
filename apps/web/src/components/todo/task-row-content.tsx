@@ -33,6 +33,7 @@ import {
   MessageSquare,
   MoreHorizontal,
   Pencil,
+  Repeat,
 } from "lucide-react";
 import type { MouseEvent, PointerEvent } from "react";
 import { Suspense, useRef, useState } from "react";
@@ -532,10 +533,7 @@ export function TaskRowContent({
             onClick={() => detailActions.onOpenDetail(task)}
             // ROW-05: long titles wrap and clamp after 4 lines — they do
             // NOT truncate to one (the user's own complaint this ticket
-            // names). `line-clamp-4` replaces the old `truncate`; ROW-06
-            // needs no code of its own; `task.content` was already a plain
-            // string interpolated as text, never run through a markdown
-            // renderer, so it already stayed literal before this ticket.
+            // names). `line-clamp-4` replaces the old `truncate`.
             className={cn(
               "line-clamp-4 block w-full text-left hover:underline",
               "text-[length:var(--td-row-font-size)] leading-[length:var(--td-row-line-height)]",
@@ -553,7 +551,27 @@ export function TaskRowContent({
             // but not the other already produced once in this repo).
             data-row-nav-target
           >
-            {task.content}
+            {/* ROW-06 (parity-ledger.md): driven live, both apps, flow 10 —
+                Todoist parses markdown in a task TITLE at render time
+                (`<strong>`/`<em>`/`<code>` in the row's own
+                `div.task_content`), verified with a title whose stored text
+                was confirmed to hold only literal delimiters, never
+                composer-converted marks
+                (`live-audit-dom/flow10-ROW-06-both.json`'s own
+                `decisiveTest`). `task.content` itself is untouched — this
+                is `inlineProse` (inline-prose.tsx), the same inline-only
+                renderer ADR 0041 already uses for a Description preview two
+                lines below, chosen because a title is one line and that
+                renderer never enters the block layer. The stored/edited
+                value stays raw: this only swaps what the reader sees. Every
+                `aria-label` on this row still interpolates the raw
+                `task.content` (below and throughout this file) — the
+                artifact only measured Todoist keeping ITS OWN raw markdown
+                on the tab-title/dialog-accessible-name strings, never on a
+                hover button's aria-label, so there is nothing recorded to
+                match there; changing them was also not asked for, and
+                `line-clamp-4`/`hover:underline` above needs no change either. */}
+            {inlineProse(task.content)}
           </button>
         )}
         {/* ROW-07: a Description previews as real HTML from markdown, one
@@ -588,11 +606,39 @@ export function TaskRowContent({
                 Sep") also carry the icon was NOT settled either way — put
                 here on every dated row, per this fix's own instruction for
                 an unsettled artifact, rather than gated to overdue only. */}
-            {dateDisplay !== null && !suppressDateBadge && (
-              <span className="flex items-center gap-0.5" style={{ color: dateDisplay.colour }}>
-                <Calendar aria-hidden="true" className="size-3" />
-                {dateDisplay.text}
+            {dateDisplay !== null && suppressDateBadge && isRecurring ? (
+              // DATE-04 (parity-ledger.md): driven live on Today (flow 2)
+              // — a recurring Task due today is NOT fully suppressed like
+              // a plain due-today row (ROW-13) is. Todoist keeps the
+              // `due-date-control` button but empties its text, leaving an
+              // icon-only badge: `<span class="date date_today"><svg
+              // .../></span>`, tinted the Today green
+              // (`rgb(37,184,76)`, `live-audit-dom/flow2-ROW-13-todoist.
+              // json`'s own `colorOfRecurrenceIcon`). The artifact's own
+              // verdict calls that lone svg "the recurrence glyph," not a
+              // second calendar icon beside it — a single icon replacing
+              // both the calendar (DATE-01) and the date text, not the two
+              // stacked — so this renders `Repeat` alone, colour-matched
+              // via `dateDisplay.colour` (already "today" green here,
+              // since this only fires on a due-today row), and no text.
+              // No `aria-label` was recorded on Todoist's own button
+              // (`due-date-control` carries none), so none is added here
+              // either. Non-Today views (Inbox, Upcoming) were not
+              // re-driven for this row — `flow2-ROW-13-todoist.json` notes
+              // "Todoist's Inbox rendering of the same task was not read" —
+              // so they keep the existing "Today ↻" plus the separate
+              // `task.dateString` badge below, unchanged.
+              <span aria-hidden="true" style={{ color: dateDisplay.colour }}>
+                <Repeat className="size-3" />
               </span>
+            ) : (
+              dateDisplay !== null &&
+              !suppressDateBadge && (
+                <span className="flex items-center gap-0.5" style={{ color: dateDisplay.colour }}>
+                  <Calendar aria-hidden="true" className="size-3" />
+                  {dateDisplay.text}
+                </span>
+              )
             )}
             {task.deadline !== null && <span>Due {formatDay(task.deadline)}</span>}
             {/* ROW-10(a): Todoist shows NO priority text badge on a row —

@@ -212,6 +212,38 @@ describe("TaskRow", () => {
     expect(screen.getByRole("checkbox", { name: "Mark task as complete" })).not.toBeChecked();
   });
 
+  // ROW-06 (parity-ledger.md): driven live, both apps, flow 10 — Todoist
+  // parses markdown in a task title at render time
+  // (`live-audit-dom/flow10-ROW-06-both.json`), verified with a title
+  // confirmed to hold only literal delimiters, never composer-converted
+  // marks. This row used to interpolate `task.content` as plain text
+  // everywhere.
+  it("renders markdown in the title as real formatting, not literal characters — ROW-06", () => {
+    renderRow({ task: task({ content: "ZZ probe **bold** _em_ `code`" }) });
+
+    // The title button's own accessible name is computed from its
+    // rendered content, so a browser (and RTL) reads it as the plain
+    // words — this also proves the button still opens the detail view
+    // via `data-row-nav-target`, unaffected by the markup swap inside it.
+    const titleButton = screen.getByRole("button", { name: "ZZ probe bold em code" });
+    expect(titleButton).toHaveAttribute("data-row-nav-target");
+    expect(titleButton.querySelector("strong")?.textContent).toBe("bold");
+    expect(titleButton.querySelector("em")?.textContent).toBe("em");
+    expect(titleButton.querySelector("code")?.textContent).toBe("code");
+  });
+
+  // The artifact's own row aria-labels were never re-driven live against
+  // Todoist for this construct (only the tab-title/dialog-accessible-name
+  // strings were), so this row's hover-action aria-labels keep
+  // interpolating the raw, un-rendered title — unchanged by ROW-06.
+  it("keeps aria-labels as the raw, unrendered title — ROW-06 aria-labels are unrecorded", () => {
+    renderRow({ task: task({ content: "ZZ probe **bold** _em_ `code`" }) });
+
+    expect(
+      screen.getByRole("button", { name: 'Edit "ZZ probe **bold** _em_ `code`"' }),
+    ).toBeInTheDocument();
+  });
+
   it("ticking the checkbox calls onComplete", () => {
     const onComplete = vi.fn();
     renderRow({ onComplete });
@@ -688,6 +720,37 @@ describe("TaskRow", () => {
 
     const dateText = screen.getByText("3 Sep");
     expect(dateText.querySelector("svg.lucide-calendar")).not.toBeNull();
+  });
+
+  // DATE-04 (parity-ledger.md): driven live on Today (flow 2) — a
+  // recurring Task whose date badge is suppressed (today-view.tsx's own
+  // `suppressDateBadge`, ROW-13) is NOT fully suppressed the way a plain
+  // due-today row is: Todoist keeps the `due-date-control` button but
+  // empties its text, leaving an icon-only badge tinted the Today green
+  // (`live-audit-dom/flow2-ROW-13-todoist.json`'s own
+  // `recurringDueTodayRow`, "the recurrence glyph" — a single icon, not
+  // the calendar (DATE-01) beside it). A plain, non-recurring suppressed
+  // row still renders nothing at all, unchanged from before this fix.
+  it("DATE-04: a suppressed date badge on a recurring Task still shows an icon-only recurrence glyph", () => {
+    renderRow({
+      task: task({ content: "water plants", date: "2026-09-02", dateString: "every day" }),
+      suppressDateBadge: true,
+    });
+
+    expect(screen.queryByText("Today")).not.toBeInTheDocument();
+    expect(screen.queryByText(/↻/)).not.toBeInTheDocument();
+    expect(rowBox().querySelector("svg.lucide-repeat")).not.toBeNull();
+    expect(rowBox().querySelector("svg.lucide-calendar")).toBeNull();
+  });
+
+  it("DATE-04: a suppressed date badge on a non-recurring Task still renders nothing", () => {
+    renderRow({
+      task: task({ content: "call mum", date: "2026-09-02" }),
+      suppressDateBadge: true,
+    });
+
+    expect(rowBox().querySelector("svg.lucide-repeat")).toBeNull();
+    expect(rowBox().querySelector("svg.lucide-calendar")).toBeNull();
   });
 
   // ROW-01 (parity-ledger.md): a title-only row (no date, deadline,

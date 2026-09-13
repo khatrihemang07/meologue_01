@@ -292,6 +292,33 @@ describe("TaskDetailView", () => {
     expect(screen.queryByLabelText("Task name")).not.toBeInTheDocument();
   });
 
+  // ROW-06 (parity-ledger.md): row-and-detail.md §2's own finding is that
+  // this title-at-rest is the SAME display component the row uses, so the
+  // live-measured markdown rendering (`live-audit-dom/flow10-ROW-06-both.
+  // json`) applies here too — driven through the same `data-testid`,
+  // `tabIndex` and click-to-edit DET-02 already pins above.
+  it("renders markdown in the at-rest title as real formatting — ROW-06", () => {
+    renderView({ task: task({ content: "ZZ probe **bold** _em_ `code`" }) });
+
+    const title = screen.getByTestId("task-detail-title");
+    expect(title).toHaveAttribute("tabindex", "-1");
+    expect(title.querySelector("strong")?.textContent).toBe("bold");
+    expect(title.querySelector("em")?.textContent).toBe("em");
+    expect(title.querySelector("code")?.textContent).toBe("code");
+  });
+
+  // The stored/edited value must stay the raw markdown — only the at-rest
+  // display renders it, matching Todoist's own editor (row-and-detail.md's
+  // own open question notwithstanding, the stored string is untouched
+  // either way).
+  it("still opens the editor on the raw, unrendered title", async () => {
+    renderView({ task: task({ content: "ZZ probe **bold** _em_ `code`" }) });
+
+    fireEvent.click(screen.getByTestId("task-detail-title"));
+
+    expect(await screen.findByLabelText("Task name")).toHaveValue("ZZ probe **bold** _em_ `code`");
+  });
+
   // CMT-06: Todoist's own per-task activity names the task in every line
   // (flow 5), so this view no longer suppresses its subject; and an old
   // "Edited a comment" event is neither shown nor counted.
