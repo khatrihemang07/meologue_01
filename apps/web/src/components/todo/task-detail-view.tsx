@@ -1579,9 +1579,15 @@ function TaskDetailBody({
               reading it, and Todoist shows its own thread expanded. The
               composer is deliberately NOT inside this element (it is the
               column's footer, below), so collapsing the thread never takes
-              the way to add a Comment with it. */}
+              the way to add a Comment with it.
+
+              No `flex` on the `<details>` itself: its children are the
+              `<summary>` and the thread, and making that a flex container is
+              a needless way to disturb how the disclosure marker lays out.
+              The `mt-2` on the list below is the whole of the spacing this
+              needs. */}
             {comments.length > 0 && (
-              <details open className="flex flex-col gap-2">
+              <details open>
                 <summary className="cursor-pointer select-none text-muted-foreground text-xs">
                   Comments ({comments.length})
                 </summary>
