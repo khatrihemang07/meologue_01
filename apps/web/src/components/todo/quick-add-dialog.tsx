@@ -26,24 +26,44 @@
  * already produces once the Remove-date row is conditionally rendered,
  * not a value this component chooses.
  *
- * **That 66→97px growth is still exactly what Todoist does, and this
- * dialog does not do it (issue #264).** Flow 12's round S1 (2026-09-13,
- * `flow12-S1-QA-13-14-15-16-18-both.json`) reported Todoist "no longer
- * shrinks at rest", flat at 97px in both states, and concluded the
- * reference had drifted. **Round S2 the next day overturned that**
- * (`flow12-S2-verification-both.json`, both sides driven in one session,
- * ≥800ms settle on every read): Todoist reads **580×66px at rest and
- * 580×97px once text is present**, because its Inbox/Date/Priority/Labels
- * toolbar row is only rendered once the field is non-empty — the original
- * capture was right, and S1's "the reference moved" was a bad reading.
- * Two sources now agree against it.
+ * **That 66→97px growth is now what this file does too (issue #264).**
+ * Flow 12's round S1 (2026-09-13, `flow12-S1-QA-13-14-15-16-18-both.json`)
+ * reported Todoist "no longer shrinks at rest", flat at 97px in both
+ * states, and concluded the reference had drifted. **Round S2 the next
+ * day overturned that** (`flow12-S2-verification-both.json`, both sides
+ * driven in one session, ≥800ms settle on every read): Todoist reads
+ * **580×66px at rest and 580×97px once text is present**, because its
+ * Inbox/Date/Priority/Labels toolbar row is only rendered once the field
+ * is non-empty — the original capture was right, and S1's "the reference
+ * moved" was a bad reading. Two sources now agree against the flat
+ * reading, so this file grows on text the same way.
  *
- * meologue holds a flat **580×110px** in both states: this file renders
- * "Remove date" *inside* the existing footer row rather than adding a
- * row, so nothing grows. So the divergence is two things, not one — the
- * absolute height, and the fact that this dialog is height-inert to
- * recognition where Todoist's is not. Gap measured 2026-09-14: 44px at
- * rest, 13px with a date.
+ * **The 66/97 arithmetic, worked from the box model, not guessed.** The
+ * chrome outside the content is fixed by the tokens above and never
+ * changes: `1 border + 16 padding + <content> + 16 padding + 1 border`,
+ * i.e. 34px of chrome either way.
+ * - **Rest** (66px): chrome (34) + a single content row of **32px**
+ *   (`h-8`, the editor plus the dismiss button below, vertically
+ *   centred) — the identical `h-8` idiom `add-task-form.tsx`'s own
+ *   `EDITOR_BOX_CLASSES` already uses for its own editor row, not a
+ *   fresh magic number.
+ * - **Grown** (97px): chrome (34) + the same 32px editor row + a footer
+ *   block that must total **31px** (97 − 34 − 32), against the original
+ *   design's 53px (`12 mt-3 + 1 border-t + 12 pt-3 + 28 h-7 button`).
+ *   Landed on `mt-1 (4) + border-t (1) + pt-0.5 (2) + h-6 "xs"-size
+ *   buttons (24)` = 4 + 1 + 2 + 24 = **31px exactly** — the footer
+ *   buttons shrink from `size="sm"` to `size="xs"` to make that number
+ *   reachable with real Tailwind spacing rather than an arbitrary
+ *   `h-[Npx]`.
+ *
+ * A dismiss (X) button sits in the editor row in both states — the
+ * editor row's own height (32px) doesn't change between rest and grown,
+ * so nothing in this file hides it once the footer appears. **QA-15:
+ * that X is a plain close affordance, not a stand-in for Todoist's red
+ * Ramble/dictate button.** meologue has no dictation feature; this file
+ * deliberately does not add one, stub one, or add a disabled placeholder
+ * for one — QA-15 stays a known open item in the parity ledger rather
+ * than being papered over with a fake control.
  *
  * **Footer — the recorded subset, not the full described one.**
  * `quick-add.md` describes six footer controls (More actions, Select
@@ -95,6 +115,7 @@
  * leaving the second half to a keydown that will never arrive.
  */
 import { parseQuickAdd, uiPriorityOf } from "@meologue/core";
+import { X } from "lucide-react";
 import { Dialog as DialogPrimitive } from "radix-ui";
 import { Suspense, useRef } from "react";
 import { LazyTaskTitleEditor } from "@/components/todo/lazy-task-title-editor";
@@ -145,6 +166,18 @@ const DIALOG_CLASSES =
 const EDITOR_BOX_CLASSES =
   "w-full min-w-0 bg-transparent text-[length:var(--td-composer-title-font-size)] leading-[length:var(--td-composer-title-line-height)] outline-none";
 
+// 32px (`h-8`) — the content row the rest state's 66px chrome math needs
+// (this file's own header comment). Same idiom `add-task-form.tsx`'s
+// `EDITOR_BOX_CLASSES` already reaches for with its own `h-8`, not a
+// number invented here.
+const EDITOR_ROW_CLASSES = "flex h-8 items-center gap-2";
+
+// 31px (`mt-1` 4 + `border-t` 1 + `pt-0.5` 2 + `h-6` "xs" buttons 24) —
+// the exact footer sum the grown state's 97px chrome math needs (this
+// file's own header comment does the arithmetic).
+const FOOTER_CLASSES =
+  "mt-1 flex items-center justify-between gap-2 border-t border-[color:var(--td-composer-border)] pt-0.5";
+
 export function QuickAddDialog({
   open,
   onOpenChange,
@@ -191,6 +224,10 @@ export function QuickAddDialog({
   const hasDate = preview.date !== null || preview.dateString !== null;
   const hasPriority = preview.priority !== null;
   const uiPriority = hasPriority ? uiPriorityOf(preview.priority as number) : null;
+  // Issue #264: the one thing that decides 66px vs 97px. Trimmed so
+  // whitespace-only input still reads as "empty" — the identical check
+  // "Add task" already uses below to decide whether it's enabled.
+  const hasText = composer.value.trim() !== "";
 
   function removeDate() {
     // `composer.remount` is what actually changes what's on screen —
@@ -229,25 +266,39 @@ export function QuickAddDialog({
           }}
         >
           <DialogPrimitive.Title className="sr-only">Quick Add</DialogPrimitive.Title>
-          <Suspense fallback={<div className="h-8" />}>
-            <LazyTaskTitleEditor
-              key={composer.resetKey}
-              value={composer.seed}
-              ariaLabel="Task name"
-              autoFocus={true}
-              commitOnBlur={false}
-              onChange={composer.setValue}
-              onCommit={composer.commit}
-              onCancel={() => onOpenChange(false)}
-              className={EDITOR_BOX_CLASSES}
-              extraPlugins={composer.extraPlugins}
-              autocomplete={composer.autocomplete}
-              onAutocompleteOpenChange={(isOpen) => {
-                autocompleteOpenRef.current = isOpen;
-              }}
-              closeAutocompleteRef={closeAutocompleteRef}
-            />
-          </Suspense>
+          <div className={EDITOR_ROW_CLASSES}>
+            <div className="min-w-0 flex-1">
+              <Suspense fallback={<div className="h-8" />}>
+                <LazyTaskTitleEditor
+                  key={composer.resetKey}
+                  value={composer.seed}
+                  ariaLabel="Task name"
+                  autoFocus={true}
+                  commitOnBlur={false}
+                  onChange={composer.setValue}
+                  onCommit={composer.commit}
+                  onCancel={() => onOpenChange(false)}
+                  className={EDITOR_BOX_CLASSES}
+                  extraPlugins={composer.extraPlugins}
+                  autocomplete={composer.autocomplete}
+                  onAutocompleteOpenChange={(isOpen) => {
+                    autocompleteOpenRef.current = isOpen;
+                  }}
+                  closeAutocompleteRef={closeAutocompleteRef}
+                />
+              </Suspense>
+            </div>
+            {/* QA-15: Todoist's rest state carries a red Ramble/dictate
+                button here — meologue has no dictation feature, so this
+                stays a plain dismiss affordance rather than a stub or a
+                disabled placeholder for one. Known open item, not papered
+                over (this file's own header comment). */}
+            <DialogPrimitive.Close asChild>
+              <Button type="button" variant="ghost" size="icon-xs" aria-label="Close">
+                <X aria-hidden="true" className="size-3.5" />
+              </Button>
+            </DialogPrimitive.Close>
+          </div>
 
           {/* PRI-04: the flag icon alone carries the priority's colour —
               the `P{n}` text stays the shared neutral grey
@@ -268,37 +319,50 @@ export function QuickAddDialog({
             </div>
           )}
 
-          <div className="mt-3 flex items-center justify-between gap-2 border-t border-[color:var(--td-composer-border)] pt-3">
-            <div className="flex items-center gap-2">
-              {/* QA-18: `Tab` from the title field lands here first —
-                  natural DOM order already gives that, since this is the
-                  editor's very next focusable sibling. No menu is wired
-                  behind it (out of scope for this ticket — the record
-                  never established its contents, only that Tab reaches
-                  it); reported as unimplemented rather than faked. */}
-              <Button type="button" variant="ghost" size="sm" aria-label="More actions">
-                <span aria-hidden="true">…</span>
-              </Button>
-              {hasDate && (
-                <Button type="button" variant="ghost" size="sm" onClick={removeDate}>
-                  Remove date
+          {/* Issue #264: this whole toolbar row only exists once there's
+              text — matching Todoist's own 66→97px grow-on-text (this
+              file's own header comment has the exact arithmetic behind
+              `FOOTER_CLASSES` and the "xs"-sized buttons below). At rest
+              this block is absent entirely, not hidden, so it contributes
+              nothing to the compact single-row layout above. */}
+          {hasText && (
+            <div className={FOOTER_CLASSES}>
+              <div className="flex items-center gap-2">
+                {/* QA-18: `Tab` from the title field lands here first —
+                    natural DOM order already gives that, since this is the
+                    editor's very next focusable sibling. No menu is wired
+                    behind it (out of scope for this ticket — the record
+                    never established its contents, only that Tab reaches
+                    it); reported as unimplemented rather than faked. */}
+                <Button type="button" variant="ghost" size="xs" aria-label="More actions">
+                  <span aria-hidden="true">…</span>
                 </Button>
-              )}
+                {hasDate && (
+                  <Button type="button" variant="ghost" size="xs" onClick={removeDate}>
+                    Remove date
+                  </Button>
+                )}
+              </div>
+              <div className="flex items-center gap-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="xs"
+                  onClick={() => onOpenChange(false)}
+                >
+                  Cancel
+                </Button>
+                <Button
+                  type="button"
+                  size="xs"
+                  onClick={() => composer.commit(composer.value)}
+                  disabled={composer.value.trim() === ""}
+                >
+                  Add task
+                </Button>
+              </div>
             </div>
-            <div className="flex items-center gap-2">
-              <Button type="button" variant="outline" size="sm" onClick={() => onOpenChange(false)}>
-                Cancel
-              </Button>
-              <Button
-                type="button"
-                size="sm"
-                onClick={() => composer.commit(composer.value)}
-                disabled={composer.value.trim() === ""}
-              >
-                Add task
-              </Button>
-            </div>
-          </div>
+          )}
         </DialogPrimitive.Content>
       </DialogPrimitive.Portal>
     </DialogPrimitive.Root>
