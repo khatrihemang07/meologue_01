@@ -114,6 +114,17 @@ One of the app's top-level views, reachable directly by its own URL and listed a
 root screen: Composer, Reflection, Digest, Todo, and Settings (ADR 0036, ADR 0049). Settings is a
 Destination like the others even though it configures the app rather than showing Entries.
 
+Back leaves a Destination and returns to the root screen (ADR 0079). Moving between a
+Destination's own views, or between the dates one of them covers, is not leaving it — so it is
+not something Back undoes. Back is for screens, not for state within one.
+
+### Resume point
+
+Where a reader was inside a Destination when they last left it: the day the Composer was scrolled
+to, the date a Digest reader was on, the view Todo was showing. A Destination may return a reader
+to its resume point when they come back to it, which is what makes leaving one cheap. A resume
+point is never a Back step — it is where a Destination starts, not somewhere Back can go.
+
 ### Composer
 
 The view where the user writes an Entry before Sending it, and where they read the ones they
