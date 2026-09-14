@@ -26,6 +26,25 @@
  * already produces once the Remove-date row is conditionally rendered,
  * not a value this component chooses.
  *
+ * **That 66→97px growth is still exactly what Todoist does, and this
+ * dialog does not do it (issue #264).** Flow 12's round S1 (2026-09-13,
+ * `flow12-S1-QA-13-14-15-16-18-both.json`) reported Todoist "no longer
+ * shrinks at rest", flat at 97px in both states, and concluded the
+ * reference had drifted. **Round S2 the next day overturned that**
+ * (`flow12-S2-verification-both.json`, both sides driven in one session,
+ * ≥800ms settle on every read): Todoist reads **580×66px at rest and
+ * 580×97px once text is present**, because its Inbox/Date/Priority/Labels
+ * toolbar row is only rendered once the field is non-empty — the original
+ * capture was right, and S1's "the reference moved" was a bad reading.
+ * Two sources now agree against it.
+ *
+ * meologue holds a flat **580×110px** in both states: this file renders
+ * "Remove date" *inside* the existing footer row rather than adding a
+ * row, so nothing grows. So the divergence is two things, not one — the
+ * absolute height, and the fact that this dialog is height-inert to
+ * recognition where Todoist's is not. Gap measured 2026-09-14: 44px at
+ * rest, 13px with a date.
+ *
  * **Footer — the recorded subset, not the full described one.**
  * `quick-add.md` describes six footer controls (More actions, Select
  * project, Set date, Set priority, Add labels, then Cancel/Add task);
@@ -41,24 +60,39 @@
  * recognised, since the composer already carries that information whether
  * or not a dedicated "Set priority" button exists yet.
  *
- * **Escape vs. the `#`/`@` popup — the Radix trap `task-title-editor.tsx`
- * names but cannot fix alone.** Radix's `DismissableLayer` (what
- * `Dialog.Content` is built on) wires its own Escape handler on
- * `document`, capture phase, BEFORE the contenteditable's own bubble-phase
- * keydown handler ever runs (confirmed against
+ * **Escape vs. the `#`/`@` popup — issue #261, the Radix trap
+ * `task-title-editor.tsx` names but cannot fix alone.** Radix's
+ * `DismissableLayer` (what `Dialog.Content` is built on) wires its own
+ * Escape handler on `document`, capture phase, BEFORE the contenteditable's
+ * own bubble-phase keydown handler ever runs (confirmed against
  * `@radix-ui/react-dismissable-layer`'s own source: `addEventListener(...,
  * { capture: true })`, and its handler calls `onDismiss()` — closing this
  * dialog — unless the consumer's own `onEscapeKeyDown` called
- * `preventDefault()` first). Crucially that handler never calls
- * `stopPropagation()`, so the native keydown still reaches the editor's
- * own bubble handler afterwards **as long as this dialog didn't just
- * close out from under it**. `onAutocompleteOpenChange` (wired through
- * both composer instances below) is the one signal this dialog has for
- * "is a popup open right now" — `Content`'s own `onEscapeKeyDown` reads it
- * and calls `preventDefault()` while true, so Radix leaves the dialog
- * alone and the keystroke goes on to reach `quick-add-autocomplete.ts`'s
- * own `handleKeyDown`, which (registered ahead of the commit keymap,
- * `task-title-editor.tsx`'s `buildTitlePlugins`) closes just the popup.
+ * `preventDefault()` first). **What actually gates ProseMirror's own
+ * handling is `defaultPrevented`, not propagation** — `prosemirror-view`'s
+ * own dispatch gate (`eventBelongsToView`) refuses to run this view's
+ * `handleKeyDown` at all once ANYONE earlier in the same event's lifecycle
+ * called `event.preventDefault()`, capture-phase included. An earlier
+ * version of this comment argued the opposite — that because
+ * `DismissableLayer` "never calls `stopPropagation()`", the keystroke
+ * would still reach the editor's own bubble handler after `Content`'s own
+ * `preventDefault()` ran. That is exactly backwards: propagation
+ * continuing is irrelevant when the gate checked is `defaultPrevented`,
+ * and `Content`'s own `preventDefault()` (below) trips that gate before
+ * `quick-add-autocomplete.ts`'s own `handleKeyDown` ever runs — Escape did
+ * nothing at all, to either layer, which is issue #261's exact symptom.
+ * The fix is the same one `task-detail-view.tsx`'s `dismissGuardRef`
+ * already ships (`8eafad9`): don't trust the same gated keydown to close
+ * the popup — call `closeAutocompleteRef.current?.()` directly.
+ * `view.dispatch()` is a plain method call, not a DOM event, so it is
+ * never subject to that gate; `task-title-editor.tsx`'s own doc comment on
+ * `closeAutocompleteRef` has the full proof. `onAutocompleteOpenChange`
+ * (wired through both composer instances below) is the one signal this
+ * dialog has for "is a popup open right now" — `Content`'s own
+ * `onEscapeKeyDown` reads it, calls `preventDefault()` (keeping Radix from
+ * closing the whole dialog) AND `closeAutocompleteRef.current?.()`
+ * (actually closing the popup) in the same synchronous tick, rather than
+ * leaving the second half to a keydown that will never arrive.
  */
 import { parseQuickAdd, uiPriorityOf } from "@meologue/core";
 import { Dialog as DialogPrimitive } from "radix-ui";
@@ -125,6 +159,13 @@ export function QuickAddDialog({
   // "no render needed, just a fresh read at fire-time" shape
   // `todo-keymap.ts`'s own `focusedTaskId()` already uses.
   const autocompleteOpenRef = useRef(false);
+  // Issue #261 — this file's own header comment on the Escape/popup trap
+  // has the full reasoning: `onEscapeKeyDown` below cannot trust the same
+  // keydown to reach `quick-add-autocomplete.ts`'s own handler once it has
+  // called `event.preventDefault()` itself, so it closes the popup
+  // directly through this instead, the identical shape
+  // `task-detail-view.tsx`'s `dismissGuardRef` already uses.
+  const closeAutocompleteRef = useRef<(() => void) | null>(null);
 
   const composer = useQuickAddComposer({
     onAdd,
@@ -175,11 +216,15 @@ export function QuickAddDialog({
           data-testid="quick-add"
           className={DIALOG_CLASSES}
           onEscapeKeyDown={(event) => {
-            // This file's own header comment has the full Radix-capture
-            // ordering reasoning: preventing the dismissal here is what
-            // lets the keystroke go on to close only the popup instead.
+            // This file's own header comment has the full reasoning: the
+            // `preventDefault()` below is what stops Radix dismissing the
+            // dialog, but it ALSO gates `prosemirror-view`'s own key
+            // handling for this same event — so the popup has to be
+            // closed directly, through `closeAutocompleteRef`, rather than
+            // trusted to close itself once this handler returns.
             if (autocompleteOpenRef.current) {
               event.preventDefault();
+              closeAutocompleteRef.current?.();
             }
           }}
         >
@@ -200,6 +245,7 @@ export function QuickAddDialog({
               onAutocompleteOpenChange={(isOpen) => {
                 autocompleteOpenRef.current = isOpen;
               }}
+              closeAutocompleteRef={closeAutocompleteRef}
             />
           </Suspense>
 
