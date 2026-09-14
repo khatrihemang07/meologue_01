@@ -46,23 +46,31 @@ function periodTitle(period: string): string {
  * disabled>`, not a `<Link>` merely styled to look grey, so it is inert for
  * keyboard, screen reader and click alike, not just visually muted.
  *
- * Otherwise this is a `<Link>`, the same navigation primitive
- * `digest-page.tsx`'s cards already use to open a Digest, not
- * `navigate(..., { replace: true })` — for two reasons. First, it's the
- * accessible default: a real anchor gets middle-click/open-in-new-tab and a
- * visible href for free, neither of which a click handler calling
- * `navigate` would have. Second, and load-bearing for this ticket's own
- * acceptance criteria ("browser back walks the steps"): `<Link>` pushes a
- * new history entry per step, where `replace: true` would overwrite the
- * entry behind it — so back would jump straight out of the Digest archive
- * instead of walking back through the Digests just visited.
+ * Otherwise this is a `<Link>` — the same navigation primitive
+ * `digest-page.tsx`'s cards already use to open a Digest, for the
+ * accessible default it gets for free (middle-click/open-in-new-tab and a
+ * visible href, neither of which a click handler calling `navigate` would
+ * have) — but with `replace` (ADR 0079, "Back is for screens, not for
+ * state within one"). A step from one date to the next is movement *within*
+ * the Digest reader, not a departure from it: the reader is still looking
+ * at the same Destination, just a different day of it. ADR 0079's rule is
+ * that only leaving a Destination earns a history entry, so stepping must
+ * not push one — a reader who has stepped through several days and then
+ * presses Back (hardware, browser, or the app bar's own arrow) leaves the
+ * archive in one press, exactly as if they'd never stepped at all, rather
+ * than re-walking every day they passed through on the way in. That
+ * supersedes this same file's own earlier acceptance criterion ("browser
+ * back walks the steps") — see ADR 0079 for why that criterion no longer
+ * holds.
  *
- * Stepping is navigation by URL — ADR 0025 made exactly this call for
- * Sessions ("the Session id lives in the URL, and the URL is the only
- * state"): reloading an open Digest must land on the same one, and browser
- * back from an open Digest must return to the cards. A step that only
- * updated in-page state (instead of visiting `/digest/{period}/{date}`)
- * would break both of those the moment the reader reloaded mid-archive.
+ * The date still lives in the URL, unchanged — ADR 0025 made exactly this
+ * call for Sessions ("the Session id lives in the URL, and the URL is the
+ * only state"): reloading an open Digest must land on the same one, and a
+ * specific day must stay linkable and shareable. `replace` only changes
+ * which history entry the navigation writes into, never whether the URL
+ * itself carries the date — a step that instead updated in-page state
+ * (rather than visiting `/digest/{period}/{date}`) would still break reload
+ * and sharing, `replace` or not.
  */
 function DigestStepControl({
   period,
@@ -96,7 +104,7 @@ function DigestStepControl({
   }
 
   return (
-    <Link to={`/digest/${period}/${date}`} aria-label={label} className={className}>
+    <Link to={`/digest/${period}/${date}`} replace aria-label={label} className={className}>
       <Icon aria-hidden="true" className="size-4" />
     </Link>
   );
