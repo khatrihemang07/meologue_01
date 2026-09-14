@@ -658,6 +658,22 @@ export interface OpenScheduleEventDetail {
  */
 export const OPEN_QUICK_ADD_EVENT = "todo:open-quick-add";
 
+/**
+ * The identical fan-in one door over again (this module's own doc comment
+ * on `OPEN_SCHEDULE_EVENT` above), for the `focus-add-task` binding (`A`,
+ * KBD-01/KBD-06) below. `focusAddTaskField()` dispatches this only when
+ * its own selector-based fast path finds no live textbox/input already
+ * mounted — i.e. only while `add-task-form.tsx`'s composer is still the
+ * collapsed resting row. `add-task-form.tsx` listens for it to reveal
+ * itself (`setOpen(true)`), the same "no external door" reason
+ * `OPEN_SCHEDULE_EVENT`'s own doc comment gives: that component's `open`
+ * is private `useState`, so a document-level event is the only door this
+ * module — which has no reference to that component — can reach through.
+ * No detail, like `OPEN_QUICK_ADD_EVENT` just above: there is no Task to
+ * name.
+ */
+export const FOCUS_ADD_TASK_EVENT = "todo:focus-add-task";
+
 /** The Task a keyboard action should act on — whichever row's own focusable element (`data-task-id`, `task-row.tsx`) currently holds focus, or `null` if none does. Read fresh at fire-time rather than tracked in state: the DOM's own focus is already the single source of truth every row's tab order already relies on (`keyboard.md` §2's own tab-order findings). */
 export function focusedTaskId(): string | null {
   const active = document.activeElement;
@@ -856,24 +872,53 @@ export function focusAdjacentRow(direction: "next" | "previous"): void {
 }
 
 /**
- * `focus-add-task` (`A`, KBD-01/KBD-06) — jumps straight to the "Add task"
- * field's own live focusable descendant, rather than cycling row by row
- * through `focusAdjacentRow` above to reach it. Reuses the identical
- * `[data-add-task-field] [role="textbox"], [data-add-task-field]
- * input:not([disabled])` selector `rowNavTargets()` folds into its own
- * three-selector query, rather than a second, hand-duplicated one — so if
- * `add-task-form.tsx` ever changes which element is live there, both
- * functions stay in sync automatically. A silent no-op when the field
- * isn't in the DOM at all, matching this module's existing posture for
- * every other "no affordance for a gesture that can't happen here" case
- * (`focusAdjacentRow`'s own `targets.length === 0` guard, `focusedTaskId()`
- * returning `null`).
+ * `focus-add-task` (`A`, KBD-01/KBD-06) — puts focus in the "Add task"
+ * composer, revealing it first if it is currently the collapsed resting
+ * row.
+ *
+ * Two paths, because the composer only has a live focusable descendant
+ * (`[role="textbox"]`, or an enabled `<input>`) once it is already open:
+ *
+ *   - **Already open**: the identical `[data-add-task-field]
+ *     [role="textbox"], [data-add-task-field] input:not([disabled])`
+ *     selector `rowNavTargets()` folds into its own three-selector query
+ *     finds a live match, and this focuses it directly — no event round
+ *     trip, and critically no call into `add-task-form.tsx`'s own reveal
+ *     path, which would otherwise treat an already-open composer as a
+ *     fresh one and clear whatever the reader had already typed (this
+ *     ticket's own acceptance: `A` on an open composer must focus it
+ *     WITHOUT collapsing or clearing it).
+ *   - **Collapsed**: the selector matches nothing, because the resting
+ *     row is a bare `<button>` (`add-task-form.tsx`'s collapsed branch),
+ *     not a textbox or input — this used to make `field?.focus()` a
+ *     silent no-op (issue #260's Defect 2: pressing `A` did nothing once
+ *     the composer became collapsed-by-default, and nothing in the suite
+ *     caught it, because every existing `A`-key test hand-built a
+ *     `[data-add-task-field][role="textbox"]` the real collapsed
+ *     component never renders). `add-task-form.tsx` owns `open` as
+ *     private `useState` with no external door onto it, so this
+ *     dispatches `FOCUS_ADD_TASK_EVENT` instead — the identical
+ *     document-level fan-in `OPEN_SCHEDULE_EVENT`/`OPEN_COMMAND_MENU_EVENT`
+ *     above use to reach into a component this module holds no reference
+ *     to.
+ *
+ * This function no longer assumes its selector "stays in sync" with
+ * whatever `add-task-form.tsx` renders — a previous version of this
+ * comment made exactly that claim, and it is exactly the assumption
+ * Defect 2 broke. The fast path above only ever fires when that
+ * assumption happens to hold (the composer is already open); the event
+ * path is what covers the case where it doesn't, without needing the two
+ * files to agree on a shared selector at all.
  */
 export function focusAddTaskField(): void {
   const field = document.querySelector<HTMLElement>(
     '[data-add-task-field] [role="textbox"], [data-add-task-field] input:not([disabled])',
   );
-  field?.focus();
+  if (field !== null) {
+    field.focus();
+    return;
+  }
+  document.dispatchEvent(new CustomEvent(FOCUS_ADD_TASK_EVENT));
 }
 
 // Symbols where Shift is already baked into `event.key` (Shift+/ reports

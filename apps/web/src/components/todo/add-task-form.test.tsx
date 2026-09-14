@@ -1,7 +1,8 @@
-import { fireEvent, render, screen } from "@testing-library/react";
-import { useState } from "react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
+import { useEffect, useRef, useState } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useSettingsStore } from "@/lib/settings";
+import { focusAddTaskField } from "@/lib/todo-keymap";
 import { AddTaskForm } from "./add-task-form";
 
 /**
@@ -20,6 +21,12 @@ import { AddTaskForm } from "./add-task-form";
  * Backspace actually landing, the span's own two visual states) has not
  * been verified in a real browser as part of this change — see this
  * ticket's own report.
+ *
+ * `autoFocus` is honoured here too, the identical way `task-detail-
+ * view.test.tsx`'s own `StubTaskTitleEditor` honours it — issue #260's
+ * Defect 1/2 tests below need this stub to actually move focus, the same
+ * real thing the ProseMirror editor's own mount-time `view.focus()` does
+ * for `autoFocus={true}` (`add-task-form.tsx` always passes that).
  */
 function StubTaskTitleEditor({
   value,
@@ -28,6 +35,7 @@ function StubTaskTitleEditor({
   onCancel,
   ariaLabel,
   placeholder,
+  autoFocus = true,
 }: {
   value: string;
   onChange?: (value: string) => void;
@@ -35,10 +43,19 @@ function StubTaskTitleEditor({
   onCancel: () => void;
   ariaLabel?: string;
   placeholder?: string;
+  autoFocus?: boolean;
 }) {
   const [text, setText] = useState(value);
+  const ref = useRef<HTMLInputElement>(null);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: mount-only, mirroring the real editor's own mount-time focus.
+  useEffect(() => {
+    if (autoFocus) {
+      ref.current?.focus();
+    }
+  }, []);
   return (
     <input
+      ref={ref}
       aria-label={ariaLabel ?? "Task name"}
       placeholder={placeholder}
       value={text}
@@ -103,23 +120,33 @@ describe("AddTaskForm", () => {
     expect(screen.getByRole("button", { name: "Add task" })).toBeInTheDocument();
   });
 
-  it("calls onAdd with the parsed fields on Add, and collapses back to the quiet row", async () => {
+  it("calls onAdd with the parsed fields on Add, and stays open, empty and focused", async () => {
     const onAdd = vi.fn();
     render(<AddTaskForm onAdd={onAdd} disabled={false} />);
     await reveal();
 
-    fireEvent.change(await getInput(), { target: { value: "buy milk" } });
+    const firstInput = await getInput();
+    fireEvent.change(firstInput, { target: { value: "buy milk" } });
     fireEvent.click(screen.getByRole("button", { name: "Add task" }));
 
     expect(onAdd).toHaveBeenCalledWith(
       expect.objectContaining({ content: "buy milk", date: null, priority: 1, labelNames: [] }),
     );
-    // NAV-12/QA-19 (parity ledger): a real Add collapses the composer back
-    // to the quiet trigger row, matching Todoist's own click-to-reveal
-    // affordance rather than keeping it open for another task — this
-    // file's own header comment records why that call was made.
-    expect(await screen.findByRole("button", { name: "Add task" })).toBeInTheDocument();
-    expect(screen.queryByLabelText("Task name")).not.toBeInTheDocument();
+    // Issue #260 Defect 1, flow-12 S1 (2026-09-13 live drive,
+    // `meologue-parity-docs/todoist/live-audit-dom/flow12-S1-NAV-07-10-
+    // 12-both.json`): Todoist's own in-list composer, after a real Add,
+    // "stayed mounted, EMPTY, and focused — does NOT collapse", unlike
+    // the Quick Add *dialog* (QA-19, a different surface, which still
+    // closes on commit). This file's own header comment has the full
+    // citation and why the old collapse-after-Add behaviour was wrong.
+    // `composer.resetKey` remounts a fresh `LazyTaskTitleEditor` instance
+    // on commit (`use-quick-add-composer.ts`), so this must be a new
+    // element, not the one just typed into.
+    const secondInput = await getInput();
+    expect(secondInput).not.toBe(firstInput);
+    expect(secondInput).toHaveValue("");
+    expect(secondInput).toHaveFocus();
+    expect(screen.getByRole("button", { name: "Cancel" })).toBeInTheDocument();
   });
 
   it("calls onAdd with the parsed fields on Enter, the editor's own commit keymap", async () => {
@@ -232,5 +259,60 @@ describe("AddTaskForm", () => {
     expect(onAdd).toHaveBeenCalledWith(
       expect.objectContaining({ content: "buy milk tomorrow", priority: 4 }),
     );
+  });
+
+  /**
+   * Issue #260 Defect 2: `todo-keymap.ts`'s `focusAddTaskField()` (the `A`
+   * shortcut's own implementation) used to query
+   * `[data-add-task-field] [role="textbox"], [data-add-task-field]
+   * input:not([disabled])` directly against the DOM, and was a silent
+   * no-op once this component's collapsed resting row — a bare
+   * `<button>`, not a textbox or input — became the default. The
+   * existing `A`-key tests in `use-todo-keymap.test.tsx` (L448-460) and
+   * `todo-keymap.test.ts` (L148-165) both hand-build a fake
+   * `<div data-add-task-field><div role="textbox">` that this real
+   * collapsed component never renders — exactly why that defect shipped
+   * under a fully green suite. These two tests call the real
+   * `focusAddTaskField()` against a real, unmocked-at-the-DOM-level
+   * `AddTaskForm` instead, so they would have caught it.
+   */
+  describe("focusAddTaskField (the `A` shortcut)", () => {
+    it("reveals the real collapsed composer and focuses its editor", async () => {
+      render(<AddTaskForm onAdd={vi.fn()} disabled={false} />);
+      expect(await screen.findByRole("button", { name: "Add task" })).toBeInTheDocument();
+      expect(screen.queryByLabelText("Task name")).not.toBeInTheDocument();
+
+      act(() => {
+        focusAddTaskField();
+      });
+
+      const input = await getInput();
+      expect(input).toHaveFocus();
+      expect(screen.getByRole("button", { name: "Cancel" })).toBeInTheDocument();
+    });
+
+    it("focuses an already-open composer without collapsing or clearing typed text", async () => {
+      render(<AddTaskForm onAdd={vi.fn()} disabled={false} />);
+      await reveal();
+
+      const input = await getInput();
+      fireEvent.change(input, { target: { value: "buy milk" } });
+      input.blur();
+      expect(input).not.toHaveFocus();
+
+      act(() => {
+        focusAddTaskField();
+      });
+
+      // Same element, still open, still holding what was typed — the
+      // fast path in `focusAddTaskField()` finds this live input
+      // directly and focuses it, never dispatching `FOCUS_ADD_TASK_EVENT`
+      // (which would otherwise be indistinguishable, from this
+      // component's side, from a fresh reveal).
+      expect(await getInput()).toBe(input);
+      expect(input).toHaveFocus();
+      expect(input).toHaveValue("buy milk");
+      expect(screen.getByRole("button", { name: "Cancel" })).toBeInTheDocument();
+    });
   });
 });
