@@ -6,11 +6,40 @@
  * is checked against the ledger's own measured values, not values this
  * suite invented independently of the reference capture.
  */
-import { fireEvent, render, screen, within } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { WIDE_LAYOUT_QUERY } from "@/hooks/use-wide-layout";
 import { TaskSchedulePopover } from "./task-schedule-popover";
 
 const NOW = new Date(2026, 8, 10, 12, 0); // Thu 10 Sep 2026, local noon
+
+/**
+ * Pins which shell the component renders in (issue #282).
+ *
+ * `test/setup.ts`'s global stub answers `false` to every query but
+ * `(hover: hover)`, which includes the wide-layout breakpoint — so without
+ * this, every test below silently exercises the *bottom sheet* rather than
+ * the anchored popover. That is not hypothetical: when the narrow variant
+ * landed, all 59 assertions in this file kept passing while testing the
+ * other shell entirely, because they query by `data-testid="scheduler-view"`
+ * and by role, and both shells satisfy both. Assert the property, not the
+ * difference — and state which shell you meant.
+ */
+function stubLayout(wide: boolean) {
+  vi.stubGlobal(
+    "matchMedia",
+    vi.fn((query: string) => ({
+      matches: query === "(hover: hover)" || (wide && query === WIDE_LAYOUT_QUERY),
+      media: query,
+      onchange: null,
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+    })),
+  );
+}
 
 function renderPopover(props: Partial<Parameters<typeof TaskSchedulePopover>[0]> = {}) {
   const onPickDay = vi.fn();
@@ -37,7 +66,80 @@ function open() {
   fireEvent.click(screen.getByRole("button", { name: "Pick a date" }));
 }
 
+describe("shell by breakpoint (issue #282)", () => {
+  it("renders an anchored popover at wide widths", () => {
+    stubLayout(true);
+    renderPopover();
+    open();
+
+    const view = screen.getByTestId("scheduler-view");
+    expect(view.getAttribute("data-slot")).toBe("popover-content");
+    // Not asserted by role: Radix gives `Popover.Content` `role="dialog"`
+    // too, so role tells the two shells apart not at all. `data-slot` is the
+    // only thing that actually discriminates, which is the whole reason the
+    // 59 assertions below could run against the wrong shell and pass.
+    expect(screen.queryByText("Date")).toBeNull();
+  });
+
+  it("renders a bottom sheet below the wide breakpoint", () => {
+    stubLayout(false);
+    renderPopover();
+    open();
+
+    const view = screen.getByTestId("scheduler-view");
+    expect(view.getAttribute("data-slot")).toBe("sheet-content");
+    expect(screen.getByRole("dialog")).toBe(view);
+  });
+
+  it("gives the narrow sheet a visible Date title, as Todoist Android's has", () => {
+    stubLayout(false);
+    renderPopover();
+    open();
+
+    // Both a parity row (ASCHED-01) and Radix Dialog's own accessible-name
+    // requirement, satisfied by the same element.
+    const heading = screen.getByText("Date");
+    expect(heading.getAttribute("data-slot")).toBe("sheet-title");
+    expect(screen.getByRole("dialog", { name: "Date" })).toBeTruthy();
+  });
+
+  it("offers the same quick options in both shells", () => {
+    // The two shells share one `scheduleFields` tree precisely so they cannot
+    // drift; this is the assertion that holds that shut.
+    // Scoped `within` the scheduler, not the whole screen: the sheet is a
+    // modal Dialog, so Radix marks everything outside it `aria-hidden` and
+    // the trigger drops out of the accessibility tree — a real difference
+    // between the shells, and not one about the options themselves.
+    const optionsIn = () =>
+      within(screen.getByTestId("scheduler-view"))
+        .getAllByRole("button")
+        .map((b) => b.getAttribute("aria-label") ?? b.textContent ?? "");
+
+    stubLayout(true);
+    renderPopover();
+    open();
+    const wide = optionsIn();
+
+    cleanup();
+
+    stubLayout(false);
+    renderPopover();
+    open();
+    const narrow = optionsIn();
+
+    // The sheet adds its own title element but no extra controls.
+    expect(narrow).toEqual(wide);
+    expect(wide.length).toBeGreaterThan(4);
+  });
+});
+
 describe("TaskSchedulePopover", () => {
+  // Every assertion in this suite was measured against Todoist's anchored
+  // popover at desktop width, so it runs at desktop width.
+  beforeEach(() => {
+    stubLayout(true);
+  });
+
   describe("quick options (SCHED-02/03)", () => {
     it("renders Today/Tomorrow/Next week/Next weekend with the exact captured hints, in order", () => {
       renderPopover();

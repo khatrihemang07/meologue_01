@@ -77,4 +77,15 @@ function SheetTitle({ ...props }: React.ComponentProps<typeof DialogPrimitive.Ti
   return <DialogPrimitive.Title data-slot="sheet-title" {...props} />;
 }
 
-export { Sheet, SheetContent, SheetOverlay, SheetPortal, SheetTitle };
+/**
+ * The counterpart to `popover.tsx`'s own `PopoverTrigger`, added so a caller
+ * that picks its shell by breakpoint can hand the identical `trigger` node to
+ * either primitive without cloning it (`task-schedule-popover.tsx` is the
+ * first). Every other caller so far drives `Sheet` through a controlled
+ * `open` prop and needs no trigger at all, which is why this did not exist.
+ */
+function SheetTrigger({ ...props }: React.ComponentProps<typeof DialogPrimitive.Trigger>) {
+  return <DialogPrimitive.Trigger data-slot="sheet-trigger" {...props} />;
+}
+
+export { Sheet, SheetContent, SheetOverlay, SheetPortal, SheetTitle, SheetTrigger };
