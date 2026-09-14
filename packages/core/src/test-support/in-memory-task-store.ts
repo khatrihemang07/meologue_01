@@ -246,9 +246,12 @@ export class InMemoryTaskStore implements TaskStore {
       this.applyIfLive(id, { dateString: null, updatedAt: this.now(), seq: null, syncedAt: null });
       return;
     }
-    // Only the calendar day matters to ../recurrence/'s engine — the
-    // identical `.slice(0, 10)` advanceRecurring's own mechanics applies
-    // above.
+    // Only the calendar day matters to ../recurrence/'s engine, hence the
+    // slice — unlike advanceRecurring above (issue #290's fix), this
+    // method's own callers still thread a UTC instant through `now` rather
+    // than a resolved local day (see SqliteTaskStore.setDateString's
+    // identical comment) — out of scope for issue #290, left as a known,
+    // not-yet-fixed instance.
     const outcome = firstOccurrence(dateString, {
       dueDate: existing.date,
       now: now.slice(0, 10),
@@ -352,7 +355,7 @@ export class InMemoryTaskStore implements TaskStore {
   // own doc comment for the full reasoning. "No-op against a tombstone"
   // is checked here the same way setParent's own no-op check is: before
   // either throw below becomes reachable.
-  async advanceRecurring(id: string, completedAt: string): Promise<void> {
+  async advanceRecurring(id: string, completedAt: string, today: string): Promise<void> {
     const existing = this.tasks.get(id);
     if (existing === undefined || existing.deletedAt !== null) {
       return;
@@ -362,10 +365,13 @@ export class InMemoryTaskStore implements TaskStore {
         `advanceRecurring called on Task ${id}, which has no recurrence (dateString is null)`,
       );
     }
-    const now = completedAt.slice(0, 10);
+    // `today` — not a slice of `completedAt` — is the recurrence engine's
+    // floating "now" (issue #290): see SqliteTaskStore.advanceRecurring's
+    // identical comment for why the caller resolves the local day itself
+    // rather than this method guessing one out of a UTC instant.
     const outcome = nextOccurrenceAfterCompletion(existing.dateString, {
       dueDate: existing.date,
-      now,
+      now: today,
     });
     if (outcome.kind === "refused") {
       throw new Error(

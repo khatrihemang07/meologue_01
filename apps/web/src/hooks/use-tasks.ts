@@ -10,6 +10,7 @@ import type {
 import { mintId, orderKeyBetween } from "@meologue/core";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { type RecordEventInput, useEvents } from "@/hooks/use-events";
+import { localDayKey } from "@/lib/local-day-key";
 import { queryClient } from "@/lib/query-client";
 import { COMPLETED_TASKS_QUERY_KEY, ENTRIES_QUERY_KEY, TASKS_QUERY_KEY } from "@/lib/query-keys";
 import { requestSync } from "@/lib/sync-runner";
@@ -681,10 +682,24 @@ export function useTasks(
   // reaching for "complete this recurring Task" has no reason to think
   // about what timestamp that means any more than completeTask's own
   // caller does.
+  //
+  // `today` is `localDayKey`'s reading of this same clock read, not
+  // `new Date().toISOString()` sliced down — issue #290. This hook is the
+  // one layer that knows the Device's own local time, which is exactly why
+  // TaskStore.advanceRecurring takes `today` as its own argument rather
+  // than deriving it from `completedAt`: a UTC instant's first ten
+  // characters name the UTC calendar day, not the Device's, and for a
+  // reader east of UTC that's a day early for a window each night as wide
+  // as their own offset — see TaskStore.advanceRecurring's own doc comment
+  // (packages/core) for the full consequence of handing the recurrence
+  // engine a "now" that's a day early. One `Date` read, like issue #196's
+  // own `remove()` convention, rather than two independent clock reads
+  // that could disagree by a millisecond straddling midnight.
   const advanceRecurringMutation = useMutation({
     mutationFn: async (id: string) => {
       const before = await findTask(id);
-      await taskStore.advanceRecurring(id, new Date().toISOString());
+      const completedAt = new Date();
+      await taskStore.advanceRecurring(id, completedAt.toISOString(), localDayKey(completedAt));
       // TaskStore.advanceRecurring's own doc comment: "this is a
       // completion event too — they set completedAt for real" (an ended
       // series) or advance dateString to the next occurrence, neither of
@@ -720,7 +735,14 @@ export function useTasks(
   const postponeMutation = useMutation({
     mutationFn: async (id: string) => {
       const before = await findTask(id);
-      await taskStore.postpone(id, new Date().toISOString());
+      // `localDayKey(new Date())`, not `new Date().toISOString()` — issue
+      // #290. TaskStore.postpone's own `today` parameter has always meant
+      // a floating local day, never an instant; passing the instant relied
+      // on ../recurrence/'s `tomorrowOf` silently slicing its first ten
+      // characters, which names the UTC calendar day rather than this
+      // Device's own. See TaskStore.postpone's own doc comment
+      // (packages/core) for the full account.
+      await taskStore.postpone(id, localDayKey(new Date()));
       // A reschedule like any other setDate call — TaskStore.postpone's
       // own doc comment: "a plain one-day shift of date." The resulting
       // value is read back from the store rather than recomputed here,

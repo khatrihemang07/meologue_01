@@ -408,9 +408,15 @@ export class SqliteTaskStore implements TaskStore {
       await this.updateIfLive(id, { dateString: null });
       return;
     }
-    // Only the calendar day matters to ../recurrence/'s engine — the
-    // identical `.slice(0, 10)` advanceRecurring's own mechanics applies
-    // to `completedAt` above.
+    // Only the calendar day matters to ../recurrence/'s engine, hence the
+    // slice — unlike advanceRecurring above (issue #290's fix), this
+    // method's own callers (task-row-content.tsx, task-detail-view.tsx)
+    // still thread a UTC instant (`new Date().toISOString()`) through
+    // `now` rather than a resolved local day, so slicing it here is
+    // subject to the identical UTC-vs-local trap TaskStore.advanceRecurring's
+    // own doc comment describes — out of scope for issue #290 (which named
+    // only advanceRecurring/postpone), left here as a known, not-yet-fixed
+    // instance rather than a silent one.
     const outcome = firstOccurrence(dateString, { dueDate: current.date, now: now.slice(0, 10) });
     if (outcome.kind === "refused") {
       throw new Error(
@@ -503,7 +509,7 @@ export class SqliteTaskStore implements TaskStore {
   // to be checked before either throw below becomes reachable, and
   // there's no `dateString` to re-parse for a row that isn't live in the
   // first place.
-  async advanceRecurring(id: string, completedAt: string): Promise<void> {
+  async advanceRecurring(id: string, completedAt: string, today: string): Promise<void> {
     const current = await this.get(id);
     if (current === undefined) {
       return;
@@ -513,13 +519,15 @@ export class SqliteTaskStore implements TaskStore {
         `advanceRecurring called on Task ${id}, which has no recurrence (dateString is null)`,
       );
     }
-    // ../task-views.ts's today() reads `now` the identical way — only the
-    // calendar day matters to ../recurrence/'s engine, never the exact
-    // instant a completion happened at.
-    const now = completedAt.slice(0, 10);
+    // `today` — not a slice of `completedAt` — is the recurrence engine's
+    // floating "now" (issue #290: `completedAt` is a UTC instant, and
+    // slicing it named the UTC calendar day, not the Device's own; see
+    // TaskStore.advanceRecurring's own doc comment for the full
+    // consequence). The caller resolves the local day and passes it here
+    // already correct.
     const outcome = nextOccurrenceAfterCompletion(current.dateString, {
       dueDate: current.date,
-      now,
+      now: today,
     });
     if (outcome.kind === "refused") {
       throw new Error(

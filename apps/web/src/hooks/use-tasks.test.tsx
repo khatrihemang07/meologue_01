@@ -12,7 +12,7 @@ import { firstOccurrence, nextOccurrenceAfterCompletion, tomorrowOf } from "@meo
 import { QueryClientProvider } from "@tanstack/react-query";
 import { act, renderHook, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { useTasks as UseTasks } from "./use-tasks";
 
 // Issue #177: `afterLocalWrite`'s own nudge, mocked the identical way
@@ -178,12 +178,19 @@ function createFakeStore(): TaskStore {
     // mechanics (../../packages/core/src/sqlite/sqlite-task-store.ts) that
     // this suite's own recurrence tests below exercise real behaviour
     // rather than a stub that always no-ops.
-    advanceRecurring: vi.fn(async (id: string, completedAt: string) => {
+    // `today` (not `completedAt`) supplies the recurrence engine's
+    // floating "now" — issue #290's fix: the two used to be conflated by
+    // slicing `completedAt`, which only worked because nothing at this
+    // layer distinguished a UTC instant from a floating day. Reading
+    // `today` directly, the same way the real stores do post-fix, is what
+    // lets this fake's own recurrence tests (below) actually exercise the
+    // decoupling rather than paper over it.
+    advanceRecurring: vi.fn(async (id: string, completedAt: string, today: string) => {
       const found = active.find((t) => t.id === id);
       if (found === undefined || found.dateString === null) return;
       const outcome = nextOccurrenceAfterCompletion(found.dateString, {
         dueDate: found.date,
-        now: completedAt.slice(0, 10),
+        now: today,
       });
       if (outcome.kind === "occurrence") {
         active = active.map((t) => (t.id === id ? { ...t, date: outcome.date, seq: null } : t));
@@ -680,7 +687,11 @@ describe("useTasks", () => {
       act(() => result.current.advanceRecurringTask("a"));
 
       await waitFor(() =>
-        expect(store.advanceRecurring).toHaveBeenCalledWith("a", expect.any(String)),
+        expect(store.advanceRecurring).toHaveBeenCalledWith(
+          "a",
+          expect.any(String),
+          expect.any(String),
+        ),
       );
       // Never enters completedTasks — TaskStore.advanceRecurring's own
       // doc comment: "the checkbox does not un-tick itself."
@@ -717,6 +728,109 @@ describe("useTasks", () => {
 
       await waitFor(() => expect(store.postpone).toHaveBeenCalledWith("a", expect.any(String)));
       await waitFor(() => expect(result.current.tasks[0]?.date).not.toBe("2020-01-01"));
+    });
+
+    // Issue #290: this hook reads `new Date()` at the moment a recurring
+    // Task is completed or postponed, and used to hand `advanceRecurring`/
+    // `postpone` a UTC instant (`new Date().toISOString()`) for what both
+    // methods treat as a floating calendar day. `vi.stubEnv("TZ", ...)`
+    // reassigns the process's own zone for every `Date` built afterwards
+    // (the identical technique lib/local-day-key.test.ts's own suite
+    // uses); `vi.useFakeTimers({ toFake: ["Date"] })` pins the clock
+    // without also faking the timers `waitFor`'s own polling needs to
+    // survive (see this file's later comment on why plain
+    // `vi.useFakeTimers()` doesn't).
+    describe("the calendar day must be the Device's own local day, not UTC's", () => {
+      afterEach(() => {
+        vi.useRealTimers();
+        vi.unstubAllEnvs();
+      });
+
+      it("advanceRecurringTask uses the local day for a Device east of UTC, before its own midnight has reached UTC", async () => {
+        // The exact case issue #290 measured: 00:16 IST (+05:30) on
+        // 2026-09-15 is still 2026-09-14 18:46 in UTC. The old
+        // `completedAt.slice(0, 10)` mechanics would have handed the
+        // recurrence engine "2026-09-14" as `now` — a day early — which is
+        // exactly the shape of bug that can return an occurrence already
+        // due today instead of moving the Task forward.
+        vi.stubEnv("TZ", "Asia/Kolkata");
+        vi.useFakeTimers({ toFake: ["Date"] });
+        vi.setSystemTime(new Date(2026, 8, 15, 0, 16, 18));
+
+        const store = createFakeStore();
+        await store.upsert([task({ id: "a", date: "2026-09-14", dateString: "every day" })]);
+        const { result } = await renderUseTasks(store);
+        await waitFor(() => expect(result.current.tasks).toHaveLength(1));
+
+        act(() => result.current.advanceRecurringTask("a"));
+
+        await waitFor(() =>
+          expect(store.advanceRecurring).toHaveBeenCalledWith(
+            "a",
+            expect.any(String),
+            "2026-09-15",
+          ),
+        );
+      });
+
+      it("advanceRecurringTask uses the local day for a Device west of UTC, once local time has already rolled into UTC's next day", async () => {
+        // The mirror trap lib/local-day-key.ts's own doc comment names for
+        // `parseDayKey`, applied here to the instant-to-day direction
+        // instead: 23:45 on 2026-09-14 in America/Los_Angeles (UTC-7 in
+        // September) is already 2026-09-15 06:45 in UTC. The old
+        // `completedAt.slice(0, 10)` mechanics would have handed the
+        // recurrence engine "2026-09-15" as `now` — a day *late* this
+        // time — which can make an occurrence due later that day look
+        // already-passed and skip it a day early.
+        vi.stubEnv("TZ", "America/Los_Angeles");
+        vi.useFakeTimers({ toFake: ["Date"] });
+        vi.setSystemTime(new Date(2026, 8, 14, 23, 45, 0));
+
+        const store = createFakeStore();
+        await store.upsert([task({ id: "a", date: "2026-09-13", dateString: "every day" })]);
+        const { result } = await renderUseTasks(store);
+        await waitFor(() => expect(result.current.tasks).toHaveLength(1));
+
+        act(() => result.current.advanceRecurringTask("a"));
+
+        await waitFor(() =>
+          expect(store.advanceRecurring).toHaveBeenCalledWith(
+            "a",
+            expect.any(String),
+            "2026-09-14",
+          ),
+        );
+      });
+
+      it("postponeTask uses the local day for a Device east of UTC, before its own midnight has reached UTC", async () => {
+        vi.stubEnv("TZ", "Asia/Kolkata");
+        vi.useFakeTimers({ toFake: ["Date"] });
+        vi.setSystemTime(new Date(2026, 8, 15, 0, 16, 18));
+
+        const store = createFakeStore();
+        await store.upsert([task({ id: "a", date: "2020-01-01" })]);
+        const { result } = await renderUseTasks(store);
+        await waitFor(() => expect(result.current.tasks).toHaveLength(1));
+
+        act(() => result.current.postponeTask("a"));
+
+        await waitFor(() => expect(store.postpone).toHaveBeenCalledWith("a", "2026-09-15"));
+      });
+
+      it("postponeTask uses the local day for a Device west of UTC, once local time has already rolled into UTC's next day", async () => {
+        vi.stubEnv("TZ", "America/Los_Angeles");
+        vi.useFakeTimers({ toFake: ["Date"] });
+        vi.setSystemTime(new Date(2026, 8, 14, 23, 45, 0));
+
+        const store = createFakeStore();
+        await store.upsert([task({ id: "a", date: "2020-01-01" })]);
+        const { result } = await renderUseTasks(store);
+        await waitFor(() => expect(result.current.tasks).toHaveLength(1));
+
+        act(() => result.current.postponeTask("a"));
+
+        await waitFor(() => expect(store.postpone).toHaveBeenCalledWith("a", "2026-09-14"));
+      });
     });
 
     // Issue #227: the one door onto changing or clearing a Recurrence a

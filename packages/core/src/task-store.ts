@@ -376,10 +376,32 @@ export interface TaskStore {
    *
    * `completedAt` is a real timestamp, exactly like complete()'s own
    * parameter above — this is a completion event even though it doesn't
-   * set the `completedAt` column — and its first ten characters become
-   * the recurrence engine's floating "now," the identical technique
-   * ../task-views.ts's today() uses to derive a day-granular boundary
-   * from a full timestamp.
+   * set the `completedAt` column.
+   *
+   * `today` is the **floating calendar day** the recurrence engine treats
+   * as "now" — issue #290's fix. This method used to derive that day
+   * itself, by slicing `completedAt`'s first ten characters the same way
+   * ../task-views.ts's today() derives a day-granular boundary from a full
+   * timestamp; that only works when `completedAt` is already a floating
+   * string, and every real caller instead threads through
+   * `new Date().toISOString()`, a UTC instant. Slicing *that* names the
+   * UTC calendar day, not the Device's own — for any reader east of UTC,
+   * a window each night as wide as their own offset, the recurrence engine
+   * is handed a "now" a day early, and since it only ever returns a date
+   * strictly after "now" (see ../recurrence/recurrence.ts's own doc
+   * comment on skipping missed occurrences), a day-early "now" can return
+   * an occurrence that's already today — the Task completes and
+   * immediately reappears due today instead of moving forward. `today`
+   * exists so the caller — apps/web's use-tasks.ts, the one layer that
+   * knows the Device's own local time — resolves that day itself (via
+   * lib/local-day-key.ts's `localDayKey`, whose own doc comment names this
+   * exact trap) and hands this method an already-correct floating day,
+   * rather than this method guessing one out of an instant it has no way
+   * to interpret correctly. `completedAt` still supplies `updatedAt` (and
+   * `completedAt` itself, for the "ended" outcome below) — an instant is
+   * exactly the right shape for those columns, just the wrong one for
+   * recurrence arithmetic, which is why this method needs both rather than
+   * one implying the other.
    *
    * A bounded rule (a `starting`/`ending`/`for` clause whose window has
    * elapsed — ../recurrence/'s `{ kind: "ended" }` outcome) has no next
@@ -397,7 +419,7 @@ export interface TaskStore {
    * reachable, the same ordering setDeadline's own doc comment explains
    * for the identical reason. Clears `seq`.
    */
-  advanceRecurring(id: string, completedAt: string): Promise<void>;
+  advanceRecurring(id: string, completedAt: string, today: string): Promise<void>;
   /**
    * Ends a recurring Task's series and files it as an ordinary completed
    * Task — Shift+Click on a recurring task's checkbox ("Complete and
@@ -420,7 +442,19 @@ export interface TaskStore {
    * exactly why a Task with no `dateString` can use it too. `today` is a
    * floating date-or-datetime string in ../task-views.ts's today()'s own
    * encoding — only its first ten characters matter, the calendar day
-   * "tomorrow" is computed from (../recurrence/'s tomorrowOf). Preserves
+   * "tomorrow" is computed from (../recurrence/'s tomorrowOf).
+   *
+   * **`today` must already be a floating local day** (lib/local-day-key.ts's
+   * `localDayKey` on apps/web's side, not `new Date().toISOString()`) —
+   * issue #290. This parameter has always been named `today` rather than
+   * `now`, which was itself the tell: a caller that instead threaded a UTC
+   * instant through it was relying on ../recurrence/'s `tomorrowOf` (via
+   * `parseFloating`) silently slicing the first ten characters, which
+   * names the UTC calendar day rather than the Device's own. For any
+   * reader east of UTC that's a day early for a window each night as wide
+   * as their own offset — see advanceRecurring's own doc comment above for
+   * the full account of why a day-early "now" is a correctness bug here,
+   * not a cosmetic one. Preserves
    * whichever shape `date` already had: a timed `date` keeps its
    * time-of-day on the new day; an all-day `date` stays all-day. No-op
    * against a tombstone or a Task with no `date` at all — there is
