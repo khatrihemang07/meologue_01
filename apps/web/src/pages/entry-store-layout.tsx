@@ -19,6 +19,7 @@ import { open } from "@meologue/core";
 import { queryOptions, useQuery } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Outlet, useOutletContext } from "react-router";
+import type { MessageAction } from "@/components/shell";
 import { useComments } from "@/hooks/use-comments";
 import { useEvents } from "@/hooks/use-events";
 import { type AddFilterOverrides, useFilters } from "@/hooks/use-filters";
@@ -298,7 +299,7 @@ export interface EntryStoreOutletContext {
    * existing tests pin it, and Shell keeps deciding what an error region
    * looks like instead of accepting arbitrary JSX from whoever set it.
    */
-  messageAction?: { href: string; label: string };
+  messageAction?: MessageAction;
 }
 
 // This is the composition root for the sqlite-driver seam (ticket 24): each
@@ -347,7 +348,7 @@ export const entryStoreQueryOptions = queryOptions({
  */
 interface OpenFailure {
   message: string;
-  action?: { href: string; label: string };
+  action?: MessageAction;
 }
 
 /**
