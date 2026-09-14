@@ -30,7 +30,7 @@
  * in apps/e2e/tests/composer.spec.ts instead, against a real browser.
  */
 import type { Entry } from "@meologue/core";
-import { ArrowUp, Type, X } from "lucide-react";
+import { ArrowUp, X } from "lucide-react";
 import { EditorState, Selection, type Transaction } from "prosemirror-state";
 import { EditorView } from "prosemirror-view";
 import { type Ref, useCallback, useEffect, useImperativeHandle, useRef, useState } from "react";
@@ -327,21 +327,18 @@ export function Composer({
   const [slashMenu, setSlashMenu] = useState<SlashMenuState | null>(null);
   const [slashHighlightIndex, setSlashHighlightIndex] = useState(0);
 
-  // Issue #164's format toolbar. `formatBarVisible` is the Device setting
-  // (settings.ts) — off by default, flipped by the toggle button beside
-  // Send below — and `isFocused` mirrors the `EditorView`'s own DOM focus
-  // (the `handleDOMEvents` in the mount effect below), so the toolbar row
-  // is rendered only when BOTH are true: on while switched on, but still
-  // hidden the instant the Composer isn't the thing being typed into,
-  // per the ticket's own "appears only while the Composer has focus."
+  // Issue #164's format toolbar, reworked by the "toolbar means always"
+  // ticket: `formatBarVisible` is the Device setting (settings.ts) — on by
+  // default everywhere, flipped only from Settings now that the inline
+  // toggle beside Send is gone — and is the sole condition gating the
+  // toolbar row below. No DOM-focus tracking is involved: once switched on,
+  // the row stays on screen whether or not the Composer itself has focus.
   // `commandStates` is `computeCommandStates`'s own output, kept as state
   // (rather than recomputed inline in the render body) because it depends
   // on the live `EditorView`'s current `state`, which this component has
   // no other way to read during a render that wasn't triggered by one of
   // the three call sites that already set it.
   const formatBarVisible = useSettingsStore((state) => state.formatBarVisible);
-  const setFormatBarVisible = useSettingsStore((state) => state.setFormatBarVisible);
-  const [isFocused, setIsFocused] = useState(false);
   const [commandStates, setCommandStates] = useState<Record<string, CommandState>>({});
   // Entries matched by `searchEntries`, for whichever query last resolved
   // — kept separate from `picker` because it arrives asynchronously and a
@@ -793,26 +790,6 @@ export function Composer({
         }),
         handleKeyDown: (currentView, event) => handleKeyDownImplRef.current(currentView, event),
         dispatchTransaction: (tr) => dispatchTransactionImplRef.current(tr),
-        // Issue #164: `isFocused` is what gates the format toolbar's own
-        // visibility (alongside the `formatBarVisible` Device setting) —
-        // see this component's own state declarations above. `setState`
-        // setters from `useState` are referentially stable across renders
-        // (unlike `handleKeyDownImplRef`/`dispatchTransactionImplRef`'s
-        // "latest callback" indirection above), so these two can close over
-        // them directly with no staleness risk, even though the view
-        // itself is built exactly once. Both return `false`: ProseMirror
-        // still runs its own default focus/blur handling (there is none to
-        // suppress here), this is purely an observer.
-        handleDOMEvents: {
-          focus: () => {
-            setIsFocused(true);
-            return false;
-          },
-          blur: () => {
-            setIsFocused(false);
-            return false;
-          },
-        },
       },
     );
     viewRef.current = view;
@@ -924,7 +901,7 @@ export function Composer({
           </div>
         </div>
       )}
-      {formatBarVisible && isFocused && (
+      {formatBarVisible && (
         <ComposerToolbar commandStates={commandStates} onRun={runToolbarCommand} />
       )}
       <div className="mx-auto flex w-[97%] items-end gap-2 px-4 py-2.5 md:w-[85%]">
@@ -1043,39 +1020,6 @@ export function Composer({
               function instead. */}
           <div ref={hostRef} />
         </div>
-        <Button
-          type="button"
-          aria-label="Format toolbar"
-          // Reflects the persisted Device setting (settings.ts), not
-          // `isFocused` — this button's own pressed state is "is the
-          // toolbar switched ON," which stays true even the instant the
-          // Composer itself isn't focused and the row is therefore not
-          // currently on screen (this file's own `formatBarVisible &&
-          // isFocused` guard above). Deliberately no keyboard chord: the
-          // ticket calls this out explicitly — UpNote's own equivalent
-          // (Cmd+Shift+A) collides with Chrome's "search tabs," and this is
-          // a switch flipped once, not a per-Entry action worth a shortcut.
-          aria-pressed={formatBarVisible}
-          variant={formatBarVisible ? "secondary" : "outline"}
-          size="icon-lg"
-          // size-11 (44px) — same tap-target override as Send, immediately
-          // below, and for the identical reason (`icon-lg` alone is 36px).
-          className="size-11 shrink-0 self-end rounded-full"
-          // Same caret-preserving trick as the toolbar's own twelve buttons
-          // (composer-toolbar.tsx's own comment): without it, clicking this
-          // WHILE typing blurs the editor (an ordinary click moves DOM
-          // focus onto whatever was clicked), `isFocused` above flips to
-          // `false`, and the row this button just switched on would fail
-          // to appear until the reader clicked back into the field —
-          // switching the toolbar on would look like it did nothing.
-          onMouseDown={(event) => event.preventDefault()}
-          onClick={() => {
-            setFormatBarVisible(!formatBarVisible);
-            viewRef.current?.focus();
-          }}
-        >
-          <Type aria-hidden="true" className="size-5" />
-        </Button>
         <Button
           aria-label="Send"
           size="icon-lg"

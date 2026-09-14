@@ -54,15 +54,16 @@ test("the format bar shows by default with no stored preference, and the soft-br
 }) => {
   await page.goto("/composer");
   const editor = composerField(page);
-  const toggle = page.getByRole("button", { name: "Format toolbar" });
 
   // No `meologue.format-bar-visible` in this fresh context's localStorage —
-  // still visible the instant the Composer has focus, and the toggle
-  // itself already reads "on" (settings.ts's `defaultFormatBarVisible`).
-  await editor.click();
+  // visible before the Composer is even focused, on every device now
+  // (settings.ts's `defaultFormatBarVisible`), with no toggle left to read
+  // an "on" state from — Settings (composer-section.tsx) is the only
+  // switch left, and this file's own "leads with outdent" test above
+  // already covers the same default without touching it.
   const toolbar = page.getByRole("toolbar", { name: "Formatting" });
   await expect(toolbar).toBeVisible();
-  await expect(toggle).toHaveAttribute("aria-pressed", "true");
+  await editor.click();
 
   await editor.pressSequentially("alpha");
   await toolbar.getByRole("button", { name: "Insert line break" }).click();

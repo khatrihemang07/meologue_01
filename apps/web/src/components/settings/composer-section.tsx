@@ -32,7 +32,7 @@ export function ComposerSection() {
   // No `applyX` step, unlike `selectCompletedStyle` below: there is no
   // on-screen paint for a `localStorage` write to drive immediately from
   // here — `composer.tsx` reads this setting itself, the next time it
-  // renders, the same way it already applies the toggle button beside Send.
+  // renders this row.
   function toggleFormatBarVisible() {
     setStoredFormatBarVisible(!formatBarVisible);
   }
@@ -62,18 +62,18 @@ export function ComposerSection() {
       </h2>
       <DeviceGroup heading="On this device">
         {/*
-          Issue #164 built this setting; issue #202 promotes it here.
-          "Promoted" means "also findable in Settings," not "moved" — the
-          toggle button beside Send (composer.tsx) stays exactly where it
-          is, and this row is a second way to reach the identical switch,
-          not a replacement for the first.
+          Issue #164 built this setting; issue #202 promoted it here
+          alongside the toggle button that used to sit beside Send. The
+          "toolbar means always" rework removes that inline button
+          outright, so this row is now the ONLY switch for the setting —
+          not a second door to it, the sole one.
         */}
         <SettingsSection
           label="Format toolbar"
-          hint="Adds a row of formatting buttons — bold, italic, lists, Reference and more — above the input while writing an Entry. The toggle beside Send does the same thing and stays there."
+          hint="Adds a row of formatting buttons — bold, italic, lists, Reference and more — above the input, always visible while composing."
         >
           <SwitchRow
-            label="Show while writing"
+            label="Show the format toolbar"
             checked={formatBarVisible}
             onToggle={toggleFormatBarVisible}
           />

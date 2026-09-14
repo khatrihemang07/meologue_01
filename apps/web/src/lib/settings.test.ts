@@ -275,24 +275,20 @@ describe("settings store", () => {
     });
   });
 
-  // Issue #213: the default now follows `hoverCapable()` rather than a flat
-  // `false` (`defaultFormatBarVisible`'s own doc comment) — a phone has no
-  // other way to reach indent/outdent/soft-break at all. Each case here
-  // re-imports the module fresh (`vi.resetModules()`), the same pattern
+  // "Toolbar means always" rework: `defaultFormatBarVisible` is a flat
+  // `true` now (its own doc comment) — the toolbar is no longer
+  // focus-gated, so issue #213's device split (hidden by default on a
+  // hover-capable device, visible by default on a touch one) is retired;
+  // every device gets the same default. Each case here re-imports the
+  // module fresh (`vi.resetModules()`), the same pattern
   // `completedStyle`/`smartDatesEnabled` above use, because the default is
   // read once at store construction (module load), not per render.
   describe("format bar visibility", () => {
-    it("defaults to hidden on a hover-capable device with no stored preference", () => {
-      stubHoverCapable(true);
-
-      vi.resetModules();
-      return import("./settings").then((fresh) => {
-        expect(fresh.useSettingsStore.getState().formatBarVisible).toBe(false);
-      });
-    });
-
-    it("defaults to visible on a touch device with no stored preference", () => {
-      stubHoverCapable(false);
+    it.each([
+      ["hover-capable", true],
+      ["touch", false],
+    ])("defaults to visible on a %s device with no stored preference", (_label, hover) => {
+      stubHoverCapable(hover);
 
       vi.resetModules();
       return import("./settings").then((fresh) => {
@@ -300,9 +296,9 @@ describe("settings store", () => {
       });
     });
 
-    // The requirement this ticket exists to protect: a reader who explicitly
-    // turned the toolbar off must never have it turned back on just because
-    // they're on a touch device.
+    // The requirement a stored value still protects, unaffected by the flat
+    // default above: a reader who explicitly turned the toolbar off must
+    // never have it turned back on just because the default changed.
     it("respects a stored 'false' on a touch device rather than overriding it", () => {
       stubHoverCapable(false);
       localStorage.setItem("meologue.format-bar-visible", "false");

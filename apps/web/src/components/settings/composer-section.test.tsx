@@ -8,7 +8,7 @@ describe("ComposerSection", () => {
     localStorage.clear();
     useSettingsStore.setState({
       completedStyle: DEFAULT_COMPLETED_STYLE,
-      formatBarVisible: false,
+      formatBarVisible: true,
       smartDatesEnabled: true,
     });
     delete document.documentElement.dataset.completedStyle;
@@ -18,49 +18,50 @@ describe("ComposerSection", () => {
     delete document.documentElement.dataset.completedStyle;
   });
 
-  // Issue #202: promoted from the button beside Send (composer.tsx) — the
-  // button stays exactly where it is; this is a second way to reach the
-  // identical Device setting.
+  // "Toolbar means always" rework: Settings is now the ONLY switch for this
+  // Device setting — the inline toggle beside Send (composer.tsx) is gone
+  // — and the toolbar is on by default on every device, not just while the
+  // Composer happens to have focus.
   describe("format toolbar visibility", () => {
-    it("is off by default", () => {
+    it("is on by default", () => {
       render(<ComposerSection />);
 
-      expect(screen.getByRole("switch", { name: "Show while writing" })).toHaveAttribute(
-        "aria-checked",
-        "false",
-      );
-    });
-
-    it("turns on on click, and persists it", () => {
-      render(<ComposerSection />);
-
-      fireEvent.click(screen.getByRole("switch", { name: "Show while writing" }));
-
-      expect(screen.getByRole("switch", { name: "Show while writing" })).toHaveAttribute(
+      expect(screen.getByRole("switch", { name: "Show the format toolbar" })).toHaveAttribute(
         "aria-checked",
         "true",
       );
-      expect(useSettingsStore.getState().formatBarVisible).toBe(true);
-      expect(localStorage.getItem("meologue.format-bar-visible")).toBe("true");
     });
 
-    it("turns off again on a second click", () => {
-      useSettingsStore.setState({ formatBarVisible: true });
+    it("turns off on click, and persists it", () => {
       render(<ComposerSection />);
 
-      fireEvent.click(screen.getByRole("switch", { name: "Show while writing" }));
+      fireEvent.click(screen.getByRole("switch", { name: "Show the format toolbar" }));
 
-      expect(screen.getByRole("switch", { name: "Show while writing" })).toHaveAttribute(
+      expect(screen.getByRole("switch", { name: "Show the format toolbar" })).toHaveAttribute(
         "aria-checked",
         "false",
       );
       expect(useSettingsStore.getState().formatBarVisible).toBe(false);
+      expect(localStorage.getItem("meologue.format-bar-visible")).toBe("false");
+    });
+
+    it("turns on again on a second click", () => {
+      useSettingsStore.setState({ formatBarVisible: false });
+      render(<ComposerSection />);
+
+      fireEvent.click(screen.getByRole("switch", { name: "Show the format toolbar" }));
+
+      expect(screen.getByRole("switch", { name: "Show the format toolbar" })).toHaveAttribute(
+        "aria-checked",
+        "true",
+      );
+      expect(useSettingsStore.getState().formatBarVisible).toBe(true);
     });
 
     it("gives the switch the 44px touch target every other control on this page has", () => {
       render(<ComposerSection />);
 
-      expect(screen.getByRole("switch", { name: "Show while writing" })).toHaveClass("h-11");
+      expect(screen.getByRole("switch", { name: "Show the format toolbar" })).toHaveClass("h-11");
     });
   });
 

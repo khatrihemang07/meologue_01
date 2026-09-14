@@ -1035,7 +1035,7 @@ test("un-listing a flat 3-item list restores three separate plain blocks with te
   page,
 }) => {
   await page.goto("/composer");
-  await enableFormatToolbar(page);
+  await expectFormatToolbarVisible(page);
   const editor = composerField(page);
   const toolbar = page.getByRole("toolbar", { name: "Formatting" });
   await editor.click();
@@ -1063,7 +1063,7 @@ test("un-listing a 3-level nested selection flattens one level per press, not Up
   page,
 }) => {
   await page.goto("/composer");
-  await enableFormatToolbar(page);
+  await expectFormatToolbarVisible(page);
   const editor = composerField(page);
   const toolbar = page.getByRole("toolbar", { name: "Formatting" });
   await editor.click();
@@ -1117,7 +1117,7 @@ test("a block containing a soft break survives conversion to a bullet and back, 
   page,
 }) => {
   await page.goto("/composer");
-  await enableFormatToolbar(page);
+  await expectFormatToolbarVisible(page);
   const editor = composerField(page);
   const toolbar = page.getByRole("toolbar", { name: "Formatting" });
   await editor.click();
@@ -2034,68 +2034,65 @@ test("opens a Task from the Day block over the Composer, and Escape returns to i
 // the caret rather than merely looking right in one static screenshot.
 // ---------------------------------------------------------------------------
 
-/** Focuses the Composer and switches the format toolbar on — off by default (settings.ts), so most of the specs below need this first. */
-async function enableFormatToolbar(page: Page): Promise<void> {
-  const editor = composerField(page);
-  await editor.click();
-  await page.getByRole("button", { name: "Format toolbar" }).click();
+/**
+ * No-op now that the format toolbar is on by default (settings.ts) and
+ * Settings (composer-section.tsx) is its only switch — the inline toggle
+ * button beside Send this used to click is gone. Kept, rather than deleted
+ * along with every call site below, purely so those sites don't all need
+ * touching; it just waits for the toolbar row, already visible by default,
+ * to render.
+ */
+async function expectFormatToolbarVisible(page: Page): Promise<void> {
+  await expect(page.getByRole("toolbar", { name: "Formatting" })).toBeVisible();
 }
 
-test("the format toolbar is off by default, shows only while the Composer has focus once switched on, and the toggle survives a reload", async ({
+test("the format toolbar is on by default, stays visible regardless of Composer focus, and the Settings switch persists across a reload", async ({
   page,
 }) => {
   await page.goto("/composer");
   const editor = composerField(page);
   const toolbar = page.getByRole("toolbar", { name: "Formatting" });
-  const toggle = page.getByRole("button", { name: "Format toolbar" });
 
-  // Off by default — UpNote's own equivalent also defaults off (settings.ts's
-  // own comment) — so focusing the field alone shows nothing.
-  await editor.click();
-  await expect(toolbar).toHaveCount(0);
-  await expect(toggle).toHaveAttribute("aria-pressed", "false");
-
-  // Switching it on shows the row immediately, without blurring the editor
-  // — the toggle button gets the same caret-preserving treatment as the
-  // toolbar's own twelve buttons (composer.tsx's own comment on it), which
-  // is what makes "immediately" true rather than "after clicking back in".
-  await toggle.click();
-  await expect(toggle).toHaveAttribute("aria-pressed", "true");
+  // On by default (settings.ts) — visible before the Composer has ever
+  // been focused, unlike the pre-rework "appears only while the Composer
+  // has focus" behaviour.
   await expect(toolbar).toBeVisible();
-  await expect(editor).toBeFocused();
 
-  // Blurring the Composer hides the row again — it shows only WHILE the
-  // Composer has focus, independent of the setting itself, which is still
-  // on underneath (the toggle's own `aria-pressed` doesn't move here).
-  // Send needs real content to blur INTO, first: composer.tsx disables it
-  // whenever the field is empty (`disabled={disabled || isEmpty}`), and a
-  // disabled button is not focusable at all — `.focus()` on it is a no-op,
-  // which left this step never actually moving focus anywhere and the
-  // toolbar never actually being tested for hiding.
+  // Focusing the field, typing, and moving focus to Send all leave it
+  // exactly as visible — `formatBarVisible` alone gates the row now
+  // (composer.tsx), with no DOM-focus tracking involved at all. Send needs
+  // real content to focus, first: composer.tsx disables it whenever the
+  // field is empty (`disabled={disabled || isEmpty}`), and a disabled
+  // button is not focusable — `.focus()` on it is a no-op.
+  await editor.click();
   await editor.pressSequentially("plain prose, no list here");
   await page.getByRole("button", { name: "Send" }).focus();
-  await expect(toolbar).toHaveCount(0);
-  await expect(toggle).toHaveAttribute("aria-pressed", "true");
+  await expect(toolbar).toBeVisible();
   await editor.click();
   await expect(toolbar).toBeVisible();
 
   // The setting itself is a Device setting (settings.ts), not component
-  // state — it survives a reload, the same way Accent/text size do
-  // (settings.spec.ts's own "persisted the same way theme is" comment).
+  // state, and Settings is the only place left to flip it — it survives a
+  // reload, the same way Accent/text size do (settings.spec.ts's own
+  // "persisted the same way theme is" comment).
+  await page.goto("/settings");
+  const settingsSwitch = page.getByRole("switch", { name: "Show the format toolbar" });
+  await expect(settingsSwitch).toHaveAttribute("aria-checked", "true");
+  await settingsSwitch.click();
+  await expect(settingsSwitch).toHaveAttribute("aria-checked", "false");
+
+  await page.goto("/composer");
+  await expect(page.getByRole("toolbar", { name: "Formatting" })).toHaveCount(0);
+
   await page.reload();
-  await expect(page.getByRole("button", { name: "Format toolbar" })).toHaveAttribute(
-    "aria-pressed",
-    "true",
-  );
-  await composerField(page).click();
-  await expect(page.getByRole("toolbar", { name: "Formatting" })).toBeVisible();
+  await expect(page.getByRole("toolbar", { name: "Formatting" })).toHaveCount(0);
 });
 
 test("the bold, italic, strikethrough and code toolbar buttons apply their marks, reflect the caret's own pressed state, and never blur the editor", async ({
   page,
 }) => {
   await page.goto("/composer");
-  await enableFormatToolbar(page);
+  await expectFormatToolbarVisible(page);
   const editor = composerField(page);
   const toolbar = page.getByRole("toolbar", { name: "Formatting" });
   await editor.pressSequentially("word");
@@ -2138,7 +2135,7 @@ test("the bulletList toolbar button wraps the caret's paragraph in a bullet list
   page,
 }) => {
   await page.goto("/composer");
-  await enableFormatToolbar(page);
+  await expectFormatToolbarVisible(page);
   const editor = composerField(page);
   const toolbar = page.getByRole("toolbar", { name: "Formatting" });
   await editor.pressSequentially("buy milk");
@@ -2161,7 +2158,7 @@ test("the orderedList toolbar button wraps the caret's paragraph in a numbered l
   page,
 }) => {
   await page.goto("/composer");
-  await enableFormatToolbar(page);
+  await expectFormatToolbarVisible(page);
   const editor = composerField(page);
   const toolbar = page.getByRole("toolbar", { name: "Formatting" });
   await editor.pressSequentially("buy milk");
@@ -2177,7 +2174,7 @@ test("the checklist toolbar button wraps the caret's paragraph as a task, with a
   page,
 }) => {
   await page.goto("/composer");
-  await enableFormatToolbar(page);
+  await expectFormatToolbarVisible(page);
   const editor = composerField(page);
   const toolbar = page.getByRole("toolbar", { name: "Formatting" });
   await editor.pressSequentially("buy milk");
@@ -2198,7 +2195,7 @@ test("the outdent and indent toolbar buttons lift and sink a list item, and thei
   page,
 }) => {
   await page.goto("/composer");
-  await enableFormatToolbar(page);
+  await expectFormatToolbarVisible(page);
   const editor = composerField(page);
   const toolbar = page.getByRole("toolbar", { name: "Formatting" });
   await editor.pressSequentially("- first");
@@ -2226,7 +2223,7 @@ test("the Reference toolbar button inserts the same `[[` trigger a hand-typed on
   page,
 }) => {
   await page.goto("/composer");
-  await enableFormatToolbar(page);
+  await expectFormatToolbarVisible(page);
   const editor = composerField(page);
   const toolbar = page.getByRole("toolbar", { name: "Formatting" });
   await editor.pressSequentially("see ");
@@ -2241,7 +2238,7 @@ test("the undo and redo toolbar buttons revert and restore an edit, and are disa
   page,
 }) => {
   await page.goto("/composer");
-  await enableFormatToolbar(page);
+  await expectFormatToolbarVisible(page);
   const editor = composerField(page);
   const toolbar = page.getByRole("toolbar", { name: "Formatting" });
   const undoButton = toolbar.getByRole("button", { name: "Undo" });
@@ -2314,7 +2311,7 @@ test("Mod-Shift-Enter toggles a checkbox done from the keyboard, and never sends
 test("the submit chord still sends, even with the format toolbar switched on", async ({ page }) => {
   const body = uniqueEntryBody("composer-toolbar-submit-chord");
   await page.goto("/composer");
-  await enableFormatToolbar(page);
+  await expectFormatToolbarVisible(page);
   const editor = composerField(page);
   await editor.pressSequentially(body);
   await editor.press("ControlOrMeta+Enter");

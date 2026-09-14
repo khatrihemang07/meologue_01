@@ -29,7 +29,6 @@
  */
 import type { ServerCapabilities } from "@meologue/core";
 import { create } from "zustand";
-import { hoverCapable } from "@/lib/pointer";
 import { checkServerUrl } from "@/lib/server-check";
 
 const THEME_KEY = "meologue.theme";
@@ -341,33 +340,30 @@ function writeStoredCompletedStyle(style: CompletedStyleId): void {
 /**
  * Whether the Composer's format toolbar (issue #164 — bold/italic/code, the
  * three list toggles, indent/outdent, Reference, undo/redo, in a row above
- * the input, shown only while the Composer has focus) is switched on at
- * all — a Device-local view preference, exactly like `AccentId`/
- * `TextSizeId`/`CompletedStyleId` above: it is a property of how this
- * Device draws the Composer's own chrome, never Synced, and never entering
- * the glossary for the same reason those three don't.
+ * the input) is switched on at all — a Device-local view preference,
+ * exactly like `AccentId`/`TextSizeId`/`CompletedStyleId` above: it is a
+ * property of how this Device draws the Composer's own chrome, never
+ * Synced, and never entering the glossary for the same reason those three
+ * don't.
  *
- * Issue #213: the default now follows `hoverCapable()` rather than being a
- * flat `false`. UpNote's own equivalent (`FORMAT_BAR_VISIBLE` in its
- * shipped bundle, verified the same way `DEFAULT_COMPLETED_STYLE` above
- * was) defaults to `false` on a pointer device — a toolbar most Sends
- * never touch there should not cost every reader a permanent row of
- * vertical space in a footer that already grows to eight lines and claims
- * the bottom safe area (composer.tsx's own layout comments) — but on a
- * touch device the toolbar carries indent, outdent and the soft break,
- * which a phone's keyboard (there isn't one) has no other way to reach at
- * all (meologue-parity-docs/upnote-android-detail.md), so hiding it there by
- * default would hide the only path to those three actions until the
- * reader happens to find the toggle beside Send.
+ * The "toolbar means always" rework drops the focus gate composer.tsx used
+ * to pair this with — the row now stays on screen for as long as this
+ * setting is on, not just while the Composer happens to have focus — and
+ * with it the device-dependent `hoverCapable()` default issue #213 added:
+ * a toolbar that only ever showed up while typing was worth hiding by
+ * default on a pointer device, but an always-visible one is not, so this
+ * is a flat `true` on every Device, touch or hover, desktop included.
+ * `readStoredFormatBarVisible` below still applies: a reader who
+ * explicitly switched it off keeps it off regardless of this default.
  *
- * `defaultFormatBarVisible` is a function, not a plain constant, precisely
- * because that default now depends on the device rather than being one
- * fixed value — every other reader of "the default" (this module's own
- * store construction below, and `readStoredFormatBarVisible`) calls it
- * rather than assuming a single boolean.
+ * `defaultFormatBarVisible` stays a function rather than a plain constant
+ * — every other reader of "the default" (this module's own store
+ * construction below, and `readStoredFormatBarVisible`) calls it rather
+ * than assuming a single boolean, and a future default is free to depend
+ * on something again without changing those call sites.
  */
 export function defaultFormatBarVisible(): boolean {
-  return !hoverCapable();
+  return true;
 }
 
 /**
