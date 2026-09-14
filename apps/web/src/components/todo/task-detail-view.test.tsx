@@ -1322,7 +1322,7 @@ describe("TaskDetailView", () => {
         ],
       });
 
-      expect(screen.getByText("Comments (2)")).toBeInTheDocument();
+      expect(screen.getByText("Comments 2")).toBeInTheDocument();
       expect(screen.getByText("reply", { selector: "em" })).toBeInTheDocument();
       expect(screen.getByText("second reply")).toBeInTheDocument();
     });
@@ -1345,23 +1345,35 @@ describe("TaskDetailView", () => {
       expect(link).toHaveAttribute("rel", "noopener noreferrer");
     });
 
-    it("the composer is always visible, and submitting adds a Comment and clears the field", () => {
+    /**
+     * CMT-11: the composer is collapsed at rest, so every test below that
+     * wants the field has to open it first. `openComposer` returns the
+     * field so the call sites stay one line.
+     */
+    function openComposer() {
+      fireEvent.click(screen.getByRole("button", { name: "Open comment editor" }));
+      return screen.getByLabelText("Add a comment");
+    }
+
+    it("submitting adds a Comment, clears the field, and leaves the composer open for the next one", () => {
       const onAddComment = vi.fn();
       renderView({ comments: [], onAddComment });
 
-      const field = screen.getByLabelText("Add a comment");
+      const field = openComposer();
       fireEvent.change(field, { target: { value: "  a new comment  " } });
       fireEvent.click(screen.getByRole("button", { name: "Comment" }));
 
       expect(onAddComment).toHaveBeenCalledWith("a new comment");
       expect(field).toHaveValue("");
+      // Todoist does not re-collapse after a submit — driven and read back.
+      expect(screen.getByLabelText("Add a comment")).toBeInTheDocument();
     });
 
     it("CMT-01: Ctrl/Cmd+Enter submits — plain Enter and Shift+Enter do not (the opposite of the task composer)", () => {
       const onAddComment = vi.fn();
       renderView({ comments: [], onAddComment });
 
-      const field = screen.getByLabelText("Add a comment");
+      const field = openComposer();
       fireEvent.change(field, { target: { value: "typed" } });
       fireEvent.keyDown(field, { key: "Enter" });
       expect(onAddComment).not.toHaveBeenCalled();
@@ -1377,18 +1389,22 @@ describe("TaskDetailView", () => {
       const onAddComment = vi.fn();
       renderView({ comments: [], onAddComment });
 
-      const field = screen.getByLabelText("Add a comment");
+      const field = openComposer();
       fireEvent.change(field, { target: { value: "typed" } });
       fireEvent.keyDown(field, { key: "Enter", metaKey: true });
 
       expect(onAddComment).toHaveBeenCalledWith("typed");
     });
 
-    it("ignores a blank comment", () => {
+    it("ignores a blank comment — the submit is never disabled, so the guard is in the handler", () => {
       const onAddComment = vi.fn();
       renderView({ comments: [], onAddComment });
 
-      fireEvent.click(screen.getByRole("button", { name: "Comment" }));
+      openComposer();
+      const submit = screen.getByRole("button", { name: "Comment" });
+      // Measured on Todoist in both states: never `disabled`, never greyed.
+      expect(submit).not.toBeDisabled();
+      fireEvent.click(submit);
 
       expect(onAddComment).not.toHaveBeenCalled();
     });
@@ -1533,6 +1549,104 @@ describe("TaskDetailView", () => {
       expect(onRemoveComment).not.toHaveBeenCalled();
     });
 
+    describe("CMT-11 — the composer is collapsed at rest", () => {
+      it("shows a 'Comment' bar and no field until it is opened", () => {
+        renderView({ comments: [] });
+
+        const bar = screen.getByRole("button", { name: "Open comment editor" });
+        expect(bar).toHaveTextContent("Comment");
+        expect(screen.queryByLabelText("Add a comment")).not.toBeInTheDocument();
+      });
+
+      it("opens on click, with focus landing directly in the field", () => {
+        renderView({ comments: [] });
+
+        const field = openComposer();
+
+        expect(field).toBeInTheDocument();
+        expect(document.activeElement).toBe(field);
+      });
+
+      it("opens from the keyboard — the bar is a real button, so Enter activates it", () => {
+        renderView({ comments: [] });
+
+        const bar = screen.getByRole("button", { name: "Open comment editor" });
+        bar.focus();
+        expect(document.activeElement).toBe(bar);
+        fireEvent.click(bar); // what Enter on a focused <button> dispatches
+
+        expect(document.activeElement).toBe(screen.getByLabelText("Add a comment"));
+      });
+
+      it("Escape on an EMPTY field collapses it and returns focus to the bar", () => {
+        renderView({ comments: [] });
+
+        const field = openComposer();
+        field.focus();
+        fireEvent.keyDown(window, { key: "Escape" });
+
+        expect(screen.queryByLabelText("Add a comment")).not.toBeInTheDocument();
+        expect(screen.getByRole("button", { name: "Open comment editor" })).toBeInTheDocument();
+      });
+
+      it("Escape with TEXT only blurs — it does not collapse, ask, or discard", () => {
+        const onAddComment = vi.fn();
+        renderView({ comments: [], onAddComment });
+
+        const field = openComposer();
+        fireEvent.change(field, { target: { value: "half-written" } });
+        field.focus();
+        fireEvent.keyDown(window, { key: "Escape" });
+
+        // Still open, still holding the draft, nothing asked.
+        expect(screen.getByLabelText("Add a comment")).toHaveValue("half-written");
+        expect(document.activeElement).not.toBe(field);
+        expect(screen.queryByText(/discard/i)).not.toBeInTheDocument();
+      });
+
+      it("a SECOND Escape is left for the dialog — the composer stops claiming the key once focus has left the field", () => {
+        const onClose = vi.fn();
+        renderView({ comments: [], onClose });
+
+        const field = openComposer();
+        fireEvent.change(field, { target: { value: "half-written" } });
+        field.focus();
+        fireEvent.keyDown(window, { key: "Escape" }); // stage one: blur only
+
+        // Stage two: focus is no longer in the field, so this listener must
+        // not stop the event — that is the whole mechanism, and it is what
+        // lets Radix close the Task modal on the next press.
+        // Dispatched on `body`, not on `window`: an event fired AT `window`
+        // only runs `window`'s own listeners, so it could never prove
+        // anything about what reaches `document`. Firing from the element
+        // focus actually sits on is what the browser really does, and it
+        // travels window -> document -> target the same way Radix sees it.
+        let reachedDocument = false;
+        document.addEventListener(
+          "keydown",
+          () => {
+            reachedDocument = true;
+          },
+          { capture: true },
+        );
+        fireEvent.keyDown(document.body, { key: "Escape" });
+
+        expect(reachedDocument).toBe(true);
+      });
+
+      it("Cancel is a different path from Escape: it collapses AND discards on the first click", () => {
+        renderView({ comments: [] });
+
+        const field = openComposer();
+        fireEvent.change(field, { target: { value: "half-written" } });
+        fireEvent.click(screen.getByRole("button", { name: "Close comment editor" }));
+
+        expect(screen.queryByLabelText("Add a comment")).not.toBeInTheDocument();
+        // Reopening shows an empty field — Cancel truly discards.
+        expect(openComposer()).toHaveValue("");
+      });
+    });
+
     describe("CMT-10 — the Comments header collapses", () => {
       it("is a real disclosure, open by default, and collapses the thread", () => {
         renderView({ comments: [comment({ id: "c1", text: "first" })] });
@@ -1541,7 +1655,7 @@ describe("TaskDetailView", () => {
         // a `<details>` does take the role, but testing-library does not
         // compute its accessible name from the `<summary>`, so the named
         // query finds nothing. Checked directly before writing this.
-        const summary = screen.getByText("Comments (1)");
+        const summary = screen.getByText("Comments 1");
         const disclosure = summary.closest("details");
         expect(disclosure).toHaveAttribute("open");
         expect(screen.getByText("first")).toBeInTheDocument();
@@ -1551,23 +1665,31 @@ describe("TaskDetailView", () => {
         expect(disclosure).not.toHaveAttribute("open");
       });
 
-      it("counts the Comments in its summary", () => {
+      it("counts the Comments in its summary, bare and always plural, as Todoist does", () => {
         renderView({
           comments: [comment({ id: "c1" }), comment({ id: "c2" }), comment({ id: "c3" })],
         });
 
-        expect(screen.getByText("Comments (3)")).toBeInTheDocument();
+        expect(screen.getByText("Comments 3")).toBeInTheDocument();
+        expect(screen.queryByText(/Comments \(/)).not.toBeInTheDocument();
+      });
+
+      it("does not singularise at one Comment — Todoist reads 'Comments 1', never 'Comment 1'", () => {
+        renderView({ comments: [comment({ id: "c1" })] });
+
+        expect(screen.getByText("Comments 1")).toBeInTheDocument();
       });
 
       it("keeps the pinned composer reachable while the thread is collapsed", () => {
         renderView({ comments: [comment({ id: "c1", text: "first" })] });
 
-        fireEvent.click(screen.getByText("Comments (1)"));
+        fireEvent.click(screen.getByText("Comments 1"));
 
         // The composer is the column's footer, a sibling of the thread
         // rather than a member of it — collapsing the thread must not take
-        // the way to add a Comment with it.
-        expect(screen.getByLabelText("Add a comment")).toBeInTheDocument();
+        // the way to add a Comment with it. At rest that way in is the
+        // collapsed bar (CMT-11), not the field itself.
+        expect(screen.getByRole("button", { name: "Open comment editor" })).toBeInTheDocument();
       });
     });
 

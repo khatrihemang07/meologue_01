@@ -562,21 +562,63 @@ function CommentRow({
 }
 
 /**
- * The always-visible "Add a comment" composer (issue #180's own
- * reference-behaviour note — never hidden behind an icon).
+ * **CMT-11: the composer is collapsed at rest** — a bar reading "Comment"
+ * that opens into the real field on click, as Todoist's is.
+ *
+ * **This reverses issue #180's own reference-behaviour note** ("the
+ * always-visible composer — never hidden behind an icon"), which is why
+ * that sentence is gone from this comment rather than quietly contradicted
+ * by the code beneath it. The owner took that decision on 2026-09-14 after
+ * Todoist's own collapsed bar was measured; the reversal is argued in this
+ * change's own commit message. Nothing here is hidden behind an *icon* in
+ * the end — the bar carries the word "Comment" and is keyboard-reachable,
+ * which was #180's actual concern.
+ *
+ * Every behaviour below was driven on live Todoist and read back
+ * (`comment-behaviour-todoist-2026-09-14.json`), not reasoned about:
+ *
+ * - **Opening**: a click on the bar, or Tab to it and Enter. Focus lands
+ *   *directly* in the field on both paths — proved there by object
+ *   identity, not by matching a label.
+ * - **Escape is two-stage, and this is the counter-intuitive part.** With
+ *   the field EMPTY, one Escape collapses the composer silently and returns
+ *   focus to the bar. With TEXT in it, Escape does **not** collapse and
+ *   does **not** ask anything — it only blurs. A *second* Escape, now that
+ *   focus has left the field, closes the whole Task modal, because nothing
+ *   inside claimed the key any more. So the listener below stays out of the
+ *   way the moment focus is not in the field: that is the entire mechanism,
+ *   and it falls out of the same `window`-capture trick `CommentRow` above
+ *   already documents at length (Radix reads Escape on `document` in the
+ *   capture phase, so `window` is the only earlier seat).
+ * - **Cancel is a genuinely different path**, not a faster Escape: one
+ *   click collapses immediately AND discards the text.
+ * - **Submitting does not re-collapse.** The field clears and stays open
+ *   for the next Comment.
+ * - **An outside click does not collapse it** — Todoist has no
+ *   single-open-editor rule; its description editor can be open at once.
+ * - **The submit button is never disabled and never greyed**, in either
+ *   state, and clicking it while empty simply does nothing.
  *
  * **CMT-01: Ctrl/Cmd+Enter or the "Comment" button submits — Enter and
  * Shift+Enter both insert a newline.** This is the deliberate *opposite*
  * of the title field's own Enter-commits convention above
  * (`lifecycle.md`'s own header comment: "Two editors, two rules — do not
  * unify them"), so this composer's own `onKeyDown` only ever intercepts
- * the Mod+Enter chord, never plain Enter. Submitting clears the field for
- * the next Comment rather than leaving what was just sent sitting in the
- * box.
+ * the Mod+Enter chord, never plain Enter.
+ *
+ * Two of Todoist's own details are deliberately NOT reproduced, recorded
+ * here so their absence reads as a decision rather than an oversight. Its
+ * collapsed bar docks a paperclip that both opens the composer and raises a
+ * file chooser — meologue has no attachments. And a draft abandoned by the
+ * Escape cascade *survives* reopening the Task there; meologue's dialog
+ * unmounts with the draft, and persisting it would need a store this app
+ * does not have.
  */
 function CommentComposer({ onSubmit }: { onSubmit: (text: string) => void }) {
+  const [expanded, setExpanded] = useState(false);
   const [text, setText] = useState("");
   const fieldRef = useRef<HTMLTextAreaElement>(null);
+  const barRef = useRef<HTMLButtonElement>(null);
   // Measured on the device before this: the field stayed 37.4px tall whether it
   // was empty, holding ~500 characters, or holding ~2000, while `scrollHeight`
   // for those same contents read 276px and 1016px. `resize: none` (this app's
@@ -585,13 +627,89 @@ function CommentComposer({ onSubmit }: { onSubmit: (text: string) => void }) {
   // about a twenty-seventh of itself.
   useAutoGrowTextarea(fieldRef, text, { maxHeight: COMMENT_FIELD_MAX_HEIGHT });
 
+  // Focus lands directly in the field on BOTH opening paths (click and
+  // Tab-then-Enter) — Todoist's own, proved there by object identity.
+  // Keyed to `expanded` so it fires on the transition, never on a keystroke.
+  useEffect(() => {
+    if (expanded) {
+      fieldRef.current?.focus();
+    }
+  }, [expanded]);
+
+  /** Cancel's path, and Escape's when the field is empty: close the editor, keep nothing. */
+  function collapse() {
+    setText("");
+    setExpanded(false);
+  }
+
+  // The `window` capture-phase seat, for exactly the reason `CommentRow`'s
+  // own header comment above sets out in full: Radix's `DismissableLayer`
+  // reads Escape on `document` in the CAPTURE phase, so by the time a
+  // handler on this textarea could call `stopPropagation`, the dialog has
+  // already decided to close. `window` is the one node earlier than that.
+  //
+  // The two-stage mechanism is the `activeElement` check. While focus is IN
+  // the field this claims the key — collapsing if empty, blurring if not.
+  // The moment focus is anywhere else, it returns without claiming, and the
+  // keystroke reaches Radix and closes the Task modal. That is precisely
+  // what live Todoist does, and it needs no second listener to express.
+  // The same "latest callback" ref pattern `CommentRow` above already uses,
+  // and for the identical reason: naming `collapse` in the dependency list
+  // would re-attach this listener on every keystroke, because it is a fresh
+  // function each render. The text goes through a ref too, so the listener
+  // reads what is in the field NOW rather than what was there when it was
+  // attached.
+  const stateRef = useRef({ text, collapse });
+  stateRef.current = { text, collapse };
+  useEffect(() => {
+    if (!expanded) {
+      return;
+    }
+    function handleWindowEscape(event: KeyboardEvent) {
+      if (event.key !== "Escape" || document.activeElement !== fieldRef.current) {
+        return;
+      }
+      event.stopPropagation();
+      if (stateRef.current.text === "") {
+        stateRef.current.collapse();
+        // Focus returns to the bar the composer just collapsed into, so a
+        // keyboard reader is left where they started rather than at the
+        // top of the document.
+        window.requestAnimationFrame(() => barRef.current?.focus());
+        return;
+      }
+      // Text present: blur only. No collapse, no confirmation, no discard —
+      // the draft stays exactly where it was, and the NEXT Escape closes
+      // the Task modal because this listener no longer claims it.
+      fieldRef.current?.blur();
+    }
+    window.addEventListener("keydown", handleWindowEscape, { capture: true });
+    return () => window.removeEventListener("keydown", handleWindowEscape, { capture: true });
+  }, [expanded]);
+
   function submit() {
     const trimmed = text.trim();
     if (trimmed === "") {
       return;
     }
     onSubmit(trimmed);
+    // Cleared but NOT collapsed — Todoist leaves the form open and empty,
+    // ready for the next Comment.
     setText("");
+  }
+
+  if (!expanded) {
+    return (
+      <button
+        ref={barRef}
+        type="button"
+        aria-label="Open comment editor"
+        onClick={() => setExpanded(true)}
+        className="w-full rounded-md border border-border px-2 py-2 text-left text-muted-foreground text-sm transition hover:bg-muted"
+      >
+        Comment
+      </button>
+    );
   }
 
   return (
@@ -600,7 +718,7 @@ function CommentComposer({ onSubmit }: { onSubmit: (text: string) => void }) {
         event.preventDefault();
         submit();
       }}
-      className="flex items-end gap-2"
+      className="flex flex-col gap-2"
     >
       <textarea
         ref={fieldRef}
@@ -617,12 +735,27 @@ function CommentComposer({ onSubmit }: { onSubmit: (text: string) => void }) {
         rows={1}
         className="min-w-0 flex-1 resize-none rounded-md border border-border bg-transparent p-2 text-sm outline-none"
       />
-      <button
-        type="submit"
-        className="shrink-0 rounded-md border border-border px-2.5 py-1.5 text-sm transition hover:bg-muted"
-      >
-        Comment
-      </button>
+      {/* Todoist's own labels and order — Cancel left of the submit, both
+          real accessible names from their visible text. The submit stays
+          enabled and un-greyed even with an empty field, measured in both
+          states; `submit()` above is what makes clicking it then a no-op,
+          rather than a `disabled` attribute the reference does not have. */}
+      <div className="flex justify-end gap-2">
+        <button
+          type="button"
+          aria-label="Close comment editor"
+          onClick={collapse}
+          className="shrink-0 rounded-md border border-border px-2.5 py-1.5 text-sm transition hover:bg-muted"
+        >
+          Cancel
+        </button>
+        <button
+          type="submit"
+          className="shrink-0 rounded-md border border-border px-2.5 py-1.5 text-sm transition hover:bg-muted"
+        >
+          Comment
+        </button>
+      </div>
     </form>
   );
 }
@@ -1597,8 +1730,26 @@ function TaskDetailBody({
               needs. */}
             {comments.length > 0 && (
               <details open>
+                {/* `Comments 3`, bare — NOT `Comments (3)`. Read back from
+                    live Todoist at one, two and three comments
+                    (`comment-behaviour-todoist-2026-09-14.json`'s
+                    `commentsHeader.exactRenderedText`), which also never
+                    singularises: it stays "Comments 1", not "Comment 1".
+                    meologue's own parenthesised convention survives
+                    everywhere it has no reference to match — `Activity (5)`
+                    right below keeps it, because Todoist's detail modal has
+                    no Activity section at all.
+
+                    Structurally this is a native `<details>` where Todoist
+                    uses a `<button aria-expanded aria-controls>` over a
+                    panel. Same behaviour on every axis that was driven —
+                    toggles, starts expanded, and the state resets when the
+                    Task is reopened — so this keeps the native element for
+                    the same reason NAV-04 and DET-03 are ratified
+                    divergences: where meologue can be the more accessible
+                    side at equal behaviour, it is. Recorded, not silent. */}
                 <summary className="cursor-pointer select-none text-muted-foreground text-xs">
-                  Comments ({comments.length})
+                  Comments {comments.length}
                 </summary>
                 <ul className="mt-2 flex flex-col gap-1">
                   {comments.map((comment) => (
