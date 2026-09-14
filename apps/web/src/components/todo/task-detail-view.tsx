@@ -312,10 +312,19 @@ const AttributeRow = forwardRef<
 // How tall either comment field may grow before it scrolls inside itself.
 // Roughly ten lines at this surface's own 14px/20px type — enough that an
 // ordinary long comment is read and edited in full, short enough that the
-// field never pushes the Comment/Cancel buttons off a laptop screen. A cap
-// rather than unbounded growth because this composer sits inside the detail
-// dialog's single shared scroll container (it is not a pinned chat input), so
-// an unbounded field would walk its own submit buttons out of view.
+// field never pushes the Comment/Cancel buttons off a laptop screen.
+//
+// The cap is also exactly Todoist's, measured rather than chosen to match:
+// its own composer's computed `max-height` reads 200px, growing freely
+// below that and scrolling internally above it
+// (`detail-modal-todoist-2026-09-14.json`'s `longCommentBehavior`).
+//
+// The parenthetical that used to sit here — "it is not a pinned chat input"
+// — stopped being true the moment the composer was pinned beneath the
+// thread, and is dropped rather than left to mislead. The reason for a cap
+// survives the change: the EDIT field still sits inside the scrolling
+// thread, where an unbounded field would walk its own Cancel/Update buttons
+// out of view.
 const COMMENT_FIELD_MAX_HEIGHT = 200;
 
 /**
