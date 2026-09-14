@@ -1105,7 +1105,23 @@ function TaskDetailBody({
         )}
       </header>
 
-      <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto p-3 sm:flex-row">
+      {/* No longer the scroll container itself. Todoist scrolls its LEFT
+          COLUMN and pins the comment composer beneath it as a sibling
+          outside that region — driven live 2026-09-14
+          (`detail-modal-todoist-2026-09-14.json`, `comments.scrollBehavior`):
+          setting the container's `scrollTop` to 300 moved a posted comment
+          by exactly 300px while the composer's form stayed at y=522. Here,
+          one shared scroller over both columns meant the composer scrolled
+          away the moment a thread got long — precisely when it is wanted.
+
+          The split is `sm:` and up only. Below that breakpoint the two
+          columns stack (`sm:flex-row`), and two independently scrolling
+          regions stacked on a phone is worse than one — so narrow keeps the
+          single shared scroller it always had, and the composer scrolls with
+          the thread there. Todoist's own reference for this is its desktop
+          two-column modal; nothing in the record says what it does when the
+          columns stack. */}
+      <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto p-3 sm:flex-row sm:overflow-hidden">
         {/* DET-10: this container's own `gap-3` spacing is real empty
             space between the title row and the Description block below —
             belonging to neither child (live audit's own
@@ -1132,137 +1148,153 @@ function TaskDetailBody({
             interactive role would misrepresent it as a control a reader
             might mean to activate rather than the plain layout container
             it is. */}
-        {/* biome-ignore lint/a11y/noStaticElementInteractions: pointer-only progressive enhancement on a plain layout container — see the comment above. */}
-        {/* biome-ignore lint/a11y/useKeyWithClickEvents: no keyboard equivalent of clicking empty space exists to pair this with — see the comment above. */}
-        <div
-          data-testid="task-detail-edit-column"
-          ref={editColumnRef}
-          onClick={(event) => {
-            if (editing && event.target === event.currentTarget) {
-              contentRef.current?.focus();
-            }
-          }}
-          className="flex min-w-0 flex-1 flex-col gap-3"
-        >
-          {/* The title (issue #225's display/edit split — `editingTitle`'s
+        {/* `min-h-0 flex-1` are `sm:`-only, matching the inner scroller below.
+            Unprefixed they were a real regression at narrow widths: the flex
+            algorithm compressed this wrapper to ~504px while a long thread
+            needed ~1300px, and because the inner child only becomes a
+            scroller at `sm:`, nothing clipped the overflow — the comments
+            spilled out of their own box and painted over the attribute panel
+            beneath them. Found by driving a 500px-wide window, not by any
+            test: jsdom lays nothing out. Below `sm:` this wrapper must size
+            to its content and let the ONE shared scroller above own the
+            scrolling. */}
+        <div ref={editColumnRef} className="flex min-w-0 flex-col gap-2 sm:min-h-0 sm:flex-1">
+          {/* `editColumnRef` stays on the element ABOVE this one so its
+            `focusin` listener still sees the pinned composer below —
+            moving the ref down here would stop the composer's own textarea
+            from being tracked as the last focused editor. This inner
+            element keeps the testid and the gap-click, because both belong
+            to the `gap-3` spacing between the title row and Description. */}
+          {/* biome-ignore lint/a11y/noStaticElementInteractions: pointer-only progressive enhancement on a plain layout container — see the comment above. */}
+          {/* biome-ignore lint/a11y/useKeyWithClickEvents: no keyboard equivalent of clicking empty space exists to pair this with — see the comment above. */}
+          <div
+            data-testid="task-detail-edit-column"
+            onClick={(event) => {
+              if (editing && event.target === event.currentTarget) {
+                contentRef.current?.focus();
+              }
+            }}
+            className="flex flex-col gap-3 sm:min-h-0 sm:flex-1 sm:overflow-y-auto"
+          >
+            {/* The title (issue #225's display/edit split — `editingTitle`'s
               own doc comment above). Editable regardless of completion
               state: nothing about this view's own scope refuses a rename
               of a completed Task, and task-row.tsx's own checkbox doesn't
               either — completing something is not "locking" it. */}
-          <div className="flex items-start gap-2">
-            {/* Completes/un-completes this Task (issue #184's own
+            <div className="flex items-start gap-2">
+              {/* Completes/un-completes this Task (issue #184's own
                 gap-fix report: "not read-only" — a real toggle, not the
                 `readOnly` button-shaped-like-a-checkbox task-row.tsx's
                 own active-only checkbox is, since this is the one place
                 in the app both states of the same checkbox render.
                 Filled and struck through when done, mirroring the
                 reference's own completed-row rendering. */}
-            <input
-              type="checkbox"
-              checked={task.completedAt !== null}
-              onChange={() => (task.completedAt !== null ? onUncomplete() : onComplete())}
-              aria-label={
-                task.completedAt !== null
-                  ? `Mark "${task.content}" not done`
-                  : `Complete "${task.content}"`
-              }
-              className="mt-1.5 size-4 shrink-0 accent-current"
-            />
-            <DialogPrimitive.Title asChild>
-              {editing ? (
-                // `<Suspense>` is what keeps ProseMirror out of Todo's own
-                // eager chunk (`lazy-task-title-editor.ts`'s own header
-                // comment has the bundle numbers) even though this view
-                // itself is not lazy — the boundary is on the editor, not
-                // on the dialog that hosts it. The fallback repeats the
-                // plain title text rather than a spinner, matching
-                // `task-row-content.tsx`'s identical choice for its own
-                // inline rename.
-                //
-                // DET-09: BOTH the title and the description become real
-                // editors together the instant either is activated — only
-                // which one holds the caret differs, via `autoFocus`
-                // below (DET-10's own `focusField`), never whether it's
-                // editable at all.
-                <div className="w-full">
-                  <Suspense
-                    fallback={
-                      <p
-                        className={cn(
-                          "font-medium text-base",
-                          task.completedAt !== null && "completed-task-text",
-                        )}
-                      >
-                        {task.content}
-                      </p>
-                    }
+              <input
+                type="checkbox"
+                checked={task.completedAt !== null}
+                onChange={() => (task.completedAt !== null ? onUncomplete() : onComplete())}
+                aria-label={
+                  task.completedAt !== null
+                    ? `Mark "${task.content}" not done`
+                    : `Complete "${task.content}"`
+                }
+                className="mt-1.5 size-4 shrink-0 accent-current"
+              />
+              <DialogPrimitive.Title asChild>
+                {editing ? (
+                  // `<Suspense>` is what keeps ProseMirror out of Todo's own
+                  // eager chunk (`lazy-task-title-editor.ts`'s own header
+                  // comment has the bundle numbers) even though this view
+                  // itself is not lazy — the boundary is on the editor, not
+                  // on the dialog that hosts it. The fallback repeats the
+                  // plain title text rather than a spinner, matching
+                  // `task-row-content.tsx`'s identical choice for its own
+                  // inline rename.
+                  //
+                  // DET-09: BOTH the title and the description become real
+                  // editors together the instant either is activated — only
+                  // which one holds the caret differs, via `autoFocus`
+                  // below (DET-10's own `focusField`), never whether it's
+                  // editable at all.
+                  <div className="w-full">
+                    <Suspense
+                      fallback={
+                        <p
+                          className={cn(
+                            "font-medium text-base",
+                            task.completedAt !== null && "completed-task-text",
+                          )}
+                        >
+                          {task.content}
+                        </p>
+                      }
+                    >
+                      <LazyTaskTitleEditor
+                        value={task.content}
+                        onChange={setTitleDraft}
+                        onCommit={saveEditing}
+                        onCancel={requestCancelEditing}
+                        autoFocus={focusField === "title"}
+                        // DET-09: blur no longer means "done" — moving focus
+                        // from the title into the description (still inside
+                        // this same combined form) must not close it. Only
+                        // Enter, Escape or the explicit Save/Cancel pair
+                        // below end this form now.
+                        commitOnBlur={false}
+                        className="font-medium text-base"
+                        // DET-07 (this function's own comment above on the
+                        // ref this reads and what it deliberately doesn't
+                        // change): the same plugin `add-task-form.tsx`
+                        // attaches, so recognition renders identically here.
+                        extraPlugins={[
+                          quickAddRecognitionPlugin(() => titleRecognitionOptionsRef.current),
+                        ]}
+                        // QA-14's own second half: the identical `#`/`@`
+                        // popup Quick Add and the row's rename already open,
+                        // wired to this view's own `projects`/`labels` and
+                        // whatever create hook the outlet context supplies
+                        // (this function's own `titleAutocomplete` comment
+                        // above). `onAutocompleteOpenChange` feeds
+                        // `autocompletePopupOpenRef`, which
+                        // `dismissGuardRef`'s own assignment above reads —
+                        // DET-15's fix for the Escape gap this file's own
+                        // header comment on that ref names.
+                        autocomplete={titleAutocomplete}
+                        onAutocompleteOpenChange={(open) => {
+                          autocompletePopupOpenRef.current = open;
+                        }}
+                        closeAutocompleteRef={closeAutocompleteRef}
+                      />
+                    </Suspense>
+                  </div>
+                ) : (
+                  // DET-02: matched to Todoist's own measured shape (live
+                  // audit, flow 4 — `flow4-DET-02-03-05-14-todoist.json`),
+                  // ratified by the user on 2026-09-13, reversing this
+                  // file's own earlier `<button>` choice: a `DIV`, no
+                  // `role`, `tabIndex={-1}` — non-editable and non-focusable
+                  // by Tab, same as Todoist's `div.task_content`. That
+                  // trades away "activate with just a keyboard" (Tab, then
+                  // Enter/Space), which the reference never had either; the
+                  // user accepted the loss rather than keep meologue's own
+                  // divergence.
+                  // DET-03: unlike Todoist (whose sibling hint carries no
+                  // `aria-describedby` link — nothing points at it), this
+                  // element keeps pointing at `titleHintId` — ratified
+                  // separately, in meologue's favour, the same day.
+                  // biome-ignore lint/a11y/noStaticElementInteractions: DET-02 — Todoist's title at rest is a plain, non-interactive div; matching that shape means the click handler has no button/role to live on. The click-catcher just below (`task-detail-edit-column`) already sets this file's precedent for a `biome-ignore` here rather than a synthetic role.
+                  // biome-ignore lint/a11y/useKeyWithClickEvents: DET-02 — `tabIndex={-1}` (matched to Todoist) takes this out of Tab order, so there is no keyboard event to pair the click with; the user's 2026-09-13 decision accepted losing keyboard activation of the title specifically.
+                  <div
+                    onClick={() => startEditing("title")}
+                    aria-describedby={titleHintId}
+                    tabIndex={-1}
+                    data-testid="task-detail-title"
+                    className={cn(
+                      "w-full text-left font-medium text-base",
+                      task.completedAt !== null && "completed-task-text",
+                    )}
                   >
-                    <LazyTaskTitleEditor
-                      value={task.content}
-                      onChange={setTitleDraft}
-                      onCommit={saveEditing}
-                      onCancel={requestCancelEditing}
-                      autoFocus={focusField === "title"}
-                      // DET-09: blur no longer means "done" — moving focus
-                      // from the title into the description (still inside
-                      // this same combined form) must not close it. Only
-                      // Enter, Escape or the explicit Save/Cancel pair
-                      // below end this form now.
-                      commitOnBlur={false}
-                      className="font-medium text-base"
-                      // DET-07 (this function's own comment above on the
-                      // ref this reads and what it deliberately doesn't
-                      // change): the same plugin `add-task-form.tsx`
-                      // attaches, so recognition renders identically here.
-                      extraPlugins={[
-                        quickAddRecognitionPlugin(() => titleRecognitionOptionsRef.current),
-                      ]}
-                      // QA-14's own second half: the identical `#`/`@`
-                      // popup Quick Add and the row's rename already open,
-                      // wired to this view's own `projects`/`labels` and
-                      // whatever create hook the outlet context supplies
-                      // (this function's own `titleAutocomplete` comment
-                      // above). `onAutocompleteOpenChange` feeds
-                      // `autocompletePopupOpenRef`, which
-                      // `dismissGuardRef`'s own assignment above reads —
-                      // DET-15's fix for the Escape gap this file's own
-                      // header comment on that ref names.
-                      autocomplete={titleAutocomplete}
-                      onAutocompleteOpenChange={(open) => {
-                        autocompletePopupOpenRef.current = open;
-                      }}
-                      closeAutocompleteRef={closeAutocompleteRef}
-                    />
-                  </Suspense>
-                </div>
-              ) : (
-                // DET-02: matched to Todoist's own measured shape (live
-                // audit, flow 4 — `flow4-DET-02-03-05-14-todoist.json`),
-                // ratified by the user on 2026-09-13, reversing this
-                // file's own earlier `<button>` choice: a `DIV`, no
-                // `role`, `tabIndex={-1}` — non-editable and non-focusable
-                // by Tab, same as Todoist's `div.task_content`. That
-                // trades away "activate with just a keyboard" (Tab, then
-                // Enter/Space), which the reference never had either; the
-                // user accepted the loss rather than keep meologue's own
-                // divergence.
-                // DET-03: unlike Todoist (whose sibling hint carries no
-                // `aria-describedby` link — nothing points at it), this
-                // element keeps pointing at `titleHintId` — ratified
-                // separately, in meologue's favour, the same day.
-                // biome-ignore lint/a11y/noStaticElementInteractions: DET-02 — Todoist's title at rest is a plain, non-interactive div; matching that shape means the click handler has no button/role to live on. The click-catcher just below (`task-detail-edit-column`) already sets this file's precedent for a `biome-ignore` here rather than a synthetic role.
-                // biome-ignore lint/a11y/useKeyWithClickEvents: DET-02 — `tabIndex={-1}` (matched to Todoist) takes this out of Tab order, so there is no keyboard event to pair the click with; the user's 2026-09-13 decision accepted losing keyboard activation of the title specifically.
-                <div
-                  onClick={() => startEditing("title")}
-                  aria-describedby={titleHintId}
-                  tabIndex={-1}
-                  data-testid="task-detail-title"
-                  className={cn(
-                    "w-full text-left font-medium text-base",
-                    task.completedAt !== null && "completed-task-text",
-                  )}
-                >
-                  {/* ROW-06 (parity-ledger.md): row-and-detail.md §2's own
+                    {/* ROW-06 (parity-ledger.md): row-and-detail.md §2's own
                       "single most consequential finding" is that this div
                       IS the row's own display component, `div.task_content`
                       — so the same live-measured markdown rendering
@@ -1273,16 +1305,16 @@ function TaskDetailBody({
                       `LazyTaskTitleEditor` on the raw, unformatted value
                       above, `data-testid`/`tabIndex`/`aria-describedby` are
                       untouched. */}
-                  {inlineProse(task.content)}
-                </div>
-              )}
-            </DialogPrimitive.Title>
-          </div>
-          <span id={titleHintId} className="sr-only">
-            Activate to edit the task name
-          </span>
+                    {inlineProse(task.content)}
+                  </div>
+                )}
+              </DialogPrimitive.Title>
+            </div>
+            <span id={titleHintId} className="sr-only">
+              Activate to edit the task name
+            </span>
 
-          {/* Description (issue #180, DET-09 onward) — directly under the
+            {/* Description (issue #180, DET-09 onward) — directly under the
               title, not in the sidebar (this file's own header comment).
               At rest: a pill until it has words, then a rendered,
               click-to-edit block, the identical promotion
@@ -1291,66 +1323,68 @@ function TaskDetailBody({
               (DET-11/DET-12) regardless of which field the reader
               activated — DET-09's own "task-wide, not field-wide" rule —
               sharing the one Cancel/Save pair below with the title. */}
-          {editing ? (
-            <div className="flex flex-col gap-2">
-              <Suspense
-                fallback={
-                  <div className="[&_p]:my-0 [&_ul]:my-0">{entryProse(task.description ?? "")}</div>
-                }
-              >
-                <LazyTaskDescriptionEditor
-                  value={task.description ?? ""}
-                  onChange={setDescriptionDraft}
-                  onCancel={requestCancelEditing}
-                  autoFocus={focusField === "description"}
-                  className="text-sm"
-                />
-              </Suspense>
-              <div className="flex justify-end gap-2">
-                <button
-                  type="button"
-                  // A wrapper, not `requestCancelEditing` passed
-                  // directly: React hands an `onClick` handler the
-                  // native (truthy) MouseEvent as its first argument,
-                  // which — passed straight through as this function's
-                  // now-optional `fromOutsideClick` parameter — would
-                  // read as "yes, this was an outside click" on every
-                  // ordinary Cancel-button press (DET-15 round 3's own
-                  // regression, caught by this file's own "clicking
-                  // Discard...without closing the whole view" test).
-                  onClick={() => requestCancelEditing()}
-                  className="rounded-md border border-border px-2.5 py-1 text-sm transition hover:bg-muted"
+            {editing ? (
+              <div className="flex flex-col gap-2">
+                <Suspense
+                  fallback={
+                    <div className="[&_p]:my-0 [&_ul]:my-0">
+                      {entryProse(task.description ?? "")}
+                    </div>
+                  }
                 >
-                  Cancel
-                </button>
-                <button
-                  type="button"
-                  onClick={() => saveEditing()}
-                  className="rounded-md border border-border px-2.5 py-1 text-sm transition hover:bg-muted"
-                >
-                  Save
-                </button>
+                  <LazyTaskDescriptionEditor
+                    value={task.description ?? ""}
+                    onChange={setDescriptionDraft}
+                    onCancel={requestCancelEditing}
+                    autoFocus={focusField === "description"}
+                    className="text-sm"
+                  />
+                </Suspense>
+                <div className="flex justify-end gap-2">
+                  <button
+                    type="button"
+                    // A wrapper, not `requestCancelEditing` passed
+                    // directly: React hands an `onClick` handler the
+                    // native (truthy) MouseEvent as its first argument,
+                    // which — passed straight through as this function's
+                    // now-optional `fromOutsideClick` parameter — would
+                    // read as "yes, this was an outside click" on every
+                    // ordinary Cancel-button press (DET-15 round 3's own
+                    // regression, caught by this file's own "clicking
+                    // Discard...without closing the whole view" test).
+                    onClick={() => requestCancelEditing()}
+                    className="rounded-md border border-border px-2.5 py-1 text-sm transition hover:bg-muted"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => saveEditing()}
+                    className="rounded-md border border-border px-2.5 py-1 text-sm transition hover:bg-muted"
+                  >
+                    Save
+                  </button>
+                </div>
               </div>
-            </div>
-          ) : task.description === null ? (
-            <AttributePill label="Description" onClick={() => startEditing("description")} />
-          ) : (
-            <button
-              type="button"
-              onClick={() => startEditing("description")}
-              className="w-full rounded-md p-2 text-left text-sm transition hover:bg-muted"
-            >
-              {/* `[&_p]:my-0` — entryProse's own `<p>` carries margin
+            ) : task.description === null ? (
+              <AttributePill label="Description" onClick={() => startEditing("description")} />
+            ) : (
+              <button
+                type="button"
+                onClick={() => startEditing("description")}
+                className="w-full rounded-md p-2 text-left text-sm transition hover:bg-muted"
+              >
+                {/* `[&_p]:my-0` — entryProse's own `<p>` carries margin
                   meant for History's multi-Entry rhythm; a single Task's
                   Description reads as one block, not a stack of Entries,
                   so that margin is undone here the same way it would be
                   wherever else this renderer is dropped into a context
                   that isn't History. */}
-              <div className="[&_p]:my-0 [&_ul]:my-0">{entryProse(task.description ?? "")}</div>
-            </button>
-          )}
+                <div className="[&_p]:my-0 [&_ul]:my-0">{entryProse(task.description ?? "")}</div>
+              </button>
+            )}
 
-          {/* Sub-tasks (issue #229) — the detail view had no such section
+            {/* Sub-tasks (issue #229) — the detail view had no such section
               at all before this ticket, despite `Task.parentId`,
               `listChildren` and `listDescendants` already existing in the
               store (this ticket's own brief). Create, display, complete —
@@ -1361,89 +1395,91 @@ function TaskDetailBody({
               (CONTEXT.md's Sub-task entry) — already true for free, since
               `onComplete` above routes to the identical `TaskStore.complete`
               that already cascades to `listChildren` (sqlite-task-store.ts). */}
-          <div className="flex flex-col gap-2">
-            <h2 className="text-muted-foreground text-xs">
-              Sub-tasks{subtasks.length > 0 ? ` (${subtasks.length})` : ""}
-            </h2>
-            {subtasks.length > 0 && (
-              <ul className="flex flex-col gap-1">
-                {subtasks.map((subtask) => (
-                  <li key={subtask.id} className="flex items-center gap-2 rounded-md p-1.5 text-sm">
-                    <input
-                      type="checkbox"
-                      checked={subtask.completedAt !== null}
-                      onChange={() =>
-                        subtask.completedAt !== null
-                          ? onUncompleteSubtask(subtask.id)
-                          : onCompleteSubtask(subtask.id)
-                      }
-                      aria-label={
-                        subtask.completedAt !== null
-                          ? `Mark "${subtask.content}" not done`
-                          : `Complete "${subtask.content}"`
-                      }
-                      className="size-4 shrink-0 accent-current"
-                    />
-                    <span
-                      className={cn(
-                        "min-w-0 flex-1 truncate",
-                        subtask.completedAt !== null && "completed-task-text",
-                      )}
+            <div className="flex flex-col gap-2">
+              <h2 className="text-muted-foreground text-xs">
+                Sub-tasks{subtasks.length > 0 ? ` (${subtasks.length})` : ""}
+              </h2>
+              {subtasks.length > 0 && (
+                <ul className="flex flex-col gap-1">
+                  {subtasks.map((subtask) => (
+                    <li
+                      key={subtask.id}
+                      className="flex items-center gap-2 rounded-md p-1.5 text-sm"
                     >
-                      {subtask.content}
-                    </span>
-                  </li>
-                ))}
-              </ul>
-            )}
-            <form
-              onSubmit={(event) => {
-                event.preventDefault();
-                submitSubtask();
-              }}
-              className="flex items-center gap-2"
-            >
-              <input
-                type="text"
-                aria-label="Add sub-task"
-                placeholder="Add sub-task"
-                value={subtaskDraft}
-                onChange={(event) => setSubtaskDraft(event.target.value)}
-                className="min-w-0 flex-1 rounded-md border border-border bg-transparent p-2 text-sm outline-none"
-              />
-              <button
-                type="submit"
-                className="shrink-0 rounded-md border border-border px-2.5 py-1.5 text-sm transition hover:bg-muted"
+                      <input
+                        type="checkbox"
+                        checked={subtask.completedAt !== null}
+                        onChange={() =>
+                          subtask.completedAt !== null
+                            ? onUncompleteSubtask(subtask.id)
+                            : onCompleteSubtask(subtask.id)
+                        }
+                        aria-label={
+                          subtask.completedAt !== null
+                            ? `Mark "${subtask.content}" not done`
+                            : `Complete "${subtask.content}"`
+                        }
+                        className="size-4 shrink-0 accent-current"
+                      />
+                      <span
+                        className={cn(
+                          "min-w-0 flex-1 truncate",
+                          subtask.completedAt !== null && "completed-task-text",
+                        )}
+                      >
+                        {subtask.content}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+              <form
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  submitSubtask();
+                }}
+                className="flex items-center gap-2"
               >
-                Add
-              </button>
-            </form>
-          </div>
+                <input
+                  type="text"
+                  aria-label="Add sub-task"
+                  placeholder="Add sub-task"
+                  value={subtaskDraft}
+                  onChange={(event) => setSubtaskDraft(event.target.value)}
+                  className="min-w-0 flex-1 rounded-md border border-border bg-transparent p-2 text-sm outline-none"
+                />
+                <button
+                  type="submit"
+                  className="shrink-0 rounded-md border border-border px-2.5 py-1.5 text-sm transition hover:bg-muted"
+                >
+                  Add
+                </button>
+              </form>
+            </div>
 
-          {/* Comments (issue #180) — a thread below the description, an
+            {/* Comments (issue #180) — a thread below the description, an
               always-visible composer, the most recent Comment simply the
               last item in the list rather than hidden behind an icon
               (this ticket's own reference-behaviour note). */}
-          <div className="flex flex-col gap-2">
-            <h2 className="text-muted-foreground text-xs">
-              Comments{comments.length > 0 ? ` (${comments.length})` : ""}
-            </h2>
-            {comments.length > 0 && (
-              <ul className="flex flex-col gap-1">
-                {comments.map((comment) => (
-                  <CommentRow
-                    key={comment.id}
-                    comment={comment}
-                    onEdit={(text) => onEditComment(comment.id, text)}
-                    onRequestRemove={() => setConfirmingCommentId(comment.id)}
-                  />
-                ))}
-              </ul>
-            )}
-            <CommentComposer onSubmit={onAddComment} />
-          </div>
+            <div className="flex flex-col gap-2">
+              <h2 className="text-muted-foreground text-xs">
+                Comments{comments.length > 0 ? ` (${comments.length})` : ""}
+              </h2>
+              {comments.length > 0 && (
+                <ul className="flex flex-col gap-1">
+                  {comments.map((comment) => (
+                    <CommentRow
+                      key={comment.id}
+                      comment={comment}
+                      onEdit={(text) => onEditComment(comment.id, text)}
+                      onRequestRemove={() => setConfirmingCommentId(comment.id)}
+                    />
+                  ))}
+                </ul>
+              )}
+            </div>
 
-          {/* DET-15: Cancel/Escape/an outside click confirm first when the
+            {/* DET-15: Cancel/Escape/an outside click confirm first when the
               title/description form holds unsaved changes, verbatim
               wording matching live Todoist's own (`parity-ledger.md`'s
               DET-15 row) — meologue used to discard immediately. Rendered
@@ -1454,107 +1490,116 @@ function TaskDetailBody({
               `editing` back to `false` in the same tick doesn't also
               unmount this dialog out from under its own closing
               animation. */}
-          <ConfirmDialog
-            open={discardConfirmOpen}
-            onOpenChange={setDiscardConfirmOpen}
-            title="Discard unsaved changes?"
-            description="Your unsaved changes will be discarded."
-            confirmLabel="Discard"
-            // DET-15 round 3: matches live Todoist's own
-            // `attempt3_clickOutsideModal` finding
-            // (`flow11-R3-DET-15-both.json`) — Discard after an
-            // outside-click trigger completes that click's own original
-            // intent (leave the task) by closing the whole view too, on
-            // top of ending the edit every trigger already ends. Cancel
-            // and Escape leave `cancelTriggeredByOutsideClickRef` `false`
-            // (its own default, and `requestCancelEditing`'s), so Discard
-            // there stays exactly what it already was: end editing, keep
-            // the view open.
-            onConfirm={() => {
-              discardConfirmedRef.current = true;
-              cancelEditing();
-              if (cancelTriggeredByOutsideClickRef.current) {
-                onClose();
-              }
-            }}
-            // DET-15 round 3, gap 2: only reached when this confirmation
-            // closes WITHOUT Discard (Escape, or its own Cancel button —
-            // `discardConfirmedRef` is what tells the two apart, set only
-            // by `onConfirm` just above). Radix's own default here would
-            // restore focus to whatever triggered this dialog's open —
-            // nothing, since `requestCancelEditing` opens it
-            // programmatically — which is why live meologue previously
-            // dropped focus to `document.body`
-            // (`flow11-R3-DET-15-both.json`'s `escapeInsideConfirmation`).
-            // `preventDefault()` takes that default away in favour of the
-            // one place a reader dismissing this without discarding
-            // actually came from: whichever editor `lastFocusedEditorRef`
-            // last saw. A Discard close skips this entirely — editing is
-            // ending (or the whole view is), so there is no editor left
-            // to send focus back to.
-            // Radix defers this dispatch a tick (`FocusScope`'s own
-            // cleanup effect wraps it in `setTimeout(..., 0)`, so the
-            // container is fully gone from the DOM before anything tries
-            // to focus relative to it) — a caller (this file's own tests
-            // included) needs to let that tick pass before checking where
-            // focus landed, the identical `setTimeout(resolve, 0)` wait
-            // this file's own `clickOutside` test helper already uses for
-            // Radix's own outside-pointerdown listener, for the identical
-            // reason: a real async gap inside Radix, not a jsdom quirk to
-            // work around.
-            onCloseAutoFocus={(event) => {
-              if (discardConfirmedRef.current) {
-                discardConfirmedRef.current = false;
-                return;
-              }
-              event.preventDefault();
-              lastFocusedEditorRef.current?.focus();
-            }}
-          />
+            <ConfirmDialog
+              open={discardConfirmOpen}
+              onOpenChange={setDiscardConfirmOpen}
+              title="Discard unsaved changes?"
+              description="Your unsaved changes will be discarded."
+              confirmLabel="Discard"
+              // DET-15 round 3: matches live Todoist's own
+              // `attempt3_clickOutsideModal` finding
+              // (`flow11-R3-DET-15-both.json`) — Discard after an
+              // outside-click trigger completes that click's own original
+              // intent (leave the task) by closing the whole view too, on
+              // top of ending the edit every trigger already ends. Cancel
+              // and Escape leave `cancelTriggeredByOutsideClickRef` `false`
+              // (its own default, and `requestCancelEditing`'s), so Discard
+              // there stays exactly what it already was: end editing, keep
+              // the view open.
+              onConfirm={() => {
+                discardConfirmedRef.current = true;
+                cancelEditing();
+                if (cancelTriggeredByOutsideClickRef.current) {
+                  onClose();
+                }
+              }}
+              // DET-15 round 3, gap 2: only reached when this confirmation
+              // closes WITHOUT Discard (Escape, or its own Cancel button —
+              // `discardConfirmedRef` is what tells the two apart, set only
+              // by `onConfirm` just above). Radix's own default here would
+              // restore focus to whatever triggered this dialog's open —
+              // nothing, since `requestCancelEditing` opens it
+              // programmatically — which is why live meologue previously
+              // dropped focus to `document.body`
+              // (`flow11-R3-DET-15-both.json`'s `escapeInsideConfirmation`).
+              // `preventDefault()` takes that default away in favour of the
+              // one place a reader dismissing this without discarding
+              // actually came from: whichever editor `lastFocusedEditorRef`
+              // last saw. A Discard close skips this entirely — editing is
+              // ending (or the whole view is), so there is no editor left
+              // to send focus back to.
+              // Radix defers this dispatch a tick (`FocusScope`'s own
+              // cleanup effect wraps it in `setTimeout(..., 0)`, so the
+              // container is fully gone from the DOM before anything tries
+              // to focus relative to it) — a caller (this file's own tests
+              // included) needs to let that tick pass before checking where
+              // focus landed, the identical `setTimeout(resolve, 0)` wait
+              // this file's own `clickOutside` test helper already uses for
+              // Radix's own outside-pointerdown listener, for the identical
+              // reason: a real async gap inside Radix, not a jsdom quirk to
+              // work around.
+              onCloseAutoFocus={(event) => {
+                if (discardConfirmedRef.current) {
+                  discardConfirmedRef.current = false;
+                  return;
+                }
+                event.preventDefault();
+                lastFocusedEditorRef.current?.focus();
+              }}
+            />
 
-          {/* CMT-03: deleting a Comment confirms first, verbatim wording
+            {/* CMT-03: deleting a Comment confirms first, verbatim wording
               matching Todoist's own (`lifecycle.md` §2). */}
-          <ConfirmDialog
-            open={confirmingCommentId !== null}
-            onOpenChange={(open) => {
-              if (!open) {
-                setConfirmingCommentId(null);
-              }
-            }}
-            title="Delete comment?"
-            description="This comment will be permanently deleted."
-            confirmLabel="Delete"
-            onConfirm={() => {
-              if (confirmingCommentId !== null) {
-                onRemoveComment(confirmingCommentId);
-              }
-            }}
-          />
+            <ConfirmDialog
+              open={confirmingCommentId !== null}
+              onOpenChange={(open) => {
+                if (!open) {
+                  setConfirmingCommentId(null);
+                }
+              }}
+              title="Delete comment?"
+              description="This comment will be permanently deleted."
+              confirmLabel="Delete"
+              onConfirm={() => {
+                if (confirmingCommentId !== null) {
+                  onRemoveComment(confirmingCommentId);
+                }
+              }}
+            />
 
-          {/* Activity (issue #184, ADR 0056) — collapsed by default, open
+            {/* Activity (issue #184, ADR 0056) — collapsed by default, open
               on request (this file's own header comment). Renders
               nothing when there's nothing to show yet, rather than an
               always-visible disclosure with nothing inside it. */}
-          {renderableEvents.length > 0 && (
-            <details className="rounded-lg border border-border">
-              <summary className="cursor-pointer select-none px-3 py-2 text-muted-foreground text-sm">
-                Activity ({renderableEvents.length})
-              </summary>
-              <div className="border-t border-border">
-                <ActivityFeed
-                  events={renderableEvents}
-                  // CMT-06: no `currentTaskId`. Flow 5 read Todoist's own
-                  // per-task activity and it names the task in every line
-                  // ("You completed {task}", "You deleted a comment from
-                  // {task}"), even though every line is about that task, so
-                  // suppressing the subject here was the divergence itself.
-                  // `tasks` holds this task so its subject resolves.
-                  tasks={[task]}
-                  projects={projects}
-                />
-              </div>
-            </details>
-          )}
+            {renderableEvents.length > 0 && (
+              <details className="rounded-lg border border-border">
+                <summary className="cursor-pointer select-none px-3 py-2 text-muted-foreground text-sm">
+                  Activity ({renderableEvents.length})
+                </summary>
+                <div className="border-t border-border">
+                  <ActivityFeed
+                    events={renderableEvents}
+                    // CMT-06: no `currentTaskId`. Flow 5 read Todoist's own
+                    // per-task activity and it names the task in every line
+                    // ("You completed {task}", "You deleted a comment from
+                    // {task}"), even though every line is about that task, so
+                    // suppressing the subject here was the divergence itself.
+                    // `tasks` holds this task so its subject resolves.
+                    tasks={[task]}
+                    projects={projects}
+                  />
+                </div>
+              </details>
+            )}
+          </div>
+
+          {/* Pinned beneath the scrolling region rather than inside it, as
+            Todoist's is — it stays put while the thread scrolls. It sits
+            below Activity in source order because it is the column's
+            footer, not a member of the Comments block; Todoist has no
+            Activity section here, so nothing in the record says where it
+            would fall relative to one. */}
+          <CommentComposer onSubmit={onAddComment} />
         </div>
 
         {/* The attribute sidebar — Project, Date, Deadline, Priority,
@@ -1563,7 +1608,7 @@ function TaskDetailBody({
             alongside the `sm:flex-row` above, so a narrow sheet still
             stacks this beneath the title instead of squeezing both into
             one row. */}
-        <div className="flex shrink-0 flex-col gap-1 sm:w-56">
+        <div className="flex shrink-0 flex-col gap-1 sm:min-h-0 sm:w-56 sm:overflow-y-auto">
           {/*
             Project — the one attribute that's never truly "unset" the way
             Date/Deadline/Priority/Labels can be (CONTEXT.md's Inbox
