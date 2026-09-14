@@ -71,6 +71,7 @@ import { LazyTaskDescriptionEditor } from "@/components/todo/lazy-task-descripti
 import { LazyTaskTitleEditor } from "@/components/todo/lazy-task-title-editor";
 import { TaskSchedulePopover } from "@/components/todo/task-schedule-popover";
 import { ConfirmDialog } from "@/components/ui/alert-dialog";
+import { useAutoGrowTextarea } from "@/hooks/use-auto-grow-textarea";
 import { useTaskDateState } from "@/hooks/use-task-date-state";
 import { useWideLayout } from "@/hooks/use-wide-layout";
 import { isRenderableEvent } from "@/lib/format-event";
@@ -297,6 +298,15 @@ const AttributeRow = forwardRef<
  * so a reader who isn't mid-edit still closes the dialog on Escape
  * exactly as before.
  */
+// How tall either comment field may grow before it scrolls inside itself.
+// Roughly ten lines at this surface's own 14px/20px type — enough that an
+// ordinary long comment is read and edited in full, short enough that the
+// field never pushes the Comment/Cancel buttons off a laptop screen. A cap
+// rather than unbounded growth because this composer sits inside the detail
+// dialog's single shared scroll container (it is not a pinned chat input), so
+// an unbounded field would walk its own submit buttons out of view.
+const COMMENT_FIELD_MAX_HEIGHT = 200;
+
 function CommentRow({
   comment,
   onEdit,
@@ -309,6 +319,11 @@ function CommentRow({
 }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(comment.text);
+  const editRef = useRef<HTMLTextAreaElement>(null);
+  // Seeded with the existing comment, so this has to size itself the moment
+  // it mounts rather than on the first keystroke — a long comment opened for
+  // editing used to appear as two rows of itself.
+  useAutoGrowTextarea(editRef, draft, { maxHeight: COMMENT_FIELD_MAX_HEIGHT });
 
   function startEditing() {
     setDraft(comment.text);
@@ -373,6 +388,7 @@ function CommentRow({
     return (
       <li className="flex flex-col gap-1.5">
         <textarea
+          ref={editRef}
           aria-label="Edit comment"
           value={draft}
           onChange={(event) => setDraft(event.target.value)}
@@ -402,7 +418,13 @@ function CommentRow({
 
   return (
     <li className="group flex items-start gap-1 rounded-md p-1.5 text-sm transition hover:bg-muted">
-      <div className="min-w-0 flex-1 [&_p]:my-0 [&_ul]:my-0">
+      {/* `break-words` because nothing else in this chain constrains a single
+          unbroken token: a long URL or hash pasted into a comment would
+          otherwise set the row's intrinsic width and push the dialog's own
+          layout sideways rather than wrapping. `min-w-0` alone does not do
+          it — that lets the flex child shrink, but the word still refuses to
+          break. */}
+      <div className="min-w-0 flex-1 break-words [&_p]:my-0 [&_ul]:my-0">
         {entryProse(comment.text, undefined, undefined, undefined, "comment")}
       </div>
       <button
@@ -440,6 +462,14 @@ function CommentRow({
  */
 function CommentComposer({ onSubmit }: { onSubmit: (text: string) => void }) {
   const [text, setText] = useState("");
+  const fieldRef = useRef<HTMLTextAreaElement>(null);
+  // Measured on the device before this: the field stayed 37.4px tall whether it
+  // was empty, holding ~500 characters, or holding ~2000, while `scrollHeight`
+  // for those same contents read 276px and 1016px. `resize: none` (this app's
+  // convention for a field it lays out itself) meant it could not be dragged
+  // bigger either, so a long comment was written into a one-line slot showing
+  // about a twenty-seventh of itself.
+  useAutoGrowTextarea(fieldRef, text, { maxHeight: COMMENT_FIELD_MAX_HEIGHT });
 
   function submit() {
     const trimmed = text.trim();
@@ -459,6 +489,7 @@ function CommentComposer({ onSubmit }: { onSubmit: (text: string) => void }) {
       className="flex items-end gap-2"
     >
       <textarea
+        ref={fieldRef}
         aria-label="Add a comment"
         placeholder="Add a comment"
         value={text}
