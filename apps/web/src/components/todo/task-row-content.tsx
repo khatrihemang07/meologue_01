@@ -869,11 +869,16 @@ export function TaskRowContent({
         datesWithTasks={detailActions.datesWithTasks}
         onPickDay={(day) => {
           setScheduleDay(day);
-          // A plain date (or "No Date") ends any Recurrence the Task
-          // already had — TaskSchedulePopover's own doc comment names
-          // this a deliberate, disclosed design decision, mirrored here
-          // from task-schedule-sheet.tsx's own former identical wiring.
-          if (task.dateString !== null) {
+          // SCHED-15: only "No Date" ends a Recurrence now — picking a day
+          // postpones this occurrence and keeps the rule. The previous
+          // comment here called clearing on every pick "a deliberate,
+          // disclosed design decision", and it was; it was also wrong
+          // against the reference, and it silently ended a series every
+          // time a repeating Task was rescheduled. `task-detail-view.tsx`'s
+          // own identical handler carries the full account and the
+          // artifact it was driven from — this file mirrors it, as it
+          // already mirrored the behaviour being replaced.
+          if (day === null && task.dateString !== null) {
             detailActions.onSetDateString(task.id, null, new Date().toISOString());
           }
         }}

@@ -1957,7 +1957,31 @@ function TaskDetailBody({
             onPickDay={(day) => {
               pendingRenameDateRef.current = null;
               setScheduleDay(day);
-              if (task.dateString !== null) {
+              // SCHED-15: picking a DAY postpones this occurrence and leaves
+              // the Recurrence alone. This used to clear `dateString` on
+              // every pick, so rescheduling a repeating Task silently ended
+              // the series — `Today ↻ every day` became a plain `21 Sep`,
+              // with no warning and no way back short of retyping the
+              // phrase.
+              //
+              // Driven on live Todoist 2026-09-15
+              // (`recurrence-reschedule-todoist-2026-09-14.json`): both a
+              // calendar click and a quick option leave the rule untouched,
+              // and completing afterwards computes `max(current due, today)
+              // + one interval`, so the postponed date IS the anchor.
+              // meologue's engine already agrees — `recurrence.ts`'s own
+              // "skipping missed occurrences" rule returns only a date
+              // strictly after `now`, stepping a whole interval at a time.
+              // It simply never got to run, because the Task stopped being
+              // recurring before it could.
+              //
+              // `null` — "No Date" — still ends the Recurrence: a rule
+              // counts from a date, and there is nothing left to count
+              // from. Todoist reaches that end through a separate "Clear
+              // recurrence" control instead, and what its own "No Date"
+              // does to a recurring Task was NOT established — so this is
+              // meologue's reasoned default, not a matched behaviour.
+              if (day === null && task.dateString !== null) {
                 onSetDateString(task.id, null, new Date().toISOString());
               }
             }}

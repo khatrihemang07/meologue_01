@@ -1193,6 +1193,60 @@ describe("TaskDetailView", () => {
     });
   });
 
+  describe("SCHED-15 — postponing a recurring Task keeps its rule", () => {
+    /**
+     * Driven on live Todoist 2026-09-15
+     * (`recurrence-reschedule-todoist-2026-09-14.json`): rescheduling a
+     * recurring task — by calendar click OR by quick option — leaves the
+     * recurrence rule untouched, and completing it then computes
+     * `max(current due, today) + one interval`. So the postponed date is
+     * the real anchor. meologue used to clear `dateString` on every date
+     * pick, which meant a postponed Task stopped repeating altogether.
+     */
+    it("picking a day leaves the recurrence in place", () => {
+      const onSetDate = vi.fn();
+      const onSetDateString = vi.fn();
+      renderView({
+        task: task({ id: "1", date: "2026-09-15", dateString: "every day" }),
+        onSetDate,
+        onSetDateString,
+      });
+
+      fireEvent.click(screen.getByRole("button", { name: /^Date/ }));
+      fireEvent.click(screen.getByRole("button", { name: /^Tomorrow \w{3}$/ }));
+
+      expect(onSetDate).toHaveBeenCalled();
+      // The whole defect: this used to fire with `null` and end the series.
+      expect(onSetDateString).not.toHaveBeenCalled();
+    });
+
+    it("clearing the date with No Date still ends the recurrence — a rule has nothing left to count from", () => {
+      const onSetDateString = vi.fn();
+      renderView({
+        task: task({ id: "1", date: "2026-09-15", dateString: "every day" }),
+        onSetDateString,
+      });
+
+      fireEvent.click(screen.getByRole("button", { name: /^Date/ }));
+      fireEvent.click(screen.getByRole("button", { name: "No Date" }));
+
+      expect(onSetDateString).toHaveBeenCalledWith("1", null, expect.any(String));
+    });
+
+    it("a Task with no recurrence is unaffected either way", () => {
+      const onSetDateString = vi.fn();
+      renderView({
+        task: task({ id: "1", date: "2026-09-15", dateString: null }),
+        onSetDateString,
+      });
+
+      fireEvent.click(screen.getByRole("button", { name: /^Date/ }));
+      fireEvent.click(screen.getByRole("button", { name: /^Tomorrow \w{3}$/ }));
+
+      expect(onSetDateString).not.toHaveBeenCalled();
+    });
+  });
+
   describe("Description — issue #180", () => {
     it("an unset Description renders a pill", () => {
       renderView({ task: task({ description: null }) });
