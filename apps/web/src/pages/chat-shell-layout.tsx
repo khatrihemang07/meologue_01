@@ -1,9 +1,11 @@
-import { type CSSProperties, lazy, Suspense } from "react";
+import { type CSSProperties, lazy, Suspense, useEffect } from "react";
 import { Outlet, useLocation } from "react-router";
+import { destinationForPath } from "@/components/chat-list";
 import { ChatListPane } from "@/components/chat-list-pane";
 import { PaneDivider } from "@/components/pane-divider";
 import { useKeyboardInset } from "@/hooks/use-keyboard-inset";
 import { useWideLayout } from "@/hooks/use-wide-layout";
+import { writeLastDestination } from "@/lib/last-destination";
 import { useSettingsStore } from "@/lib/settings";
 import { useTodoSurface } from "@/lib/todo-surface";
 
@@ -106,6 +108,20 @@ export function ChatShellLayout() {
   // header comment has the measurement and the reason the claims are counted
   // rather than written directly.
   useTodoSurface(isTodo);
+
+  // ADR 0080: remembers which Destination the reader is standing on, for
+  // `/`'s own Continue card at the wide breakpoint — mounted here, rather
+  // than in any one Destination's own page, because this layout is what
+  // persists across every route change (`/` included), where a per-page
+  // effect would already have unmounted by the time the reader reached `/`.
+  // `destinationForPath` returns `null` for `/` itself, so a bare visit to
+  // the root screen is never recorded as the Destination to continue into.
+  useEffect(() => {
+    const destination = destinationForPath(location.pathname);
+    if (destination !== null) {
+      writeLastDestination(destination);
+    }
+  }, [location.pathname]);
 
   return (
     <div

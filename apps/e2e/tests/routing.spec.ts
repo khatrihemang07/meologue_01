@@ -92,6 +92,52 @@ test("the pinned list marks the open destination as current, and only that one",
   await expect(chats.getByRole("link", { name: "Settings" })).not.toHaveAttribute("aria-current");
 });
 
+// ADR 0080: at the wide breakpoint `/` is no longer a dead-end placeholder
+// — it gets its own content (a Continue card, a Today summary), while
+// staying reachable, unlike the narrow layout `routing.spec.ts`'s own
+// header comment scopes the rest of this file to. Run at the same
+// 1200x900 wide viewport this file's own "pinned list marks the open
+// destination" test above already uses.
+test("/ is not a dead end at the wide breakpoint", async ({ page }) => {
+  await page.setViewportSize({ width: 1200, height: 900 });
+  await page.goto("/");
+
+  // The pane beside this column already renders the five rows — this is
+  // the assertion that the content column is not a second copy of them.
+  await expect(page.getByRole("navigation", { name: "Chats" }).getByRole("link")).toHaveCount(5);
+
+  const body = uniqueEntryBody("wide-root");
+  await openDestination(page, "Composer");
+  await sendEntry(page, body);
+
+  // Back from Composer lands on `/`, and `/` now says something about the
+  // Entry just written rather than only naming the list beside it.
+  await page.getByRole("link", { name: "Back to chats" }).click();
+  await expect(page).toHaveURL("/");
+  await expect(page.getByText("Entries written today")).toBeVisible();
+  // The Continue card offers a real link straight back into Composer.
+  await expect(page.getByRole("link", { name: /Composer/ }).first()).toHaveAttribute(
+    "href",
+    "/composer",
+  );
+});
+
+// ADR 0080 / ADR 0076: Todo is the one Destination whose own pane never
+// shows the root screen at the wide breakpoint (0076's own "What this does
+// take"), so Back from Todo is the one Back that was landing on a genuine
+// dead end before this ADR — the defect ADR 0080 exists to fix, exercised
+// here end to end rather than only through chat-list-page.test.tsx's unit
+// coverage.
+test("Back from Todo, at the wide breakpoint, no longer lands on a dead end", async ({ page }) => {
+  await page.setViewportSize({ width: 1200, height: 900 });
+  await page.goto("/todo/inbox");
+
+  await page.getByRole("link", { name: "Back to chats" }).click();
+
+  await expect(page).toHaveURL("/");
+  await expect(page.getByText("Tasks due today")).toBeVisible();
+});
+
 // Issue #248: `/todo/activity` was linked only from `todo-nav.tsx` (which
 // hides itself at the wide breakpoint) and from inside a Project —
 // `todo-sidebar.tsx`, the nav that replaces `todo-nav` at that width, had

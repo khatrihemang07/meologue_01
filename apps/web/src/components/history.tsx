@@ -225,6 +225,19 @@ interface HistoryProps {
   onSeekNeedsOlder?: () => void;
   /** The seek reached its target, or (composer-page.tsx's own call) ran out of older Entries to check. Either way, there is nothing left for this seek to do. */
   onSeekSettled?: () => void;
+  /**
+   * Reports which day's row sits topmost on screen, every time that
+   * changes — `topmostDayKey` below, the exact value the always-present
+   * pill already derives from the virtualizer's own `range`, just handed
+   * upward instead of only read locally. composer-page.tsx uses this to
+   * remember where the reader was reading when they leave the Composer,
+   * so returning lands on that day rather than at the newest Entry — the
+   * way it already reads `onSeekNeedsOlder`/`onSeekSettled` rather than
+   * reaching into `flatItems`/the virtualizer itself — both live only
+   * here. `null` whenever there's no real topmost row to report (an empty
+   * History), mirroring `topmostDayKey`'s own null case.
+   */
+  onVisibleDayChange?: (dayKey: string | null) => void;
 }
 
 /**
@@ -808,6 +821,7 @@ export function History({
   seek,
   onSeekNeedsOlder,
   onSeekSettled,
+  onVisibleDayChange,
 }: HistoryProps) {
   // The "which Entry is open" state behind the single shared
   // EntryActionsSheet below (issue #78) — owned here, not per-row, which
@@ -1204,6 +1218,29 @@ export function History({
   // same "hand off once the current one scrolls out of the way" judgement,
   // made explicitly in JS instead.
   const showOverlayPill = topmostDayKey !== null && topmostItem?.kind !== "separator";
+
+  // Reports `topmostDayKey` upward (see `onVisibleDayChange`'s own doc
+  // comment) whenever it actually changes — an effect, not a plain
+  // render-body call, because calling a parent's setter mid-render is a
+  // React anti-pattern (and would fire on every render, not just the ones
+  // where the topmost day genuinely moved). Placed before the
+  // `entries.length === 0` early return below so this hook still runs
+  // unconditionally on every render, same as every other hook above it;
+  // an empty History reports `null`, `topmostDayKey`'s own value in that
+  // case (`flatItems` is empty, so `topmostItem` is `undefined`).
+  //
+  // Note what this reports before the virtualizer has measured: `topIndex`
+  // falls back to `0` and `flatItems` runs oldest-first, so the first report
+  // of any mount is the OLDEST loaded day, not where the reader is. It
+  // self-corrects within a frame — the pin-to-newest or seek effect lands
+  // and the real range arrives — and the pill can live with that. A
+  // listener that writes what it hears somewhere longer-lived cannot:
+  // composer-page.tsx therefore refuses to record while a seek is still in
+  // flight, which is the window where that first report would otherwise
+  // overwrite the very day the seek exists to return to.
+  useEffect(() => {
+    onVisibleDayChange?.(topmostDayKey);
+  }, [topmostDayKey, onVisibleDayChange]);
 
   if (entries.length === 0) {
     return (

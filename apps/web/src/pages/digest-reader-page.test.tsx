@@ -1,6 +1,6 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen } from "@testing-library/react";
-import { MemoryRouter, Outlet, Route, Routes, useLocation } from "react-router";
+import { MemoryRouter, Outlet, Route, Routes, useLocation, useNavigate } from "react-router";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useSettingsStore } from "@/lib/settings";
 import type { EntryStoreOutletContext } from "@/pages/entry-store-layout";
@@ -91,12 +91,35 @@ function LocationProbe() {
   return <p data-testid="location-path">{location.pathname}</p>;
 }
 
-function renderDigestReaderPage(initialPath = "/digest/day/2026-08-20") {
+// Stands in for a hardware/browser Back press. MemoryRouter has no
+// `window.history` of its own for a real Back gesture to act on, so this
+// drives the identical mechanism a real Back press triggers — `navigate(-1)`
+// popping the router's own in-memory stack — the same way
+// `composer-page.test.tsx`'s `GoBackProbe` simulates Back for that page.
+function GoBackProbe() {
+  const navigate = useNavigate();
+  return (
+    <button type="button" onClick={() => navigate(-1)}>
+      Simulate Back
+    </button>
+  );
+}
+
+// `initialEntries` defaults to just the reader's own path — the same single
+// -entry stack (so `location.key === "default"`, the cold-load/deep-link
+// case) every pre-existing test in this file already renders against.
+// Tests that need a Digest actually opened from the cards first (so there's
+// a real entry behind it to pop back to) pass their own two-entry stack.
+function renderDigestReaderPage(
+  initialPath = "/digest/day/2026-08-20",
+  initialEntries: string[] = [initialPath],
+) {
   const queryClient = new QueryClient();
   return render(
     <QueryClientProvider client={queryClient}>
-      <MemoryRouter initialEntries={[initialPath]}>
+      <MemoryRouter initialEntries={initialEntries} initialIndex={initialEntries.length - 1}>
         <LocationProbe />
+        <GoBackProbe />
         <Routes>
           <Route element={<Outlet context={defaultEntryStoreContext} />}>
             <Route path="/digest" element={<p>digest cards</p>} />
@@ -117,6 +140,27 @@ function stubDigestAtFetch(response: { status: number; digest: unknown } | "netw
       ok: response.status < 300,
       status: response.status,
       json: async () => ({ digest: response.digest }),
+    };
+  });
+  vi.stubGlobal("fetch", fetchMock);
+  return fetchMock;
+}
+
+// Keyed by date, mirroring `digest-page.test.tsx`'s `stubDigestFetch` (keyed
+// by period there) — lets a stepping test follow more than one date through
+// `GET /v1/digests/day/:date` without every step resolving to the same
+// stubbed body regardless of which date it actually asked for.
+function stubDigestAtFetchByDate(responses: Record<string, { status: number; digest: unknown }>) {
+  const fetchMock = vi.fn(async (url: string) => {
+    const date = new URL(url).pathname.split("/").pop() ?? "";
+    const outcome = responses[date];
+    if (outcome === undefined) {
+      return { ok: false, status: 404, json: async () => ({}) };
+    }
+    return {
+      ok: outcome.status < 300,
+      status: outcome.status,
+      json: async () => ({ digest: outcome.digest }),
     };
   });
   vi.stubGlobal("fetch", fetchMock);
@@ -539,34 +583,93 @@ describe("DigestReaderPage", () => {
       );
     });
 
-    it("stepping is a real route change: browser back from a step returns to the prior Digest, not out of the archive", async () => {
-      // `<Link>` (a push, not `navigate(..., { replace: true })`) is what
-      // this test locks in — a `replace` would overwrite the entry behind
-      // it, so browser back from the stepped-to Digest would jump straight
-      // out to the cards instead of landing back on the Digest just left.
+    it("browser back after stepping through several days leaves the archive, rather than walking back to the previous day (ADR 0079)", async () => {
+      // `<Link replace>` is what this test locks in — a step overwrites
+      // the history entry behind it instead of pushing a new one, so
+      // browser back from a stepped-to Digest jumps straight out to the
+      // cards it was opened from, no matter how many days were stepped
+      // through on the way. This retires the opposite acceptance
+      // criterion this same test used to assert ("browser back walks the
+      // steps") — see ADR 0079, "Back is for screens, not for state
+      // within one."
       useSettingsStore.getState().setServerUrl("https://phone.example:41207");
-      stubDigestAtFetch({
+      const digestFor = (date: string, prevDate: string | null) => ({
         status: 200,
         digest: {
           period: "day",
-          period_start: "2026-08-20",
-          period_end: "2026-08-20",
-          body: "A day.",
+          period_start: date,
+          period_end: date,
+          body: `A day: ${date}.`,
           grounding_entry_ids: [],
-          prev_date: "2026-08-19",
+          prev_date: prevDate,
           next_date: null,
           stale: false,
           revision: 1,
           written_at: "2026-08-21T06:00:00Z",
         },
       });
+      stubDigestAtFetchByDate({
+        "2026-08-20": digestFor("2026-08-20", "2026-08-19"),
+        "2026-08-19": digestFor("2026-08-19", "2026-08-18"),
+        "2026-08-18": digestFor("2026-08-18", null),
+      });
 
-      renderDigestReaderPage("/digest/day/2026-08-20");
+      // Opened from the cards, same as a real Digest ever gets opened —
+      // `["/digest", "/digest/day/2026-08-20"]` puts one real entry behind
+      // the reader for Back to pop to.
+      renderDigestReaderPage("/digest/day/2026-08-20", ["/digest", "/digest/day/2026-08-20"]);
 
       const prevLink = await screen.findByRole("link", { name: "Previous Digest" });
       fireEvent.click(prevLink);
-
+      expect(await screen.findByText("A day: 2026-08-19.")).toBeInTheDocument();
       expect(screen.getByTestId("location-path")).toHaveTextContent("/digest/day/2026-08-19");
+
+      // Stepped again — still just the one entry behind the reader, since
+      // each step replaced rather than pushed.
+      const prevLinkAgain = await screen.findByRole("link", { name: "Previous Digest" });
+      fireEvent.click(prevLinkAgain);
+      expect(await screen.findByText("A day: 2026-08-18.")).toBeInTheDocument();
+      expect(screen.getByTestId("location-path")).toHaveTextContent("/digest/day/2026-08-18");
+
+      fireEvent.click(screen.getByRole("button", { name: "Simulate Back" }));
+
+      expect(screen.getByTestId("location-path")).toHaveTextContent("/digest");
+      expect(screen.getByText("digest cards")).toBeInTheDocument();
+    });
+
+    it("the on-screen Back arrow also leaves the archive after stepping, not just browser back", async () => {
+      useSettingsStore.getState().setServerUrl("https://phone.example:41207");
+      const digestFor = (date: string, prevDate: string | null) => ({
+        status: 200,
+        digest: {
+          period: "day",
+          period_start: date,
+          period_end: date,
+          body: `A day: ${date}.`,
+          grounding_entry_ids: [],
+          prev_date: prevDate,
+          next_date: null,
+          stale: false,
+          revision: 1,
+          written_at: "2026-08-21T06:00:00Z",
+        },
+      });
+      stubDigestAtFetchByDate({
+        "2026-08-20": digestFor("2026-08-20", "2026-08-19"),
+        "2026-08-19": digestFor("2026-08-19", "2026-08-18"),
+      });
+
+      renderDigestReaderPage("/digest/day/2026-08-20", ["/digest", "/digest/day/2026-08-20"]);
+
+      const prevLink = await screen.findByRole("link", { name: "Previous Digest" });
+      fireEvent.click(prevLink);
+      expect(await screen.findByText("A day: 2026-08-19.")).toBeInTheDocument();
+      expect(screen.getByTestId("location-path")).toHaveTextContent("/digest/day/2026-08-19");
+
+      fireEvent.click(screen.getByRole("button", { name: "Back" }));
+
+      expect(screen.getByTestId("location-path")).toHaveTextContent("/digest");
+      expect(screen.getByText("digest cards")).toBeInTheDocument();
     });
 
     it("skips a gap: a prev_date three days earlier is followed as-is, not recomputed", async () => {
