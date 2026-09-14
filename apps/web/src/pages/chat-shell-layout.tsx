@@ -1,10 +1,11 @@
-import { type CSSProperties, lazy, Suspense, useEffect } from "react";
+import { type CSSProperties, lazy, Suspense } from "react";
 import { Outlet, useLocation } from "react-router";
 import { ChatListPane } from "@/components/chat-list-pane";
 import { PaneDivider } from "@/components/pane-divider";
 import { useKeyboardInset } from "@/hooks/use-keyboard-inset";
 import { useWideLayout } from "@/hooks/use-wide-layout";
 import { useSettingsStore } from "@/lib/settings";
+import { useTodoSurface } from "@/lib/todo-surface";
 
 // Lazy, exactly like `todo-page.tsx`/`settings-page.tsx` themselves
 // (App.tsx's own header comment on issue #150's cold-start boundary) —
@@ -42,7 +43,9 @@ const TodoSidebar = lazy(() =>
  *
  * `data-surface="todo"` (issue #223) is written onto **`documentElement`**,
  * not onto this component's own div, and that placement is the whole of what
- * makes the token scope actually hold.
+ * makes the token scope actually hold. The write itself now lives in
+ * `lib/todo-surface.ts`; this file holds the *route's* claim on it, and is no
+ * longer the only claimant — see that module's header for why they are counted.
  *
  * It began on the div, which is the ancestor both the left pane and the open
  * Destination share, and that looked sufficient. It was not. Radix renders
@@ -63,9 +66,21 @@ const TodoSidebar = lazy(() =>
  * `data-accent`, `data-text-size` and `data-completed-style` onto the same
  * element for the same reason.
  *
+ * **The route is not the same question as "is a Todo surface on screen", and
+ * conflating the two was a real defect.** The Composer's Task detail overlay
+ * (ADR 0074, `composer-page.tsx`) is the real `TaskDetailView` rendered over
+ * `/composer`, where `isTodo` below is correctly false — so every `--td-*`
+ * token resolved to nothing underneath it. Measured on the device: on
+ * `/composer`, `--td-recognition-background`, `--td-priority-picker-1` and
+ * `--td-composer-background` all read `(UNSET)`. That is why a recognised date
+ * painted no chip there and the priority swatches all rendered grey. The
+ * overlay now holds its own claim.
+ *
  * Scoping the whole document is safe precisely because of what a `/todo/*`
  * route renders: the pane shows Todo's own sidebar and the Outlet shows Todo.
- * There is no non-Todo surface on screen to repaint by accident.
+ * There is no non-Todo surface on screen to repaint by accident. The overlay's
+ * claim is safe for the narrower reason that it is modal — while it is open it
+ * *is* the surface the reader is looking at.
  *
  * `useLocation` rather than reading `window.location` keeps this reacting to
  * every route change rather than only to a remount — this layout persists
@@ -83,21 +98,14 @@ export function ChatShellLayout() {
   // is the kind of defect nobody looks for because nobody caused it.
   const isTodo = location.pathname === "/todo" || location.pathname.startsWith("/todo/");
 
-  useEffect(() => {
-    const root = document.documentElement;
-    if (isTodo) {
-      root.dataset.surface = "todo";
-    } else {
-      // Removed rather than set to an empty string: `[data-surface="todo"]`
-      // would not match `""`, but a stray empty attribute on the document
-      // root is the kind of thing a later selector starts matching by
-      // accident, and there is nothing to gain by leaving one behind.
-      delete root.dataset.surface;
-    }
-    return () => {
-      delete root.dataset.surface;
-    };
-  }, [isTodo]);
+  // The route's own claim on the Todo token scope. It is no longer the only
+  // one: `composer-page.tsx` holds a second while its Task detail overlay is
+  // open, because that overlay is the real `TaskDetailView` rendered over
+  // `/composer`, where this test correctly says "not Todo" and would otherwise
+  // strip every `--td-*` token out from under it. `todo-surface.ts`'s own
+  // header comment has the measurement and the reason the claims are counted
+  // rather than written directly.
+  useTodoSurface(isTodo);
 
   return (
     <div
