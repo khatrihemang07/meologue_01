@@ -69,6 +69,24 @@ import type { RecurrenceOutcome, RecurrenceReference } from "./rule";
  * exactly, and only the no-bang default for these two frequencies moved
  * to match every other frequency's own due-anchored default.
  *
+ * **What #291's evidence does NOT cover, said here because the change is
+ * wider than the measurement.** Both driven probes were `every day`, where
+ * an interval of one day means the rule has no weekday *phase* to keep or
+ * lose. The artifact generalises them to "next = max(current due, today) +
+ * one interval" — but that formula is an inference from daily readings, not
+ * something driven for a weekly or longer cadence, and for `every week` the
+ * two do not agree. A Task due Mon 7 Sep completed Wed 16 Sep now lands on
+ * **Mon 21 Sep**, keeping its Monday phase by stepping from the due date;
+ * that formula would give **Wed 23 Sep**, and the retired completion anchor
+ * gave the same. So this change moved the overdue-by-more-than-one-interval
+ * weekly case too, which "only early completion differs" would have missed.
+ *
+ * Phase-keeping is very probably right — `every week` on a Monday Task
+ * meaning "Mondays" is what the words say, and it is what every other
+ * frequency here already does. But *probably right* is not *established*,
+ * and nothing has driven Todoist's own weekly-overdue behaviour either way.
+ * Tracked rather than assumed; do not promote a `SCHED-` row on it.
+ *
  * **Skipping missed occurrences (nextOccurrenceAfterCompletion only).**
  * Only a date strictly after `reference.now` is ever returned — a yearly
  * rule due 1 Jan 2025, not completed until 1 Jul 2026 (eighteen months
