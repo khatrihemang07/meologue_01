@@ -1287,11 +1287,31 @@ describe("TaskDetailView", () => {
   });
 
   describe("Comments — issue #180", () => {
-    it("renders no thread heading when there are no Comments yet", () => {
+    /**
+     * CMT-09: opens a Comment's own "Comment options" menu and clicks the
+     * named item. `pointerDown`, not `click` — Radix's `DropdownMenu`
+     * opens on pointer, and a plain `click` never opens it at all (the
+     * same idiom `project-view.test.tsx` already uses for its own menu).
+     * `index` picks which Comment's menu when a test renders several.
+     */
+    function openCommentOptions(itemName: string, index = 0) {
+      const trigger = screen.getAllByRole("button", { name: "Comment options" })[index];
+      if (trigger === undefined) {
+        throw new Error(`no Comment options trigger at index ${index}`);
+      }
+      fireEvent.pointerDown(trigger);
+      fireEvent.click(screen.getByRole("menuitem", { name: itemName }));
+    }
+
+    it("CMT-10: renders no Comments section at all when there are none — not an empty heading", () => {
       renderView({ comments: [] });
 
-      expect(screen.getByText("Comments")).toBeInTheDocument();
-      expect(screen.queryByText(/^Comments \(/)).not.toBeInTheDocument();
+      // Todoist's own zero state, read back from its live DOM
+      // (`detail-modal-todoist-2026-09-14.json`'s
+      // `comments.zeroCommentsState`): the word "Comments" appears nowhere
+      // in the left column when the Task has none. meologue used to render
+      // a bare "Comments" heading over nothing.
+      expect(screen.queryByText(/^Comments/)).not.toBeInTheDocument();
     });
 
     it("lists every Comment, oldest first as handed in, each rendered as Markdown", () => {
@@ -1376,7 +1396,7 @@ describe("TaskDetailView", () => {
     it("editing a Comment opens a textarea seeded with its text", () => {
       renderView({ comments: [comment({ id: "c1", text: "original" })] });
 
-      fireEvent.click(screen.getByRole("button", { name: "Edit comment" }));
+      openCommentOptions("Edit");
       const field = screen.getByLabelText("Edit comment");
       expect(field).toHaveValue("original");
     });
@@ -1385,7 +1405,7 @@ describe("TaskDetailView", () => {
       const onEditComment = vi.fn();
       renderView({ comments: [comment({ id: "c1", text: "original" })], onEditComment });
 
-      fireEvent.click(screen.getByRole("button", { name: "Edit comment" }));
+      openCommentOptions("Edit");
       const field = screen.getByLabelText("Edit comment");
       field.focus();
       fireEvent.change(field, { target: { value: "changed" } });
@@ -1399,7 +1419,7 @@ describe("TaskDetailView", () => {
       const onEditComment = vi.fn();
       renderView({ comments: [comment({ id: "c1", text: "original" })], onEditComment });
 
-      fireEvent.click(screen.getByRole("button", { name: "Edit comment" }));
+      openCommentOptions("Edit");
       const field = screen.getByLabelText("Edit comment");
       // Focused, exactly like a reader who has actually been typing —
       // the bug this guards against only shows up once the textarea is
@@ -1418,7 +1438,7 @@ describe("TaskDetailView", () => {
       const onClose = vi.fn();
       renderView({ comments: [comment({ id: "c1", text: "original" })], onClose });
 
-      fireEvent.click(screen.getByRole("button", { name: "Edit comment" }));
+      openCommentOptions("Edit");
       const field = screen.getByLabelText("Edit comment");
       field.focus();
       fireEvent.change(field, { target: { value: "changed" } });
@@ -1447,7 +1467,7 @@ describe("TaskDetailView", () => {
       const onEditComment = vi.fn();
       renderView({ comments: [comment({ id: "c1", text: "original" })], onEditComment });
 
-      fireEvent.click(screen.getByRole("button", { name: "Edit comment" }));
+      openCommentOptions("Edit");
       const field = screen.getByLabelText("Edit comment");
       fireEvent.change(field, { target: { value: "changed" } });
       fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
@@ -1461,7 +1481,7 @@ describe("TaskDetailView", () => {
       const onEditComment = vi.fn();
       renderView({ comments: [comment({ id: "c1", text: "original" })], onEditComment });
 
-      fireEvent.click(screen.getByRole("button", { name: "Edit comment" }));
+      openCommentOptions("Edit");
       const field = screen.getByLabelText("Edit comment");
       fireEvent.change(field, { target: { value: "  changed  " } });
       fireEvent.click(screen.getByRole("button", { name: "Update" }));
@@ -1474,12 +1494,12 @@ describe("TaskDetailView", () => {
       const onEditComment = vi.fn();
       renderView({ comments: [comment({ id: "c1", text: "original" })], onEditComment });
 
-      fireEvent.click(screen.getByRole("button", { name: "Edit comment" }));
+      openCommentOptions("Edit");
       fireEvent.click(screen.getByRole("button", { name: "Update" }));
       expect(onEditComment).not.toHaveBeenCalled();
       expect(screen.getByText("original")).toBeInTheDocument();
 
-      fireEvent.click(screen.getByRole("button", { name: "Edit comment" }));
+      openCommentOptions("Edit");
       const field = screen.getByLabelText("Edit comment");
       fireEvent.change(field, { target: { value: "   " } });
       fireEvent.click(screen.getByRole("button", { name: "Update" }));
@@ -1491,7 +1511,7 @@ describe("TaskDetailView", () => {
       const onRemoveComment = vi.fn();
       renderView({ comments: [comment({ id: "c1" })], onRemoveComment });
 
-      fireEvent.click(screen.getByRole("button", { name: "Delete comment" }));
+      openCommentOptions("Delete");
 
       // Not removed yet — the confirm dialog is open, not the delete itself.
       expect(onRemoveComment).not.toHaveBeenCalled();
@@ -1507,10 +1527,116 @@ describe("TaskDetailView", () => {
       const onRemoveComment = vi.fn();
       renderView({ comments: [comment({ id: "c1" })], onRemoveComment });
 
-      fireEvent.click(screen.getByRole("button", { name: "Delete comment" }));
+      openCommentOptions("Delete");
       fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
 
       expect(onRemoveComment).not.toHaveBeenCalled();
+    });
+
+    describe("CMT-10 — the Comments header collapses", () => {
+      it("is a real disclosure, open by default, and collapses the thread", () => {
+        renderView({ comments: [comment({ id: "c1", text: "first" })] });
+
+        // `closest("details")` rather than `getByRole("group", { name })`:
+        // a `<details>` does take the role, but testing-library does not
+        // compute its accessible name from the `<summary>`, so the named
+        // query finds nothing. Checked directly before writing this.
+        const summary = screen.getByText("Comments (1)");
+        const disclosure = summary.closest("details");
+        expect(disclosure).toHaveAttribute("open");
+        expect(screen.getByText("first")).toBeInTheDocument();
+
+        fireEvent.click(summary);
+
+        expect(disclosure).not.toHaveAttribute("open");
+      });
+
+      it("counts the Comments in its summary", () => {
+        renderView({
+          comments: [comment({ id: "c1" }), comment({ id: "c2" }), comment({ id: "c3" })],
+        });
+
+        expect(screen.getByText("Comments (3)")).toBeInTheDocument();
+      });
+
+      it("keeps the pinned composer reachable while the thread is collapsed", () => {
+        renderView({ comments: [comment({ id: "c1", text: "first" })] });
+
+        fireEvent.click(screen.getByText("Comments (1)"));
+
+        // The composer is the column's footer, a sibling of the thread
+        // rather than a member of it — collapsing the thread must not take
+        // the way to add a Comment with it.
+        expect(screen.getByLabelText("Add a comment")).toBeInTheDocument();
+      });
+    });
+
+    describe("CMT-09 — the Comment options menu", () => {
+      // This project sets neither `unstubGlobals` nor `restoreMocks`
+      // (vite.config.ts's own `test` block), so a stubbed `navigator` would
+      // otherwise stay stubbed for every test after it in this file.
+      afterEach(() => {
+        vi.unstubAllGlobals();
+      });
+
+      it("carries exactly Todoist's four visible items, in its order", () => {
+        renderView({ comments: [comment({ id: "c1" })] });
+
+        fireEvent.pointerDown(screen.getByRole("button", { name: "Comment options" }));
+
+        expect(screen.getAllByRole("menuitem").map((item) => item.textContent)).toEqual([
+          "Edit",
+          "Copy text",
+          "Copy link to comment",
+          "Delete",
+        ]);
+      });
+
+      it("has no 'Add a reaction' — this app has no user identity for a reaction to belong to", () => {
+        renderView({ comments: [comment({ id: "c1" })] });
+
+        fireEvent.pointerDown(screen.getByRole("button", { name: "Comment options" }));
+
+        expect(screen.queryByRole("menuitem", { name: "Add a reaction" })).not.toBeInTheDocument();
+      });
+
+      it("Copy text copies the Comment's own Markdown source, not its rendered prose", async () => {
+        const writeText = vi.fn().mockResolvedValue(undefined);
+        vi.stubGlobal("navigator", { ...navigator, clipboard: { writeText } });
+        renderView({ comments: [comment({ id: "c1", text: "a *bold* claim" })] });
+
+        openCommentOptions("Copy text");
+
+        expect(writeText).toHaveBeenCalledWith("a *bold* claim");
+      });
+
+      it("Copy link to comment copies this Task's own address, fragment-scoped to the Comment", () => {
+        const writeText = vi.fn().mockResolvedValue(undefined);
+        vi.stubGlobal("navigator", { ...navigator, clipboard: { writeText } });
+        renderView({
+          task: task({ id: "11111111-1111-4111-8111-111111111111", content: "Buy milk" }),
+          comments: [comment({ id: "c1" })],
+        });
+
+        openCommentOptions("Copy link to comment");
+
+        expect(writeText).toHaveBeenCalledWith(
+          `${window.location.origin}/todo/task/buy-milk-11111111-1111-4111-8111-111111111111#comment-c1`,
+        );
+      });
+
+      it("opens the menu belonging to the Comment it was triggered from", () => {
+        const onRemoveComment = vi.fn();
+        renderView({
+          comments: [comment({ id: "c1", text: "first" }), comment({ id: "c2", text: "second" })],
+          onRemoveComment,
+        });
+
+        openCommentOptions("Delete", 1);
+        fireEvent.click(screen.getByRole("button", { name: "Delete" }));
+
+        expect(onRemoveComment).toHaveBeenCalledWith("c2");
+      });
     });
   });
 

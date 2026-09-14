@@ -58,8 +58,17 @@
  */
 import type { Comment, Event, Label, Project, Section, Task } from "@meologue/core";
 import { uiPriorityOf } from "@meologue/core";
-import { ChevronLeft, ChevronRight, Pencil, Trash2, X } from "lucide-react";
-import { Dialog as DialogPrimitive } from "radix-ui";
+import {
+  ChevronLeft,
+  ChevronRight,
+  Copy,
+  Link2,
+  MoreHorizontal,
+  Pencil,
+  Trash2,
+  X,
+} from "lucide-react";
+import { Dialog as DialogPrimitive, DropdownMenu } from "radix-ui";
 import type * as React from "react";
 import { forwardRef, Suspense, useEffect, useRef, useState } from "react";
 import { useOutletContext } from "react-router";
@@ -80,6 +89,7 @@ import { formatDay, formatTaskDate } from "@/lib/format-task-date";
 import { localDayKey } from "@/lib/local-day-key";
 import type { QuickAddAutocompleteOptions } from "@/lib/quick-add-autocomplete";
 import { useSettingsStore } from "@/lib/settings";
+import { taskDetailPath } from "@/lib/task-detail-route";
 import { priorityColour } from "@/lib/task-priority-colors";
 import { quickAddRecognitionPlugin } from "@/lib/todo-quick-add-recognition";
 import { cn } from "@/lib/utils";
@@ -308,13 +318,26 @@ const AttributeRow = forwardRef<
 // an unbounded field would walk its own submit buttons out of view.
 const COMMENT_FIELD_MAX_HEIGHT = 200;
 
+/**
+ * Copied verbatim from `project-view.tsx`'s own menu items rather than
+ * extracted into a shared module: this repo has no
+ * `components/ui/dropdown-menu.tsx` wrapper, and the two menus using
+ * `radix-ui`'s `DropdownMenu` directly is the established pattern here
+ * (`project-view.tsx`, `labels-view.tsx`, `task-command-menu.tsx`).
+ */
+const menuItemClassName =
+  "flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-sm outline-none data-highlighted:bg-muted data-highlighted:text-foreground";
+
 function CommentRow({
   comment,
   onEdit,
+  onCopyLink,
   onRequestRemove,
 }: {
   comment: Comment;
   onEdit: (text: string) => void;
+  /** CMT-09: "Copy link to comment" — the caller owns the address, exactly as `onRequestRemove` below owns the confirmation. */
+  onCopyLink: () => void;
   /** CMT-03: deleting a Comment confirms first — this row never removes directly; it only asks its caller (`TaskDetailBody`'s own `ConfirmDialog`) to start that confirmation. */
   onRequestRemove: () => void;
 }) {
@@ -338,6 +361,20 @@ function CommentRow({
   function startEditing() {
     setDraft(comment.text);
     setEditing(true);
+  }
+
+  /**
+   * "Copy text" copies the Comment's own Markdown source, not its rendered
+   * prose — the same text `Edit` would put in the textarea, so copying and
+   * pasting a Comment round-trips it unchanged. Toast wording and the
+   * failure branch match `todo-page.tsx`'s own `copyTaskLink`, which is
+   * this app's only other clipboard write.
+   */
+  function copyText() {
+    navigator.clipboard?.writeText(comment.text).then(
+      () => toast("Comment copied"),
+      () => toast.error("Couldn't copy the comment"),
+    );
   }
 
   /** Escape and Cancel both land here — discard the draft, close the editor, save nothing. No blur involved (this file's own header comment above on why routing through blur was the bug). */
@@ -451,22 +488,66 @@ function CommentRow({
           {entryProse(comment.text, undefined, undefined, undefined, "comment")}
         </div>
       </div>
-      <button
-        type="button"
-        aria-label="Edit comment"
-        onClick={startEditing}
-        className="flex size-6 shrink-0 items-center justify-center rounded text-muted-foreground opacity-0 transition hover:text-foreground group-hover:opacity-100 focus-visible:opacity-100"
-      >
-        <Pencil aria-hidden="true" className="size-3.5" />
-      </button>
-      <button
-        type="button"
-        aria-label="Delete comment"
-        onClick={onRequestRemove}
-        className="flex size-6 shrink-0 items-center justify-center rounded text-muted-foreground opacity-0 transition hover:text-foreground group-hover:opacity-100 focus-visible:opacity-100"
-      >
-        <Trash2 aria-hidden="true" className="size-3.5" />
-      </button>
+      {/* CMT-09: Todoist reveals a "Comment options" menu on hover, whose
+          four visible items are Edit / Copy text / Copy link to comment /
+          Delete (driven live 2026-09-14,
+          `detail-modal-todoist-2026-09-14.json`'s own
+          `postedCommentAnatomy.commentOptionsMenu`). meologue showed a bare
+          pencil/trash pair instead, which could carry Edit and Delete but
+          had nowhere to put the two Copy actions — a third and fourth icon
+          on every row is exactly the "wall of chrome" the row's own doc
+          comment above was avoiding when it chose two.
+
+          Todoist's sibling "Add a reaction" control is deliberately NOT
+          built: this app has no user identity at all (a `Comment` carries
+          only `deviceId`), so a reaction would have nobody to belong to.
+          Recorded as a divergence rather than left to be rediscovered.
+
+          The trigger keeps the row's existing hover-reveal treatment —
+          always mounted, `opacity-0` until hover or focus — rather than
+          Todoist's mount-on-hover, per ROW-12's own ratified decision that
+          a control a keyboard reader cannot reach is worse than one that is
+          merely invisible. */}
+      <DropdownMenu.Root>
+        <DropdownMenu.Trigger asChild>
+          <button
+            type="button"
+            aria-label="Comment options"
+            className="flex size-6 shrink-0 items-center justify-center rounded text-muted-foreground opacity-0 transition hover:text-foreground group-hover:opacity-100 focus-visible:opacity-100 data-[state=open]:opacity-100"
+          >
+            <MoreHorizontal aria-hidden="true" className="size-3.5" />
+          </button>
+        </DropdownMenu.Trigger>
+        <DropdownMenu.Portal>
+          <DropdownMenu.Content
+            align="end"
+            className="z-50 flex w-52 flex-col gap-0.5 rounded-lg border border-border bg-popover p-1 text-popover-foreground shadow-lg data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0"
+          >
+            <DropdownMenu.Item className={menuItemClassName} onSelect={startEditing}>
+              <Pencil aria-hidden="true" className="size-3.5" />
+              Edit
+            </DropdownMenu.Item>
+            <DropdownMenu.Item className={menuItemClassName} onSelect={copyText}>
+              <Copy aria-hidden="true" className="size-3.5" />
+              Copy text
+            </DropdownMenu.Item>
+            <DropdownMenu.Item className={menuItemClassName} onSelect={onCopyLink}>
+              <Link2 aria-hidden="true" className="size-3.5" />
+              Copy link to comment
+            </DropdownMenu.Item>
+            <DropdownMenu.Item
+              className={cn(
+                menuItemClassName,
+                "text-destructive data-highlighted:bg-destructive/10",
+              )}
+              onSelect={onRequestRemove}
+            >
+              <Trash2 aria-hidden="true" className="size-3.5" />
+              Delete
+            </DropdownMenu.Item>
+          </DropdownMenu.Content>
+        </DropdownMenu.Portal>
+      </DropdownMenu.Root>
     </li>
   );
 }
@@ -726,6 +807,28 @@ function TaskDetailBody({
   // Comment it's currently open for, mirroring `todo-page.tsx`'s own
   // `confirmingId`/`ConfirmDialog` pair for deleting a Task.
   const [confirmingCommentId, setConfirmingCommentId] = useState<string | null>(null);
+  /**
+   * CMT-09's "Copy link to comment". meologue has no per-Comment route, so
+   * the address is this Task's own detail URL plus a `#comment-<id>`
+   * fragment: `taskIdFromParam` (task-detail-route.ts) reads only the
+   * trailing uuid of the path segment, so the fragment rides along without
+   * disturbing resolution, and a reader who opens the link lands on the
+   * Task holding the Comment. **The fragment is not yet a scroll target** —
+   * nothing reads it on mount — so this copies a durable address, not a
+   * jump-to-comment. Recorded that way rather than claiming more than it
+   * does.
+   *
+   * Origin, toast wording and the failure branch all match
+   * `todo-page.tsx`'s own `copyTaskLink`, which this is the Comment-scoped
+   * sibling of.
+   */
+  function copyCommentLink(comment: Comment) {
+    const url = `${window.location.origin}${taskDetailPath(task)}#comment-${comment.id}`;
+    navigator.clipboard?.writeText(url).then(
+      () => toast("Link copied"),
+      () => toast.error("Couldn't copy the link"),
+    );
+  }
   // DET-15: the shared discard-confirm dialog for the title/description
   // form — one boolean, not one per field, since DET-09 already made
   // Cancel/Save a single pair for both fields together; asking twice
@@ -1457,27 +1560,44 @@ function TaskDetailBody({
               </form>
             </div>
 
-            {/* Comments (issue #180) — a thread below the description, an
-              always-visible composer, the most recent Comment simply the
-              last item in the list rather than hidden behind an icon
-              (this ticket's own reference-behaviour note). */}
-            <div className="flex flex-col gap-2">
-              <h2 className="text-muted-foreground text-xs">
-                Comments{comments.length > 0 ? ` (${comments.length})` : ""}
-              </h2>
-              {comments.length > 0 && (
-                <ul className="flex flex-col gap-1">
+            {/* Comments (issue #180) — a thread below the description, the
+              most recent Comment simply the last item in the list.
+
+              **CMT-10: nothing renders at all when there are none.** Todoist's
+              own zero state, read back from its live DOM
+              (`detail-modal-todoist-2026-09-14.json`'s
+              `comments.zeroCommentsState`): the word "Comments" appears
+              nowhere in the left column until a Task has one, with the
+              composer sitting directly under "Add sub-task". meologue used to
+              print a bare "Comments" heading over an empty space — a label
+              for a section that does not exist yet.
+
+              **And it collapses.** The same native `<details>` disclosure the
+              Activity section below already uses, rather than a second idiom
+              for the same interaction two elements apart — but `open` by
+              default, where Activity is closed: a Task's Comments are part of
+              reading it, and Todoist shows its own thread expanded. The
+              composer is deliberately NOT inside this element (it is the
+              column's footer, below), so collapsing the thread never takes
+              the way to add a Comment with it. */}
+            {comments.length > 0 && (
+              <details open className="flex flex-col gap-2">
+                <summary className="cursor-pointer select-none text-muted-foreground text-xs">
+                  Comments ({comments.length})
+                </summary>
+                <ul className="mt-2 flex flex-col gap-1">
                   {comments.map((comment) => (
                     <CommentRow
                       key={comment.id}
                       comment={comment}
                       onEdit={(text) => onEditComment(comment.id, text)}
+                      onCopyLink={() => copyCommentLink(comment)}
                       onRequestRemove={() => setConfirmingCommentId(comment.id)}
                     />
                   ))}
                 </ul>
-              )}
-            </div>
+              </details>
+            )}
 
             {/* DET-15: Cancel/Escape/an outside click confirm first when the
               title/description form holds unsaved changes, verbatim
