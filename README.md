@@ -95,8 +95,12 @@ but another Device needs HTTPS. One tailnet-only option is:
 tailscale serve --bg http://127.0.0.1:41207
 ```
 
-Open the HTTPS name printed by `tailscale serve status`. Use Tailscale Serve, not Funnel: the Server
-has no application-level authentication. The web app is installable and remains usable offline.
+`serve --bg` publishes on 443, so the address to open drops the port entirely —
+`https://<machine>.<tailnet>.ts.net`, not `...:41207` — and keeping the port produces an opaque TLS
+error rather than a useful one. `server/src/main.rs` prints that exact address as `Tailscale Serve
+URL for Settings: <url>` on startup, which is the copy-pasteable answer to use. Use Tailscale Serve,
+not Funnel: the Server has no application-level authentication. The web app is installable and
+remains usable offline.
 
 ### Android
 

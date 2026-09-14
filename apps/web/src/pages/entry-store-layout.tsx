@@ -32,10 +32,12 @@ import { dayReferrers } from "@/lib/day-referrers";
 import { deferStore, type StoreMethodNames } from "@/lib/defer-store";
 import { deviceUtcOffsetMinutes } from "@/lib/entry-day";
 import {
+  InsecureContextError,
   OpenTimeoutError,
   SecondTabError,
   StorageUnavailableError,
 } from "@/lib/entry-store-errors";
+import { httpsOriginHint } from "@/lib/https-origin-hint";
 import type { ComposerPromotionContext } from "@/lib/promote-tasks";
 import { ENTRY_STORE_QUERY_KEY } from "@/lib/query-keys";
 import { runSoftBreakMigrationOnce } from "@/lib/soft-break-migration";
@@ -288,6 +290,15 @@ export interface EntryStoreOutletContext {
   removeFilter: (id: string) => void;
   disabled: boolean;
   message?: string;
+  /**
+   * Somewhere for the reader to go about `message`, when the failure has a
+   * fix rather than only a cause. Kept beside `message` as its own field
+   * rather than widening `message` to a `ReactNode`: the sentence stays
+   * independently assertable without rendering React, which is how the
+   * existing tests pin it, and Shell keeps deciding what an error region
+   * looks like instead of accepting arbitrary JSX from whoever set it.
+   */
+  messageAction?: { href: string; label: string };
 }
 
 // This is the composition root for the sqlite-driver seam (ticket 24): each
@@ -328,7 +339,53 @@ export const entryStoreQueryOptions = queryOptions({
   retryOnMount: false,
 });
 
-function describeOpenError(error: unknown): string {
+/**
+ * What the reader is shown when the store won't open, and — where one
+ * exists — somewhere to go about it. Split from a bare string in issue #159's
+ * successor: a link is the difference between naming a fix and offering one,
+ * and on a tablet a URL that isn't tappable may as well not be there.
+ */
+interface OpenFailure {
+  message: string;
+  action?: { href: string; label: string };
+}
+
+/**
+ * Appends the originating failure to a sentence that can't name it.
+ *
+ * Issue #159 carried the real `DOMException`'s name and message across
+ * `postMessage` so they'd survive to the main thread, where
+ * `classifyOpenFailure` puts them on the thrown error's own `message`. They
+ * then stopped here, because this function returned fixed copy — which is
+ * fine at a desk with a console open and useless on a tablet, the one place
+ * these failures actually get hit. `classifyOpenError` can't do better than
+ * "unavailable" (`NoModificationAllowedError` is the only name specific
+ * enough to act on, and guessing "private browsing" from `SecurityError`
+ * differs per engine), so the honest move is to show what arrived rather
+ * than to invent a taxonomy over it.
+ */
+function withDetail(sentence: string, error: unknown): string {
+  const detail = error instanceof Error ? error.message : "";
+  return detail === "" ? sentence : `${sentence} (${detail})`;
+}
+
+function describeOpenError(error: unknown): OpenFailure {
+  if (error instanceof InsecureContextError) {
+    // Checked before StorageUnavailableError, and distinct from it on
+    // purpose: every other branch of this function describes something the
+    // reader can only react to, and this one describes something they can
+    // fix — the app is fine, the URL is wrong. Saying "try a non-private
+    // window" here (as the shared branch used to) sends someone to hunt a
+    // setting that was never the problem. Browsers gate OPFS behind a
+    // secure context, so plain HTTP to anything but localhost can never
+    // store an Entry, however the browser is configured (ADR 0017).
+    const href = httpsOriginHint();
+    return {
+      message:
+        "meologue can't store Entries over plain HTTP — open this page over HTTPS, or on localhost.",
+      ...(href ? { action: { href, label: href } } : {}),
+    };
+  }
   if (error instanceof SecondTabError) {
     // OPFS allows a single writer per origin (ticket 45). Before installing
     // the PWA was possible, hitting this meant two browser tabs — an edge
@@ -338,10 +395,21 @@ function describeOpenError(error: unknown): string {
     // window, and the old wording ("can't store Entries") read like data
     // loss rather than the ordinary, expected lockout this actually is.
     // Detection is unchanged; only the words.
-    return "meologue is already open in another window. Only one window can hold the Entries at a time — close this one, or go back to the other.";
+    return {
+      message:
+        "meologue is already open in another window. Only one window can hold the Entries at a time — close this one, or go back to the other.",
+    };
   }
   if (error instanceof StorageUnavailableError) {
-    return "meologue can't store Entries here — try a non-private window over HTTPS or localhost.";
+    // No longer says "over HTTPS or localhost" — the insecure-origin branch
+    // above owns that advice now, and leaving it here made a browser that
+    // refused a legitimate attempt read like a URL mistake.
+    return {
+      message: withDetail(
+        "meologue can't store Entries here — this browser wouldn't open storage. Try a non-private window.",
+        error,
+      ),
+    };
   }
   if (error instanceof OpenTimeoutError) {
     // Issue #159: deliberately not the same sentence as the fallback below.
@@ -354,7 +422,10 @@ function describeOpenError(error: unknown): string {
     // reader isn't shown an indefinitely disabled Composer with no
     // explanation at all.
     console.error("meologue: opening the entry store timed out", error);
-    return "meologue is taking longer than expected to open its storage. If this doesn't resolve, try reloading.";
+    return {
+      message:
+        "meologue is taking longer than expected to open its storage. If this doesn't resolve, try reloading.",
+    };
   }
   // Reached by WorkerLoadError (the worker script itself failed to load or
   // threw at top level — issue #159) as well as anything else this
@@ -362,7 +433,7 @@ function describeOpenError(error: unknown): string {
   // carry more detail than the sentence below does, so it's logged in full
   // rather than only the generic fallback message reaching a developer.
   console.error("meologue: failed to open the entry store", error);
-  return "meologue couldn't open its storage. Reloading may help.";
+  return { message: withDetail("meologue couldn't open its storage. Reloading may help.", error) };
 }
 
 function noop() {}
@@ -946,7 +1017,9 @@ export function deferFilterStoreUntilOpen(
 export function EntryStoreLayout() {
   const { data, error } = useQuery(entryStoreQueryOptions);
 
-  const message = useMemo(() => (error ? describeOpenError(error) : undefined), [error]);
+  const failure = useMemo(() => (error ? describeOpenError(error) : undefined), [error]);
+  const message = failure?.message;
+  const messageAction = failure?.action;
 
   // A promise this component settles itself, from `data`/`error` above,
   // rather than one obtained by independently asking TanStack Query to
@@ -1354,6 +1427,7 @@ export function EntryStoreLayout() {
               removeFilter: noopRemoveFilter,
               disabled: true,
               message,
+              messageAction,
             } satisfies EntryStoreOutletContext)
       }
     />

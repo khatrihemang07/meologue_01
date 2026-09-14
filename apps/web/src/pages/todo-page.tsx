@@ -318,6 +318,7 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
     removeTask,
     disabled,
     message,
+    messageAction,
     setTaskDate,
     setTaskDeadline,
     setTaskPriority,
@@ -938,6 +939,7 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
       title={todoHeading(backgroundView, currentProject, currentFilter)}
       back={<BackToChats />}
       message={message}
+      messageAction={messageAction}
       composerSlot={<TodoNav />}
       // Issue #254: Todo reads like Todoist's own page now — an 800px
       // column above the existing 900px wide-layout breakpoint (reused

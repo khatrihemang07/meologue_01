@@ -11,7 +11,7 @@ import { QueryClientProvider } from "@tanstack/react-query";
 import { render, screen, waitFor } from "@testing-library/react";
 import { useEffect } from "react";
 import { MemoryRouter, Route, Routes } from "react-router";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   deferCommentStoreUntilOpen,
   deferEventStoreUntilOpen,
@@ -160,8 +160,13 @@ async function importFresh() {
 let activeUseEntryStore: typeof UseEntryStore;
 
 function Probe() {
-  const { disabled, message } = activeUseEntryStore();
-  return <p>{`disabled:${disabled} message:${message ?? "none"}`}</p>;
+  const { disabled, message, messageAction } = activeUseEntryStore();
+  return (
+    <>
+      <p>{`disabled:${disabled} message:${message ?? "none"}`}</p>
+      <p>{`action:${messageAction?.href ?? "none"}`}</p>
+    </>
+  );
 }
 
 // Issue #110's regression probe: records every mount/unmount of whatever
@@ -221,6 +226,8 @@ describe("EntryStoreLayout", () => {
     const fresh = await importFresh();
     // Pre-attached so Node doesn't flag this as an unhandled rejection in
     // the window before EntryStoreLayout's own .then() catches it.
+    // No message on this fixture on purpose: this pins that an empty
+    // message produces the plain sentence with no dangling " ()".
     const rejection = Promise.reject(new fresh.StorageUnavailableError());
     rejection.catch(() => {});
     createDriver.mockReturnValue(rejection);
@@ -241,10 +248,163 @@ describe("EntryStoreLayout", () => {
     await waitFor(() =>
       expect(
         screen.getByText(
-          "disabled:true message:meologue can't store Entries here — try a non-private window over HTTPS or localhost.",
+          "disabled:true message:meologue can't store Entries here — this browser wouldn't open storage. Try a non-private window.",
         ),
       ).toBeInTheDocument(),
     );
+  });
+
+  // Issue #159's own regression: the originating DOMException's name/message
+  // used to reach only the console, invisible on a tablet with no devtools —
+  // this pins that a non-empty error message is appended in parentheses so
+  // it reaches the reader too.
+  it("appends the originating error's own message in parentheses when StorageUnavailableError carries one", async () => {
+    const fresh = await importFresh();
+    const rejection = Promise.reject(
+      new fresh.StorageUnavailableError("SecurityError: The operation is insecure."),
+    );
+    rejection.catch(() => {});
+    createDriver.mockReturnValue(rejection);
+    activeUseEntryStore = fresh.useEntryStore;
+
+    render(
+      <QueryClientProvider client={fresh.queryClient}>
+        <MemoryRouter initialEntries={["/"]}>
+          <Routes>
+            <Route element={<fresh.EntryStoreLayout />}>
+              <Route path="/" element={<Probe />} />
+            </Route>
+          </Routes>
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+
+    await waitFor(() =>
+      expect(
+        screen.getByText(
+          "disabled:true message:meologue can't store Entries here — this browser wouldn't open storage. Try a non-private window. (SecurityError: The operation is insecure.)",
+        ),
+      ).toBeInTheDocument(),
+    );
+  });
+
+  // Checked before StorageUnavailableError in describeOpenError, and must
+  // NOT read the same as that branch's sentence above: this one names a fix
+  // (a different URL) rather than only a cause, so the two sentences read
+  // as genuinely different failures on screen, mirroring OpenTimeoutError's
+  // own "must not read the same as the fallback" test below.
+  it("puts a distinct, HTTP-specific message on the outlet when the context is insecure", async () => {
+    const fresh = await importFresh();
+    const rejection = Promise.reject(new fresh.InsecureContextError());
+    rejection.catch(() => {});
+    createDriver.mockReturnValue(rejection);
+    activeUseEntryStore = fresh.useEntryStore;
+
+    render(
+      <QueryClientProvider client={fresh.queryClient}>
+        <MemoryRouter initialEntries={["/"]}>
+          <Routes>
+            <Route element={<fresh.EntryStoreLayout />}>
+              <Route path="/" element={<Probe />} />
+            </Route>
+          </Routes>
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+
+    await waitFor(() =>
+      expect(
+        screen.getByText(
+          "disabled:true message:meologue can't store Entries over plain HTTP — open this page over HTTPS, or on localhost.",
+        ),
+      ).toBeInTheDocument(),
+    );
+  });
+
+  // httpsOriginHint (@/lib/https-origin-hint.ts) reads window.location
+  // directly rather than taking a parameter here — describeOpenError calls
+  // it with no argument — so the only reliable way to control it under
+  // jsdom is stubbing window.location itself for the two cases below,
+  // mirroring data-section.test.tsx's own Object.defineProperty pattern for
+  // the identical reason (Location's setters throw on jsdom for a bare
+  // property assignment).
+  describe("the InsecureContextError action link", () => {
+    let originalLocation: Location;
+
+    afterEach(() => {
+      Object.defineProperty(window, "location", {
+        configurable: true,
+        value: originalLocation,
+      });
+    });
+
+    it("yields an action href on an http: .ts.net origin", async () => {
+      originalLocation = window.location;
+      Object.defineProperty(window, "location", {
+        configurable: true,
+        value: {
+          ...originalLocation,
+          protocol: "http:",
+          hostname: "hemangs-macbook-air-1.tail28560e.ts.net",
+        },
+      });
+
+      const fresh = await importFresh();
+      const rejection = Promise.reject(new fresh.InsecureContextError());
+      rejection.catch(() => {});
+      createDriver.mockReturnValue(rejection);
+      activeUseEntryStore = fresh.useEntryStore;
+
+      render(
+        <QueryClientProvider client={fresh.queryClient}>
+          <MemoryRouter initialEntries={["/"]}>
+            <Routes>
+              <Route element={<fresh.EntryStoreLayout />}>
+                <Route path="/" element={<Probe />} />
+              </Route>
+            </Routes>
+          </MemoryRouter>
+        </QueryClientProvider>,
+      );
+
+      await waitFor(() =>
+        expect(
+          screen.getByText("action:https://hemangs-macbook-air-1.tail28560e.ts.net/"),
+        ).toBeInTheDocument(),
+      );
+    });
+
+    it("yields no action on a non-.ts.net http origin", async () => {
+      originalLocation = window.location;
+      Object.defineProperty(window, "location", {
+        configurable: true,
+        value: {
+          ...originalLocation,
+          protocol: "http:",
+          hostname: "192.168.1.5",
+        },
+      });
+
+      const fresh = await importFresh();
+      const rejection = Promise.reject(new fresh.InsecureContextError());
+      rejection.catch(() => {});
+      createDriver.mockReturnValue(rejection);
+      activeUseEntryStore = fresh.useEntryStore;
+
+      render(
+        <QueryClientProvider client={fresh.queryClient}>
+          <MemoryRouter initialEntries={["/"]}>
+            <Routes>
+              <Route element={<fresh.EntryStoreLayout />}>
+                <Route path="/" element={<Probe />} />
+              </Route>
+            </Routes>
+          </MemoryRouter>
+        </QueryClientProvider>,
+      );
+
+      await waitFor(() => expect(screen.getByText("action:none")).toBeInTheDocument());
+    });
   });
 
   // Issue #159, AC "a hung open and a rejected open are distinguishable on

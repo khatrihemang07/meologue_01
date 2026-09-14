@@ -339,6 +339,45 @@ describe("Shell's back slot", () => {
   });
 });
 
+// Issue #159's successor: `messageAction` renders a real, tappable link
+// under `message` when a failure has somewhere to go (today, an insecure
+// origin pointing at the HTTPS one that can actually store Entries) — a
+// plain `<a>`, not a router Link, since the destination is a different
+// origin entirely.
+describe("Shell's message action link", () => {
+  beforeEach(() => {
+    localStorage.clear();
+    useSettingsStore.setState({ serverUrl: "" });
+    useSyncStatusStore.setState({ lastAttempt: null });
+  });
+
+  it("renders messageAction as a real link with the given href", () => {
+    render(
+      <Shell
+        title="Meologue"
+        message="meologue can't store Entries over plain HTTP — open this page over HTTPS, or on localhost."
+        messageAction={{ href: "https://example.ts.net/", label: "https://example.ts.net/" }}
+      >
+        content
+      </Shell>,
+    );
+
+    const link = screen.getByRole("link", { name: "https://example.ts.net/" });
+    expect(link).toBeInTheDocument();
+    expect(link).toHaveAttribute("href", "https://example.ts.net/");
+  });
+
+  it("renders no link when message is given without messageAction", () => {
+    render(
+      <Shell title="Meologue" message="meologue couldn't open its storage. Reloading may help.">
+        content
+      </Shell>,
+    );
+
+    expect(screen.queryByRole("link")).not.toBeInTheDocument();
+  });
+});
+
 // Issue #254: the shared content column's width override, and Todo's
 // app-bar-to-in-column-heading swap. jsdom lays nothing out, so none of
 // this can confirm the *pixel* values (800px; 26px/700/35px) — only that

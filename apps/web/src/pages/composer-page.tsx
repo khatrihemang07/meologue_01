@@ -82,6 +82,7 @@ export function ComposerPage() {
     removeEntry,
     disabled,
     message,
+    messageAction,
     dayReferrers,
     // Issue #174: the day block's own source — the exact active-Task
     // array Today and Inbox already render from, handed to History so it
@@ -581,6 +582,7 @@ export function ComposerPage() {
       // by becoming Nav's fourth destination instead of an app-bar gear.
       back={<BackToChats />}
       message={message}
+      messageAction={messageAction}
       search={{ query, onQueryChange: setQuery, onDismiss: () => setQuery("") }}
       footer={
         <History
