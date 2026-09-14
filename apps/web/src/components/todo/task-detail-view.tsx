@@ -74,6 +74,7 @@ import { ConfirmDialog } from "@/components/ui/alert-dialog";
 import { useAutoGrowTextarea } from "@/hooks/use-auto-grow-textarea";
 import { useTaskDateState } from "@/hooks/use-task-date-state";
 import { useWideLayout } from "@/hooks/use-wide-layout";
+import { deviceUtcOffsetMinutes, formatCommentTimestamp } from "@/lib/entry-day";
 import { isRenderableEvent } from "@/lib/format-event";
 import { formatDay, formatTaskDate } from "@/lib/format-task-date";
 import { localDayKey } from "@/lib/local-day-key";
@@ -324,6 +325,15 @@ function CommentRow({
   // it mounts rather than on the first keystroke — a long comment opened for
   // editing used to appear as two rows of itself.
   useAutoGrowTextarea(editRef, draft, { maxHeight: COMMENT_FIELD_MAX_HEIGHT });
+  // Recomputed per render rather than memoised: it depends on "what day is it
+  // now", which a long-lived open dialog can outlive, and the formatting is a
+  // single `Intl` call against a cached formatter.
+  const offsetMinutes = deviceUtcOffsetMinutes();
+  const timestamp = formatCommentTimestamp(
+    comment.createdAt,
+    localDayKey(new Date()),
+    offsetMinutes,
+  );
 
   function startEditing() {
     setDraft(comment.text);
@@ -424,8 +434,22 @@ function CommentRow({
           layout sideways rather than wrapping. `min-w-0` alone does not do
           it — that lets the flex child shrink, but the word still refuses to
           break. */}
-      <div className="min-w-0 flex-1 break-words [&_p]:my-0 [&_ul]:my-0">
-        {entryProse(comment.text, undefined, undefined, undefined, "comment")}
+      <div className="min-w-0 flex-1">
+        {/* Todoist prints a timestamp on every comment — driven live
+            2026-09-14, rendered as `Today 7:57 PM` at 12px beside the
+            author's name. meologue had none at all, which is the half of
+            that row it can close today: `createdAt` is already on every
+            Comment. The author name and avatar Todoist shows alongside it
+            are NOT added here — this app has no user identity to print
+            (no display name, no avatar, and `Comment` carries only
+            `deviceId`), and inventing one would be a product decision
+            wearing a parity fix's clothes. */}
+        {timestamp !== null && (
+          <div className="text-[length:0.75rem] text-muted-foreground leading-4">{timestamp}</div>
+        )}
+        <div className="break-words [&_p]:my-0 [&_ul]:my-0">
+          {entryProse(comment.text, undefined, undefined, undefined, "comment")}
+        </div>
       </div>
       <button
         type="button"

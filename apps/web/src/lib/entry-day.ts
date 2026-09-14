@@ -116,3 +116,34 @@ export function formatClockTime(createdAt: string): string | null {
   const parsed = Date.parse(createdAt);
   return Number.isNaN(parsed) ? null : getClockFormatter().format(parsed);
 }
+
+/**
+ * A Comment's own timestamp, as the Task detail view prints it beside the
+ * comment (issue #180's comments section).
+ *
+ * Composed from the two formatters above rather than written as a third: the
+ * day half is the identical "Today / Yesterday / a date" rule History's own
+ * separators use, and the clock half is the identical clock. A comment posted
+ * today should read the same word the separator above today's entries reads,
+ * and that only stays true if there is one rule rather than two that agree by
+ * convention until someone edits one of them.
+ *
+ * Todoist prints this as `Today 7:57 PM` (driven live 2026-09-14,
+ * `meologue-parity-docs/todoist/live-audit-dom/detail-modal-todoist-2026-09-14.json`),
+ * which is exactly this pairing. **Its format for a comment older than today
+ * was NOT established** — all three probe comments in that session were
+ * same-day — so the older-than-today branch here follows this app's own
+ * separator rule rather than claiming to match Todoist.
+ */
+export function formatCommentTimestamp(
+  createdAt: string,
+  todayKey: string,
+  offsetMinutes: number,
+): string | null {
+  const dayKey = entryDayKey(createdAt, offsetMinutes);
+  const clock = formatClockTime(createdAt);
+  if (dayKey === null || clock === null) {
+    return null;
+  }
+  return `${formatDaySeparator(dayKey, todayKey)} ${clock}`;
+}
