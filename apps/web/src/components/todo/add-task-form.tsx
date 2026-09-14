@@ -20,26 +20,36 @@
  * dialog.tsx` (issue #260's own brief: "don't fork the add logic"). This
  * component only owns the collapsed/expanded chrome around it.
  *
- * **Collapses again on Cancel or Escape** (NAV-12's own claim) — both
- * routed through the identical `collapse` callback below, and (QA-19,
- * `matched`, re-driven live in one session) **collapses again after a
- * successful Add**, not "stays open for the next task." `keyboard.md`'s
- * own "Add task" section transcribes Enter as "Save new task and create
- * another one below," but that transcription is UNVERIFIED
- * (`keyboard.md`'s own header warns the whole keymap table is
- * transcription-only unless a row is separately marked verified) and it
- * directly conflicts with QA-19's live-driven finding — Shift+Enter
- * closes/clears the composer on both sides, confirmed by actually
- * pressing it and watching the DOM. Followed the verified record over
- * the unverified one, per this ticket's own instruction to do exactly
- * that when the two disagree.
+ * **Collapses on Cancel or Escape** (NAV-12's own claim), both routed
+ * through the identical `collapse` callback below — but does **not**
+ * collapse after a successful Add (issue #260's Defect 1). A previous
+ * version of this comment cited QA-19 for the opposite behaviour
+ * ("collapses again after a successful Add, not 'stays open for the next
+ * task'"); that citation was misapplied. QA-19 measured `Shift+Enter`
+ * inside the global Quick Add *dialog* (`quick-add-dialog.tsx`) — a
+ * different surface, where closing on commit IS correct and still
+ * happens there. It says nothing about this in-list composer's Add
+ * button. What actually governs this component is the flow-12 S1 live
+ * drive (2026-09-13): Todoist's own in-list composer, after Add,
+ * "stayed mounted, EMPTY, and focused — does NOT collapse"
+ * (`meologue-parity-docs/todoist/live-audit-dom/flow12-S1-NAV-07-10-12-
+ * both.json`). The two findings do not conflict — they describe two
+ * different surfaces, each still true on its own. `keyboard.md`'s own
+ * "Add task" section transcribes Enter as "Save new task and create
+ * another one below," which reads closer to the corrected behaviour, but
+ * that transcription is still UNVERIFIED (`keyboard.md`'s own header
+ * warns the whole keymap table is transcription-only unless a row is
+ * separately marked verified) — this file follows the live-driven flow-12
+ * S1 record, not the transcription, per this ticket's own instruction to
+ * prefer the verified source when the two disagree.
  */
-import { Suspense, useState } from "react";
+import { Suspense, useEffect, useState } from "react";
 import { LazyTaskTitleEditor } from "@/components/todo/lazy-task-title-editor";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import type { AutocompleteEntry } from "@/lib/quick-add-autocomplete";
 import type { QuickAddTaskFields } from "@/lib/quick-add-task";
+import { FOCUS_ADD_TASK_EVENT } from "@/lib/todo-keymap";
 import { useQuickAddComposer } from "@/lib/use-quick-add-composer";
 
 export interface AddTaskFormProps {
@@ -88,16 +98,40 @@ export function AddTaskForm({
 }: AddTaskFormProps) {
   const [open, setOpen] = useState(false);
 
+  // Issue #260 Defect 2: `todo-keymap.ts`'s `focusAddTaskField()` has no
+  // reference to this component's own `open` state — private `useState`,
+  // by design, the identical "no external door" gap `OPEN_SCHEDULE_EVENT`
+  // and `OPEN_COMMAND_MENU_EVENT` solve one component over (those
+  // constants' own doc comments in `todo-keymap.ts`) — so it dispatches
+  // `FOCUS_ADD_TASK_EVENT` on `document` instead, but only when its own
+  // selector-based fast path finds no live textbox/input already
+  // mounted, i.e. only while this composer is still the collapsed
+  // resting row. This listener is the other half: reveal on that event,
+  // the same way the trigger button's own `onClick` below does. The
+  // existing `autoFocus={true}` on `LazyTaskTitleEditor` below lands the
+  // caret once it mounts — no separate focus call needed here.
+  useEffect(() => {
+    function onFocusAddTask() {
+      setOpen(true);
+    }
+    document.addEventListener(FOCUS_ADD_TASK_EVENT, onFocusAddTask);
+    return () => document.removeEventListener(FOCUS_ADD_TASK_EVENT, onFocusAddTask);
+  }, []);
+
   const composer = useQuickAddComposer({
     onAdd,
     projects,
     labels,
     onCreateProject,
     onCreateLabel,
-    // NAV-12/QA-19: collapse back to the quiet row after a real Add — see
-    // this file's own header comment on why "stays open for the next
-    // task" (keyboard.md's unverified transcription) was not followed.
-    onCommitted: () => setOpen(false),
+    // No `onCommitted` here, deliberately: it used to collapse the
+    // composer back to the quiet row after a real Add (this file's own
+    // header comment explains why that was wrong, and issue #260 Defect
+    // 1 reverses it). `composer.commit()` itself already clears
+    // `value`/`seed` and bumps `resetKey`, which remounts a fresh, empty,
+    // autofocused editor — exactly flow-12 S1's observed "stayed
+    // mounted, EMPTY, and focused" behaviour, with nothing further
+    // needed from this component.
   });
 
   function collapse() {
