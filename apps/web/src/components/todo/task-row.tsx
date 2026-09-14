@@ -44,9 +44,11 @@ export interface TaskDetailActions {
    * Sets or clears the Task's Recurrence phrase (issue #253) —
    * `TaskStore.setDateString`'s own doc comment (task-schedule-sheet.tsx)
    * has the reasoning for why `date` is recomputed by the store rather
-   * than trusted from a caller.
+   * than trusted from a caller. `today` (not an instant — issue #296,
+   * `lib/local-day-key.ts`'s `localDayKey`) is what `task-row-content.tsx`
+   * threads through here.
    */
-  onSetDateString: (id: string, dateString: string | null, now: string) => void;
+  onSetDateString: (id: string, dateString: string | null, today: string) => void;
   /**
    * Day-keys carrying at least one active Task, mapped to how many —
    * threaded straight through to `TaskSchedulePopover`'s identical prop

@@ -125,17 +125,25 @@ export interface UseTasksResult {
    * none of which any surface could do before this ticket
    * (TaskStore.setDateString's own doc comment carries the full
    * reasoning, including why `date` is recomputed by the store itself
-   * rather than trusted from the caller). `now` is threaded through
-   * rather than read here, the one exception to this file's own
-   * `new Date().toISOString()`-at-the-mutation convention: the popover
-   * already reads a single `now` once per open to keep its quick options
-   * and its typed preview from disagreeing about what day "today" is,
-   * and reusing that same instant for the commit is what keeps a
-   * commit's resolved date matching the preview the reader just clicked,
-   * rather than a second, independent clock read that could in principle
-   * roll over a calendar day between the two.
+   * rather than trusted from the caller).
+   *
+   * `today` (renamed from `now` — issue #296) is threaded through from
+   * each call site rather than read inside this hook, unlike
+   * `advanceRecurringTask`/`postponeTask` below: this hook isn't "the one
+   * layer that knows the Device's own local time" for this setter the way
+   * it is for those two, because both of this setter's real callers
+   * (task-row-content.tsx, task-detail-view.tsx) fire it synchronously
+   * from inside `TaskSchedulePopover`'s own `onPickDay`/`onPickRecurrence`
+   * callbacks, each of which already has its own single clock read right
+   * there. Issue #296 found those two call sites threading
+   * `new Date().toISOString()` through this parameter — a UTC instant
+   * where TaskStore.setDateString's own doc comment says a floating local
+   * day (`lib/local-day-key.ts`'s `localDayKey`) is wanted, the identical
+   * shape of bug issue #290 fixed for `advanceRecurringTask`/
+   * `postponeTask`. The fix lives at those two call sites, not here: this
+   * function still only forwards whatever it's given.
    */
-  setTaskDateString: (id: string, dateString: string | null, now: string) => void;
+  setTaskDateString: (id: string, dateString: string | null, today: string) => void;
   /**
    * Replaces a Task's `labelIds` wholesale — TaskStore.setLabelIds's own
    * doc comment on why "read, splice, write back the whole array" is the
@@ -605,14 +613,14 @@ export function useTasks(
     mutationFn: async ({
       id,
       dateString,
-      now,
+      today,
     }: {
       id: string;
       dateString: string | null;
-      now: string;
+      today: string;
     }) => {
       const before = await findTask(id);
-      await taskStore.setDateString(id, dateString, now);
+      await taskStore.setDateString(id, dateString, today);
       if (before) {
         recordTaskEvent(before, "updated", { dateString, lastDateString: before.dateString });
       }
@@ -620,8 +628,8 @@ export function useTasks(
     onSuccess: afterLocalWrite,
   });
 
-  function setTaskDateString(id: string, dateString: string | null, now: string) {
-    setDateStringMutation.mutate({ id, dateString, now });
+  function setTaskDateString(id: string, dateString: string | null, today: string) {
+    setDateStringMutation.mutate({ id, dateString, today });
   }
 
   const setLabelIdsMutation = useMutation({

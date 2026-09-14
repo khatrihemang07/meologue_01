@@ -144,8 +144,8 @@ export interface TaskDetailViewProps {
   onOpenSchedule: () => void;
   /** Sets or clears the Task's `date` (issue #253) — reaches this view's own `TaskSchedulePopover` instance for the Date attribute, mirroring `task-row-content.tsx`'s identical wiring. */
   onSetDate: (id: string, date: string | null) => void;
-  /** Sets or clears the Task's Recurrence phrase (issue #253) — `TaskStore.setDateString`'s own doc comment (task-schedule-sheet.tsx) has the reasoning for why `date` is recomputed by the store rather than trusted from a caller. */
-  onSetDateString: (id: string, dateString: string | null, now: string) => void;
+  /** Sets or clears the Task's Recurrence phrase (issue #253) — `TaskStore.setDateString`'s own doc comment (task-schedule-sheet.tsx) has the reasoning for why `date` is recomputed by the store rather than trusted from a caller. `today` (not an instant — issue #296, `lib/local-day-key.ts`'s `localDayKey`) is what this view threads through below. */
+  onSetDateString: (id: string, dateString: string | null, today: string) => void;
   /** Day-keys carrying at least one active Task, mapped to how many — threaded straight through to `TaskSchedulePopover`'s identical prop (its own doc comment: SCHED-09's calendar dot and SCHED-04's preview subline share this one source). */
   datesWithTasks: ReadonlyMap<string, number>;
   onSetProject: (projectId: string | null) => void;
@@ -1981,13 +1981,23 @@ function TaskDetailBody({
               // recurrence" control instead, and what its own "No Date"
               // does to a recurring Task was NOT established — so this is
               // meologue's reasoned default, not a matched behaviour.
+              //
+              // `localDayKey(new Date())`, not `new Date().toISOString()` —
+              // issue #296. `TaskStore.setDateString`'s own `today`
+              // parameter has always meant a floating local day, never an
+              // instant; passing the instant relied on ../recurrence/'s
+              // engine silently slicing its first ten characters, which
+              // names the UTC calendar day rather than this Device's own —
+              // see TaskStore.setDateString's own doc comment
+              // (packages/core) for the full account, and issue #290 for
+              // the identical fix applied to advanceRecurring/postpone.
               if (day === null && task.dateString !== null) {
-                onSetDateString(task.id, null, new Date().toISOString());
+                onSetDateString(task.id, null, localDayKey(new Date()));
               }
             }}
             onPickRecurrence={(dateString) => {
               pendingRenameDateRef.current = null;
-              onSetDateString(task.id, dateString, new Date().toISOString());
+              onSetDateString(task.id, dateString, localDayKey(new Date()));
             }}
             trigger={
               task.date === null || dateDisplay === null ? (

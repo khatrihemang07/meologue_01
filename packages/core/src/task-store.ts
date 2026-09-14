@@ -261,7 +261,7 @@ export interface TaskStore {
    * deliberately rather than by running out.
    *
    * Throws if `dateString` doesn't parse, or parses but its own
-   * `starting`/`ending`/`for` bound has already elapsed as of `now`
+   * `starting`/`ending`/`for` bound has already elapsed as of `today`
    * (`{ kind: "ended" }`) — quick-add-task.ts's `resolveRecurrence`
    * silently discards either outcome because there's no Task yet to
    * report an error against there; here one already exists, and the
@@ -271,16 +271,38 @@ export interface TaskStore {
    * before either throw becomes reachable — advanceRecurring()'s own doc
    * comment gives the identical reasoning. Clears `seq`.
    *
-   * `now` is a full instant (`new Date().toISOString()`, the identical
-   * shape advanceRecurring's `completedAt` and postpone's `today` both
-   * take) rather than a bare day — only its first ten characters matter
-   * to `../recurrence/`'s engine, sliced off internally the same way
-   * advanceRecurring's own mechanics does, so every picker-facing caller
-   * can pass "now" the one way it already does everywhere else in this
-   * interface instead of learning a special day-only shape for this one
-   * setter.
+   * **`today` must already be a floating local day** (apps/web's
+   * `lib/local-day-key.ts`'s `localDayKey`, not `new Date().toISOString()`)
+   * — issue #296, the identical correction issue #290 made to
+   * advanceRecurring/postpone above. This parameter used to be named
+   * `now` and documented as "a full instant … sliced off internally," on
+   * the theory that only the first ten characters mattered so any
+   * instant would do. That theory was wrong the same way it was wrong for
+   * advanceRecurring: this method's own two real callers
+   * (task-row-content.tsx, task-detail-view.tsx) threaded
+   * `new Date().toISOString()` through, whose first ten characters name
+   * the UTC calendar day, not the Device's own — for any reader east of
+   * UTC, a window each night as wide as their own offset. Since
+   * `../recurrence/`'s engine only anchors a fresh grant to `today`
+   * (never advances past a floor the way advanceRecurring's completion
+   * does), the consequence here is a Recurrence granted against the
+   * wrong day rather than a Task returning already-due — see
+   * `../recurrence/recurrence.ts`'s `firstOccurrence` for what "anchor"
+   * means. `today` exists so the caller resolves the local day itself
+   * and hands this method an already-correct floating day, rather than
+   * this method (or its first ten characters) guessing one out of an
+   * instant it has no way to interpret correctly.
+   *
+   * **Unlike advanceRecurring, this method takes no separate instant.**
+   * advanceRecurring needs one because it may stamp `completedAt` (its
+   * "ended" outcome); setDateString never writes an instant-shaped column
+   * — `updatedAt` is left to `updateIfLive`'s own default `this.now()`
+   * read, exactly the way `postpone`'s own doc comment explains for its
+   * identical single `today` parameter. So this setter's shape mirrors
+   * `postpone`'s, not `advanceRecurring`'s, once the actual columns it
+   * touches are read rather than assumed.
    */
-  setDateString(id: string, dateString: string | null, now: string): Promise<void>;
+  setDateString(id: string, dateString: string | null, today: string): Promise<void>;
   /**
    * Sets `labelIds` and clears `seq` — mirrors the other #169-era setters
    * above for the same reason: a caller building its own patch object

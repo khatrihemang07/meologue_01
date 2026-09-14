@@ -1247,6 +1247,101 @@ describe("TaskDetailView", () => {
     });
   });
 
+  // Issue #296: both of this view's own `onSetDateString` call sites
+  // (the "No Date" pick above and the Repeat menu below) used to thread
+  // `new Date().toISOString()` through as the third argument —
+  // `TaskStore.setDateString`'s own doc comment (packages/core) says that
+  // parameter (`today`) has always meant a floating local calendar day,
+  // never an instant. Slicing an instant's first ten characters names the
+  // UTC day, not the Device's own, for a window each night as wide as the
+  // Device's own UTC offset — the identical shape of bug issue #290 fixed
+  // for `advanceRecurringTask`/`postponeTask` in use-tasks.ts. These tests
+  // pin both directions the same way that fix's own use-tasks.test.tsx
+  // suite does: a Device east of UTC before its own midnight has reached
+  // UTC, and one west of UTC after local time has already rolled into
+  // UTC's next day.
+  describe("issue #296 — onSetDateString receives the local day, not UTC's", () => {
+    afterEach(() => {
+      vi.useRealTimers();
+      vi.unstubAllEnvs();
+    });
+
+    it("clearing the date with No Date reports the local day for a Device east of UTC, before its own midnight has reached UTC", () => {
+      vi.stubEnv("TZ", "Asia/Kolkata");
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(new Date(2026, 8, 15, 0, 16, 18));
+
+      const onSetDateString = vi.fn();
+      renderView({
+        task: task({ id: "1", date: "2026-09-14", dateString: "every day" }),
+        onSetDateString,
+      });
+
+      fireEvent.click(screen.getByRole("button", { name: /^Date/ }));
+      fireEvent.click(screen.getByRole("button", { name: "No Date" }));
+
+      expect(onSetDateString).toHaveBeenCalledWith("1", null, "2026-09-15");
+    });
+
+    it("clearing the date with No Date reports the local day for a Device west of UTC, once local time has already rolled into UTC's next day", () => {
+      vi.stubEnv("TZ", "America/Los_Angeles");
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(new Date(2026, 8, 14, 23, 45, 0));
+
+      const onSetDateString = vi.fn();
+      renderView({
+        task: task({ id: "1", date: "2026-09-13", dateString: "every day" }),
+        onSetDateString,
+      });
+
+      fireEvent.click(screen.getByRole("button", { name: /^Date/ }));
+      fireEvent.click(screen.getByRole("button", { name: "No Date" }));
+
+      expect(onSetDateString).toHaveBeenCalledWith("1", null, "2026-09-14");
+    });
+
+    it("picking 'Every day' from the Repeat menu reports the local day for a Device east of UTC, before its own midnight has reached UTC", () => {
+      vi.stubEnv("TZ", "Asia/Kolkata");
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(new Date(2026, 8, 15, 0, 16, 18));
+
+      const onSetDateString = vi.fn();
+      renderView({
+        task: task({ id: "1", date: null, dateString: null }),
+        onSetDateString,
+      });
+
+      fireEvent.click(screen.getByRole("button", { name: /^Date/ }));
+      // Radix's `DropdownMenu.Trigger` opens on `pointerdown`, not `click`
+      // — task-schedule-popover.test.tsx's own `openRepeatMenu` helper
+      // establishes this identically for the same "Repeat" button.
+      fireEvent.pointerDown(screen.getByRole("button", { name: "Repeat" }));
+      const menu = screen.getByTestId("repeat-menu");
+      fireEvent.click(within(menu).getByRole("menuitem", { name: "Every day" }));
+
+      expect(onSetDateString).toHaveBeenCalledWith("1", "every day", "2026-09-15");
+    });
+
+    it("picking 'Every day' from the Repeat menu reports the local day for a Device west of UTC, once local time has already rolled into UTC's next day", () => {
+      vi.stubEnv("TZ", "America/Los_Angeles");
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(new Date(2026, 8, 14, 23, 45, 0));
+
+      const onSetDateString = vi.fn();
+      renderView({
+        task: task({ id: "1", date: null, dateString: null }),
+        onSetDateString,
+      });
+
+      fireEvent.click(screen.getByRole("button", { name: /^Date/ }));
+      fireEvent.pointerDown(screen.getByRole("button", { name: "Repeat" }));
+      const menu = screen.getByTestId("repeat-menu");
+      fireEvent.click(within(menu).getByRole("menuitem", { name: "Every day" }));
+
+      expect(onSetDateString).toHaveBeenCalledWith("1", "every day", "2026-09-14");
+    });
+  });
+
   describe("Description — issue #180", () => {
     it("an unset Description renders a pill", () => {
       renderView({ task: task({ description: null }) });

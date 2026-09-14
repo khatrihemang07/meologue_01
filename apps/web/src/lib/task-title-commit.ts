@@ -23,7 +23,15 @@ export interface TaskTitleCommitSetters {
   setTaskDate: (id: string, date: string | null) => void;
   setTaskDeadline: (id: string, deadline: string | null) => void;
   setTaskPriority: (id: string, priority: number) => void;
-  setTaskDateString: (id: string, dateString: string | null, now: string) => void;
+  // `options.now` (itself `localDayKey(new Date())` in both real callers —
+  // composer-page.tsx's and todo-page.tsx's own `commitRename` wrappers)
+  // is passed straight through here for the identical parameter, already
+  // a floating local day rather than an instant. Issue #296 renamed the
+  // parameter this reaches to `today` for the same reason it fixed the
+  // other two `setTaskDateString` call sites; this one needed no
+  // behaviour change, only the rename, since it was never threading an
+  // instant through in the first place.
+  setTaskDateString: (id: string, dateString: string | null, today: string) => void;
   setTaskLabels: (id: string, labelIds: string[]) => void;
   resolveLabelIds: (names: string[]) => Promise<string[]>;
 }

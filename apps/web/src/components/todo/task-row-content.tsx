@@ -878,12 +878,22 @@ export function TaskRowContent({
           // own identical handler carries the full account and the
           // artifact it was driven from — this file mirrors it, as it
           // already mirrored the behaviour being replaced.
+          //
+          // `localDayKey(new Date())`, not `new Date().toISOString()` —
+          // issue #296. `TaskStore.setDateString`'s own `today` parameter
+          // has always meant a floating local day, never an instant;
+          // passing the instant relied on ../recurrence/'s engine silently
+          // slicing its first ten characters, which names the UTC
+          // calendar day rather than this Device's own — see
+          // TaskStore.setDateString's own doc comment (packages/core) for
+          // the full account, and issue #290 for the identical fix applied
+          // to advanceRecurring/postpone.
           if (day === null && task.dateString !== null) {
-            detailActions.onSetDateString(task.id, null, new Date().toISOString());
+            detailActions.onSetDateString(task.id, null, localDayKey(new Date()));
           }
         }}
         onPickRecurrence={(dateString) =>
-          detailActions.onSetDateString(task.id, dateString, new Date().toISOString())
+          detailActions.onSetDateString(task.id, dateString, localDayKey(new Date()))
         }
         trigger={
           <button

@@ -497,7 +497,7 @@ export function taskStoreContract(createStore: () => TaskStore | Promise<TaskSto
   // own suite above already covers that engine wrapping; these tests are
   // the "given," not the "completed," half of the identical pairing).
   describe("setDateString()", () => {
-    it("sets dateString and recomputes date via firstOccurrence — inclusive of `now` itself (issue #191)", async () => {
+    it("sets dateString and recomputes date via firstOccurrence — inclusive of `today` itself (issue #191)", async () => {
       await store.upsert([task({ id: "a", seq: 5 })]);
 
       // 2026-01-05 is itself a Monday.
@@ -512,7 +512,7 @@ export function taskStoreContract(createStore: () => TaskStore | Promise<TaskSto
       });
     });
 
-    it("anchors a due-anchored phrase off the Task's own current date, not `now`", async () => {
+    it("anchors a due-anchored phrase off the Task's own current date, not `today`", async () => {
       await store.upsert([task({ id: "a", date: "2026-01-15", seq: 5 })]);
 
       await store.setDateString("a", "every month", "2026-01-20");
@@ -551,12 +551,12 @@ export function taskStoreContract(createStore: () => TaskStore | Promise<TaskSto
       ).rejects.toThrow();
     });
 
-    it("throws when the phrase's own ending bound has already elapsed as of `now`", async () => {
+    it("throws when the phrase's own ending bound has already elapsed as of `today`", async () => {
       // Mirrors advanceRecurring's identical "ended" fixture above
       // (dueDate 2026-01-01, the same "every day ending 8 Jan"), but
-      // `now` sits one day PAST the 8th rather than exactly on it —
-      // firstOccurrence's own floor is inclusive of `now` (issue #191),
-      // so landing `now` exactly on the boundary would still resolve as
+      // `today` sits one day PAST the 8th rather than exactly on it —
+      // firstOccurrence's own floor is inclusive of `today` (issue #191),
+      // so landing `today` exactly on the boundary would still resolve as
       // a valid occurrence there, unlike advanceRecurring's exclusive
       // floor.
       await store.upsert([task({ id: "a", date: "2026-01-01", seq: 1 })]);

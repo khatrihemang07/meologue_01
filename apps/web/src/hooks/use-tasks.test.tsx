@@ -155,16 +155,20 @@ function createFakeStore(): TaskStore {
     // setDateString), the identical fidelity advanceRecurring below
     // already gets, since this suite's own recurrence tests exercise real
     // `firstOccurrence` behaviour through it.
-    setDateString: vi.fn(async (id: string, dateString: string | null, now: string) => {
+    // `today` (not `now`, and no internal slice — issue #296) is the
+    // recurrence engine's floating anchor, exactly the way this fake's own
+    // `postpone` below already took `today` directly: mirroring the real
+    // stores post-fix, not the pre-fix conflation.
+    setDateString: vi.fn(async (id: string, dateString: string | null, today: string) => {
       const found = active.find((t) => t.id === id);
       if (found === undefined) return;
       if (dateString === null) {
         active = active.map((t) => (t.id === id ? { ...t, dateString: null, seq: null } : t));
         return;
       }
-      const outcome = firstOccurrence(dateString, { dueDate: found.date, now: now.slice(0, 10) });
+      const outcome = firstOccurrence(dateString, { dueDate: found.date, now: today });
       if (outcome.kind !== "occurrence") {
-        throw new Error(`setDateString: "${dateString}" has no occurrence as of ${now}`);
+        throw new Error(`setDateString: "${dateString}" has no occurrence as of ${today}`);
       }
       active = active.map((t) =>
         t.id === id ? { ...t, date: outcome.date, dateString, seq: null } : t,
@@ -835,15 +839,19 @@ describe("useTasks", () => {
 
     // Issue #227: the one door onto changing or clearing a Recurrence a
     // Task already has — see TaskStore.setDateString's own doc comment
-    // (packages/core/src/task-store.ts) for why `now` is threaded straight
-    // through rather than read inside this hook.
+    // (packages/core/src/task-store.ts) for why `today` is threaded
+    // straight through rather than read inside this hook. `today` is a
+    // floating local day, not an instant (issue #296) — these two tests
+    // pass a bare day the same way task-row-content.tsx/task-detail-
+    // view.tsx now do (`localDayKey(new Date())`), not the pre-fix
+    // `new Date().toISOString()` this hook used to forward unexamined.
     it("setTaskDateString gives a Task its first Recurrence", async () => {
       const store = createFakeStore();
       await store.upsert([task({ id: "a" })]);
       const { result } = await renderUseTasks(store);
       await waitFor(() => expect(result.current.tasks).toHaveLength(1));
 
-      act(() => result.current.setTaskDateString("a", "every day", "2026-01-05T00:00:00.000Z"));
+      act(() => result.current.setTaskDateString("a", "every day", "2026-01-05"));
 
       await waitFor(() =>
         expect(store.setDateString).toHaveBeenCalledWith("a", "every day", expect.any(String)),
@@ -852,13 +860,13 @@ describe("useTasks", () => {
       expect(result.current.tasks[0]?.date).toBe("2026-01-05");
     });
 
-    it("setTaskDateString(id, null, now) clears an existing Recurrence and leaves date untouched", async () => {
+    it("setTaskDateString(id, null, today) clears an existing Recurrence and leaves date untouched", async () => {
       const store = createFakeStore();
       await store.upsert([task({ id: "a", date: "2026-01-05", dateString: "every day" })]);
       const { result } = await renderUseTasks(store);
       await waitFor(() => expect(result.current.tasks).toHaveLength(1));
 
-      act(() => result.current.setTaskDateString("a", null, "2026-01-10T00:00:00.000Z"));
+      act(() => result.current.setTaskDateString("a", null, "2026-01-10"));
 
       await waitFor(() => expect(result.current.tasks[0]?.dateString).toBeNull());
       expect(result.current.tasks[0]?.date).toBe("2026-01-05");

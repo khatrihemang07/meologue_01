@@ -396,7 +396,7 @@ export class SqliteTaskStore implements TaskStore {
   // Reads the Task first, mirroring advanceRecurring/setParent above: the
   // tombstone no-op has to be checked before either throw below becomes
   // reachable.
-  async setDateString(id: string, dateString: string | null, now: string): Promise<void> {
+  async setDateString(id: string, dateString: string | null, today: string): Promise<void> {
     const current = await this.get(id);
     if (current === undefined) {
       return;
@@ -408,16 +408,14 @@ export class SqliteTaskStore implements TaskStore {
       await this.updateIfLive(id, { dateString: null });
       return;
     }
-    // Only the calendar day matters to ../recurrence/'s engine, hence the
-    // slice — unlike advanceRecurring above (issue #290's fix), this
-    // method's own callers (task-row-content.tsx, task-detail-view.tsx)
-    // still thread a UTC instant (`new Date().toISOString()`) through
-    // `now` rather than a resolved local day, so slicing it here is
-    // subject to the identical UTC-vs-local trap TaskStore.advanceRecurring's
-    // own doc comment describes — out of scope for issue #290 (which named
-    // only advanceRecurring/postpone), left here as a known, not-yet-fixed
-    // instance rather than a silent one.
-    const outcome = firstOccurrence(dateString, { dueDate: current.date, now: now.slice(0, 10) });
+    // `today` — not a slice of a caller-supplied instant — is the
+    // recurrence engine's floating anchor (issue #296, the identical
+    // correction issue #290 made to advanceRecurring/postpone above: see
+    // TaskStore.setDateString's own doc comment for why "only the first
+    // ten characters matter" was never a safe reason to accept an instant
+    // here). The caller resolves the local day and passes it here already
+    // correct; no slicing happens in this method any more.
+    const outcome = firstOccurrence(dateString, { dueDate: current.date, now: today });
     if (outcome.kind === "refused") {
       throw new Error(
         `"${dateString}" is not a recurrence rule ../recurrence/ accepts: ${outcome.reason}`,
@@ -425,7 +423,7 @@ export class SqliteTaskStore implements TaskStore {
     }
     if (outcome.kind === "ended") {
       throw new Error(
-        `"${dateString}" has no occurrence left as of ${now} — its own starting/ending/for bound has already elapsed`,
+        `"${dateString}" has no occurrence left as of ${today} — its own starting/ending/for bound has already elapsed`,
       );
     }
     await this.updateIfLive(id, { date: outcome.date, dateString });
