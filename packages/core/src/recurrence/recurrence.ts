@@ -45,10 +45,29 @@ import type { RecurrenceOutcome, RecurrenceReference } from "./rule";
  * guess which date it received.
  *
  * **The two anchors.** `every` counts from `reference.dueDate`; `every!`
- * counts from `reference.now` — except `every day` and `every week`,
- * which are completion-anchored (`reference.now`) either way, bang or no
- * bang. See ./parser.ts's resolveAnchor for exactly where that exception
- * is applied, once, so nothing downstream has to re-check it.
+ * counts from `reference.now` — uniformly, for every frequency, `every
+ * day` and `every week` included. See ./parser.ts's resolveAnchor for
+ * exactly where the bang is turned into `"due"` or `"completion"`, once,
+ * so nothing downstream has to re-check it.
+ *
+ * **That wasn't always the rule for `every day`/`every week`.** This
+ * module used to force those two, specifically, to be completion-anchored
+ * regardless of the bang — issue #170's own text called it "the detail
+ * most descriptions get wrong," on the theory that a bare daily or weekly
+ * cadence inherently means "do it again from whenever you actually did
+ * it." Issue #291 retired that theory: driven live against both Todoist
+ * web and Android
+ * (meologue-parity-docs/todoist/live-audit-dom/recurrence-reschedule-todoist-2026-09-14.json),
+ * a daily Task there postponed forward and then completed resumes from
+ * its postponed due date plus one interval, not from the completion
+ * date — a Task postponed six days out and completed landed six days
+ * later than completion-anchoring would have given, independently
+ * confirmed on both platforms, not a rounding difference. `every!` still
+ * means "count from when I actually did it," a user-typed opt-in the
+ * "Custom repeat" dialog surfaces explicitly as "Based on: Scheduled
+ * date / Completed date" (issue #292) — so that choice is preserved
+ * exactly, and only the no-bang default for these two frequencies moved
+ * to match every other frequency's own due-anchored default.
  *
  * **Skipping missed occurrences (nextOccurrenceAfterCompletion only).**
  * Only a date strictly after `reference.now` is ever returned — a yearly
