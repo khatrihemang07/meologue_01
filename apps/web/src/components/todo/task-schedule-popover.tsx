@@ -41,6 +41,7 @@ import { addDays, format, nextMonday, nextSaturday } from "date-fns";
 import {
   CalendarDays,
   CalendarRange,
+  Check,
   CircleSlash,
   Clock,
   Repeat,
@@ -377,15 +378,52 @@ export function TaskSchedulePopover({
       },
     ];
   });
-  // Mirrors scheduler-and-priority.md §7's own captured behaviour: "the
-  // Repeat button disappears from the panel and is replaced by the
-  // resolved preview" once a recurrence is active. Here that's already
-  // true by construction — `typed` is seeded from `dateString` on every
-  // open (this file's own header comment), so an existing Recurrence
-  // already renders as the preview button above; this just hides the
-  // Repeat entry point while that's showing, rather than offering two
-  // controls that both claim to set the same thing at once.
-  const showRepeatControl = preview === null || preview.dateString === null;
+  // Whether this Task already carries a Recurrence. Issue #293: Todoist
+  // does not hide its Repeat entry once one is set — it *replaces* it with a
+  // two-part control, a button carrying the rule's own name beside a
+  // separate `Clear recurrence` button (finding
+  // `C-already-recurring-scheduler-state`, driven 2026-09-14).
+  const activeRecurrence = dateString;
+  // "What the user typed is what is stored" (CONTEXT.md, Recurrence), so the
+  // button carries the stored phrase rather than a re-derived description of
+  // it — capitalised only, which is what turns the stored `every day` into
+  // Todoist's own displayed `Every day`.
+  const recurrenceLabel =
+    activeRecurrence === null
+      ? null
+      : activeRecurrence.charAt(0).toUpperCase() + activeRecurrence.slice(1);
+
+  // The original gate here hid the Repeat control whenever a recurrence
+  // preview was showing, to avoid two controls claiming to set the same
+  // thing. But `typed` is seeded from `dateString` on every open, so that
+  // also hid it for a Task that was *already* recurring — leaving no way to
+  // change or clear the rule except by editing the typed text, and no way at
+  // all to stop a Task repeating while keeping its date (`No Date` takes the
+  // date with it).
+  //
+  // Narrowed: hide it only while the user is typing a recurrence that is not
+  // the one already stored. Then the preview button above is genuinely the
+  // thing that commits, and the original concern still holds.
+  const typingNewRecurrence =
+    preview !== null && preview.dateString !== null && preview.dateString !== activeRecurrence;
+  const showRepeatControl = !typingNewRecurrence;
+
+  /**
+   * Drops the Recurrence and keeps the day — issue #293's load-bearing
+   * distinction, exercised functionally on Todoist rather than merely
+   * observed: the control reverted to a plain `Repeat` and the Task's due
+   * date was unchanged.
+   *
+   * Needs no new prop. `onPickDay` already "commits a plain, non-recurring
+   * date and clears any Recurrence the Task already had" (this file's own
+   * header comment), so handing it the day the Task is already on clears the
+   * rule and moves nothing.
+   */
+  const clearRecurrenceKeepingDate = () => {
+    setTyped("");
+    onPickDay(dateDay);
+    setOpen(false);
+  };
 
   const tomorrow = addDays(now, 1);
   const nextWeek = nextMonday(now);
@@ -658,68 +696,83 @@ export function TaskSchedulePopover({
             precondition here the way there is for a time-of-day.
           */}
         {showRepeatControl && (
-          <DropdownMenu.Root>
-            <DropdownMenu.Trigger asChild>
-              <Button
-                type="button"
-                variant="ghost"
-                className="h-8 w-fit justify-start gap-2 px-2 font-normal text-muted-foreground"
-              >
-                <Repeat className="size-4" />
-                Repeat
-              </Button>
-            </DropdownMenu.Trigger>
-            <DropdownMenu.Portal>
-              <DropdownMenu.Content
-                data-testid="repeat-menu"
-                align="start"
-                className="flex flex-col gap-0.5 p-1 text-sm"
-                style={{
-                  width: "282px",
-                  borderRadius: "10px",
-                  background: "rgb(40, 40, 40)",
-                  border: "1px solid rgb(61, 61, 61)",
-                  boxShadow: "rgba(0, 0, 0, 0.12) 0px 0px 8px 0px",
-                  zIndex: 1000,
-                  color: "rgb(255, 255, 255)",
-                }}
-                // The identical hand-off task-command-menu.tsx's own
-                // "Date…" item needed for issue #255: focusing
-                // `typedInputRef` straight from "Custom…"'s `onSelect`
-                // would race this very menu's own `FocusScope` while it's
-                // still tearing down mid-close-animation. Waiting for
-                // `onCloseAutoFocus` — fired once that teardown is
-                // actually done — and skipping its own default (return
-                // focus to the trigger) is what lets the focus land on
-                // the input instead and stick there.
-                onCloseAutoFocus={(event) => {
-                  if (!focusInputAfterRepeatCloseRef.current) {
-                    return;
-                  }
-                  focusInputAfterRepeatCloseRef.current = false;
-                  event.preventDefault();
-                  typedInputRef.current?.focus();
-                }}
-                // SCHED-11's own follow-up (pass2-2026-09-11.md §7):
-                // "One Escape closes the Repeat/Time layer and the
-                // scheduler beneath it simultaneously" — recorded for
-                // both layers this popover opens, not just
-                // `TaskTimeDialog` (that file's own header comment).
-                // Radix's own default `Escape` handling still closes
-                // this menu alone; not preventDefault()-ed, so that
-                // keeps happening alongside `setOpen(false)` here.
-                onEscapeKeyDown={() => setOpen(false)}
-              >
-                {repeatOptions.map((option) => (
-                  <DropdownMenu.Item
-                    key={option.key}
-                    className={repeatItemClassName}
-                    onSelect={() => commitRepeatPhrase(option.phrase, option.day)}
-                  >
-                    {option.label}
-                  </DropdownMenu.Item>
-                ))}
-                {/*
+          <div className="flex w-fit items-center gap-0.5">
+            <DropdownMenu.Root>
+              <DropdownMenu.Trigger asChild>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  // Issue #293: once a rule is set the trigger carries the
+                  // rule's own name, and the menu it opens is named for the
+                  // rule rather than for "Repeat" — both driven on Todoist.
+                  aria-label={recurrenceLabel ?? "Repeat"}
+                  className="h-8 w-fit justify-start gap-2 px-2 font-normal text-muted-foreground"
+                >
+                  <Repeat className="size-4" />
+                  {recurrenceLabel ?? "Repeat"}
+                </Button>
+              </DropdownMenu.Trigger>
+              <DropdownMenu.Portal>
+                <DropdownMenu.Content
+                  data-testid="repeat-menu"
+                  align="start"
+                  className="flex flex-col gap-0.5 p-1 text-sm"
+                  style={{
+                    width: "282px",
+                    borderRadius: "10px",
+                    background: "rgb(40, 40, 40)",
+                    border: "1px solid rgb(61, 61, 61)",
+                    boxShadow: "rgba(0, 0, 0, 0.12) 0px 0px 8px 0px",
+                    zIndex: 1000,
+                    color: "rgb(255, 255, 255)",
+                  }}
+                  // The identical hand-off task-command-menu.tsx's own
+                  // "Date…" item needed for issue #255: focusing
+                  // `typedInputRef` straight from "Custom…"'s `onSelect`
+                  // would race this very menu's own `FocusScope` while it's
+                  // still tearing down mid-close-animation. Waiting for
+                  // `onCloseAutoFocus` — fired once that teardown is
+                  // actually done — and skipping its own default (return
+                  // focus to the trigger) is what lets the focus land on
+                  // the input instead and stick there.
+                  onCloseAutoFocus={(event) => {
+                    if (!focusInputAfterRepeatCloseRef.current) {
+                      return;
+                    }
+                    focusInputAfterRepeatCloseRef.current = false;
+                    event.preventDefault();
+                    typedInputRef.current?.focus();
+                  }}
+                  // SCHED-11's own follow-up (pass2-2026-09-11.md §7):
+                  // "One Escape closes the Repeat/Time layer and the
+                  // scheduler beneath it simultaneously" — recorded for
+                  // both layers this popover opens, not just
+                  // `TaskTimeDialog` (that file's own header comment).
+                  // Radix's own default `Escape` handling still closes
+                  // this menu alone; not preventDefault()-ed, so that
+                  // keeps happening alongside `setOpen(false)` here.
+                  onEscapeKeyDown={() => setOpen(false)}
+                >
+                  {repeatOptions.map((option) => (
+                    <DropdownMenu.Item
+                      key={option.key}
+                      className={cn(repeatItemClassName, "justify-between")}
+                      onSelect={() => commitRepeatPhrase(option.phrase, option.day)}
+                    >
+                      {option.label}
+                      {/*
+                        Issue #293: the active rule carries a check that the
+                        plain Repeat menu's items do not. Compared against the
+                        stored phrase rather than the rendered label, since
+                        the label is re-derived per open and the phrase is
+                        what the Task actually holds.
+                      */}
+                      {option.phrase === activeRecurrence && (
+                        <Check aria-hidden="true" className="size-3.5" />
+                      )}
+                    </DropdownMenu.Item>
+                  ))}
+                  {/*
                     Todoist's own dedicated custom-recurrence dialog isn't
                     built here (this ticket's own disclosed scope cut) —
                     this focuses the "Type a date" input instead, already
@@ -728,17 +781,50 @@ export function TaskSchedulePopover({
                     a reader lands somewhere they can type a custom phrase
                     rather than a dead end.
                   */}
-                <DropdownMenu.Item
-                  className={repeatItemClassName}
-                  onSelect={() => {
-                    focusInputAfterRepeatCloseRef.current = true;
-                  }}
-                >
-                  Custom…
-                </DropdownMenu.Item>
-              </DropdownMenu.Content>
-            </DropdownMenu.Portal>
-          </DropdownMenu.Root>
+                  <DropdownMenu.Item
+                    className={repeatItemClassName}
+                    onSelect={() => {
+                      focusInputAfterRepeatCloseRef.current = true;
+                    }}
+                  >
+                    Custom…
+                  </DropdownMenu.Item>
+                  {/*
+                    Issue #293's seventh item, present only once a rule is
+                    set. Removal has two doors in Todoist — this and the
+                    standalone button beside the trigger — and both leave the
+                    date alone.
+                  */}
+                  {activeRecurrence !== null && (
+                    <DropdownMenu.Item
+                      className={repeatItemClassName}
+                      onSelect={clearRecurrenceKeepingDate}
+                    >
+                      Clear
+                    </DropdownMenu.Item>
+                  )}
+                </DropdownMenu.Content>
+              </DropdownMenu.Portal>
+            </DropdownMenu.Root>
+            {/*
+                The standalone half of the two-part control. `Clear
+                recurrence` is deliberately NOT `No Date`: it drops the rule
+                and keeps the day, which is the distinction meologue had no
+                way to express at all before this — `No Date` takes the date
+                with it.
+              */}
+            {activeRecurrence !== null && (
+              <Button
+                type="button"
+                variant="ghost"
+                aria-label="Clear recurrence"
+                onClick={clearRecurrenceKeepingDate}
+                className="size-8 shrink-0 text-muted-foreground"
+              >
+                <X className="size-4" />
+              </Button>
+            )}
+          </div>
         )}
       </div>
     </>

@@ -133,6 +133,76 @@ describe("shell by breakpoint (issue #282)", () => {
   });
 });
 
+describe("an already-recurring Task (issue #293)", () => {
+  beforeEach(() => {
+    stubLayout(true);
+  });
+
+  const RECURRING = { dateDay: "2026-09-10", dateString: "every day" };
+
+  it("names the trigger for the rule instead of 'Repeat'", () => {
+    renderPopover(RECURRING);
+    open();
+
+    // Todoist labels the control with the rule's own name once one is set,
+    // and CONTEXT.md's Recurrence entry says the stored phrase is what the
+    // user typed — so this is the stored phrase, capitalised, not a
+    // re-derived description of it.
+    expect(screen.getByRole("button", { name: "Every day" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Repeat" })).toBeNull();
+  });
+
+  it("offers a Clear recurrence button beside it", () => {
+    renderPopover(RECURRING);
+    open();
+
+    expect(screen.getByRole("button", { name: "Clear recurrence" })).toBeInTheDocument();
+  });
+
+  it("clears the rule and keeps the day", () => {
+    const { onPickDay, onPickRecurrence } = renderPopover(RECURRING);
+    open();
+
+    fireEvent.click(screen.getByRole("button", { name: "Clear recurrence" }));
+
+    // The distinction this whole ticket turns on: the rule goes, the date
+    // stays. `No Date` — the only previous way out of a recurrence — would
+    // have called onPickDay(null) and taken the date with it.
+    expect(onPickDay).toHaveBeenCalledWith("2026-09-10");
+    expect(onPickRecurrence).not.toHaveBeenCalled();
+  });
+
+  it("keeps a Clear item inside the menu too, and marks the active rule", () => {
+    renderPopover(RECURRING);
+    open();
+    // Radix opens its menu on pointerdown, not click — the same reason the
+    // Android rig never uses a synthetic element.click() on one.
+    fireEvent.pointerDown(screen.getByRole("button", { name: "Every day" }));
+
+    const menu = screen.getByTestId("repeat-menu");
+    const items = within(menu)
+      .getAllByRole("menuitem")
+      .map((i) => i.textContent ?? "");
+    // Removal has two doors in Todoist — the standalone button and this.
+    expect(items.at(-1)).toBe("Clear");
+    // The active rule carries a check the plain menu's items do not.
+    const daily = within(menu).getByText("Every day");
+    expect(daily.closest('[role="menuitem"]')?.querySelector("svg")).not.toBeNull();
+  });
+
+  it("offers no Clear anywhere when the Task does not recur", () => {
+    renderPopover({ dateDay: "2026-09-10", dateString: null });
+    open();
+
+    expect(screen.queryByRole("button", { name: "Clear recurrence" })).toBeNull();
+    fireEvent.pointerDown(screen.getByRole("button", { name: "Repeat" }));
+    const items = within(screen.getByTestId("repeat-menu"))
+      .getAllByRole("menuitem")
+      .map((i) => i.textContent ?? "");
+    expect(items).not.toContain("Clear");
+  });
+});
+
 describe("TaskSchedulePopover", () => {
   // Every assertion in this suite was measured against Todoist's anchored
   // popover at desktop width, so it runs at desktop width.
