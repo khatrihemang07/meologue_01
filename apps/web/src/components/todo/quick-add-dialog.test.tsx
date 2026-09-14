@@ -79,17 +79,59 @@ describe("QuickAddDialog", () => {
   // QA-13/QA-15/QA-16/NAV-07 (parity ledger): the real Quick Add dialog,
   // identity-asserted the same way the live capture was
   // (`role="dialog"`/`aria-label="Quick Add"`).
-  it("opens as role=dialog aria-label=Quick Add, with the Task name editor and the recorded footer buttons", async () => {
+  it("opens as role=dialog aria-label=Quick Add, with the Task name editor, at rest", async () => {
     render(<QuickAddDialog open={true} onOpenChange={vi.fn()} onAdd={vi.fn()} />);
 
     const dialog = await screen.findByRole("dialog", { name: "Quick Add" });
     expect(dialog).toBeInTheDocument();
     expect(await getInput()).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "More actions" })).toBeInTheDocument();
+  });
+
+  // Issue #264: at rest (empty composer) the footer toolbar row is absent
+  // entirely — meologue now matches Todoist's 66px "single compact row"
+  // rather than always rendering the footer. A plain dismiss (X) affordance
+  // replaces Todoist's red Ramble/dictate button, which meologue has no
+  // feature behind (QA-15 — this file's own header comment records that
+  // divergence as a known open item, not something papered over).
+  it("at rest, renders the compact single row with no footer toolbar", async () => {
+    render(<QuickAddDialog open={true} onOpenChange={vi.fn()} onAdd={vi.fn()} />);
+
+    await getInput();
+    expect(screen.getByRole("button", { name: "Close" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "More actions" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Cancel" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Add task" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Remove date" })).not.toBeInTheDocument();
+  });
+
+  // Issue #264: typing anything grows the dialog and reveals the footer —
+  // the recorded subset of controls (More actions, Cancel, Add task; QA-15
+  // "Remove date" is additionally conditional on a recognised date, covered
+  // separately below).
+  it("typing text reveals the footer toolbar row", async () => {
+    render(<QuickAddDialog open={true} onOpenChange={vi.fn()} onAdd={vi.fn()} />);
+
+    fireEvent.change(await getInput(), { target: { value: "buy milk" } });
+
+    expect(await screen.findByRole("button", { name: "More actions" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Cancel" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Add task" })).toBeInTheDocument();
-    // QA-15: "Remove date" only appears once a date is recognised.
-    expect(screen.queryByRole("button", { name: "Remove date" })).not.toBeInTheDocument();
+  });
+
+  // Issue #264: clearing the field back to empty returns the dialog to the
+  // compact state — this isn't a one-way grow.
+  it("clearing the text back to empty returns the dialog to the compact state", async () => {
+    render(<QuickAddDialog open={true} onOpenChange={vi.fn()} onAdd={vi.fn()} />);
+
+    const input = await getInput();
+    fireEvent.change(input, { target: { value: "buy milk" } });
+    expect(await screen.findByRole("button", { name: "Add task" })).toBeInTheDocument();
+
+    fireEvent.change(input, { target: { value: "" } });
+
+    expect(screen.queryByRole("button", { name: "Add task" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "More actions" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Cancel" })).not.toBeInTheDocument();
   });
 
   it("calls onAdd with the parsed fields and closes on Add task", async () => {
