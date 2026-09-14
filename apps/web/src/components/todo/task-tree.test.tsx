@@ -65,6 +65,7 @@ function renderTree(overrides: Partial<Parameters<typeof TaskTree>[0]> = {}) {
     reorderTask: vi.fn(),
     setTaskParent: vi.fn(async () => {}),
     listTaskChildren: vi.fn(async () => []),
+    countTaskChildren: vi.fn(async () => ({ done: 0, total: 0 })),
     listTasksInProject: vi.fn(async () => []),
     ...overrides,
   };
@@ -106,6 +107,45 @@ function rowBox(label: string): HTMLElement {
   if (!box) throw new Error(`expected a row box on "${label}"'s row`);
   return box;
 }
+
+describe("the sub-task progress badge (issue #298)", () => {
+  function parentWithChildren(done: number, total: number) {
+    const parent = task({ id: "parent", content: "Parent" });
+    const child = task({ id: "child", content: "Child", parentId: "parent" });
+    return {
+      tasks: [parent],
+      // `listTaskChildren` is the ACTIVE children — what gets rendered. The
+      // badge must not be read off it: that is the bug this covers.
+      listTaskChildren: vi.fn(async (parentId: string) =>
+        parentId === "parent" && done < total ? [child] : [],
+      ),
+      countTaskChildren: vi.fn(async (parentId: string) =>
+        parentId === "parent" ? { done, total } : { done: 0, total: 0 },
+      ),
+    };
+  }
+
+  it("reads done/total, not the number of active children", async () => {
+    renderTree(parentWithChildren(1, 2));
+
+    expect(await screen.findByText("1/2")).toBeInTheDocument();
+  });
+
+  it("still shows the badge when every sub-task is done", async () => {
+    // The defect this fixes: `listChildren` excludes completed rows, so a
+    // parent with 2 of 2 finished had zero active children and the badge
+    // vanished — counting down to nothing as work got done.
+    renderTree(parentWithChildren(2, 2));
+
+    expect(await screen.findByText("2/2")).toBeInTheDocument();
+  });
+
+  it("names the count for a screen reader, since 2/2 alone is ambiguous", async () => {
+    renderTree(parentWithChildren(2, 2));
+
+    expect(await screen.findByText("2 of 2 sub-tasks done")).toBeInTheDocument();
+  });
+});
 
 describe("TaskTree", () => {
   // Pointer-drag tests below need real-looking row geometry and pointer

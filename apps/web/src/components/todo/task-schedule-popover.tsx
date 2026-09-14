@@ -307,13 +307,22 @@ export function TaskSchedulePopover({
   // SCHED-14's five named cadences, each resolved through the identical
   // `firstOccurrence` the typed input already uses — not reconstructed by
   // hand from `dateDay`/`now`. That distinction is load-bearing, not
-  // stylistic: `../../packages/core/src/recurrence/recurrence.ts`'s own
-  // header comment records that a bare "every day" is
-  // completion-anchored to `now` regardless of `dateDay`, while "every
-  // month"/"every year" anchor to `dateDay` when one exists — two
-  // different rules a hand-written label would have to reimplement (and
-  // could drift from) to describe correctly. Reading each option's own
+  // stylistic: every phrase's anchor is now `bang ? "completion" : "due"`
+  // (issue #291, commit 6968bf4), so an unbanged rule resolves against
+  // `dateDay` when the Task has one and against `now` when it does not —
+  // and a hand-written label would have to reimplement that (and could
+  // drift from it) to describe correctly. Reading each option's own
   // weekday/day-of-month/month-and-day off its own real outcome can't.
+  //
+  // This comment used to say bare "every day" was completion-anchored
+  // regardless of `dateDay`, which was true and deliberate — issue #170
+  // stated it twice as an acceptance criterion — until #291 removed the
+  // carve-out. Driven evidence overturned it: Todoist Android advances a
+  // postponed daily Task to `max(due, today) + 1`, six days from where
+  // completion-anchoring lands it (parity-ledger-android.md AREC-01), and
+  // Todoist web agrees. The two rules are indistinguishable for a Task
+  // completed on time, which is presumably why the documentation the
+  // criterion came from reads the way it does.
   const repeatAnchor = parseDayKey(dateDay) ?? now;
   const repeatCandidates: ReadonlyArray<{
     key: string;
@@ -322,9 +331,13 @@ export function TaskSchedulePopover({
   }> = [
     { key: "day", phrase: "every day", label: () => "Every day" },
     {
-      // A named weekday, not a bare "every week". The engine anchors bare
-      // "every week" to completion, so a task finished late would drift off
-      // the weekday this label promises; "every sunday" stays on Sundays.
+      // A named weekday, not a bare "every week". Since #291 the engine
+      // anchors an unbanged rule to the due date, so bare "every week" no
+      // longer drifts off its weekday the way this comment used to warn —
+      // but a named weekday is still the honest label, because it says on
+      // the tin which day it keeps rather than leaving a reader to derive
+      // it from the anchor rule. `every! week` remains explicitly
+      // completion-anchored and would still drift.
       // The weekday is the task's own date's, or today's for an undated
       // task, as in Todoist's "Every week on Saturday" read on Sat 12 Sep.
       key: "week",

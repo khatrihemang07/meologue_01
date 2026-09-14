@@ -1010,10 +1010,23 @@ describe("TaskRow", () => {
       expect(screen.queryByText("3")).not.toBeInTheDocument();
     });
 
-    it("shows the sub-task count, icon plus number, once there are sub-tasks", () => {
-      renderRow({ task: task({ content: "call mum" }), subtaskCount: 3 });
+    it("shows sub-task progress as done/total, once there are sub-tasks", () => {
+      // Issue #298 changed this from a bare number. It read
+      // `listChildren(...).length` — the *active* children — so a parent
+      // whose sub-tasks were all finished counted 0 and the badge emptied as
+      // work got done. `subtaskCount` is now the total and `subtaskDone` the
+      // finished half; this assertion changed deliberately rather than being
+      // relaxed to keep passing.
+      renderRow({ task: task({ content: "call mum" }), subtaskCount: 3, subtaskDone: 1 });
 
-      expect(screen.getByText("3")).toBeInTheDocument();
+      expect(screen.getByText("1/3")).toBeInTheDocument();
+      expect(screen.getByText("1 of 3 sub-tasks done")).toBeInTheDocument();
+    });
+
+    it("still shows the badge when every sub-task is done", () => {
+      renderRow({ task: task({ content: "call mum" }), subtaskCount: 2, subtaskDone: 2 });
+
+      expect(screen.getByText("2/2")).toBeInTheDocument();
     });
 
     it("previews a Description's first line as rendered markdown beneath the title — ROW-07", () => {

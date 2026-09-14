@@ -69,6 +69,8 @@ export interface TaskRowContentProps {
    * already has in hand.
    */
   subtaskCount: number;
+  /** How many of them are done (issue #298). See TaskRow's own prop doc for why this cannot come from the rendered children. */
+  subtaskDone: number;
   onComplete: () => void;
   onCompleteForever: () => void;
   /**
@@ -174,6 +176,7 @@ export function TaskRowContent({
   detailActions,
   commentCount,
   subtaskCount,
+  subtaskDone,
   onComplete,
   onCompleteForever,
   onUncomplete,
@@ -739,9 +742,24 @@ export function TaskRowContent({
                 typed. */}
             {task.dateString !== null && <span>{task.dateString}</span>}
             {subtaskCount > 0 && (
+              // Issue #298: `done/total`, as Todoist's own badge reads.
+              // This used to render `listChildren(...).length` — the count
+              // of *active* children — so a parent whose sub-tasks were all
+              // finished counted 0 and the badge emptied as work got done,
+              // which is the opposite of the progress signal it looks like.
               <span className="flex items-center gap-0.5">
                 <ListTree aria-hidden="true" className="size-3" />
-                {subtaskCount}
+                {/* "0/2" read aloud is ambiguous, and a bare <span> takes no
+                    aria-label — so the glyphs are hidden and the sentence is
+                    the accessible name, the same split the date badge above
+                    already makes between a glyph for a glance and a literal
+                    reading for anyone who wants it spelled out. */}
+                <span aria-hidden="true">
+                  {subtaskDone}/{subtaskCount}
+                </span>
+                <span className="sr-only">
+                  {subtaskDone} of {subtaskCount} sub-tasks done
+                </span>
               </span>
             )}
             {commentCount > 0 && (

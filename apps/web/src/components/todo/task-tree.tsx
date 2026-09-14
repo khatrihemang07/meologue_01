@@ -66,7 +66,7 @@ import type { PointerEvent } from "react";
 import { useRef, useState } from "react";
 import { toast } from "sonner";
 import { type TaskDetailActions, TaskRow } from "@/components/todo/task-row";
-import { taskChildrenQueryKey } from "@/lib/query-keys";
+import { taskChildCountsQueryKey, taskChildrenQueryKey } from "@/lib/query-keys";
 import { refocusTaskHandle } from "@/lib/refocus-task-handle";
 import { dropIndexForPointer } from "@/lib/task-drag-recognizer";
 import { reorderedTaskOrderKey, siblingMoveDropIndex } from "@/lib/task-reorder";
@@ -121,6 +121,8 @@ export interface TaskTreeProps {
   reorderTask: (id: string, orderKey: string) => void;
   setTaskParent: (id: string, parentId: string | null) => Promise<void>;
   listTaskChildren: (parentId: string) => Promise<Task[]>;
+  /** A Task's `done`/`total` sub-task counts (issue #298) — separate from `listTaskChildren` because that list excludes completed sub-tasks and so cannot supply either number once one is finished. */
+  countTaskChildren: (parentId: string) => Promise<{ done: number; total: number }>;
   listTasksInProject: (projectId: string | null) => Promise<Task[]>;
 }
 
@@ -153,6 +155,7 @@ export function TaskTree({
   reorderTask,
   setTaskParent,
   listTaskChildren,
+  countTaskChildren,
   listTasksInProject,
 }: TaskTreeProps) {
   // Drag state, scoped to this one sibling group — see this file's own
@@ -541,6 +544,7 @@ export function TaskTree({
             reorderTask={reorderTask}
             setTaskParent={setTaskParent}
             listTaskChildren={listTaskChildren}
+            countTaskChildren={countTaskChildren}
             listTasksInProject={listTasksInProject}
           />
         ),
@@ -587,6 +591,8 @@ interface TaskTreeRowProps {
   reorderTask: (id: string, orderKey: string) => void;
   setTaskParent: (id: string, parentId: string | null) => Promise<void>;
   listTaskChildren: (parentId: string) => Promise<Task[]>;
+  /** A Task's `done`/`total` sub-task counts (issue #298) — separate from `listTaskChildren` because that list excludes completed sub-tasks and so cannot supply either number once one is finished. */
+  countTaskChildren: (parentId: string) => Promise<{ done: number; total: number }>;
   listTasksInProject: (projectId: string | null) => Promise<Task[]>;
 }
 
@@ -622,6 +628,7 @@ function TaskTreeRow({
   reorderTask,
   setTaskParent,
   listTaskChildren,
+  countTaskChildren,
   listTasksInProject,
 }: TaskTreeRowProps) {
   // Sub-tasks keep their own order regardless of any sorting or grouping
@@ -634,6 +641,16 @@ function TaskTreeRow({
     queryFn: () => listTaskChildren(task.id),
   });
   const children = childrenQuery.data ?? [];
+  // Issue #298: the badge's two numbers, asked for separately because
+  // `childrenQuery` above excludes completed sub-tasks by definition and so
+  // can supply neither of them once any child is finished. One aggregate,
+  // under the same TASKS_QUERY_KEY prefix, so a Task write invalidates it
+  // alongside the list without bespoke wiring.
+  const childCountsQuery = useQuery({
+    queryKey: taskChildCountsQueryKey(task.id),
+    queryFn: () => countTaskChildren(task.id),
+  });
+  const childCounts = childCountsQuery.data ?? { done: 0, total: children.length };
 
   return (
     // No Fragment of `<TaskRow>` then a sibling `<TaskTree>` any more
@@ -651,11 +668,14 @@ function TaskTreeRow({
       task={task}
       detailActions={detailActions}
       commentCount={detailActions.commentCountFor(task.id)}
-      // Issue #224's own "must gain" list — this query already ran, just
-      // above, to decide whether to render a nested `TaskTree` at all
-      // (`children.length > 0` below), so the row's own badge reads the
-      // identical number rather than this component fetching it twice.
-      subtaskCount={children.length}
+      // Issue #298: `total`, not `children.length`. The list above is the
+      // *active* children — it decides whether to render a nested `TaskTree`
+      // at all — and a parent whose sub-tasks are all done has none, so
+      // reading the badge off it counted 0 for a Task that was in fact 2/2.
+      // Falls back to `children.length` until the count resolves, which is
+      // the old number and never larger than the true total.
+      subtaskCount={childCounts.total}
+      subtaskDone={childCounts.done}
       depth={depth}
       isDropTarget={isDropTarget}
       isNestTarget={isNestTarget}
@@ -689,6 +709,7 @@ function TaskTreeRow({
           reorderTask={reorderTask}
           setTaskParent={setTaskParent}
           listTaskChildren={listTaskChildren}
+          countTaskChildren={countTaskChildren}
           listTasksInProject={listTasksInProject}
         />
       )}

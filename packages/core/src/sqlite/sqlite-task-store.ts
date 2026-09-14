@@ -102,6 +102,21 @@ export class SqliteTaskStore implements TaskStore {
       .orderBy(tasks.orderKey, tasks.id);
   }
 
+  // See TaskStore.countChildren's own doc comment. One aggregate rather than
+  // a second row fetch: the caller wants two numbers, not the rows, and the
+  // same `tasks_parent_id_idx` serves it.
+  async countChildren(parentId: string): Promise<{ done: number; total: number }> {
+    const [row] = await this.db
+      .select({
+        total: sql<number>`count(*)`,
+        done: sql<number>`sum(case when ${tasks.completedAt} is not null then 1 else 0 end)`,
+      })
+      .from(tasks)
+      .where(and(isNull(tasks.deletedAt), eq(tasks.parentId, parentId)));
+    // `sum()` over zero rows is SQL NULL, not 0.
+    return { done: Number(row?.done ?? 0), total: Number(row?.total ?? 0) };
+  }
+
   // See TaskStore.listInSection's own doc comment for why both active and
   // completed Tasks are included here, unlike listByProject/listChildren
   // above.

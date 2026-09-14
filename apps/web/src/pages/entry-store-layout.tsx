@@ -188,6 +188,7 @@ export interface EntryStoreOutletContext {
   listTasksInProject: (projectId: string | null) => Promise<Task[]>;
   /** A Task's own direct sub-tasks — use-tasks.ts's own `listTaskChildren` doc comment. */
   listTaskChildren: (parentId: string) => Promise<Task[]>;
+  countTaskChildren: (parentId: string) => Promise<{ done: number; total: number }>;
   /** A Section's own direct members — use-tasks.ts's own `listTasksInSection` doc comment. */
   listTasksInSection: (sectionId: string) => Promise<Task[]>;
   /** Every descendant of a Task — use-tasks.ts's own `listTaskDescendants` doc comment. */
@@ -529,6 +530,10 @@ async function noopListTasksInProject(_projectId: string | null): Promise<Task[]
   return [];
 }
 
+async function noopCountTaskChildren(_parentId: string): Promise<{ done: number; total: number }> {
+  return { done: 0, total: 0 };
+}
+
 async function noopListTaskChildren(_parentId: string): Promise<Task[]> {
   return [];
 }
@@ -746,6 +751,7 @@ const TASK_STORE_METHODS: StoreMethodNames<TaskStore> = {
   // it does to every setter.
   listByProject: true,
   listChildren: true,
+  countChildren: true,
   listInSection: true,
   listDescendants: true,
   listCompleted: true,
@@ -1228,6 +1234,7 @@ export function EntryStoreLayout() {
     setTaskDescription,
     listTasksInProject,
     listTaskChildren,
+    countTaskChildren,
     listTasksInSection,
     listTaskDescendants,
     advanceRecurringTask,
@@ -1303,6 +1310,7 @@ export function EntryStoreLayout() {
               setTaskDescription,
               listTasksInProject,
               listTaskChildren,
+              countTaskChildren,
               listTasksInSection,
               listTaskDescendants,
               advanceRecurringTask,
@@ -1380,6 +1388,7 @@ export function EntryStoreLayout() {
               setTaskDescription: noopSetTaskDescription,
               listTasksInProject: noopListTasksInProject,
               listTaskChildren: noopListTaskChildren,
+              countTaskChildren: noopCountTaskChildren,
               listTasksInSection: noopListTasksInSection,
               listTaskDescendants: noopListTaskDescendants,
               advanceRecurringTask: noopAdvanceRecurringTask,

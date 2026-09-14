@@ -133,6 +133,7 @@ function renderProjectView(overrides: Partial<Parameters<typeof ProjectView>[0]>
     reorderTask: vi.fn(),
     setTaskParent: vi.fn(async () => {}),
     listTaskChildren: vi.fn(async () => []),
+    countTaskChildren: vi.fn(async () => ({ done: 0, total: 0 })),
     listTasksInProject: vi.fn(async () => []),
     ...overrides,
   };

@@ -108,6 +108,13 @@ export interface TaskRowProps {
    */
   subtaskCount?: number;
   /**
+   * How many of those sub-tasks are done — issue #298's `done/total` badge.
+   * Comes from `TaskStore.countChildren`, NOT from the children this row
+   * renders: that list excludes completed sub-tasks by definition, so it
+   * can supply neither number once any of them is finished.
+   */
+  subtaskDone?: number;
+  /**
    * Completes this Task — for a recurring one (`task.dateString !== null`),
    * the caller's own job is to call `advanceRecurringTask` here instead of
    * `completeTask` (TaskStore.advanceRecurring's own doc comment: the
@@ -315,6 +322,7 @@ export function TaskRow({
   detailActions,
   commentCount = 0,
   subtaskCount = 0,
+  subtaskDone = 0,
   onComplete,
   onCompleteForever,
   onUncomplete,
@@ -455,6 +463,7 @@ export function TaskRow({
         detailActions={detailActions}
         commentCount={commentCount}
         subtaskCount={subtaskCount}
+        subtaskDone={subtaskDone}
         onComplete={onComplete}
         onCompleteForever={onCompleteForever}
         onUncomplete={onUncomplete}

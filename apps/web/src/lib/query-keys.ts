@@ -170,6 +170,18 @@ export function taskChildrenQueryKey(parentId: string) {
 }
 
 /**
+ * A Task's own `done`/`total` sub-task counts (TaskStore.countChildren) —
+ * issue #298. A sibling of `taskChildrenQueryKey` rather than a widening of
+ * it, for the same reason the store method is separate: that list means
+ * "active children, for rendering", and this means "how much of this is
+ * done". Under the same TASKS_QUERY_KEY prefix, so a Task write invalidates
+ * both without either needing bespoke invalidation.
+ */
+export function taskChildCountsQueryKey(parentId: string) {
+  return [...TASKS_QUERY_KEY, "child-counts", parentId] as const;
+}
+
+/**
  * Issue #170: every active Label (LabelStore.list()), read by
  * use-labels.ts. A flat key, unpaginated and with no completed sibling —
  * mirroring TASKS_QUERY_KEY's own reasoning rather than

@@ -326,6 +326,7 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
     setTaskLabels,
     listTasksInProject,
     listTaskChildren,
+    countTaskChildren,
     listTasksInSection,
     listTaskDescendants,
     advanceRecurringTask,
@@ -991,6 +992,7 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
           reorderTask={reorderTask}
           setTaskParent={setTaskParent}
           listTaskChildren={listTaskChildren}
+          countTaskChildren={countTaskChildren}
           listTasksInProject={listTasksInProject}
         />
       )}
@@ -1040,6 +1042,7 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
             reorderTask={reorderTask}
             setTaskParent={setTaskParent}
             listTaskChildren={listTaskChildren}
+            countTaskChildren={countTaskChildren}
             listTasksInProject={listTasksInProject}
           />
         ))}
