@@ -142,8 +142,16 @@ const DESTINATIONS = [
  * `settings-page.tsx` never offers a control for it, but this is the second,
  * load-bearing guarantee: even a hand-edited `localStorage` value naming
  * "settings" cannot make the one recovery route (ADR 0008/0009) disappear.
+ *
+ * Exported (ADR 0080) so `chat-list-page.tsx`'s wide-breakpoint content
+ * column — the Continue card and the Today summary — can check a
+ * Destination's own hidden/locked state through this exact derivation
+ * rather than re-deriving `useSyncEnabled`/`useCapabilities`/
+ * `useHiddenDestinations` a second time somewhere else. `ChatList` below is
+ * still this hook's only *rendering* caller; `chat-list-page.tsx` calls it
+ * purely to filter, never to render a second copy of these rows.
  */
-function useDestinations() {
+export function useDestinations() {
   const syncEnabled = useSyncEnabled();
   const capabilities = useCapabilities();
   const hiddenDestinations = useHiddenDestinations();
@@ -165,6 +173,27 @@ function useDestinations() {
     // `as const` already guarantees rather than asserting something new.
     return !hiddenDestinations.has(destination.to.slice(1) as HideableDestinationId);
   });
+}
+
+/** One row of `useDestinations()`'s own return shape — `chat-list-page.tsx`'s own Continue card and Today summary read this, not `DESTINATIONS` directly, so they see the same lock/hidden derivation this file's rows do. */
+export type Destination = ReturnType<typeof useDestinations>[number];
+
+/**
+ * Which `DESTINATIONS` row's route a location belongs to, independent of
+ * lock or hidden state — `null` for `/` itself and for anything that
+ * matches none of the five (ADR 0080). `chat-shell-layout.tsx`'s own
+ * last-Destination memory is this function's one caller, recording the
+ * Destination a reader is standing on without restating this file's
+ * exact-or-slash route rule a second time (the same rule `back-to-chats.tsx`
+ * and `chat-shell-layout.tsx`'s own `isTodo` already each carry a private
+ * copy of, for Todo alone) — here it is read straight off `end`, the exact
+ * flag `NavLink`'s own `end` prop above already renders with.
+ */
+export function destinationForPath(pathname: string): Destination["to"] | null {
+  const match = DESTINATIONS.find(({ to, end }) =>
+    end ? pathname === to : pathname === to || pathname.startsWith(`${to}/`),
+  );
+  return match?.to ?? null;
 }
 
 /**
