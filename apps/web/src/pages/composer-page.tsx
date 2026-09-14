@@ -10,6 +10,12 @@ import { TaskDetailView } from "@/components/todo/task-detail-view";
 import { TaskScheduleSheet } from "@/components/todo/task-schedule-sheet";
 import { useHistorySearch } from "@/hooks/use-history-search";
 import { commentsForTask } from "@/lib/comment-counts";
+import {
+  clearComposerResumeDay,
+  readComposerResumeDay,
+  writeComposerResumeDay,
+} from "@/lib/composer-resume";
+import { deviceUtcOffsetMinutes, entryDayKey } from "@/lib/entry-day";
 import { localDayKey } from "@/lib/local-day-key";
 import type { ComposerPromotionContext } from "@/lib/promote-tasks";
 import { useSettingsStore, useSyncEnabled } from "@/lib/settings";
@@ -153,8 +159,41 @@ export function ComposerPage() {
     // dependency check (`NaN` to `NaN`) and silently stop forcing the jump
     // from then on.
     setSendSignal((count) => (count ?? 0) + 1);
+    // "Send clears it" — the reader just wrote something and wants to see
+    // it, not be returned to wherever they were reading before (composer-
+    // resume.ts's own doc comment). `forceToNewest` above already lands the
+    // view at the newest end unconditionally; this is what stops a *later*
+    // mount from seeking back to whatever day was remembered before this
+    // Send.
+    clearComposerResumeDay();
   }
 
+  // "Returning to the Composer lands you on the day you were reading" — the
+  // other half of `resumeSeek` above: which day to remember for *next*
+  // time. History (history.tsx's own `onVisibleDayChange`) reports the
+  // topmost visible day every time it changes; this decides whether that's
+  // worth keeping.
+  //
+  // Compared against the newest Entry's own day, not merely "is History
+  // scrolled to its pixel bottom" — this page has no access to that (it's
+  // `usePinnedScroll`'s own, private `awayFromNewest`, read only inside
+  // Shell), and the day is the only unit this feature deals in anyway (see
+  // composer-resume.ts's own doc comment on why). A reader who has scrolled
+  // to the top of *today's* own day block is, for this purpose, already at
+  // the newest end: seeking back to today on a later visit would land them
+  // at that day's separator rather than its true bottom, a worse landing
+  // than the ordinary "jump to the very newest Entry" a `null` (nothing
+  // remembered) already gives them.
+  //
+  // Written continuously rather than only on unmount: this page's own
+  // instance of History is what stops reporting once it unmounts, so the
+  // last write made while it was still mounted is already exactly the
+  // "where the reader was when they left" value — a dedicated unmount
+  // effect would do the identical write, just later and with more
+  // machinery.
+  const newestEntry = entries[0];
+  const newestEntryDayKey =
+    newestEntry !== undefined ? entryDayKey(newestEntry.createdAt, deviceUtcOffsetMinutes()) : null;
   // Issue #142/#143: the seek a Reference lands here with, held entirely in
   // the URL rather than component state — the same reason Search's own
   // query lives in `?q=` (use-history-search.ts). `seek` is derived fresh
@@ -176,12 +215,72 @@ export function ComposerPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const seekEntryParam = searchParams.get(SEEK_ENTRY_PARAM);
   const seekDayParam = searchParams.get(SEEK_DAY_PARAM);
-  const seek: HistorySeekTarget | null =
+  const urlSeek: HistorySeekTarget | null =
     seekEntryParam !== null && ENTRY_ID_SHAPE.test(seekEntryParam)
       ? { kind: "entry", entryId: seekEntryParam }
       : seekDayParam !== null && DAY_KEY_SHAPE.test(seekDayParam)
         ? { kind: "day", dayKey: seekDayParam }
         : null;
+
+  // "Returning to the Composer lands you on the day you were reading" — the
+  // in-memory sibling of the `?d=`/`?e=` seek above, seeded from
+  // composer-resume.ts's own module-level memory rather than the URL.
+  // Lazily initialised (the function form of `useState`) so the read only
+  // ever happens once, at this mount, not on every render — the exact
+  // "derive once, then it's this mount's own state" composer-resume.ts's
+  // own doc comment assumes. A `useState`, unlike `urlSeek` above, because
+  // there is no URL param for this to stay in sync with; the module is only
+  // ever consulted at mount.
+  //
+  // `seekDayParam !== null || seekEntryParam !== null` — not `urlSeek !==
+  // null` — is deliberately the gate: "an explicit `?d=`/`?e=` param always
+  // wins over the remembered day" reads as "there IS a seek param," not
+  // "there is a *valid* one." A malformed `?d=` still names the reader's
+  // own intent to land somewhere specific (or a stale link's), and this
+  // remembered day has no better claim to the same seek than that does.
+  const [resumeSeek, setResumeSeek] = useState<HistorySeekTarget | null>(() => {
+    if (seekDayParam !== null || seekEntryParam !== null) {
+      return null;
+    }
+    const rememberedDayKey = readComposerResumeDay();
+    return rememberedDayKey !== null ? { kind: "day", dayKey: rememberedDayKey } : null;
+  });
+
+  // `urlSeek` first: a followed Reference always wins over a remembered
+  // reading position, the same precedence `resumeSeek`'s own initialiser
+  // above already encodes for the very first render.
+  const seek: HistorySeekTarget | null = urlSeek ?? resumeSeek;
+
+  /**
+   * Records where the reader is reading, so leaving and coming back returns
+   * them there (CONTEXT.md, "Resume point").
+   *
+   * Deliberately records nothing while `seek !== null`. History reports the
+   * OLDEST loaded day on the first render of any mount — `topIndex` falls
+   * back to `0` before the virtualizer has measured, and `flatItems` runs
+   * oldest-first (history.tsx's own note on `onVisibleDayChange`). On an
+   * ordinary visit that report is harmless: the pin-to-newest lands a frame
+   * later, reports the newest day, and the branch below clears the memory
+   * anyway. On a *restoring* visit it is not harmless at all — the seek that
+   * is mid-flight exists precisely to return the reader to a remembered day,
+   * and writing the oldest loaded day over it while it travels would erase
+   * the answer before the question finished being asked. A seek is a
+   * position the app is still moving to, so there is nothing true to record
+   * until it settles.
+   */
+  const handleVisibleDayChange = useCallback(
+    (dayKey: string | null) => {
+      if (seek !== null) {
+        return;
+      }
+      if (dayKey === null || dayKey === newestEntryDayKey) {
+        clearComposerResumeDay();
+        return;
+      }
+      writeComposerResumeDay(dayKey);
+    },
+    [seek, newestEntryDayKey],
+  );
 
   // Removes `?d=` and `?e=` once the seek has nowhere left to go — either
   // History found the target and scrolled to it, or (handleSeekNeedsOlder,
@@ -193,6 +292,12 @@ export function ComposerPage() {
   // history means Back from here returns to wherever the reader followed
   // the Reference from, rather than landing back on this exact mid-seek URL
   // and re-triggering the same seek a second time.
+  //
+  // `setResumeSeek(null)` alongside: whichever of `urlSeek`/`resumeSeek`
+  // was actually driving `seek` (only one ever is at a time — `resumeSeek`
+  // is seeded `null` outright whenever a URL param was present at mount),
+  // this is the one place both kinds of seek converge on "done." Clearing
+  // the loser too is harmless — it's already `null`.
   const settleSeek = useCallback(() => {
     setSearchParams(
       (previous) => {
@@ -203,6 +308,7 @@ export function ComposerPage() {
       },
       { replace: true },
     );
+    setResumeSeek(null);
   }, [setSearchParams]);
 
   // History's own "not found yet" report (history.tsx's own comment on
@@ -482,6 +588,7 @@ export function ComposerPage() {
           seek={seek}
           onSeekNeedsOlder={handleSeekNeedsOlder}
           onSeekSettled={settleSeek}
+          onVisibleDayChange={handleVisibleDayChange}
         />
       }
       composerSlot={
