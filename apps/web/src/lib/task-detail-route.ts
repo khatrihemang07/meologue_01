@@ -50,9 +50,54 @@ export function taskDetailSlug(content: string): string {
   return slug === "" ? "task" : slug;
 }
 
-/** The full `/todo/task/<slug>-<id>` address for `task` — see this module's own header comment. */
-export function taskDetailPath(task: Task): string {
-  return `/todo/task/${taskDetailSlug(task.content)}-${task.id}`;
+/**
+ * Issue #306's own query parameter — the door a Task row's comment-count
+ * badge (`ROW-08`, task-row-content.tsx) opens onto "land in the thread,
+ * ready to reply," matching Todoist's own `<a href="…/?intent=reply">`.
+ *
+ * A query parameter on the SAME address, not a route-shaped alternative
+ * (e.g. `/todo/task/<slug>-<id>/reply`): this module's own header comment
+ * already settled that the detail route's address IS the Task's address
+ * (issue #178's "a Task has its own address" criterion), so a second path
+ * naming the identical Task would either have to redirect back to the
+ * first — pointless — or become a second bookmarkable "address" for one
+ * Task, which is the thing #178 ruled out. A query string also carries
+ * the intent, and only the intent: `taskIdFromParam` above reads the
+ * `:taskSlugId` route param alone and never sees the query string at all,
+ * so this needed no change there to stay stale-slug-tolerant. And a query
+ * param is exactly the shape #178's own "reference behaviour, observed
+ * live" note already borrowed the route from — Todoist's own choice here
+ * too.
+ */
+export const COMMENT_REPLY_INTENT_PARAM = "intent";
+const COMMENT_REPLY_INTENT_VALUE = "reply";
+
+/**
+ * The full `/todo/task/<slug>-<id>` address for `task` — see this module's
+ * own header comment. `options.commentIntent` appends `?intent=reply`
+ * (see `COMMENT_REPLY_INTENT_PARAM` above) — the row's own comment badge
+ * is the one caller that passes it; every other caller (a title click, a
+ * "Copy link to task" command, an Activity row) wants the bare address, so
+ * this stays opt-in rather than a second parameter every other call site
+ * would have to remember to pass `false`.
+ */
+export function taskDetailPath(task: Task, options?: { commentIntent?: boolean }): string {
+  const path = `/todo/task/${taskDetailSlug(task.content)}-${task.id}`;
+  return options?.commentIntent
+    ? `${path}?${COMMENT_REPLY_INTENT_PARAM}=${COMMENT_REPLY_INTENT_VALUE}`
+    : path;
+}
+
+/**
+ * Reads the intent `taskDetailPath`'s `commentIntent` option wrote back
+ * out of the current URL's search params — `todo-page.tsx`'s own signal to
+ * open `TaskDetailView`'s comment composer already expanded and focused,
+ * rather than at rest (issue #306). Exact match only: an unrecognised
+ * `?intent=` value (or none at all) is "no intent," not a guess at what
+ * the reader meant.
+ */
+export function hasCommentReplyIntent(searchParams: URLSearchParams): boolean {
+  return searchParams.get(COMMENT_REPLY_INTENT_PARAM) === COMMENT_REPLY_INTENT_VALUE;
 }
 
 /**

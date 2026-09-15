@@ -752,23 +752,24 @@ export function TaskRowContent({
               // plural `"2 comments"` from `flow2-ROW-06-07-08-todoist.
               // json`) — this used to be a plain, non-interactive `<span>`.
               // `taskDetailPath` (task-detail-route.ts) is the one place
-              // this app already builds a Task's own detail address; no
-              // `?intent=reply` equivalent is added here because
-              // `task-detail-view.tsx` has no query-param door onto
-              // focusing its comment composer to answer that intent (its
-              // `CommentComposer` is a plain always-visible field with no
-              // read of `useSearchParams` at all) — building that focus
-              // behaviour is a separate piece of work this row's own fix
-              // doesn't take on, so the link's destination is the bare
-              // detail path, same place the title/Comment hover action
-              // already open.
+              // this app already builds a Task's own detail address, and
+              // issue #306 is what closed the one remaining divergence
+              // ROW-08 disclosed: `commentIntent: true` appends the same
+              // `?intent=reply` Todoist's own badge carries (that
+              // function's own doc comment has the full "why a query
+              // param, on the same address" reasoning), and
+              // `task-detail-view.tsx`'s `TaskDetailView` now reads it
+              // (via `todo-page.tsx`'s `hasCommentReplyIntent`) to open its
+              // comment composer already expanded and focused rather than
+              // at rest — CMT-11's own doc comment (task-detail-view.tsx)
+              // covers that behaviour in full.
               // `stopPropagation` keeps this link's own navigation from
               // also bubbling into whatever ancestor click handling this
               // row picks up in the future — the same defensive posture
               // the checkbox's Shift+Click branch above already takes for
               // a different reason.
               <Link
-                to={taskDetailPath(task)}
+                to={taskDetailPath(task, { commentIntent: true })}
                 aria-label={`${commentCount} comment${commentCount === 1 ? "" : "s"}`}
                 onClick={(event) => event.stopPropagation()}
                 className="flex items-center gap-0.5 hover:underline"

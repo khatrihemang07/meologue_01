@@ -159,6 +159,20 @@ export interface TaskDetailViewProps {
   onEditComment: (id: string, text: string) => void;
   onRemoveComment: (id: string) => void;
   /**
+   * Issue #306: opens `CommentComposer` already expanded, with focus
+   * placed in the field, instead of collapsed at rest (CMT-11's own doc
+   * comment on that component has the full behaviour and the reasoning
+   * for reusing its existing open/focus mechanism rather than adding a
+   * new one). `todo-page.tsx` is the one caller that ever passes `true` —
+   * read off the `?intent=reply` query parameter
+   * (`hasCommentReplyIntent`, task-detail-route.ts) a Task row's comment
+   * badge now links with. Optional, defaulting to the CMT-11 collapsed
+   * rest state, so every other way of reaching this view (a title click,
+   * "Copy link to task," an Activity row's own link, a bookmarked or
+   * reloaded address) is unaffected.
+   */
+  openCommentComposer?: boolean;
+  /**
    * This Task's own direct sub-tasks (issue #229) — already scoped by the
    * caller (`TaskStore.listChildren`), the identical "the caller scopes
    * it, this view only renders" split `comments`/`events` above already
@@ -613,9 +627,36 @@ function CommentRow({
  * Escape cascade *survives* reopening the Task there; meologue's dialog
  * unmounts with the draft, and persisting it would need a store this app
  * does not have.
+ *
+ * **`initialExpanded` (issue #306).** A Task row's comment-count badge now
+ * carries `?intent=reply` (ROW-08, task-row-content.tsx), Todoist's own
+ * signal to land "in the thread, ready to reply" rather than merely on the
+ * Task. `TaskDetailView`'s own `openCommentComposer` prop carries that
+ * intent down to here, and this is read straight into `expanded`'s own
+ * `useState` initialiser — not a separate "start focused" mechanism — so
+ * the very first render already shows the open form instead of the
+ * collapsed bar, and the "Opening" effect just below (keyed to `expanded`,
+ * and firing on mount exactly as it fires on a later click, because a
+ * dependency has nothing to have "changed" from yet) lands focus in the
+ * field the identical way a manual click does. Deliberately NOT "expand
+ * collapsed, then separately call `.focus()`": that would be a second
+ * behaviour to keep in sync with the one this component already has and
+ * already tested, for an outcome — an open, focused field — this prop
+ * produces for free by choosing where `expanded` starts.
+ * `TaskDetailView`'s Radix `Content` also claims focus once on mount
+ * (`onOpenAutoFocus`, that file's own doc comment) — this composer's own
+ * effect is a plain (not layout) `useEffect`, so it commits after that
+ * dialog-level focus, the same ordering that already makes a later manual
+ * click override whatever else has focus.
  */
-function CommentComposer({ onSubmit }: { onSubmit: (text: string) => void }) {
-  const [expanded, setExpanded] = useState(false);
+function CommentComposer({
+  onSubmit,
+  initialExpanded = false,
+}: {
+  onSubmit: (text: string) => void;
+  initialExpanded?: boolean;
+}) {
+  const [expanded, setExpanded] = useState(initialExpanded);
   const [text, setText] = useState("");
   const fieldRef = useRef<HTMLTextAreaElement>(null);
   const barRef = useRef<HTMLButtonElement>(null);
@@ -784,6 +825,7 @@ function TaskDetailBody({
   onAddComment,
   onEditComment,
   onRemoveComment,
+  openCommentComposer,
   subtasks,
   onAddSubtask,
   onCompleteSubtask,
@@ -1885,7 +1927,7 @@ function TaskDetailBody({
             footer, not a member of the Comments block; Todoist has no
             Activity section here, so nothing in the record says where it
             would fall relative to one. */}
-          <CommentComposer onSubmit={onAddComment} />
+          <CommentComposer onSubmit={onAddComment} initialExpanded={openCommentComposer} />
         </div>
 
         {/* The attribute sidebar — Project, Date, Deadline, Priority,

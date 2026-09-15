@@ -1179,11 +1179,16 @@ describe("TaskRow", () => {
     // (`row-and-detail.md:120`; singular confirmed live,
     // `flow10-ROW-09-both.json`'s `"1 comment"` reading) — this used to be
     // a plain, non-interactive `<span>`.
-    it("renders the comment badge as a link to the Task's own detail route, singular wording at 1", () => {
+    // Issue #306: `?intent=reply` closes ROW-08's one remaining
+    // divergence — Todoist's own badge carries it too
+    // (`taskDetailPath`'s own doc comment, task-detail-route.ts, has the
+    // full reasoning for why it rides the SAME address as a query
+    // parameter rather than a second route).
+    it("renders the comment badge as a link to the Task's own detail route, carrying the reply intent, singular wording at 1", () => {
       renderRow({ task: task({ id: "1", content: "call mum" }), commentCount: 1 });
 
       const link = screen.getByRole("link", { name: "1 comment" });
-      expect(link).toHaveAttribute("href", "/todo/task/call-mum-1");
+      expect(link).toHaveAttribute("href", "/todo/task/call-mum-1?intent=reply");
     });
 
     it("pluralises the comment badge's wording above 1", () => {
