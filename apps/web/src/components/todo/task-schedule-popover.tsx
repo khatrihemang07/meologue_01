@@ -35,7 +35,7 @@
  * ask), and it is seeded with the Task's current `dateString` on every
  * open so editing one reads as editing, not retyping from scratch.
  */
-import type { QuickAddToken } from "@meologue/core";
+import type { LocalDayKey, QuickAddToken } from "@meologue/core";
 import { firstOccurrence, parseQuickAdd, parseRecurrence } from "@meologue/core";
 import { addDays, format, nextMonday, nextSaturday } from "date-fns";
 import {
@@ -69,10 +69,24 @@ interface SchedulePreview {
   readonly forever: boolean;
 }
 
-/** Resolves `text` against `now`/`dueDate` exactly as described in this file's own header comment. `null` for empty or unrecognised input — the caller renders nothing above the quick options in that case, matching SCHED-04's "preview appears once text resolves." */
+/**
+ * Resolves `text` against `now`/`dueDate` exactly as described in this
+ * file's own header comment. `null` for empty or unrecognised input — the
+ * caller renders nothing above the quick options in that case, matching
+ * SCHED-04's "preview appears once text resolves."
+ *
+ * `now: LocalDayKey` (issue #314, the follow-up to #300's own `Recurrence
+ * Reference.now`/`QuickAddOptions.now` gap): this function's one call site
+ * already hands it `nowKey` (`localDayKey(now)`, below) — a real
+ * `LocalDayKey`, not a cast — so branding the parameter here costs this
+ * file nothing and lets the two object literals below (`{ now }` for
+ * `parseQuickAdd`, `{ dueDate, now }` for `firstOccurrence`) produce the
+ * branded value through the parameter instead of casting to it at either
+ * call.
+ */
 function resolveSchedulePreview(
   text: string,
-  now: string,
+  now: LocalDayKey,
   dueDate: string | null,
 ): SchedulePreview | null {
   const trimmed = text.trim();

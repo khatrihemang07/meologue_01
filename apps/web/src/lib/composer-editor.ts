@@ -31,6 +31,8 @@
  * `/` menu read the Reference picker's already-computed state for the same
  * transaction and defer to it, per ADR 0046.
  */
+
+import { type LocalDayKey, mustParseLocalDayKey } from "@meologue/core";
 import { baseKeymap, chainCommands, splitBlock } from "prosemirror-commands";
 import { history } from "prosemirror-history";
 import { InputRule, inputRules, undoInputRule } from "prosemirror-inputrules";
@@ -1223,9 +1225,33 @@ export function slashPlugin(): Plugin<SlashMenuState | null> {
  * parse in step with the highlight") — one function computing "now" for
  * quick-add purposes, not two that could drift apart.
  */
-export function quickAddOptionsNow(): { now: string; smartDates: boolean } {
+export function quickAddOptionsNow(): { now: LocalDayKey; smartDates: boolean } {
+  const instant = new Date().toISOString();
+  const offsetMinutes = deviceUtcOffsetMinutes();
+  const day = entryDayKey(instant, offsetMinutes);
+  if (day === null) {
+    // Not reachable for any real `Date`: `new Date().toISOString()` is
+    // always parseable, so `entryDayKey` only returns `null` here if the
+    // runtime's own `Date` is broken. Thrown rather than papered over with
+    // a slice-derived fallback day, which would reintroduce the exact
+    // "UTC instant sliced into a local day key" shape issues #290/#296
+    // exist to close.
+    //
+    // The message names both inputs on purpose. This throw sits in the
+    // composer's typing path, so whoever meets it meets it as an exception
+    // mid-keystroke, in a stack trace with no argument in view — and
+    // "unreachable today" is a claim about today's callers, not about the
+    // one that reaches it. The value that got here is the first thing that
+    // reader needs and the hardest thing for them to recover afterwards.
+    throw new Error(
+      `quickAddOptionsNow: entryDayKey rejected ${JSON.stringify(instant)} at offset ${offsetMinutes}`,
+    );
+  }
+  // `mustParseLocalDayKey` — a real parse, not an `as LocalDayKey` cast —
+  // is what turns `entryDayKey`'s already-validated `YYYY-MM-DD` result
+  // into the branded value (issue #314).
   return {
-    now: entryDayKey(new Date().toISOString(), deviceUtcOffsetMinutes()) ?? "",
+    now: mustParseLocalDayKey(day),
     smartDates: useSettingsStore.getState().smartDatesEnabled,
   };
 }

@@ -4,6 +4,7 @@ import type {
   EntryStore,
   EventStore,
   LabelStore,
+  LocalDayKey,
   ProjectStore,
   Task,
   TaskStore,
@@ -168,7 +169,7 @@ function createFakeStore(): TaskStore {
     // recurrence engine's floating anchor, exactly the way this fake's own
     // `postpone` below already took `today` directly: mirroring the real
     // stores post-fix, not the pre-fix conflation.
-    setDateString: vi.fn(async (id: string, dateString: string | null, today: string) => {
+    setDateString: vi.fn(async (id: string, dateString: string | null, today: LocalDayKey) => {
       const found = active.find((t) => t.id === id);
       if (found === undefined) return;
       if (dateString === null) {
@@ -198,7 +199,7 @@ function createFakeStore(): TaskStore {
     // `today` directly, the same way the real stores do post-fix, is what
     // lets this fake's own recurrence tests (below) actually exercise the
     // decoupling rather than paper over it.
-    advanceRecurring: vi.fn(async (id: string, completedAt: string, today: string) => {
+    advanceRecurring: vi.fn(async (id: string, completedAt: string, today: LocalDayKey) => {
       const found = active.find((t) => t.id === id);
       if (found === undefined || found.dateString === null) return;
       const outcome = nextOccurrenceAfterCompletion(found.dateString, {

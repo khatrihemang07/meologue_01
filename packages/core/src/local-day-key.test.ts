@@ -5,6 +5,8 @@ import {
   mustParseLocalDayKey,
   parseLocalDayKey,
 } from "./local-day-key";
+import type { QuickAddOptions } from "./quick-add/types";
+import type { RecurrenceReference } from "./recurrence/rule";
 import type { TaskStore } from "./task-store";
 
 describe("isLocalDayKey/parseLocalDayKey/mustParseLocalDayKey", () => {
@@ -78,4 +80,60 @@ it.skip("compile-only: TaskStore's `today` parameters reject a raw string or a U
 
   // The one legitimate producer — no cast, no `@ts-expect-error` — compiles.
   void store.postpone("task-1", validDay);
+});
+
+// Two plain accept-functions rather than typed `const` bindings, matching
+// the `store.postpone(...)` call-site shape above: the bad literal is
+// passed as an argument, so `@ts-expect-error` sits on the call rather
+// than on an unused, ill-typed variable declaration.
+function acceptReference(_reference: RecurrenceReference): void {}
+function acceptOptions(_options: QuickAddOptions): void {}
+
+/**
+ * Issue #314's own mutation test — the one issue #300 left as tracked
+ * follow-up rather than closing outright (see `./local-day-key.ts`'s own
+ * header comment): `RecurrenceReference.now` and `QuickAddOptions.now`
+ * were the two fields #300 could not brand while
+ * `apps/web/src/components/todo/task-schedule-popover.tsx` was under
+ * concurrent rework (#303) — their own construction sites live entirely
+ * inside that one file. Verified by hand for this change (see the commit
+ * body): reverting either field's `now` from `LocalDayKey` back to
+ * `string` turns every `@ts-expect-error` below into an "unused
+ * '@ts-expect-error' directive" error under `tsc -b --noEmit`, the same
+ * mutation-verification #300's own test above records.
+ *
+ * `it.skip` for the identical reason as the block above: every line here
+ * is deliberately ill-typed application code, checked by `tsc -b
+ * --noEmit` and never actually executed.
+ */
+it.skip("compile-only: RecurrenceReference.now and QuickAddOptions.now reject a raw string or a UTC instant (issue #314)", () => {
+  const rawToday: string = "2026-09-15";
+  const utcInstant: string = new Date().toISOString();
+  const validDay: LocalDayKey = mustParseLocalDayKey("2026-09-15");
+
+  // The plain `string` that used to satisfy this field — no longer does,
+  // even when it's shaped exactly like a valid day key.
+  // @ts-expect-error — RecurrenceReference.now requires LocalDayKey, not a bare string.
+  acceptReference({ dueDate: null, now: rawToday });
+
+  // The literal historical shape (#290, #296): a UTC instant handed to a
+  // parameter that means a floating local day.
+  // @ts-expect-error — RecurrenceReference.now: a UTC instant is not a LocalDayKey.
+  acceptReference({ dueDate: null, now: utcInstant });
+
+  // `dueDate` stays an unbranded `string` on purpose (`./local-day-key.ts`'s
+  // own "Why `completedAt`... is NOT branded" reasoning applies here too —
+  // the asymmetric risk is identical) — only `now` rejects these.
+  // @ts-expect-error — RecurrenceReference.now still requires LocalDayKey even when dueDate is a plain string.
+  acceptReference({ dueDate: rawToday, now: rawToday });
+
+  // The one legitimate producer — no cast, no `@ts-expect-error` — compiles.
+  acceptReference({ dueDate: null, now: validDay });
+
+  // @ts-expect-error — QuickAddOptions.now requires LocalDayKey, not a bare string.
+  acceptOptions({ now: rawToday });
+  // @ts-expect-error — QuickAddOptions.now: a UTC instant is not a LocalDayKey.
+  acceptOptions({ now: utcInstant });
+  // The one legitimate producer — no cast, no `@ts-expect-error` — compiles.
+  acceptOptions({ now: validDay });
 });

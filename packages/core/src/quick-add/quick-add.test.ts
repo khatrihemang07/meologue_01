@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { storedPriorityOf } from "../task-types";
+import { dayKey } from "../test-support/day-key-fixture";
 import { demoteQuickAddToken, parseQuickAdd } from "./parse-quick-add";
 import type { QuickAddOptions, QuickAddToken } from "./types";
 
@@ -16,7 +17,7 @@ import type { QuickAddOptions, QuickAddToken } from "./types";
  * compute, so a regression in the weekday math has something external to
  * disagree with.
  */
-const NOW = "2026-09-02"; // Wednesday.
+const NOW = dayKey("2026-09-02"); // Wednesday.
 
 function parse(input: string, options: Partial<QuickAddOptions> = {}) {
   return parseQuickAdd(input, { now: NOW, ...options });
@@ -79,18 +80,22 @@ describe("dates", () => {
   // the 7 the old `today+7` implementation gave (which would have landed
   // on 19 Sep).
   it("'next week' resolves to the next Monday, matching the live-audit measurement (QA-09)", () => {
-    expect(parseQuickAdd("buy milk next week", { now: "2026-09-12" }).date).toBe("2026-09-14");
+    expect(parseQuickAdd("buy milk next week", { now: dayKey("2026-09-12") }).date).toBe(
+      "2026-09-14",
+    );
   });
 
   it("'next week' typed on a Monday is the Monday after, never today", () => {
-    expect(parseQuickAdd("buy milk next week", { now: "2026-09-14" }).date).toBe("2026-09-21");
+    expect(parseQuickAdd("buy milk next week", { now: dayKey("2026-09-14") }).date).toBe(
+      "2026-09-21",
+    );
   });
 
   it("does not read 25/12 as day=12 month=25 — the numeric form QA-09's fix reads month-first", () => {
     // Confirms the new bare two-part form is hardcoded month-first, never
     // day-first: "25/12" has no valid month=25, so this must stay
     // unrecognised rather than silently reading it the other way round.
-    expect(parseQuickAdd("do it 25/12", { now: "2026-09-02" }).date).toBeNull();
+    expect(parseQuickAdd("do it 25/12", { now: dayKey("2026-09-02") }).date).toBeNull();
   });
 });
 
