@@ -1226,7 +1226,9 @@ export function slashPlugin(): Plugin<SlashMenuState | null> {
  * quick-add purposes, not two that could drift apart.
  */
 export function quickAddOptionsNow(): { now: LocalDayKey; smartDates: boolean } {
-  const day = entryDayKey(new Date().toISOString(), deviceUtcOffsetMinutes());
+  const instant = new Date().toISOString();
+  const offsetMinutes = deviceUtcOffsetMinutes();
+  const day = entryDayKey(instant, offsetMinutes);
   if (day === null) {
     // Not reachable for any real `Date`: `new Date().toISOString()` is
     // always parseable, so `entryDayKey` only returns `null` here if the
@@ -1234,7 +1236,16 @@ export function quickAddOptionsNow(): { now: LocalDayKey; smartDates: boolean } 
     // a slice-derived fallback day, which would reintroduce the exact
     // "UTC instant sliced into a local day key" shape issues #290/#296
     // exist to close.
-    throw new Error("quickAddOptionsNow: entryDayKey rejected the current instant");
+    //
+    // The message names both inputs on purpose. This throw sits in the
+    // composer's typing path, so whoever meets it meets it as an exception
+    // mid-keystroke, in a stack trace with no argument in view — and
+    // "unreachable today" is a claim about today's callers, not about the
+    // one that reaches it. The value that got here is the first thing that
+    // reader needs and the hardest thing for them to recover afterwards.
+    throw new Error(
+      `quickAddOptionsNow: entryDayKey rejected ${JSON.stringify(instant)} at offset ${offsetMinutes}`,
+    );
   }
   // `mustParseLocalDayKey` — a real parse, not an `as LocalDayKey` cast —
   // is what turns `entryDayKey`'s already-validated `YYYY-MM-DD` result
