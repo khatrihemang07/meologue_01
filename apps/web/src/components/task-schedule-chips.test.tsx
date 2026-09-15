@@ -133,4 +133,38 @@ describe("TaskScheduleChips (issue #181)", () => {
       expect(screen.getByText("5 Sep")).toBeInTheDocument();
     });
   });
+
+  // Issue #242: `entry-row.tsx`'s `TaskReferenceItem` needs this component
+  // placed as an explicit grid item, in the row BELOW the label it
+  // describes, with no wrapping `<div>` of its own — a wrapping `<div>`
+  // would re-enter `index.css`'s `li.list-none input:checked ~ div`
+  // selector and get struck through along with the label again, the exact
+  // bug this ticket fixes. Merging onto this component's own root (already
+  // a `<span>`, which that selector never matches) is what avoids needing
+  // one.
+  describe("className (issue #242)", () => {
+    it("merges an explicit className onto its own root span alongside its own classes", () => {
+      const { container } = render(
+        <TaskScheduleChips
+          task={task({ date: "2026-09-03" })}
+          projects={[]}
+          className="col-start-2 row-start-2"
+        />,
+      );
+      const root = container.firstElementChild;
+      expect(root?.tagName).toBe("SPAN");
+      expect(root).toHaveClass("col-start-2");
+      expect(root).toHaveClass("row-start-2");
+      expect(root).toHaveClass("flex");
+    });
+
+    it("renders with no className at all when the caller omits it, exactly as before this prop existed", () => {
+      const { container } = render(
+        <TaskScheduleChips task={task({ date: "2026-09-03" })} projects={[]} />,
+      );
+      const root = container.firstElementChild;
+      expect(root).not.toHaveClass("undefined");
+      expect(root).toHaveClass("flex");
+    });
+  });
 });

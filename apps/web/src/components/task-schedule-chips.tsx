@@ -69,23 +69,42 @@ import type { Project, Task } from "@meologue/core";
 import { uiPriorityOf } from "@meologue/core";
 import { formatTaskDate } from "@/lib/format-task-date";
 import { projectNameFor } from "@/lib/project-name";
+import { cn } from "@/lib/utils";
 
 export function TaskScheduleChips({
   task,
   projects,
   hideDate = false,
+  className,
 }: {
   task: Task;
   projects: readonly Project[];
   /** See this module's own doc comment on why a completed recurring occurrence is the one case that must pass `true` here. */
   hideDate?: boolean;
+  /**
+   * Merged onto this component's own root `<span>` (issue #242) — a caller
+   * that needs this element to be an explicit grid/flex placement target,
+   * rather than just the next thing in flow after its neighbours, sets this
+   * instead of wrapping the component in another element. `entry-row.tsx`'s
+   * `TaskReferenceItem` is the one caller that needs this: it places this
+   * span directly into its own grid's second row so the chips sit outside
+   * the `<div>` that `index.css`'s completed-checklist-item rule decorates,
+   * with no wrapping `<div>` of its own to accidentally re-enter that
+   * selector's reach (this component's root has always been a `<span>`,
+   * never a `<div>`, which is exactly what keeps it outside that selector's
+   * `~ div` reach either way — this prop only decides its grid placement,
+   * not its decoration exposure).
+   */
+  className?: string;
 }) {
   const showDate = !hideDate && task.date !== null;
   if (!showDate && task.priority === 1 && task.projectId === null) {
     return null;
   }
   return (
-    <span className="flex flex-wrap items-center gap-x-2 text-muted-foreground text-xs">
+    <span
+      className={cn("flex flex-wrap items-center gap-x-2 text-muted-foreground text-xs", className)}
+    >
       {/* `.text` only — this chip sits outside `[data-surface="todo"]`
           (it renders inside an Entry/History row, not Todo itself), so it
           never applies `describeTaskDate`'s own `--td-date-*` colour: that
