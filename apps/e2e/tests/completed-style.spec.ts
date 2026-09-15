@@ -207,7 +207,12 @@ test("a completed Task's look — decoration and colour — agrees across every 
     await expect(checkbox).toBeChecked({ timeout: 1_000 });
   }).toPass({ timeout: 15_000 });
 
-  await waitForTaskCompleted(body, SERVER_A_DATABASE, 15_000);
+  // `waitForTaskCompleted`'s own default budget, not the 15s this used to
+  // pass. The short budget was an *inner* step of a 90s retry and only made
+  // sense as one; standing alone it would be tighter than every other wait
+  // in this suite, against a helper whose default is deliberately wide for
+  // machine-load variance (issue #112, that helper's own doc comment).
+  await waitForTaskCompleted(body, SERVER_A_DATABASE);
 
   // Sanity check on the comparison itself, independent of any variant:
   // the two custom properties the whole test hinges on telling apart must
