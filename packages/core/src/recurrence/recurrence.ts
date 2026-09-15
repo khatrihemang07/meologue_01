@@ -87,6 +87,42 @@ import type { RecurrenceOutcome, RecurrenceReference } from "./rule";
  * and nothing has driven Todoist's own weekly-overdue behaviour either way.
  * Tracked rather than assumed; do not promote a `SCHED-` row on it.
  *
+ * **RESOLVED 2026-09-15 (issue #301): phase-keeping is what Todoist does,
+ * and it is now driven rather than assumed.** Two probes on Todoist web,
+ * recorded in
+ * meologue-parity-docs/todoist/live-audit-dom/recurrence-overdue-weekly-2026-09-15.json
+ * and promoted to ledger row `SCHED-15`:
+ *
+ *     every week,    due Mon 31 Aug, completed Tue 15 Sep -> Mon 21 Sep
+ *     every 2 weeks, due Mon 17 Aug, completed Tue 15 Sep -> Mon 28 Sep
+ *
+ * So the rule is `due + k x interval`, for the smallest k >= 1 landing
+ * strictly after today — exactly what computeOccurrence already does.
+ * `max(due, today) + interval` predicts Tue 22 Sep and Tue 29 Sep, and is
+ * falsified for any interval longer than a day.
+ *
+ * **The `every 2 weeks` probe is the one that settles it, and the weekly
+ * probe alone would NOT have.** For a one-week interval every Monday is an
+ * occurrence, so "step whole intervals from the due date" and "land on the
+ * next matching weekday" both predict Mon 21 Sep — the same fixture
+ * weakness that produced the bad formula, one cadence up. At two weeks the
+ * three rival rules predict three different dates, so a single reading
+ * separates them.
+ *
+ * **Commit 6968bf4's own message is wrong about this and is corrected
+ * here**, because a commit message outlives a ledger row and is where the
+ * next reader will look: it says completing a repeating Task "now computes
+ * `max(current due, today) + one interval`". The code it ships does not do
+ * that and never did — it steps from the due date, which is why the two
+ * probes above match it. The message inherited the same over-general
+ * formula from the same daily-only fixture.
+ *
+ * Still NOT driven, and deliberately not generalised a third time: monthly
+ * and longer cadences, recurrences carrying a time of day, multi-weekday
+ * rules such as `every Mon, Wed`, and the whole `every!` family. Todoist
+ * **Android** is also untouched by this — under the per-platform parity
+ * ruling that is `AREC-01`'s question, not this one's.
+ *
  * **Skipping missed occurrences (nextOccurrenceAfterCompletion only).**
  * Only a date strictly after `reference.now` is ever returned — a yearly
  * rule due 1 Jan 2025, not completed until 1 Jul 2026 (eighteen months
