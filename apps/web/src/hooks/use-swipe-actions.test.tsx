@@ -364,6 +364,71 @@ describe("useSwipeActions", () => {
     expect(target.style.transition).toBe("");
   });
 
+  // The 150 is DEVICE pixels, and these tests pin the conversion, because the
+  // unit is the whole bug. jsdom leaves `devicePixelRatio` at 1, so every
+  // assertion below that does not stub it is silently testing the desktop case
+  // — which is why the original edge tests passed while most real swipes on the
+  // phone did nothing at all.
+  //
+  // Driven on the device 2026-09-15: at dpr 2.8125 the viewport is 426 CSS px,
+  // so reading 150 as CSS px left a live band of x ∈ (150, 276) — under 30% of
+  // the row, with no symptom other than swipes not working.
+  describe("screen-edge exclusion converts device px to CSS px", () => {
+    afterEach(() => {
+      vi.unstubAllGlobals();
+    });
+
+    it("accepts a swipe starting at x=320 on the phone, which a CSS-px reading of 150 would have refused", () => {
+      vi.stubGlobal("innerWidth", 426);
+      vi.stubGlobal("devicePixelRatio", 2.8125);
+      const onOpen = vi.fn();
+      render(<Thread onOpen={onOpen} />);
+      const target = bubble("one");
+
+      // 320 sits outside (426 - 150) = 276, so the pre-fix guard refused it.
+      // The real margin is 150 / 2.8125 ≈ 53.3 CSS px, so the band is
+      // (53.3, 372.7) and 320 is comfortably inside it.
+      fireEvent.pointerDown(target, {
+        pointerId: 1,
+        pointerType: "touch",
+        clientX: 320,
+        clientY: 100,
+      });
+      fireEvent.pointerMove(target, {
+        pointerId: 1,
+        pointerType: "touch",
+        clientX: 260,
+        clientY: 100,
+      });
+
+      expect(target.style.transform).not.toBe("");
+    });
+
+    it("still refuses a swipe inside the real 53px band at the phone's pixel ratio", () => {
+      vi.stubGlobal("innerWidth", 426);
+      vi.stubGlobal("devicePixelRatio", 2.8125);
+      const onOpen = vi.fn();
+      render(<Thread onOpen={onOpen} />);
+      const target = bubble("one");
+
+      // 40 CSS px ≈ 112 device px — inside the 150 device px Android claims.
+      fireEvent.pointerDown(target, {
+        pointerId: 1,
+        pointerType: "touch",
+        clientX: 40,
+        clientY: 100,
+      });
+      fireEvent.pointerMove(target, {
+        pointerId: 1,
+        pointerType: "touch",
+        clientX: 20,
+        clientY: 100,
+      });
+
+      expect(target.style.transform).toBe("");
+    });
+  });
+
   describe("screen-edge exclusion", () => {
     // Android's own gesture navigation claims a horizontal drag that begins
     // within ~150px of either screen edge for itself (back/forward/recents)
@@ -371,6 +436,9 @@ describe("useSwipeActions", () => {
     // issue #303. A narrow phone viewport (426 CSS px, this ticket's own
     // measurement) is used throughout rather than jsdom's 1024px default, so
     // the exclusion band actually overlaps a plausible finger position.
+    //
+    // These assert the dpr=1 case: jsdom never sets `devicePixelRatio`, so the
+    // margin here is 150 CSS px. See the block above for the phone's ratio.
     afterEach(() => {
       vi.unstubAllGlobals();
     });

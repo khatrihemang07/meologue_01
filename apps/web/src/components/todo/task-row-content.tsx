@@ -385,6 +385,21 @@ export function TaskRowContent({
       // carries it.
       {...{ [SWIPE_TARGET_ATTRIBUTE]: "", "data-task-id": task.id }}
       className={cn(
+        // `touch-pan-y` is not decoration — it is half of the contract the
+        // attribute above enters into, and `entry-bubble.tsx` carries the
+        // identical class for the identical reason (swipe-recognizer.ts:194
+        // names it outright). Left at the default `touch-action: auto`, the
+        // browser claims BOTH axes for panning, so a horizontal drag is
+        // handled by the compositor and the sequence ends in `pointercancel`
+        // before the recogniser's threshold is ever reached. `pan-y` keeps
+        // vertical scrolling with the browser and leaves the horizontal axis
+        // to `use-swipe-actions.ts`.
+        //
+        // Driven on the device 2026-09-15: without this the row reported
+        // `touch-action: auto` and no left swipe ever opened the scheduler,
+        // while every jsdom test stayed green — jsdom has no compositor, so
+        // it never cancels, and a unit test cannot observe this at all.
+        "touch-pan-y",
         "group flex items-center gap-2 rounded-lg border-t-2 border-t-transparent transition-colors",
         // ROW-02 (parity-ledger.md): a full-width divider, 0px inset —
         // living here rather than on the `<li>` around it because
