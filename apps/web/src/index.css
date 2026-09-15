@@ -575,10 +575,22 @@
   --td-recognition-radius: 3px;
   --td-recognition-padding-inline: 4px;
 
-  /* The scheduler's calendar (SCHED-06 through SCHED-10). */
+  /* The scheduler's calendar (SCHED-06 through SCHED-10, plus the six
+     defects measured live 2026-09-15: today+selected legibility, the
+     focus-visible pill, the hover pill, outside-day dimming, cell
+     geometry, and the month-caption format — the rest of those six live
+     entirely in `task-schedule-popover.tsx`'s own `<Calendar>` call site,
+     not here). */
   --td-calendar-selected: rgb(222, 76, 74);
   --td-calendar-today: rgb(226, 106, 96);
   --td-calendar-busy-dot: rgb(209, 209, 209);
+  /* The measured hover pill — opaque rgb(77, 77, 77) — and the base grey
+     the measured focus-visible pill (`rgba(77, 77, 77, 0.306)`) is the
+     identical colour at 30.6% opacity. One token, not two literals: the
+     call site derives the focus value from this one via Tailwind's
+     `/[30.6%]` opacity modifier rather than repeating "77, 77, 77" a
+     second time. */
+  --td-calendar-cell-hover: rgb(77, 77, 77);
 
   /* Composer chrome (QA-16) and the scheduler popover (SCHED-01) — two
      different surfaces with two different radii, which is exactly why

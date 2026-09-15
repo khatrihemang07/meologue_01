@@ -685,7 +685,17 @@ export function TaskSchedulePopover({
         // form) renders "Mo Tu We Th Fr Sa Su" instead. Overridden here
         // rather than left at the default, which this ticket's own
         // reference measurement would otherwise silently diverge from.
-        formatters={{ formatWeekdayName: (day) => format(day, "EEEEE") }}
+        formatters={{
+          formatWeekdayName: (day) => format(day, "EEEEE"),
+          // Defect 6 (measured 2026-09-15): Todoist's own caption reads
+          // "Sep 2026" — react-day-picker's default `formatCaption`
+          // (`DateLib.formatMonthYear`) renders the locale's full month
+          // name instead ("September 2026"). Same override mechanism as
+          // `formatWeekdayName` above, for the identical reason: left at
+          // the default, this ticket's own reference measurement would
+          // silently diverge from it.
+          formatCaption: (month) => format(month, "MMM yyyy"),
+        }}
         month={month}
         onMonthChange={setMonth}
         selected={parseDayKey(dateDay)}
@@ -732,15 +742,99 @@ export function TaskSchedulePopover({
           // (SCHED-07); `!important` here forces today's colour to win
           // regardless of stylesheet order, without touching index.css or
           // any `--td-*` token.
-          today: "[&>button]:font-bold [&>button]:text-[color:var(--td-calendar-today)]!",
-          // SCHED-08: a 24px filled circle — `size-6` (Tailwind's 24px)
-          // plus `rounded-full` on a square box is exactly a 12px
-          // corner radius, the measured figure, not merely "looks round."
+          //
+          // Defect 1 (measured 2026-09-15, meologue-only — Todoist's own
+          // today+selected resolution was never captured, so this is NOT
+          // a parity claim): that same unconditional `!important` used to
+          // also beat `selected`'s `text-white` whenever a cell was both
+          // today and selected — text rgb(226,106,96) on fill
+          // rgb(222,76,74), contrast ratio 1.23:1, barely readable. The
+          // `!` still has to force today-red to beat `weekend`'s grey; it
+          // must not also beat `selected`'s white. Scoped with
+          // `:not([data-selected=true])` on the cell itself — both
+          // `data-today` and `data-selected` land on this same `<td>`,
+          // never the `<button>` — so the rule doesn't match the element
+          // at all once it's selected, and `selected`'s own
+          // (uncontested, non-`!important`) white applies with nothing
+          // left to fight. This is meologue's own choice for legibility;
+          // do not read it as replicating Todoist, which this reference
+          // capture never exercised.
+          today:
+            "[&>button]:font-bold [&:not([data-selected=true])>button]:text-[color:var(--td-calendar-today)]!",
+          // SCHED-08: the coral fill + bold white text. Deliberately no
+          // `!important` here — defect 1's note on `today` above is what
+          // keeps this from having to fight `today`'s red for a
+          // today-and-selected cell, so this stays the plain,
+          // uncontested rule it always was. The 12px corner radius
+          // SCHED-08 measured is pinned on `day_button` below, not here —
+          // this key only ever set fill/text, never the box shape.
           selected:
             "[&>button]:bg-[color:var(--td-calendar-selected)] [&>button]:text-white [&>button]:font-bold [&>button]:hover:bg-[color:var(--td-calendar-selected)]",
+          // Defect 4 (measured 2026-09-15): Todoist gave next-month days
+          // shown in its grid (it had Oct 1–11 visible) no distinguishing
+          // class at all — a next-month Saturday read exactly like a
+          // current-month Saturday. The base `Calendar` primitive
+          // (calendar.tsx) dims every `outside` cell
+          // (`text-muted-foreground opacity-50`) for its two other
+          // callers (the History date picker, the Custom-repeat end-date
+          // picker), neither of which this ticket measured against
+          // Todoist — so the dimming is cleared here, at this call site
+          // only, rather than in the shared primitive. An outside day now
+          // falls through to whichever of `weekend`/`today`/`selected`
+          // actually applies to it, same as a current-month day.
+          outside: "",
           day_button: cn(
             buttonVariants({ variant: "ghost" }),
-            "size-6 w-6 rounded-full p-0 font-normal aria-selected:opacity-100",
+            "p-0 font-normal aria-selected:opacity-100",
+            // Defect 5 (measured 2026-09-15): Todoist's own cell is
+            // 30.4×28px, not the square 24×24 (`size-6 w-6`) this used to
+            // be. `h-7` (28px) `w-[30px]` moves toward that. The 12px
+            // selected-pill radius SCHED-08 measured stays pinned via an
+            // explicit `rounded-[12px]` rather than `rounded-full`:
+            // `rounded-full` only produced 12px as a side effect of the
+            // old box being square (24px ÷ 2 = 12px) — on a non-square
+            // 30×28 box it would instead draw a stadium shape with a
+            // ~14px radius (half the shorter side), silently breaking the
+            // very figure it used to get right only by accident of shape.
+            // Pin the radius directly; don't let the box decide it.
+            "h-7 w-[30px] rounded-[12px]",
+            // Defect 3 (measured 2026-09-15): Todoist's hover is an
+            // OPAQUE rgb(77,77,77) pill, not `ghost`'s translucent
+            // `hover:bg-muted` (this theme's `oklab(0.2686 … / 0.5)`) —
+            // overridden with the shared `--td-calendar-cell-hover`
+            // token (index.css) rather than a second literal, since
+            // defect 2's focus pill below is the identical grey at
+            // partial opacity. `ghost`'s OWN hover is really two rules —
+            // plain `hover:bg-muted` and, separately, `dark:hover:bg-
+            // muted/50` (button.tsx) — and only the plain one shares this
+            // override's specificity; `.dark .cls:hover` outranks a bare
+            // `.cls:hover` regardless of source order, so without a
+            // `dark:` twin of this same override, dark mode (the ONLY
+            // theme Todoist was ever measured in — this file's own
+            // `[data-surface="todo"]` header comment) would keep showing
+            // the old translucent wash on top. Repeated rather than
+            // computed from the plain class so `cn`'s tailwind-merge sees
+            // the identical `dark:hover:bg-*` group and drops `ghost`'s
+            // version outright, instead of leaving two same-specificity
+            // rules to fight over stylesheet order.
+            //
+            // Defect 2 (measured 2026-09-15): a focused day cell computed
+            // `outline-style: none` and an all-zero `box-shadow` live —
+            // no visible focus state at all, unlike every other control
+            // in this popover. `ghost`'s own `focus-visible:ring-3
+            // focus-visible:ring-ring/50 focus-visible:border-ring`
+            // (button.tsx) is neutralised here (`ring-0`/
+            // `border-transparent`) and replaced with Todoist's own
+            // measured focus-visible pill: `rgba(77, 77, 77, 0.306)`,
+            // i.e. the hover token's grey at 30.6% opacity —
+            // `color-mix`'s opacity modifier scales a colour's alpha
+            // alone when mixed with fully-transparent (CSS Color 4), so
+            // `/[30.6%]` on the token reproduces the measured rgba
+            // exactly without a second literal. It deliberately sets no
+            // text colour, so a focused "today" cell stays today-red —
+            // Todoist's own measured behaviour ("inheriting the cell's
+            // own text colour").
+            "hover:bg-[color:var(--td-calendar-cell-hover)] dark:hover:bg-[color:var(--td-calendar-cell-hover)] focus-visible:border-transparent focus-visible:ring-0 focus-visible:bg-[color:var(--td-calendar-cell-hover)]/[30.6%]",
           ),
         }}
         className="mx-auto"
