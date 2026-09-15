@@ -435,3 +435,72 @@ describe("a rule the controls can't express is announced, not silently narrowed 
     expect(screen.getByTestId(WARNING)).toBeTruthy();
   });
 });
+
+/**
+ * Three defects found by driving this dialog in a real browser (issue #292
+ * follow-up), all invisible in jsdom for the same underlying reason: jsdom
+ * never lays anything out, never establishes a stacking context, and never
+ * asks "what's actually painted on top at these coordinates" the way a real
+ * compositor does. So none of the tests below can assert the thing that was
+ * actually wrong (a picker rendering behind an opaque dialog, a 480px box
+ * overhanging a 400px viewport, dead space between a field and a button
+ * row) — they assert the class/style CONTRACT the fix relies on instead
+ * (the computed z-index value, the max-width rule being present, the
+ * overflow/min-height rules that let content scroll instead of clip). The
+ * real check for all three is the browser pass this ticket asked for, not
+ * this file.
+ */
+describe("layout defects found live and fixed here — class/style contract only (issue #292 follow-up)", () => {
+  it("the 'Select date' popover carries a z-index above this dialog's own z-[70], overriding ui/popover.tsx's shared z-[60] default", () => {
+    renderDialog();
+    fireEvent.click(screen.getByRole("radio", { name: "On date (inclusive)" }));
+    fireEvent.click(screen.getByRole("button", { name: "Select date" }));
+
+    const popover = screen.getByTestId("custom-repeat-date-popover");
+    // Radix portals `Popover.Content` to `document.body`, so `getByTestId`
+    // (which searches the whole document) is the only way to reach it — it
+    // is not a descendant of `dialog()`. jsdom cannot tell us this actually
+    // *paints* above the dialog (no stacking context in jsdom at all); this
+    // only confirms the class this fix depends on is the one actually
+    // rendered, not silently reverted or typo'd.
+    expect(popover.className).toMatch(/(?:^|\s)z-\[80\](?:\s|$)/);
+    expect(popover.className).not.toMatch(/(?:^|\s)z-\[60\](?:\s|$)/);
+  });
+
+  it("the dialog's own frame carries both the captured 480px width and a viewport-bounded max-width clamp", () => {
+    renderDialog();
+    // jsdom never lays this out, so nothing here can assert the resulting
+    // `x`/width at a narrow viewport (the live-measured `x: -40` overhang)
+    // — only that the two Tailwind classes the fix depends on are both
+    // present: the captured desktop width, unchanged, and the clamp that
+    // keeps it from overhanging a viewport narrower than that.
+    expect(dialog().className).toMatch(/(?:^|\s)w-\[480px\](?:\s|$)/);
+    expect(dialog().className).toMatch(/(?:^|\s)max-w-\[calc\(100%-2rem\)\](?:\s|$)/);
+  });
+
+  it("the dialog's own height is still exactly the captured 403px, unchanged by the width/overflow fix", () => {
+    renderDialog();
+    // The one part of this defect jsdom actually CAN see: this is a plain
+    // inline style, not a layout outcome. Confirms the fixed-height,
+    // non-resize property (task-custom-repeat-dialog.tsx's own header
+    // comment: Todoist's dialog does not resize between "Ends" branches,
+    // measured 480x403 before and after) is still intact after this
+    // ticket's changes, not accidentally swapped for `minHeight` while
+    // fixing the other two defects.
+    expect(dialog().style.height).toBe("403px");
+  });
+
+  it("the form absorbs overflow instead of the dialog clipping it: overflow-auto + min-h-0 on a flex-1 child, not a bare fixed box", () => {
+    renderDialog();
+    const form = dialog().querySelector("form");
+    expect(form).not.toBeNull();
+    // jsdom lays out nothing, so it can't show content actually overflowing
+    // and scrolling — only that the three classes the no-clip guarantee
+    // depends on (flex-1's automatic min-height zeroed by `min-h-0`, and
+    // `overflow-auto` to make the zeroed-out overflow scrollable rather
+    // than invisible) are the ones actually on the element.
+    expect(form?.className).toMatch(/(?:^|\s)min-h-0(?:\s|$)/);
+    expect(form?.className).toMatch(/(?:^|\s)overflow-auto(?:\s|$)/);
+    expect(form?.className).toMatch(/(?:^|\s)justify-between(?:\s|$)/);
+  });
+});

@@ -101,7 +101,13 @@
  * copied from the capture — Todoist's own dialog is recorded as *not*
  * resizing when the "On date" row appears, and a fixed height (rather than
  * a `minHeight` that would let the tree grow) is what keeps that true
- * regardless of which "Ends" branch is showing.
+ * regardless of which "Ends" branch is showing. That fixed height is still
+ * the whole story at the captured 480px width; once the width itself can
+ * shrink below that (see the `className` on `DialogPrimitive.Content`
+ * below), content can need more than 403px, and the `<form>`'s own
+ * `overflow-auto`/`min-h-0` is what makes that scroll inside the fixed
+ * frame instead of clipping — see that style block's own comment for the
+ * preserved/relaxed split.
  */
 import type { MonthDay, RecurrenceFrequency } from "@meologue/core";
 import { parseRecurrence } from "@meologue/core";
@@ -432,11 +438,46 @@ export function TaskCustomRepeatDialog({
           // Radix's own default Escape handling (close this dialog) still
           // runs alongside it.
           onEscapeKeyDown={onEscape}
-          className="-translate-x-1/2 -translate-y-1/2 fixed top-1/2 left-1/2 z-[70] flex w-[480px] flex-col gap-3 p-4 text-sm outline-hidden"
+          // `w-[480px]` is the captured desktop width (this file's own
+          // header comment) — kept as-is, not shrunk, since it's a parity
+          // value, not a guess. `max-w-[calc(100%-2rem)]` is the clamp: for
+          // `position: fixed`, `%` resolves against the viewport, so this
+          // caps the dialog at "viewport width minus a 1rem gutter on each
+          // side" once the viewport is narrower than 480px, the same
+          // `w-[N] max-w-[calc(100%-2rem)]` shape `quick-add-dialog.tsx`
+          // already uses for its own centered dialog. Without it, measured
+          // live at a ~400px viewport: the dialog stayed hard 480px wide,
+          // rendered at `x: -40` overhanging both edges by 40px with no
+          // clamping and no scroll — left-edge labels truncated ("Based on"
+          // -> "ed on"), the calendar-icon button and most of "Save" cut off
+          // the right edge.
+          className="-translate-x-1/2 -translate-y-1/2 fixed top-1/2 left-1/2 z-[70] flex w-[480px] max-w-[calc(100%-2rem)] flex-col gap-3 p-4 text-sm outline-hidden"
           style={{
-            // Fixed, not `minHeight` — see this file's own header comment
-            // on why "doesn't resize when the On-date row appears" needs a
-            // fixed height specifically.
+            // PRESERVED: fixed, not `minHeight`. Todoist's own captured
+            // dialog does not resize when the "On date" row appears (this
+            // file's own header comment) — measured 480x403 before and
+            // after that reveal — and a fixed height is what keeps that true
+            // regardless of which "Ends" branch is showing. This number
+            // does not change with viewport width either, for the same
+            // reason: the captured non-resize behaviour is about which
+            // Task-recurrence state is showing, not about how narrow the
+            // viewport is, so there is no width at which this should start
+            // resizing on its own.
+            //
+            // RELAXED: "fits without scrolling" is not preserved — only
+            // "never silently clips" is. At 480px wide, in every state this
+            // dialog can show, 403px was always enough room (that's the
+            // whole basis for the measurement above). Once the width clamp
+            // above lets this dialog get narrower than 480px, labels wrap to
+            // more lines, and a longer `unrepresentable` warning can wrap
+            // too — either can need more than 403px of content height. The
+            // `<form>` below (`flex-1 overflow-auto min-h-0`) is what
+            // absorbs that: a flex child with `min-h-0` and `overflow-auto`
+            // never forces this fixed-height parent to grow past 403px (per
+            // the flexbox spec, a scrolling flex item's automatic minimum
+            // size is 0, not its content size), so the extra content scrolls
+            // inside the form, with Cancel/Save staying put, instead of
+            // being cut off outside it.
             height: "403px",
             borderRadius: "10px",
             background: "rgb(31, 31, 31)",
@@ -449,7 +490,23 @@ export function TaskCustomRepeatDialog({
             Build a custom recurrence rule for this Task.
           </DialogPrimitive.Description>
 
-          <form onSubmit={handleSave} className="flex flex-1 flex-col gap-4 overflow-auto">
+          <form
+            onSubmit={handleSave}
+            // `justify-between` (not the default `justify-start` +
+            // `mt-auto` on just the button row) spreads the default
+            // "Ends: Never" state's ~150px of slack (measured, 480x403)
+            // across the gaps between every group instead of leaving it as
+            // one block of empty space sitting right above Cancel/Save —
+            // which is what read as a layout bug on inspection, even though
+            // the total dialog height (the thing that's actually parity-
+            // measured) is unchanged either way. `min-h-0` overrides this
+            // flex item's default `min-height: auto`, which is what lets
+            // `overflow-auto` below actually scroll instead of forcing the
+            // fixed-height dialog above to grow — see that style's own
+            // comment for why this half is a deliberate relaxation, not an
+            // oversight.
+            className="flex flex-1 min-h-0 flex-col justify-between gap-4 overflow-auto"
+          >
             {/*
               The dropdown's five units cannot express every frequency the
               grammar parses (this file's own header comment) — a named
@@ -556,6 +613,21 @@ export function TaskCustomRepeatDialog({
                   >
                     {unitLabel(draft.unit)}
                   </div>
+                  {/*
+                    Checked for the same behind-the-dialog risk as the
+                    "Select date" popover above, and it is NOT at risk: unlike
+                    `PopoverContent`, this listbox is never portalled — it is
+                    an ordinary descendant of `DialogPrimitive.Content`
+                    (`unitMenuRef`'s own sibling below), so it paints inside
+                    that Content's own `z-[70]` stacking context rather than
+                    competing with it. Its `z-10` only has to beat this
+                    dialog's OTHER children, which are all `z-index: auto`, so
+                    it already wins locally with no change needed. (A portalled
+                    popover escapes that same stacking context by rendering
+                    into `document.body`, which is exactly why it — and only
+                    it — could paint behind a `z-[70]` ancestor it isn't a
+                    descendant of.)
+                  */}
                   {unitMenuOpen && (
                     <div
                       id={unitListboxId}
@@ -650,7 +722,33 @@ export function TaskCustomRepeatDialog({
                           <CalendarDays className="size-4" />
                         </button>
                       </PopoverTrigger>
-                      <PopoverContent align="start">
+                      <PopoverContent
+                        align="start"
+                        data-testid="custom-repeat-date-popover"
+                        // `ui/popover.tsx`'s own default is `z-[60]` — fine for
+                        // its one other caller (the scheduler's anchored
+                        // popover, which sits over ordinary page content), but
+                        // this dialog itself is `z-[70]` (above), so its OWN
+                        // default paints BEHIND this dialog. Found live in a
+                        // real browser: only the bottom one or two rows of
+                        // dates peeked out below the Cancel/Save row, the
+                        // header and top weeks fully hidden, unusable by
+                        // mouse — typing the date manually still worked,
+                        // which is exactly why the (jsdom, no stacking
+                        // context) suite never caught it. Overridden here
+                        // rather than in `ui/popover.tsx`: this dialog is the
+                        // one caller that knows it needs to beat its own
+                        // z-70, and raising the shared primitive's default
+                        // would just move the same "picker behind host"
+                        // problem onto every other caller's z-index instead
+                        // of fixing it for the one caller that has it.
+                        // `cn("z-[60]", className)` in `ui/popover.tsx` runs
+                        // through tailwind-merge, which treats `z-[60]` and
+                        // `z-[80]` as the same conflicting utility group and
+                        // keeps whichever comes later — so this wins over the
+                        // primitive's own default without editing it.
+                        className="z-[80]"
+                      >
                         <Calendar
                           mode="single"
                           today={now}
@@ -671,7 +769,16 @@ export function TaskCustomRepeatDialog({
               </div>
             </fieldset>
 
-            <div className="mt-auto flex justify-end gap-2">
+            {/*
+              No `mt-auto` here — the form's own `justify-between` (above)
+              already pins this row to the bottom by distributing the
+              form's free space between every group, this one included. An
+              auto margin on this row would absorb ALL of that free space
+              itself before `justify-between` ever got to run (flexbox
+              resolves auto margins first), collapsing right back to one
+              lump of dead space above this row — the thing being fixed.
+            */}
+            <div className="flex justify-end gap-2">
               <DialogPrimitive.Close asChild>
                 <Button type="button" variant="outline" size="sm">
                   Cancel
