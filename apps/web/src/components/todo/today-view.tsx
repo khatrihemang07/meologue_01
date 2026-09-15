@@ -15,12 +15,14 @@
 import type { Task } from "@meologue/core";
 import { today } from "@meologue/core";
 import { CheckCircle2 } from "lucide-react";
-import { useState } from "react";
+import { useCallback, useState } from "react";
 import { DatePickerSheet } from "@/components/date-picker-sheet";
 import { type TaskDetailActions, TaskRow } from "@/components/todo/task-row";
 import { Button } from "@/components/ui/button";
+import { useSwipeActions } from "@/hooks/use-swipe-actions";
 import { groupTodayTasks, type TodayGrouping } from "@/lib/group-today-tasks";
 import { localDayKey } from "@/lib/local-day-key";
+import { OPEN_SCHEDULE_EVENT } from "@/lib/todo-keymap";
 
 export interface TodayViewProps {
   /** Every active Task (TaskStore.list()'s result) — today() does its own filtering; this component never pre-narrows it. */
@@ -61,6 +63,29 @@ export function TodayView({
   const [grouping, setGrouping] = useState<TodayGrouping>("none");
   const [reschedulingOverdue, setReschedulingOverdue] = useState(false);
 
+  // Issue #303: swiping a row left opens its own `TaskSchedulePopover` —
+  // reusing `use-swipe-actions.ts`'s shared recogniser (task-tree.tsx's own
+  // identical wiring has the fuller reasoning for why this is reuse, not a
+  // second recogniser). Attached once, to the outer wrapper below, rather
+  // than once per section: Overdue and Due-today render as separate `<ul>`s
+  // — and Due-today's own grouping can render several more, one per bucket
+  // — with no ancestor of their own narrower than that wrapper, so this is
+  // the one container guaranteed to sit above all of them regardless of
+  // grouping. Called unconditionally, before the `isEmpty` early return
+  // below, the same rule every other Hook call in this component already
+  // follows.
+  const openScheduleForSwipe = useCallback((target: HTMLElement) => {
+    const taskId = target.dataset.taskId;
+    if (taskId !== undefined) {
+      // The identical fan-in the `T` keyboard shortcut already uses
+      // (todo-keymap.ts's own `OPEN_SCHEDULE_EVENT` doc comment) — this
+      // view has no direct reference to the swiped row's own `scheduleOpen`
+      // state (owned by task-row.tsx, several props away).
+      document.dispatchEvent(new CustomEvent(OPEN_SCHEDULE_EVENT, { detail: { taskId } }));
+    }
+  }, []);
+  const swipeRowsRef = useSwipeActions({ onOpen: openScheduleForSwipe });
+
   // localDayKey(new Date()) rather than new Date().toISOString(): Today's
   // own boundary has to be the Device's local calendar day, not a UTC one
   // — the same floating-time discipline Task.date's own doc comment
@@ -90,7 +115,7 @@ export function TodayView({
   }
 
   return (
-    <div className="flex flex-col gap-4">
+    <div ref={swipeRowsRef} className="flex flex-col gap-4">
       {overdue.length > 0 && (
         <section>
           <header className="flex items-center justify-between px-3 py-2">

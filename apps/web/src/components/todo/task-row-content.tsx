@@ -44,6 +44,7 @@ import { LazyTaskTitleEditor } from "@/components/todo/lazy-task-title-editor";
 import { TaskCommandMenu } from "@/components/todo/task-command-menu";
 import type { TaskDetailActions } from "@/components/todo/task-row";
 import { TaskSchedulePopover } from "@/components/todo/task-schedule-popover";
+import { SWIPE_TARGET_ATTRIBUTE } from "@/hooks/use-swipe-actions";
 import { useTaskDateState } from "@/hooks/use-task-date-state";
 import { formatDay, formatTaskDate } from "@/lib/format-task-date";
 import { localDayKey } from "@/lib/local-day-key";
@@ -371,6 +372,18 @@ export function TaskRowContent({
   return (
     <div
       data-task-row-box
+      // Issue #303: this row's own swipe-to-schedule target — the identical
+      // door `entry-bubble.tsx` already opens onto `use-swipe-actions.ts`'s
+      // shared recogniser, not a second one. `data-task-id` here is a second
+      // copy of the identical attribute `task-row.tsx`'s own `<li>` already
+      // carries, not a competing identity: the swipe hook resolves "which
+      // Task" off whichever element carries `[data-swipe-target]`, which is
+      // this div, not the `<li>` around it, so this is the one place that
+      // needs the id in hand. `closest("[data-task-id]")` elsewhere in this
+      // app (`todo-keymap.ts`'s `focusedTaskId`) still resolves to the same
+      // value either way, since this div sits *inside* the `<li>` that also
+      // carries it.
+      {...{ [SWIPE_TARGET_ATTRIBUTE]: "", "data-task-id": task.id }}
       className={cn(
         "group flex items-center gap-2 rounded-lg border-t-2 border-t-transparent transition-colors",
         // ROW-02 (parity-ledger.md): a full-width divider, 0px inset —
