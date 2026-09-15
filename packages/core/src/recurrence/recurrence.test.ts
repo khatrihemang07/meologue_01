@@ -129,6 +129,31 @@ const CASES: readonly Case[] = [
     expect: occurrence("2026-01-26"),
   },
 
+  // --- Issue #301, the two cases that settle it. Driven on Todoist web
+  // 2026-09-15 and recorded in
+  // meologue-parity-docs/todoist/live-audit-dom/recurrence-overdue-weekly-2026-09-15.json.
+  //
+  // These exist because every earlier overdue probe used `every day`,
+  // where a one-day interval has no weekday phase and no interval parity
+  // to lose — so the fixture could not separate "step whole intervals
+  // from the due date" from "max(due, today) + one interval", and the
+  // second was written into the corpus as the general rule. It is wrong
+  // for anything longer than a day.
+  {
+    description:
+      '"every week" overdue by more than one interval steps whole weeks from its due date, keeping the weekday — Todoist web, driven: due Mon 31 Aug, completed Tue 15 Sep, lands Mon 21 Sep (issue #301). `max(due, today) + interval` would give Tue 22 Sep and lose the Monday',
+    dateString: "every week",
+    reference: { dueDate: "2026-08-31", now: "2026-09-15" },
+    expect: occurrence("2026-09-21"),
+  },
+  {
+    description:
+      '"every 2 weeks" overdue by more than one interval keeps its interval PARITY as well as its weekday — Todoist web, driven: due Mon 17 Aug, completed Tue 15 Sep, lands Mon 28 Sep (issue #301). This is the case the weekly probe above cannot discriminate: "next matching Monday" gives 21 Sep, `max(due, today) + interval` gives Tue 29 Sep, and only stepping 17 Aug -> 31 Aug -> 14 Sep -> 28 Sep gives what Todoist actually did',
+    dateString: "every 2 weeks",
+    reference: { dueDate: "2026-08-17", now: "2026-09-15" },
+    expect: occurrence("2026-09-28"),
+  },
+
   // --- Monthly: `every` vs `every!` genuinely diverge (day-of-month
   // phase), unlike the bare daily/weekly cases above — this was already
   // due-anchored before #291, so these three (on time / overdue /
