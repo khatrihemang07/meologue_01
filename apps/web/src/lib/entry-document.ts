@@ -227,6 +227,68 @@ function blocksToPM(blocks: readonly EntryBlockNode[], taskChecked = false): PMN
 }
 
 /**
+ * Issue #245: the one mandatory separator character between a checkbox's
+ * `[ ]`/`[x]` and whatever follows it (`inline-markdown.ts`'s own comment on
+ * `referencedTaskOf`, and `itemContentStart`'s identical reasoning for the
+ * `- ` bullet marker) is syntax, not typed content — but `collectBlocks`/
+ * `pushProseRuns` (inline-markdown.ts) has no clean place to drop it while
+ * parsing, because two consumers of ITS output, `EntryBlockNode`, deliberately
+ * rely on the separator surviving there: `referencedTaskOf` (inline-markdown.ts)
+ * and `isReferencedChecklistItem` (composer-commands.ts) each strip it by
+ * hand before checking what remains. So the drop happens one step later, at
+ * this exact seam — converting a checklist item's own first prose run into
+ * ProseMirror nodes — which is the only place both requirements can hold at
+ * once: the parsed tree keeps the separator, the document does not.
+ *
+ * Only ONE leading character is ever removed, mirroring `itemContentStart`'s
+ * own "exactly one mandatory separator, not however much whitespace happens
+ * to be there" rule — a person who typed `- [ ]  two spaces` still has their
+ * second space as real content. If stripping that one character empties the
+ * leading text node entirely, the node itself is dropped (an empty text node
+ * is invalid in ProseMirror — see `inlineNodesToPM`'s own guard) rather than
+ * left behind as a zero-length leaf.
+ *
+ * `writeListItem` (this file's doc-to-markdown half) writes this separator
+ * back UNCONDITIONALLY for every task item now (its own `needsTaskSeparator`
+ * comment has the full reasoning) — always as a plain space, regardless of
+ * which single character this function actually stripped. For the ordinary
+ * case (the stripped character already was a space) that is a true, silent,
+ * byte-identical round trip. For the one character this function treats as
+ * equally mandatory-separator syntax — a TAB, which `itemContentStart`
+ * (inline-markdown.ts) already accepts as the `- ` bullet marker's own
+ * separator and which `entryParser`'s `TaskList` extension accepts here the
+ * same way — the round trip normalizes it to a space instead of restoring
+ * the tab byte-for-byte. That is not a new gap this function opens: a plain
+ * bullet's own tab separator is already normalized to a space today, on
+ * unmodified `main`, by `markerFor`'s unconditional literal `"- "` — this
+ * function's caller just makes the checkbox case consistent with that
+ * existing, accepted behavior rather than inventing a second, different
+ * rule for it. Verified directly: `entryMarkdownToDocument("-\talpha")`
+ * already round-trips to `"- alpha"` today, tab and all, with none of this
+ * ticket's code involved at all.
+ */
+function withoutTaskSeparator(blocks: readonly EntryBlockNode[]): readonly EntryBlockNode[] {
+  const first = blocks[0];
+  if (first === undefined || first.kind !== "prose") {
+    return blocks;
+  }
+  const firstChild = first.children[0];
+  if (firstChild === undefined || firstChild.kind !== "text") {
+    return blocks;
+  }
+  const char = firstChild.text[0];
+  if (char !== " " && char !== "\t") {
+    return blocks;
+  }
+  const rest = firstChild.text.slice(1);
+  const children =
+    rest === ""
+      ? first.children.slice(1)
+      : [{ ...firstChild, text: rest }, ...first.children.slice(1)];
+  return [{ ...first, children }, ...blocks.slice(1)];
+}
+
+/**
  * `list_item`'s content expression is `"paragraph block*"` — it always
  * needs a leading paragraph, even an empty one — because
  * `prosemirror-schema-list`'s own commands assume that shape (see
@@ -248,7 +310,8 @@ function itemToPM(item: EntryListItem): PMNode {
   // `itemToPM` fresh for each of those, which recomputes this from ITS OWN
   // `item.task`) starts its `checked` cache agreeing with the marker
   // beside it.
-  const content = blocksToPM(item.content, item.task?.checked ?? false);
+  const itemContent = item.task !== undefined ? withoutTaskSeparator(item.content) : item.content;
+  const content = blocksToPM(itemContent, item.task?.checked ?? false);
   const needsLeadingParagraph = content.length === 0 || content[0]?.type.name !== "paragraph";
   const withLeadingParagraph = needsLeadingParagraph
     ? [entrySchema.node("paragraph"), ...content]
@@ -841,12 +904,13 @@ function writeListItem(item: PMNode, marker: string, indent: string, w: Writer):
 
   // `list_item`'s content is always `paragraph block*` (entry-schema.ts), so
   // `first` is always that leading paragraph — written into its own `Writer`
-  // first, rather than straight into `w`, because a task's checkbox needs to
-  // *peek* at whether that paragraph's own text already starts with the
-  // mandatory separator space before deciding whether to add one (see
-  // `needsTaskSeparator` below). Its own text never starts a fresh line —
-  // it continues right after the marker `w` just wrote — so `atLineStart`
-  // is seeded `false` here regardless of `w`'s own state.
+  // first, rather than straight into `w`, so the separator decision below can
+  // be made before any of it reaches `w`. That decision used to *peek* at
+  // this text; issue #245 made it unconditional and the peek is gone (see
+  // `needsTaskSeparator` below for the invariant that changed), but the
+  // separate `Writer` stays: `atLineStart` has to be seeded `false` for this
+  // paragraph regardless of `w`'s own state, because its text never starts a
+  // fresh line — it continues right after the marker `w` just wrote.
   const childIndent = indent + " ".repeat(marker.length);
   const children = item.children;
   const first = children[0];
@@ -862,16 +926,34 @@ function writeListItem(item: PMNode, marker: string, indent: string, w: Writer):
   // A task's checkbox needs at least one space after it to be recognised as
   // a task at all on the next parse — `entryParser`'s `TaskList` extension
   // requires it; a bare `[ ]` with nothing after falls back to plain text
-  // (verified directly against `parseEntryMarkdown`). A genuine task's own
-  // leading paragraph always already starts with that separator —
-  // `inline-markdown.ts` never strips it out of an item's captured content —
-  // so this only ever adds a space when one is truly missing (an empty
-  // item, or a document built directly rather than through
-  // `entryMarkdownToDocument`), never on top of one that's already there.
-  // That is what keeps this from compounding an extra space on every
-  // repeated round trip.
-  const needsTaskSeparator =
-    checked !== null && !firstText.startsWith(" ") && !firstText.startsWith("\t");
+  // (verified directly against `parseEntryMarkdown`).
+  //
+  // Issue #245 inverted the invariant this used to rest on. Before that fix,
+  // a genuine task's own leading paragraph always already started with the
+  // separator — `inline-markdown.ts` never stripped it out of an item's
+  // captured content — so this used to *peek* at `firstText` and add a
+  // space only when one was truly missing (an empty item, or a document
+  // built directly rather than through `entryMarkdownToDocument`). Now the
+  // opposite holds: NO document ever carries that separator as real content
+  // — `withoutTaskSeparator` (above) strips it at parse time,
+  // `promote-tasks.ts`'s live Promotion never wrote one in the first place,
+  // and typing `- [ ] ` into the Composer doesn't either. `firstText`
+  // starting with whitespace is therefore never "the separator, already
+  // there" anymore; it can only be a SPACE the person genuinely typed as
+  // their own second character (`- [ ]  two spaces`, `withoutTaskSeparator`'s
+  // own comment on why only one leading character is ever stripped). Peeking
+  // at it and skipping the write would silently swallow that character on
+  // the very first save — found independently, against unmodified `main`'s
+  // `- [ ]  alpha` round trip, which stays byte-identical there precisely
+  // because main strips nothing at all.
+  //
+  // So the write is unconditional for any task item: always exactly one
+  // space, never zero, never peeking at what follows. That is what keeps
+  // the round trip byte-identical for both an ordinary item (nothing to
+  // restore but the one mandatory separator) and one whose own second
+  // character genuinely is a space (which survives untouched, since this
+  // only ever writes the FIRST character back).
+  const needsTaskSeparator = checked !== null;
   w.write(needsTaskSeparator ? " " : "");
   w.write(firstText);
 

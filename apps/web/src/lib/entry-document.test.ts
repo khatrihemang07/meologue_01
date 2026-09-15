@@ -371,14 +371,42 @@ describe("entryMarkdownToDocument", () => {
     expect(list?.child(2).attrs.checked).toBe(null);
   });
 
-  // `.lastChild`, not `.firstChild`: the leading paragraph's first child is
-  // the mandatory separator space between `[ ]` and its content (this
-  // file's own `needsTaskSeparator` comment, entry-document.ts) surviving
-  // as a text(" ") node — the reference itself is the child after it.
+  // Issue #245: the mandatory single space between a checkbox's `[ ]`/`[x]`
+  // and whatever follows it is not itself typed content — it is syntax, the
+  // same way the `- ` bullet marker's own separator is (`itemContentStart`'s
+  // comment, inline-markdown.ts). It is deliberately kept in the parsed
+  // `EntryBlockNode` tree (`referencedTaskOf`/`isReferencedChecklistItem`
+  // both rely on that), but it must NOT survive into the ProseMirror
+  // document, where it stops being a marker and becomes real,
+  // caret-addressable text a person never typed. A plain bullet (no
+  // checkbox) has no such marker-adjacent separator to strip at all.
+  it("drops a checkbox item's mandatory separator space — it is syntax, not typed content", () => {
+    expect(entryMarkdownToDocument("- [ ] alpha").textContent).toBe("alpha");
+    expect(entryMarkdownToDocument("- [x] alpha").textContent).toBe("alpha");
+    expect(entryMarkdownToDocument("- alpha").textContent).toBe("alpha");
+  });
+
+  // Regression found independently against this exact fix, and confirmed
+  // against unmodified `main`: only the FIRST space after `[ ]`/`[x]` is the
+  // mandatory separator; a SECOND one is the person's own typed content and
+  // must survive both the document (as real text) and a save (byte-identical
+  // storage) — the corpus above has no double-space-after-checkbox case, so
+  // it stayed green while `writeListItem`'s old `needsTaskSeparator` guard
+  // silently ate this exact character (see that function's own comment for
+  // why the guard had to become unconditional to stop doing that).
+  it("keeps a checkbox item's own SECOND leading space as real content, on both halves of the round trip", () => {
+    expect(entryMarkdownToDocument("- [ ]  alpha").textContent).toBe(" alpha");
+    expect(roundTrip("- [ ]  alpha")).toBe("- [ ]  alpha");
+  });
+
+  // `.firstChild`, not `.lastChild`: issue #245 fixed the leading paragraph
+  // so its first child is the reference itself — the mandatory separator
+  // space between `[ ]` and its content is dropped at the `blocksToPM`
+  // seam (entry-document.ts) rather than surviving as a text(" ") node.
   it("resolves a taskReference to a task_reference node carrying the id and decoded cached label", () => {
     const doc = entryMarkdownToDocument(`- [ ] ${formatTaskReference(TASK_ID, "buy milk")}`);
     const item = doc.firstChild?.firstChild;
-    const leaf = item?.firstChild?.lastChild;
+    const leaf = item?.firstChild?.firstChild;
     expect(leaf?.type.name).toBe("task_reference");
     expect(leaf?.attrs).toMatchObject({ taskId: TASK_ID, label: "buy milk", checked: false });
   });
