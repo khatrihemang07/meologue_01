@@ -55,6 +55,8 @@ export interface TaskListProps {
   reorderTask: (id: string, orderKey: string) => void;
   setTaskParent: (id: string, parentId: string | null) => Promise<void>;
   listTaskChildren: (parentId: string) => Promise<Task[]>;
+  /** Issue #298 — see TaskTree's own prop doc. */
+  countTaskChildren: (parentId: string) => Promise<{ done: number; total: number }>;
   listTasksInProject: (projectId: string | null) => Promise<Task[]>;
 }
 
@@ -74,6 +76,7 @@ export function TaskList({
   reorderTask,
   setTaskParent,
   listTaskChildren,
+  countTaskChildren,
   listTasksInProject,
 }: TaskListProps) {
   // ROW-14 (parity-ledger.md): narrowed to THIS scope's own top-level rows
@@ -116,6 +119,7 @@ export function TaskList({
     reorderTask,
     setTaskParent,
     listTaskChildren,
+    countTaskChildren,
     listTasksInProject,
   } as const;
 

@@ -1,7 +1,17 @@
 import type { Task } from "@meologue/core";
 import { fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { swipeDown, swipeLeft } from "@/test/swipe";
 import { TodayView } from "./today-view";
+
+/** The `[data-task-row-box]` `<div>` inside the row that renders `label` — the element `use-swipe-actions.ts` picks up (`SWIPE_TARGET_ATTRIBUTE`'s own doc comment), same as task-tree.test.tsx's identical helper. */
+function rowBox(label: string): HTMLElement {
+  const row = screen.getByText(label).closest("li");
+  if (!row) throw new Error(`expected a row for "${label}"`);
+  const box = row.querySelector<HTMLElement>(":scope > [data-task-row-box]");
+  if (!box) throw new Error(`expected a row box on "${label}"'s row`);
+  return box;
+}
 
 function task(overrides: Partial<Task> = {}): Task {
   return {
@@ -342,6 +352,38 @@ describe("TodayView", () => {
       const lateIndex = rows.findIndex((text) => text.includes("late"));
       expect(earlyIndex).toBeGreaterThanOrEqual(0);
       expect(earlyIndex).toBeLessThan(lateIndex);
+    });
+  });
+
+  // Issue #303: reuses `use-swipe-actions.ts`'s shared recogniser (the
+  // identical one `history.tsx`'s own bubbles use), attached once to this
+  // view's own outer wrapper so both the Overdue and Due-today sections'
+  // own `<ul>`s — separate DOM subtrees, unlike TaskTree's own nested
+  // levels — are covered by a single instance. The recogniser's own
+  // arithmetic is mutation-tested in `swipe-recognizer.test.ts` and
+  // `use-swipe-actions.test.tsx`; this only proves the wiring reaches
+  // Today's own rows at all.
+  describe("swipe-to-schedule (issue #303)", () => {
+    it("opens the swiped row's own schedule popover, in either section", () => {
+      renderTodayView({
+        tasks: [
+          task({ id: "late", content: "late task", date: "2026-08-30" }),
+          task({ id: "today", content: "today task", date: "2026-09-02" }),
+        ],
+      });
+
+      swipeLeft(rowBox("late task"));
+      expect(screen.getByTestId("scheduler-view")).toBeInTheDocument();
+    });
+
+    it("does not open anything for a vertical drag", () => {
+      renderTodayView({
+        tasks: [task({ id: "today", content: "today task", date: "2026-09-02" })],
+      });
+
+      swipeDown(rowBox("today task"));
+
+      expect(screen.queryByTestId("scheduler-view")).not.toBeInTheDocument();
     });
   });
 });

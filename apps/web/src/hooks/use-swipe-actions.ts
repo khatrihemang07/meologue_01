@@ -31,6 +31,48 @@ const SPRING_BACK_EASING = "cubic-bezier(0.22, 0.61, 0.36, 1)";
 /** Marks an element as something a swipe can pick up. */
 export const SWIPE_TARGET_ATTRIBUTE = "data-swipe-target";
 
+/**
+ * How close to either screen edge a swipe may not *begin* — Android's own
+ * gesture navigation claims a horizontal drag that starts inside this margin
+ * for itself (back/forward/recents) before a single `pointermove` ever
+ * reaches this hook. Captured on device (issue #303): a swipe starting
+ * within ~150px of an edge left the app entirely, mid-capture, rather than
+ * reaching the row underneath the finger. There is no way for this
+ * recogniser to out-compete the platform for a gesture it never gets to
+ * see, so the fix is to never start tracking one that begins this close to
+ * an edge in the first place.
+ *
+ * Measured against `window.innerWidth` — the same viewport the system's own
+ * edge-swipe zones are a margin of — never a container's own bounding rect:
+ * the row that happens to be under the finger has nothing to do with where
+ * Android's gesture nav claims the gesture.
+ *
+ * The 150 is **device** pixels, because that is the unit the observation was
+ * made in: swipes beginning at device x=200, or ending at x=1050, on this
+ * phone's 1200px-wide screen left the app for the launcher. Android's gesture
+ * zones are a physical margin, so they do not scale with a page's CSS pixel.
+ *
+ * `PointerEvent.clientX` is in CSS pixels, so the comparison has to convert.
+ * Getting this wrong is not a rounding error: at `devicePixelRatio` 2.8125 the
+ * viewport is 426 CSS px wide, so reading 150 as CSS px excluded everything
+ * outside x ∈ (150, 276) — a 126px live band, under 30% of the row, with no
+ * symptom except that most swipes did nothing. jsdom leaves
+ * `devicePixelRatio` at 1, so a unit test cannot notice this on its own.
+ */
+const EDGE_EXCLUSION_DEVICE_PX = 150;
+
+function edgeExclusionCssPx(): number {
+  // `devicePixelRatio` is 1 wherever there is no such thing as a system edge
+  // gesture (a desktop browser), which leaves the guard harmless there — and
+  // swipes are ignored for a mouse pointer before this is ever consulted.
+  return EDGE_EXCLUSION_DEVICE_PX / (window.devicePixelRatio || 1);
+}
+
+function isNearScreenEdge(x: number): boolean {
+  const margin = edgeExclusionCssPx();
+  return x < margin || x > window.innerWidth - margin;
+}
+
 export interface SwipeActionsOptions {
   /**
    * Called once, on release, when the swipe travelled far enough or fast
@@ -137,6 +179,11 @@ export function useSwipeActions({ onOpen, enabled = true }: SwipeActionsOptions)
       // mouse travel would take it away again. A mouse reaches Edit, Copy
       // and Delete through the hover buttons and right-click instead.
       if (event.pointerType === "mouse") return;
+      // The system owns the edges — see EDGE_EXCLUSION_PX's own doc comment.
+      // Checked before the `[data-swipe-target]` lookup below, not after:
+      // a pointer this close to an edge is never a candidate at all,
+      // regardless of what it landed on.
+      if (isNearScreenEdge(event.clientX)) return;
       const found =
         event.target instanceof Element
           ? event.target.closest<HTMLElement>(`[${SWIPE_TARGET_ATTRIBUTE}]`)

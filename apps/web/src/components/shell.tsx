@@ -168,7 +168,12 @@ interface ShellProps {
    * arrow.
    */
   back?: ReactNode;
-  /** Trailing app-bar action — e.g. the History/Settings links on the Composer page. */
+  /**
+   * Trailing action — e.g. the History/Settings links on the Composer page.
+   * Renders at the trailing edge of the fixed app bar normally, or (issue
+   * #307) of the in-column heading row when `hideAppBar` is set — Todo's
+   * Search door (todo-page.tsx) is the first caller to use it there.
+   */
   action?: ReactNode;
   message?: string;
   /**
@@ -203,6 +208,25 @@ interface ShellProps {
    * "Entry" itself here, deliberately: see use-pinned-scroll.ts.
    */
   pinnedThread?: PinnedThreadConfig;
+  /**
+   * Issue #304: a control that hangs over the scroll region's own bottom
+   * edge, the identical wrapper the jump-to-newest control above already
+   * anchors to — a sibling of `composerSlot` in the flex column, not an
+   * overlay drawn on top of it. That is what keeps a floating control from
+   * ever covering `composerSlot`'s own controls or reaching past its safe-
+   * area padding without this prop recomputing either: the two boxes never
+   * occupy the same space, so there is nothing to collide with. Undefined
+   * (every caller but Todo, todo-page.tsx's `TodoCreateFab`) renders
+   * neither this nor the bottom spacer below — byte-for-byte the layout
+   * before this prop existed, the same guarantee `columnWidthClassName`
+   * and `hideAppBar` each already make for their own callers.
+   *
+   * The scroll column also gets extra bottom padding whenever this is set
+   * (below, next to `{footer}`) — enough that a list scrolled all the way
+   * to its own end still clears the floating control's footprint, rather
+   * than its last row landing underneath it.
+   */
+  floatingAction?: ReactNode;
   /**
    * Ticket 55: the magnifier that turns this app bar into a search field in
    * place, on both destinations that have a thread. Undefined (Settings —
@@ -272,6 +296,7 @@ export function Shell({
   search,
   columnWidthClassName,
   hideAppBar,
+  floatingAction,
 }: ShellProps) {
   // Issue #83: the escape hatch History registers its virtualizer's
   // `scrollToIndex` into (see HistoryScrollContext's own comment above).
@@ -578,12 +603,40 @@ export function Shell({
                   renders while `hideAppBar` is set. Unlike the app bar
                   (`shrink-0`, never scrolls), this row scrolls away with
                   the rest of the column — see `hideAppBar`'s own doc
-                  comment for why that's accepted rather than absorbed. */}
+                  comment for why that's accepted rather than absorbed.
+
+                  Issue #307: `action` reads here too, `ml-auto`-pushed to
+                  the row's trailing edge exactly like the app-bar branch
+                  above does for its own `(search || action)` row. Before
+                  this, `action` was only ever read inside the `!hideAppBar`
+                  branch, so Todo — the one caller that sets `hideAppBar` —
+                  had no way to reach it at all; that's what left Todo's
+                  Search door (todo-page.tsx) with nowhere in the header to
+                  go. */}
+              {/* The top safe-area inset belongs here, not only on the app
+                  bar above. Android draws the WebView full-bleed — meologue's
+                  viewport is 426x949 CSS px on a 1200x2670 screen, the whole
+                  display — so the system status bar sits OVER this row and
+                  eats touches in its band before the page sees them. Measured
+                  on the device 2026-09-15: `env(safe-area-inset-top)` is 43
+                  CSS px there, and without this padding the row's children
+                  started at y=16, leaving the Search door (#307) 56% dead and
+                  `back` 57% dead. Both still DRAW, below the status-bar
+                  glyphs, which is why this survived #254 unnoticed: the
+                  controls look completely normal and simply ignore taps along
+                  their top edge. `!hideAppBar`'s <header> has carried this
+                  since #254; the in-column branch was the half that missed
+                  it, and Todo is its only caller.
+
+                  This does not make the row stop scrolling — that is a
+                  separate and deliberate property, documented on `hideAppBar`
+                  itself, matching Todoist's own behaviour. */}
               {hideAppBar && (
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-2 [padding-top:env(safe-area-inset-top)]">
                   {back}
                   <h1 className="font-heading font-bold text-[26px] leading-[35px]">{title}</h1>
                   <SyncStatusIndicator />
+                  {action && <div className="ml-auto flex items-center gap-1">{action}</div>}
                 </div>
               )}
               {message && <p className="text-sm text-destructive">{message}</p>}
@@ -594,6 +647,23 @@ export function Shell({
               )}
               {children}
               {footer}
+              {/* Issue #304: reserves room, inside the scrolling column
+                  itself, for `floatingAction`'s own footprint — 56px
+                  (size-14) plus its bottom-4 offset — so a list scrolled
+                  all the way to its own end still clears it rather than
+                  the last row landing underneath. Scrolls away with the
+                  rest of the column, unlike `floatingAction` itself, which
+                  is why this can't just be padding on the always-visible
+                  wrapper below. Absent whenever `floatingAction` is
+                  (every caller but Todo): no bottom padding this prop
+                  didn't already render before it existed. */}
+              {floatingAction && (
+                <div
+                  aria-hidden="true"
+                  data-testid="floating-action-spacer"
+                  className="h-24 shrink-0"
+                />
+              )}
             </div>
           </HistoryScrollContext.Provider>
         </div>
@@ -627,6 +697,8 @@ export function Shell({
             <ArrowDown aria-hidden="true" className="size-4" />
           </Button>
         )}
+
+        {floatingAction}
       </div>
 
       {composerSlot}

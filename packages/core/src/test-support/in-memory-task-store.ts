@@ -72,6 +72,19 @@ export class InMemoryTaskStore implements TaskStore {
       .sort(compareByOrder);
   }
 
+  // Mirrors SqliteTaskStore.countChildren — completed children counted,
+  // tombstoned ones not (that method's own doc comment on why the two
+  // exclusions differ).
+  async countChildren(parentId: string): Promise<{ done: number; total: number }> {
+    const children = [...this.tasks.values()].filter(
+      (task) => task.parentId === parentId && task.deletedAt === null,
+    );
+    return {
+      done: children.filter((task) => task.completedAt !== null).length,
+      total: children.length,
+    };
+  }
+
   // Mirrors SqliteTaskStore.listInSection — active and completed both
   // included, see TaskStore.listInSection's own doc comment for why.
   async listInSection(sectionId: string): Promise<Task[]> {

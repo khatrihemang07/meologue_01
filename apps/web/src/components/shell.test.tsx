@@ -456,4 +456,117 @@ describe("Shell's column width override and hideAppBar (issue #254)", () => {
       column?.textContent?.indexOf("content") ?? -1,
     );
   });
+
+  // Issue #307: before this, `action` was read only inside the `!hideAppBar`
+  // branch (the fixed app bar), so Todo — the one caller that sets
+  // `hideAppBar` — had no way to add a trailing header action at all; the
+  // prop existed but nothing that used `hideAppBar` could reach it. Todo's
+  // Search door (todo-page.tsx) is the first caller that needs one.
+  it("renders `action` inside the in-column heading row too, when hideAppBar is set", () => {
+    render(
+      <Shell
+        title="Inbox"
+        hideAppBar
+        action={
+          <button type="button" aria-label="Search">
+            Search
+          </button>
+        }
+      >
+        content
+      </Shell>,
+    );
+
+    const scrollRegion = screen.getByTestId("shell-scroll-region");
+    expect(scrollRegion).toContainElement(screen.getByRole("button", { name: "Search" }));
+  });
+});
+
+// Issue #304: `TodoCreateFab`'s own slot. Exercised here, against Shell
+// directly, the same way the Sync status indicator's ambient rendering is
+// (this file's own header comment) — a plain `<button>` stands in for the
+// real control since what's under test is Shell's own placement and
+// bottom-spacer wiring, not TodoCreateFab (todo-create-fab.test.tsx covers
+// that component itself).
+describe("Shell's floatingAction slot (issue #304)", () => {
+  it("renders nothing extra and adds no spacer when floatingAction is omitted", () => {
+    render(<Shell title="Todo">content</Shell>);
+
+    expect(screen.queryByRole("button", { name: "Float" })).not.toBeInTheDocument();
+    expect(
+      document.querySelector('[data-testid="floating-action-spacer"]'),
+    ).not.toBeInTheDocument();
+  });
+
+  it("renders floatingAction inside the scroll wrapper, alongside the scroll region rather than inside it", () => {
+    render(
+      <Shell title="Todo" floatingAction={<button type="button">Float</button>}>
+        content
+      </Shell>,
+    );
+
+    const floatButton = screen.getByRole("button", { name: "Float" });
+    expect(floatButton).toBeInTheDocument();
+    // Not inside the scrollable region — a floating control inside it would
+    // scroll away with the content it's supposed to hang over (shell.tsx's
+    // own header comment on the identical constraint for jump-to-newest).
+    expect(screen.getByTestId("shell-scroll-region")).not.toContainElement(floatButton);
+  });
+
+  it("reserves bottom clearance in the scroll column only when floatingAction is given", () => {
+    render(
+      <Shell title="Todo" floatingAction={<button type="button">Float</button>}>
+        content
+      </Shell>,
+    );
+
+    const spacer = document.querySelector('[data-testid="floating-action-spacer"]');
+    expect(spacer).toBeInTheDocument();
+    // Inside the scroll region, unlike floatingAction itself — the spacer's
+    // whole job is to scroll away with the content so the list's own last
+    // row clears floatingAction's footprint once scrolled fully into view.
+    expect(screen.getByTestId("shell-scroll-region")).toContainElement(spacer as HTMLElement);
+  });
+
+  // Driven on the device, 2026-09-15, build index--OQ6kPrH.js, viewport
+  // 426x949 CSS at dpr 2.8125. `env(safe-area-inset-top)` reports **43 CSS
+  // px** there, and the in-column heading row rendered its children from
+  // y=16 — so the status bar's touch region covered the top 27px of the
+  // Search door (48px tall, 56% dead) and the top 25px of `back` (44px,
+  // 57% dead). Both are VISIBLE — they draw below the status-bar glyphs —
+  // and simply do not receive taps up there, which is the worst version of
+  // this bug: nothing looks wrong.
+  //
+  // Proven positional rather than flaky by alternating five taps on the
+  // same element: device y=112.5 navigated 0/3, y=168.8 navigated 2/2, and
+  // the deciding trial was a LATE centre tap that still failed — so the
+  // result tracks the coordinate, not the ordinal.
+  //
+  // The fixed app bar (`!hideAppBar`) has always carried this inset; the
+  // in-column heading never did, and Todo is its only caller.
+  it("pads the in-column heading row by the top safe-area inset, so its controls clear the status bar (hideAppBar, narrow shells)", () => {
+    render(
+      <Shell title="Todo" hideAppBar back={<button type="button" aria-label="Back" />}>
+        content
+      </Shell>,
+    );
+
+    const heading = screen.getByRole("heading", { name: "Todo" });
+    const row = heading.parentElement as HTMLElement;
+    expect(row.className).toContain("[padding-top:env(safe-area-inset-top)]");
+  });
+
+  it("does not pad the in-column heading row when hideAppBar is omitted, because the app bar owns the inset then", () => {
+    render(
+      <Shell title="Settings" back={<button type="button" aria-label="Back" />}>
+        content
+      </Shell>,
+    );
+
+    // The app bar is the element carrying the inset in this branch, and it
+    // is a <header> rather than the heading's parent — asserting on it here
+    // is what stops the fix above from being "add the class everywhere".
+    const bar = document.querySelector("header") as HTMLElement;
+    expect(bar.className).toContain("[padding-top:env(safe-area-inset-top)]");
+  });
 });

@@ -26,8 +26,11 @@
 import type { Task } from "@meologue/core";
 import { upcoming, upcomingDayHeading } from "@meologue/core";
 import { CalendarClock } from "lucide-react";
+import { useCallback } from "react";
 import { type TaskDetailActions, TaskRow } from "@/components/todo/task-row";
+import { useSwipeActions } from "@/hooks/use-swipe-actions";
 import { localDayKey } from "@/lib/local-day-key";
+import { OPEN_SCHEDULE_EVENT } from "@/lib/todo-keymap";
 
 export interface UpcomingViewProps {
   /** Every active Task (TaskStore.list()'s result) — upcoming() does its own filtering; this component never pre-narrows it, mirroring TodayView's identical `tasks` prop. */
@@ -50,6 +53,19 @@ export function UpcomingView({
   onRequestDelete,
   onOpenSchedule,
 }: UpcomingViewProps) {
+  // Issue #303: reuses `use-swipe-actions.ts`'s shared recogniser —
+  // today-view.tsx's own identical wiring has the fuller reasoning, both
+  // for why this is reuse rather than a second recogniser and for why the
+  // container ref goes on the outer wrapper below rather than on any one
+  // day-section's own `<ul>`.
+  const openScheduleForSwipe = useCallback((target: HTMLElement) => {
+    const taskId = target.dataset.taskId;
+    if (taskId !== undefined) {
+      document.dispatchEvent(new CustomEvent(OPEN_SCHEDULE_EVENT, { detail: { taskId } }));
+    }
+  }, []);
+  const swipeRowsRef = useSwipeActions({ onOpen: openScheduleForSwipe });
+
   // localDayKey(new Date()), not new Date().toISOString(): the identical
   // "Today's boundary is the Device's local calendar day" discipline
   // today-view.tsx's own comment requires, reused rather than re-derived.
@@ -73,7 +89,7 @@ export function UpcomingView({
   }
 
   return (
-    <div className="flex flex-col gap-4">
+    <div ref={swipeRowsRef} className="flex flex-col gap-4">
       {days.map((day) => (
         <section key={day.dayKey}>
           <header className="px-3 py-2">

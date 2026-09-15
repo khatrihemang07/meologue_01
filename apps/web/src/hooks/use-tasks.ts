@@ -173,6 +173,8 @@ export interface UseTasksResult {
    * triggers.
    */
   listTasksInProject: (projectId: string | null) => Promise<Task[]>;
+  /** A Task's `done`/`total` sub-task counts (TaskStore.countChildren) — issue #298's progress badge, separate from `listTaskChildren` because that list means "active children, for rendering" and this means "how much of this is done". */
+  countTaskChildren: (parentId: string) => Promise<{ done: number; total: number }>;
   /** A Task's own direct sub-tasks (TaskStore.listChildren) — the identical "async function, page keys its own query" shape as `listTasksInProject` above, via query-keys.ts's `taskChildrenQueryKey`. */
   listTaskChildren: (parentId: string) => Promise<Task[]>;
   /**
@@ -676,6 +678,10 @@ export function useTasks(
     return taskStore.listChildren(parentId);
   }
 
+  function countTaskChildren(parentId: string): Promise<{ done: number; total: number }> {
+    return taskStore.countChildren(parentId);
+  }
+
   function listTasksInSection(sectionId: string): Promise<Task[]> {
     return taskStore.listInSection(sectionId);
   }
@@ -860,6 +866,7 @@ export function useTasks(
     setTaskDescription,
     listTasksInProject,
     listTaskChildren,
+    countTaskChildren,
     listTasksInSection,
     listTaskDescendants,
     advanceRecurringTask,

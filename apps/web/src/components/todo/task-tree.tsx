@@ -63,13 +63,15 @@
 import { MAX_TASK_NESTING_DEPTH, type Task } from "@meologue/core";
 import { useQuery } from "@tanstack/react-query";
 import type { PointerEvent } from "react";
-import { useRef, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import { toast } from "sonner";
 import { type TaskDetailActions, TaskRow } from "@/components/todo/task-row";
-import { taskChildrenQueryKey } from "@/lib/query-keys";
+import { useSwipeActions } from "@/hooks/use-swipe-actions";
+import { taskChildCountsQueryKey, taskChildrenQueryKey } from "@/lib/query-keys";
 import { refocusTaskHandle } from "@/lib/refocus-task-handle";
 import { dropIndexForPointer } from "@/lib/task-drag-recognizer";
 import { reorderedTaskOrderKey, siblingMoveDropIndex } from "@/lib/task-reorder";
+import { OPEN_SCHEDULE_EVENT } from "@/lib/todo-keymap";
 
 export interface TaskTreeProps {
   /** This sibling group, in (orderKey, id) order — TaskStore.listByProject/listChildren's own guarantee, whichever one supplied it. */
@@ -121,6 +123,8 @@ export interface TaskTreeProps {
   reorderTask: (id: string, orderKey: string) => void;
   setTaskParent: (id: string, parentId: string | null) => Promise<void>;
   listTaskChildren: (parentId: string) => Promise<Task[]>;
+  /** A Task's `done`/`total` sub-task counts (issue #298) — separate from `listTaskChildren` because that list excludes completed sub-tasks and so cannot supply either number once one is finished. */
+  countTaskChildren: (parentId: string) => Promise<{ done: number; total: number }>;
   listTasksInProject: (projectId: string | null) => Promise<Task[]>;
 }
 
@@ -153,6 +157,7 @@ export function TaskTree({
   reorderTask,
   setTaskParent,
   listTaskChildren,
+  countTaskChildren,
   listTasksInProject,
 }: TaskTreeProps) {
   // Drag state, scoped to this one sibling group — see this file's own
@@ -190,6 +195,41 @@ export function TaskTree({
   // (two Tasks sharing a parent are never one another's ancestor) — depth
   // is a property of *this level*, not of which two Tasks are involved.
   const canNest = depth < MAX_TASK_NESTING_DEPTH;
+
+  // Issue #303: swiping a row left opens its own `TaskSchedulePopover` —
+  // reusing `use-swipe-actions.ts`'s shared recogniser, the identical one
+  // `history.tsx`'s own bubbles use, rather than growing a second one.
+  //
+  // Attached only at `depth === 1` — this level's own top-level sibling
+  // group — even though every nested level below it renders through this
+  // same component and calls this same hook. `enabled` (not a conditional
+  // hook call, which the rules of Hooks forbid) is what actually decides
+  // that: every nested call still installs its own four listeners, all
+  // permanently inert. That's safe, not merely harmless, because a nested
+  // level's own `<ul>` renders *inside* its own row's `<li>` (issue #192 —
+  // this file's own header comment), which means it is already a DOM
+  // descendant of the depth-1 `<ul>` below. A pointerdown on a sub-task's
+  // own row therefore already bubbles up to the depth-1 container's own
+  // listener without this level needing an enabled recogniser of its own —
+  // and giving every level one instead would mean two enabled recognisers
+  // racing the identical pointer for a nested row (this file's own
+  // `swipe-to-schedule` test covers exactly that risk).
+  const openScheduleForSwipe = useCallback((target: HTMLElement) => {
+    const taskId = target.dataset.taskId;
+    if (taskId !== undefined) {
+      // The identical fan-in the `T` keyboard shortcut already uses
+      // (todo-keymap.ts's own `OPEN_SCHEDULE_EVENT` doc comment) — this
+      // tree has no direct reference to the swiped row's own `scheduleOpen`
+      // state (owned by `task-row.tsx`, several props away), so a
+      // document-level event is the one door onto it that doesn't mean
+      // threading a new callback through `TaskDetailActions`.
+      document.dispatchEvent(new CustomEvent(OPEN_SCHEDULE_EVENT, { detail: { taskId } }));
+    }
+  }, []);
+  const swipeRowsRef = useSwipeActions({
+    onOpen: openScheduleForSwipe,
+    enabled: depth === 1,
+  });
 
   function measureRows(excludeId: string): { ids: string[]; rects: DOMRect[] } {
     const container = listRef.current;
@@ -467,7 +507,13 @@ export function TaskTree({
   });
 
   return (
-    <ul ref={listRef} className="flex flex-col">
+    <ul
+      ref={(node) => {
+        listRef.current = node;
+        swipeRowsRef(node);
+      }}
+      className="flex flex-col"
+    >
       {rows.map((row) =>
         row.kind === "completed" ? (
           // ROW-14 (parity-ledger.md), the fix for this ticket's own
@@ -550,6 +596,7 @@ export function TaskTree({
             reorderTask={reorderTask}
             setTaskParent={setTaskParent}
             listTaskChildren={listTaskChildren}
+            countTaskChildren={countTaskChildren}
             listTasksInProject={listTasksInProject}
           />
         ),
@@ -596,6 +643,8 @@ interface TaskTreeRowProps {
   reorderTask: (id: string, orderKey: string) => void;
   setTaskParent: (id: string, parentId: string | null) => Promise<void>;
   listTaskChildren: (parentId: string) => Promise<Task[]>;
+  /** A Task's `done`/`total` sub-task counts (issue #298) — separate from `listTaskChildren` because that list excludes completed sub-tasks and so cannot supply either number once one is finished. */
+  countTaskChildren: (parentId: string) => Promise<{ done: number; total: number }>;
   listTasksInProject: (projectId: string | null) => Promise<Task[]>;
 }
 
@@ -631,6 +680,7 @@ function TaskTreeRow({
   reorderTask,
   setTaskParent,
   listTaskChildren,
+  countTaskChildren,
   listTasksInProject,
 }: TaskTreeRowProps) {
   // Sub-tasks keep their own order regardless of any sorting or grouping
@@ -643,6 +693,16 @@ function TaskTreeRow({
     queryFn: () => listTaskChildren(task.id),
   });
   const children = childrenQuery.data ?? [];
+  // Issue #298: the badge's two numbers, asked for separately because
+  // `childrenQuery` above excludes completed sub-tasks by definition and so
+  // can supply neither of them once any child is finished. One aggregate,
+  // under the same TASKS_QUERY_KEY prefix, so a Task write invalidates it
+  // alongside the list without bespoke wiring.
+  const childCountsQuery = useQuery({
+    queryKey: taskChildCountsQueryKey(task.id),
+    queryFn: () => countTaskChildren(task.id),
+  });
+  const childCounts = childCountsQuery.data ?? { done: 0, total: children.length };
 
   return (
     // No Fragment of `<TaskRow>` then a sibling `<TaskTree>` any more
@@ -660,11 +720,14 @@ function TaskTreeRow({
       task={task}
       detailActions={detailActions}
       commentCount={detailActions.commentCountFor(task.id)}
-      // Issue #224's own "must gain" list — this query already ran, just
-      // above, to decide whether to render a nested `TaskTree` at all
-      // (`children.length > 0` below), so the row's own badge reads the
-      // identical number rather than this component fetching it twice.
-      subtaskCount={children.length}
+      // Issue #298: `total`, not `children.length`. The list above is the
+      // *active* children — it decides whether to render a nested `TaskTree`
+      // at all — and a parent whose sub-tasks are all done has none, so
+      // reading the badge off it counted 0 for a Task that was in fact 2/2.
+      // Falls back to `children.length` until the count resolves, which is
+      // the old number and never larger than the true total.
+      subtaskCount={childCounts.total}
+      subtaskDone={childCounts.done}
       depth={depth}
       isDropTarget={isDropTarget}
       isNestTarget={isNestTarget}
@@ -702,6 +765,7 @@ function TaskTreeRow({
           reorderTask={reorderTask}
           setTaskParent={setTaskParent}
           listTaskChildren={listTaskChildren}
+          countTaskChildren={countTaskChildren}
           listTasksInProject={listTasksInProject}
         />
       )}

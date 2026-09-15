@@ -47,6 +47,7 @@ import { CalendarClock, CalendarX2, Copy, FolderInput, Pencil, Tag, Trash2 } fro
 import { DropdownMenu } from "radix-ui";
 import type * as React from "react";
 import { useRef } from "react";
+import { keyboardLikely } from "@/lib/pointer";
 import { priorityPickerColour } from "@/lib/task-priority-colors";
 import { hintForId } from "@/lib/todo-keymap";
 import { cn } from "@/lib/utils";
@@ -83,6 +84,17 @@ const itemClassName =
 function Hint({ id }: { id: string }) {
   const hint = hintForId(id);
   if (hint === null) {
+    return null;
+  }
+  // Issue #285: a legend for keys the reader has no way to press is worse
+  // than no legend — this menu rendered `⌘E` and `⌘⌫ or ⇧Delete`, Mac glyphs
+  // and all, on an Android phone. Withheld only on positive evidence of a
+  // touch-only device (`keyboardLikely`'s own comment), never on the absence
+  // of information, and read per render because a keyboard can arrive
+  // mid-session. The binding itself is untouched: nothing here changes what
+  // `use-todo-keymap.ts` matches, so a keyboard attached later still works
+  // and the hint comes back with it.
+  if (!keyboardLikely()) {
     return null;
   }
   return <span className="ml-auto text-muted-foreground text-xs">{hint}</span>;

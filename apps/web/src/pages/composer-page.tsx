@@ -13,6 +13,7 @@ import { commentsForTask } from "@/lib/comment-counts";
 import { localDayKey } from "@/lib/local-day-key";
 import type { ComposerPromotionContext } from "@/lib/promote-tasks";
 import { useSettingsStore, useSyncEnabled } from "@/lib/settings";
+import { taskDetailPath } from "@/lib/task-detail-route";
 import { commitTaskTitle } from "@/lib/task-title-commit";
 import { useTodoSurface } from "@/lib/todo-surface";
 import { useEntryStore } from "@/pages/entry-store-layout";
@@ -95,6 +96,12 @@ export function ComposerPage() {
     completeTask,
     uncompleteTask,
     advanceRecurringTask,
+    // Issue #302: the Task detail overlay's own overflow menu, wired below
+    // — `removeTask`/`completeForeverTask` were never reached from this
+    // page before now (this overlay's own overflow menu is the first door
+    // onto either surface Composer has ever had).
+    removeTask,
+    completeForeverTask,
     renameTask,
     setTaskDate,
     setTaskDeadline,
@@ -377,6 +384,39 @@ export function ComposerPage() {
     });
   }
 
+  // Issue #302: the Task detail overlay's own overflow menu now reaches
+  // this too — the comment this replaced ("this ticket adds no such
+  // gesture outside Todo") was true of #181's own scope, not a permanent
+  // rule; #302 is exactly the ticket that widens it, since the overlay
+  // below is the shared `TaskDetailView`, not a stripped-down copy of it.
+  // Wording matches `todo-page.tsx`'s own `handleCompleteForever` toast
+  // verbatim; the Undo action mirrors `handleCompleteTask`'s own pair just
+  // above rather than that file's own `raiseCompletionToast` machinery
+  // (`CompletionToastBody`/`pendingUndoRef`), which exists to let a second
+  // completion toast replace a still-open first one — a scenario this
+  // page's own simpler, one-toast-at-a-time surface has never needed to
+  // solve.
+  function handleCompleteForeverTask(task: Task) {
+    completeForeverTask(task.id);
+    toast("1 task completed — the recurrence has ended", {
+      action: { label: "Undo", onClick: () => uncompleteTask(task.id) },
+    });
+  }
+
+  // Issue #302: the Task detail overlay's own overflow menu — the
+  // identical clipboard write `todo-page.tsx`'s own `copyTaskLink` already
+  // performs (that function's own header comment), duplicated rather than
+  // shared because it is five lines of page-local glue around
+  // `window.location`/`navigator.clipboard`/`toast`, not a capability
+  // either page's own store exposes.
+  function copyTaskLink(task: Task) {
+    const url = `${window.location.origin}${taskDetailPath(task)}`;
+    navigator.clipboard?.writeText(url).then(
+      () => toast("Link copied"),
+      () => toast.error("Couldn't copy the link"),
+    );
+  }
+
   // Un-ticks an already-completed Task from the Day block — no
   // `dateString` branch, unlike `handleCompleteTask` above: a recurring
   // Task never carries a non-null `completedAt` from an ordinary tick
@@ -574,6 +614,9 @@ export function ComposerPage() {
           onRename={(content) => commitRename(openTask.id, content)}
           onComplete={() => handleCompleteTask(openTask)}
           onUncomplete={() => uncompleteTask(openTask.id)}
+          onCopyLink={() => copyTaskLink(openTask)}
+          onDelete={() => removeTask(openTask.id)}
+          onCompleteForever={() => handleCompleteForeverTask(openTask)}
           onOpenSchedule={() => setSchedulingOpen(true)}
           onSetDate={setTaskDate}
           onSetDateString={setTaskDateString}

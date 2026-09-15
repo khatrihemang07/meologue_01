@@ -44,6 +44,7 @@ import { LazyTaskTitleEditor } from "@/components/todo/lazy-task-title-editor";
 import { TaskCommandMenu } from "@/components/todo/task-command-menu";
 import type { TaskDetailActions } from "@/components/todo/task-row";
 import { TaskSchedulePopover } from "@/components/todo/task-schedule-popover";
+import { SWIPE_TARGET_ATTRIBUTE } from "@/hooks/use-swipe-actions";
 import { useTaskDateState } from "@/hooks/use-task-date-state";
 import { formatDay, formatTaskDate } from "@/lib/format-task-date";
 import { localDayKey } from "@/lib/local-day-key";
@@ -69,6 +70,8 @@ export interface TaskRowContentProps {
    * already has in hand.
    */
   subtaskCount: number;
+  /** How many of them are done (issue #298). See TaskRow's own prop doc for why this cannot come from the rendered children. */
+  subtaskDone: number;
   onComplete: () => void;
   onCompleteForever: () => void;
   /**
@@ -209,6 +212,7 @@ export function TaskRowContent({
   detailActions,
   commentCount,
   subtaskCount,
+  subtaskDone,
   onComplete,
   onCompleteForever,
   onUncomplete,
@@ -404,7 +408,34 @@ export function TaskRowContent({
   return (
     <div
       data-task-row-box
+      // Issue #303: this row's own swipe-to-schedule target — the identical
+      // door `entry-bubble.tsx` already opens onto `use-swipe-actions.ts`'s
+      // shared recogniser, not a second one. `data-task-id` here is a second
+      // copy of the identical attribute `task-row.tsx`'s own `<li>` already
+      // carries, not a competing identity: the swipe hook resolves "which
+      // Task" off whichever element carries `[data-swipe-target]`, which is
+      // this div, not the `<li>` around it, so this is the one place that
+      // needs the id in hand. `closest("[data-task-id]")` elsewhere in this
+      // app (`todo-keymap.ts`'s `focusedTaskId`) still resolves to the same
+      // value either way, since this div sits *inside* the `<li>` that also
+      // carries it.
+      {...{ [SWIPE_TARGET_ATTRIBUTE]: "", "data-task-id": task.id }}
       className={cn(
+        // `touch-pan-y` is not decoration — it is half of the contract the
+        // attribute above enters into, and `entry-bubble.tsx` carries the
+        // identical class for the identical reason (swipe-recognizer.ts:194
+        // names it outright). Left at the default `touch-action: auto`, the
+        // browser claims BOTH axes for panning, so a horizontal drag is
+        // handled by the compositor and the sequence ends in `pointercancel`
+        // before the recogniser's threshold is ever reached. `pan-y` keeps
+        // vertical scrolling with the browser and leaves the horizontal axis
+        // to `use-swipe-actions.ts`.
+        //
+        // Driven on the device 2026-09-15: without this the row reported
+        // `touch-action: auto` and no left swipe ever opened the scheduler,
+        // while every jsdom test stayed green — jsdom has no compositor, so
+        // it never cancels, and a unit test cannot observe this at all.
+        "touch-pan-y",
         "group flex items-center gap-2 rounded-lg border-t-2 border-t-transparent transition-colors",
         // ROW-02 (parity-ledger.md): a full-width divider, 0px inset —
         // living here rather than on the `<li>` around it because
@@ -782,9 +813,24 @@ export function TaskRowContent({
                 typed. */}
             {task.dateString !== null && <span>{task.dateString}</span>}
             {subtaskCount > 0 && (
+              // Issue #298: `done/total`, as Todoist's own badge reads.
+              // This used to render `listChildren(...).length` — the count
+              // of *active* children — so a parent whose sub-tasks were all
+              // finished counted 0 and the badge emptied as work got done,
+              // which is the opposite of the progress signal it looks like.
               <span className="flex items-center gap-0.5">
                 <ListTree aria-hidden="true" className="size-3" />
-                {subtaskCount}
+                {/* "0/2" read aloud is ambiguous, and a bare <span> takes no
+                    aria-label — so the glyphs are hidden and the sentence is
+                    the accessible name, the same split the date badge above
+                    already makes between a glyph for a glance and a literal
+                    reading for anyone who wants it spelled out. */}
+                <span aria-hidden="true">
+                  {subtaskDone}/{subtaskCount}
+                </span>
+                <span className="sr-only">
+                  {subtaskDone} of {subtaskCount} sub-tasks done
+                </span>
               </span>
             )}
             {commentCount > 0 && (

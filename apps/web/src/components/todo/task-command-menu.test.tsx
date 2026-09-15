@@ -108,6 +108,56 @@ function renderMenu(overrides: Partial<Parameters<typeof TaskCommandMenu>[0]> = 
   return props;
 }
 
+describe("keyboard hints on a touch-only device (issue #285)", () => {
+  /** Stubs the two queries `keyboardLikely()` reads, plus hover for everything else. */
+  function stubPointer({ coarse, hover }: { coarse: boolean; hover: boolean }) {
+    vi.stubGlobal(
+      "matchMedia",
+      vi.fn((query: string) => ({
+        matches:
+          (query === "(hover: hover)" && hover) ||
+          (query === "(pointer: coarse)" && coarse) ||
+          (query === "(hover: none)" && !hover),
+        media: query,
+        onchange: null,
+        addListener: vi.fn(),
+        removeListener: vi.fn(),
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+        dispatchEvent: vi.fn(),
+      })),
+    );
+  }
+
+  it("renders no chord legend on a phone", () => {
+    stubPointer({ coarse: true, hover: false });
+    renderMenu();
+
+    // The commands stay; only the legend for keys this reader cannot press
+    // goes. Todoist Android shows no such legend — and no row menu at all.
+    expect(screen.getByText("Edit")).toBeInTheDocument();
+    expect(screen.queryByText("\u2318E")).toBeNull();
+    expect(screen.queryByText(/\u2318\u232b|\u21e7Delete/)).toBeNull();
+  });
+
+  it("keeps the legend on a pointer device", () => {
+    stubPointer({ coarse: false, hover: true });
+    renderMenu();
+
+    expect(screen.getByText("\u2318E")).toBeInTheDocument();
+  });
+
+  it("keeps the legend when a coarse pointer still hovers", () => {
+    // The Tauri desktop window can report a coarse pointer for a trackpad —
+    // `task-row-content.tsx` documents the same trap. Coarse alone must not
+    // be read as "no keyboard".
+    stubPointer({ coarse: true, hover: true });
+    renderMenu();
+
+    expect(screen.getByText("\u2318E")).toBeInTheDocument();
+  });
+});
+
 describe("TaskCommandMenu", () => {
   it("Edit calls onOpenDetail", () => {
     const onOpenDetail = vi.fn();

@@ -150,6 +150,7 @@ function buildTaskReferenceContext(
     setTaskDescription: vi.fn(),
     listTasksInProject: vi.fn(async () => []),
     listTaskChildren: vi.fn(async () => []),
+    countTaskChildren: vi.fn(async () => ({ done: 0, total: 0 })),
     listTasksInSection: vi.fn(async () => []),
     listTaskDescendants: vi.fn(async () => []),
     advanceRecurringTask: vi.fn(),

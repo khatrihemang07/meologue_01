@@ -51,6 +51,7 @@ import { DatePickerSheet } from "@/components/date-picker-sheet";
 import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { formatDay } from "@/lib/format-task-date";
+import { priorityPickerColour } from "@/lib/task-priority-colors";
 
 export interface TaskScheduleSheetProps {
   /** The Task being scheduled, looked up fresh by id on every render of the caller — never a snapshot taken when the sheet opened, so a picker's own effect is visible the moment the next render lands. */
@@ -130,6 +131,19 @@ export function TaskScheduleSheet({
                   aria-pressed={ui === uiPriority}
                   onClick={() => onSetPriority(task.id, storedPriorityOf(ui))}
                 >
+                  {/* The same colour swatch `task-command-menu.tsx`'s own
+                      priority submenu already renders, from the identical
+                      `priorityPickerColour` — Todoist colours its priority
+                      options everywhere it offers them (red/orange/blue, P4
+                      unfilled), and this picker was the one place in meologue
+                      that rendered four identical text buttons. The tokens
+                      existed (`--td-priority-picker-1..4`, ADR 0069); this
+                      control simply never read them. */}
+                  <span
+                    aria-hidden="true"
+                    className="size-3 shrink-0 rounded-full"
+                    style={{ backgroundColor: priorityPickerColour(ui) }}
+                  />
                   {`P${ui}`}
                 </Button>
               ))}

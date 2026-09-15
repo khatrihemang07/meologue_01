@@ -91,6 +91,10 @@ function createFakeStore(): TaskStore {
       active.filter((t) => t.parentId === null && t.projectId === projectId),
     ),
     listChildren: vi.fn(async (parentId: string) => active.filter((t) => t.parentId === parentId)),
+    countChildren: vi.fn(async (parentId: string) => ({
+      done: 0,
+      total: active.filter((t) => t.parentId === parentId).length,
+    })),
     listInSection: vi.fn(async (sectionId: string) =>
       [...active, ...completed].filter((t) => t.sectionId === sectionId),
     ),

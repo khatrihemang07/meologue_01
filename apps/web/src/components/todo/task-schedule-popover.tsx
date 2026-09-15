@@ -41,6 +41,7 @@ import { addDays, format, nextMonday, nextSaturday } from "date-fns";
 import {
   CalendarDays,
   CalendarRange,
+  Check,
   CircleSlash,
   Clock,
   Repeat,
@@ -53,6 +54,8 @@ import { useEffect, useId, useRef, useState } from "react";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Calendar } from "@/components/ui/calendar";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Sheet, SheetContent, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
+import { useWideLayout } from "@/hooks/use-wide-layout";
 import { localDayKey, parseDayKey } from "@/lib/local-day-key";
 import { resolveRecurrencePhrase } from "@/lib/quick-add-task";
 import { cn } from "@/lib/utils";
@@ -217,6 +220,11 @@ export function TaskSchedulePopover({
   open: openProp,
   onOpenChange,
 }: TaskSchedulePopoverProps) {
+  // Which shell this renders in — see the branch near the bottom of the
+  // component. The identical 900px split `todo-nav.tsx` and
+  // `task-detail-view.tsx` already make, rather than a second breakpoint of
+  // this component's own.
+  const wide = useWideLayout();
   const [internalOpen, setInternalOpen] = useState(false);
   // Controlled iff a caller passed `open` at all — checked once via the
   // prop's presence, not compared against a sentinel, so a caller that
@@ -314,13 +322,22 @@ export function TaskSchedulePopover({
   // SCHED-14's five named cadences, each resolved through the identical
   // `firstOccurrence` the typed input already uses — not reconstructed by
   // hand from `dateDay`/`now`. That distinction is load-bearing, not
-  // stylistic: `../../packages/core/src/recurrence/recurrence.ts`'s own
-  // header comment records that a bare "every day" is
-  // completion-anchored to `now` regardless of `dateDay`, while "every
-  // month"/"every year" anchor to `dateDay` when one exists — two
-  // different rules a hand-written label would have to reimplement (and
-  // could drift from) to describe correctly. Reading each option's own
+  // stylistic: every phrase's anchor is now `bang ? "completion" : "due"`
+  // (issue #291, commit 6968bf4), so an unbanged rule resolves against
+  // `dateDay` when the Task has one and against `now` when it does not —
+  // and a hand-written label would have to reimplement that (and could
+  // drift from it) to describe correctly. Reading each option's own
   // weekday/day-of-month/month-and-day off its own real outcome can't.
+  //
+  // This comment used to say bare "every day" was completion-anchored
+  // regardless of `dateDay`, which was true and deliberate — issue #170
+  // stated it twice as an acceptance criterion — until #291 removed the
+  // carve-out. Driven evidence overturned it: Todoist Android advances a
+  // postponed daily Task to `max(due, today) + 1`, six days from where
+  // completion-anchoring lands it (parity-ledger-android.md AREC-01), and
+  // Todoist web agrees. The two rules are indistinguishable for a Task
+  // completed on time, which is presumably why the documentation the
+  // criterion came from reads the way it does.
   const repeatAnchor = parseDayKey(dateDay) ?? now;
   const repeatCandidates: ReadonlyArray<{
     key: string;
@@ -329,9 +346,13 @@ export function TaskSchedulePopover({
   }> = [
     { key: "day", phrase: "every day", label: () => "Every day" },
     {
-      // A named weekday, not a bare "every week". The engine anchors bare
-      // "every week" to completion, so a task finished late would drift off
-      // the weekday this label promises; "every sunday" stays on Sundays.
+      // A named weekday, not a bare "every week". Since #291 the engine
+      // anchors an unbanged rule to the due date, so bare "every week" no
+      // longer drifts off its weekday the way this comment used to warn —
+      // but a named weekday is still the honest label, because it says on
+      // the tin which day it keeps rather than leaving a reader to derive
+      // it from the anchor rule. `every! week` remains explicitly
+      // completion-anchored and would still drift.
       // The weekday is the task's own date's, or today's for an undated
       // task, as in Todoist's "Every week on Saturday" read on Sat 12 Sep.
       key: "week",
@@ -385,15 +406,52 @@ export function TaskSchedulePopover({
       },
     ];
   });
-  // Mirrors scheduler-and-priority.md §7's own captured behaviour: "the
-  // Repeat button disappears from the panel and is replaced by the
-  // resolved preview" once a recurrence is active. Here that's already
-  // true by construction — `typed` is seeded from `dateString` on every
-  // open (this file's own header comment), so an existing Recurrence
-  // already renders as the preview button above; this just hides the
-  // Repeat entry point while that's showing, rather than offering two
-  // controls that both claim to set the same thing at once.
-  const showRepeatControl = preview === null || preview.dateString === null;
+  // Whether this Task already carries a Recurrence. Issue #293: Todoist
+  // does not hide its Repeat entry once one is set — it *replaces* it with a
+  // two-part control, a button carrying the rule's own name beside a
+  // separate `Clear recurrence` button (finding
+  // `C-already-recurring-scheduler-state`, driven 2026-09-14).
+  const activeRecurrence = dateString;
+  // "What the user typed is what is stored" (CONTEXT.md, Recurrence), so the
+  // button carries the stored phrase rather than a re-derived description of
+  // it — capitalised only, which is what turns the stored `every day` into
+  // Todoist's own displayed `Every day`.
+  const recurrenceLabel =
+    activeRecurrence === null
+      ? null
+      : activeRecurrence.charAt(0).toUpperCase() + activeRecurrence.slice(1);
+
+  // The original gate here hid the Repeat control whenever a recurrence
+  // preview was showing, to avoid two controls claiming to set the same
+  // thing. But `typed` is seeded from `dateString` on every open, so that
+  // also hid it for a Task that was *already* recurring — leaving no way to
+  // change or clear the rule except by editing the typed text, and no way at
+  // all to stop a Task repeating while keeping its date (`No Date` takes the
+  // date with it).
+  //
+  // Narrowed: hide it only while the user is typing a recurrence that is not
+  // the one already stored. Then the preview button above is genuinely the
+  // thing that commits, and the original concern still holds.
+  const typingNewRecurrence =
+    preview !== null && preview.dateString !== null && preview.dateString !== activeRecurrence;
+  const showRepeatControl = !typingNewRecurrence;
+
+  /**
+   * Drops the Recurrence and keeps the day — issue #293's load-bearing
+   * distinction, exercised functionally on Todoist rather than merely
+   * observed: the control reverted to a plain `Repeat` and the Task's due
+   * date was unchanged.
+   *
+   * Needs no new prop. `onPickDay` already "commits a plain, non-recurring
+   * date and clears any Recurrence the Task already had" (this file's own
+   * header comment), so handing it the day the Task is already on clears the
+   * rule and moves nothing.
+   */
+  const clearRecurrenceKeepingDate = () => {
+    setTyped("");
+    onPickDay(dateDay);
+    setOpen(false);
+  };
 
   const tomorrow = addDays(now, 1);
   const nextWeek = nextMonday(now);
@@ -456,204 +514,179 @@ export function TaskSchedulePopover({
         option.day !== dateDay && all.findIndex((other) => other.day === option.day) === index,
     );
 
-  return (
-    <Popover open={open} onOpenChange={setOpen}>
-      <PopoverTrigger asChild>{trigger}</PopoverTrigger>
-      <PopoverContent
-        data-testid="scheduler-view"
-        // Radix's `Popover.Portal` renders to `document.body` by default —
-        // a sibling of `chat-shell-layout.tsx`'s own `data-surface="todo"`
-        // div, not a descendant of it, so every `--td-*` token (and the
-        // overridden `--muted`/`--border`/etc. base ones) this component
-        // reads would otherwise resolve to nothing: found live, in a real
-        // browser, as an entirely unstyled card (no background, no
-        // border, no radius, no shadow) sitting at the viewport's origin
-        // — none of it visible from a jsdom test, which never lays
-        // anything out or portals anywhere real. Re-declaring the
-        // attribute here re-establishes the scope directly on the
-        // portaled node itself, which is all index.css's attribute
-        // selector ever required in the first place.
-        data-surface="todo"
-        className="flex flex-col gap-2 p-2 text-sm"
-        style={{
-          width: "var(--td-popover-width)",
-          minHeight: "var(--td-popover-min-height)",
-          borderRadius: "var(--td-popover-radius)",
-          background: "var(--td-popover-background)",
-          border: "1px solid var(--td-popover-border)",
-          boxShadow: "var(--td-popover-shadow)",
-        }}
-        // See `ignoreOutsideWhileTimeDialogOpen`'s own comment above —
-        // both handlers get the guard since either one alone stopping the
-        // eventual dismiss is enough, and a pointer-down and a focus
-        // change don't always arrive in the same order.
-        onFocusOutside={ignoreOutsideWhileTimeDialogOpen}
-        onPointerDownOutside={ignoreOutsideWhileTimeDialogOpen}
-      >
-        <div className="relative">
-          <label htmlFor={inputId} className="sr-only">
-            Type a date
-          </label>
-          <input
-            ref={typedInputRef}
-            id={inputId}
-            type="text"
-            placeholder="Type a date"
-            maxLength={150}
-            value={typed}
-            onChange={(event) => setTyped(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === "Enter") {
-                event.preventDefault();
-                commitPreview();
-              }
-            }}
-            className="w-full rounded-md border border-border bg-background px-2 py-1 pr-7 text-sm outline-none focus-visible:ring-1 focus-visible:ring-ring"
-          />
-          {typed !== "" && (
-            <button
-              type="button"
-              aria-label="Clear"
-              onClick={() => setTyped("")}
-              className="-translate-y-1/2 absolute top-1/2 right-1.5 rounded-sm p-0.5 text-muted-foreground hover:text-foreground"
-            >
-              <X className="size-3.5" />
-            </button>
-          )}
-        </div>
-
-        {preview !== null && (
-          <button
-            type="button"
-            data-testid="scheduler-date-preview"
-            onClick={commitPreview}
-            className="flex flex-col items-start gap-0.5 rounded-md border border-border px-2 py-1.5 text-left hover:bg-accent"
-          >
-            <span className="flex items-center gap-1.5 font-medium">
-              {preview.dateString !== null ? (
-                <Repeat className="size-3.5" />
-              ) : (
-                <CalendarDays className="size-3.5" />
-              )}
-              {format(parseDayKey(preview.day) ?? now, "EEE d MMM")}
-              {preview.dateString !== null && (
-                <span className="text-muted-foreground">
-                  → {preview.forever ? "Forever" : "Ends"}
-                </span>
-              )}
-            </span>
-            <span className="text-muted-foreground text-xs">
-              {(() => {
-                const count = datesWithTasks.get(preview.day) ?? 0;
-                return count === 0 ? "No tasks" : `${count} task${count === 1 ? "" : "s"}`;
-              })()}
-            </span>
-          </button>
-        )}
-
-        <div className="flex flex-col">
-          {quickOptionDefs.map((option) => (
-            <QuickOption
-              key={option.key}
-              icon={option.icon}
-              label={option.label}
-              hint={option.hint}
-              onClick={() => commitDay(option.day)}
-            />
-          ))}
-          {/* SCHED-03: only offered once a date already exists. */}
-          {dateDay !== null && (
-            <QuickOption
-              icon={CircleSlash}
-              label="No Date"
-              hint={null}
-              onClick={() => commitDay(null)}
-            />
-          )}
-        </div>
-
-        <Calendar
-          mode="single"
-          weekStartsOn={1}
-          // `today` follows this component's own injected `now`, not
-          // react-day-picker's reading of the system clock. Everything else
-          // here already derives from `now` — SCHED-02's Today/Tomorrow
-          // hints, the preview line above — so leaving DayPicker on its own
-          // clock let the calendar's "today" cell disagree with every other
-          // date in the same popover. It also made SCHED-07's own test pass
-          // on exactly one day in history: it asserts `data-today="true"` on
-          // 2026-09-10, the reference capture instant, through an attribute
-          // DayPicker derived from the real date, so the suite went red the
-          // morning after and would have stayed red for good.
-          today={now}
-          // SCHED-06's own captured header reads "M T W T F S S" — a
-          // single letter per weekday — where react-day-picker's own
-          // default formatter ("cccccc", date-fns's 2-letter standalone
-          // form) renders "Mo Tu We Th Fr Sa Su" instead. Overridden here
-          // rather than left at the default, which this ticket's own
-          // reference measurement would otherwise silently diverge from.
-          formatters={{ formatWeekdayName: (day) => format(day, "EEEEE") }}
-          month={month}
-          onMonthChange={setMonth}
-          selected={parseDayKey(dateDay)}
-          onSelect={(day) => {
-            if (day !== undefined) {
-              commitDay(localDayKey(day));
+  // One body, two shells. Everything below renders identically whichever
+  // shell wraps it, so the anchored and bottom-sheet variants cannot drift
+  // apart the way two copies of this tree would.
+  // The scheduler's own fields, shared verbatim by both shells. Extracted
+  // when the narrow variant landed (issue #282) so the anchored and
+  // bottom-sheet forms render one tree rather than two copies that could
+  // drift apart.
+  const scheduleFields = (
+    <>
+      <div className="relative">
+        <label htmlFor={inputId} className="sr-only">
+          Type a date
+        </label>
+        <input
+          ref={typedInputRef}
+          id={inputId}
+          type="text"
+          placeholder="Type a date"
+          maxLength={150}
+          value={typed}
+          onChange={(event) => setTyped(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") {
+              event.preventDefault();
+              commitPreview();
             }
           }}
-          modifiers={{
-            weekend: (day) => day.getDay() === 0 || day.getDay() === 6,
-            busy: (day) => datesWithTasks.has(localDayKey(day)),
-          }}
-          modifiersClassNames={{
-            // SCHED-10: dimmed independently of today/busy — `--muted-
-            // foreground` already resolves to the measured rgb(204,204,204)
-            // under this surface's dark theme (index.css's own `.dark
-            // [data-surface="todo"]` block), so this reuses that token
-            // rather than adding a second literal for the identical colour.
-            weekend: "[&>button]:text-muted-foreground",
-            // SCHED-09: a 3×3px dot drawn with `::before`, no extra DOM
-            // node — the `day` cell below is already `position: relative`
-            // (Calendar's own base `day` classNames), which is what lets
-            // this dot position against the cell rather than the page.
-            busy: "before:absolute before:bottom-0.5 before:left-1/2 before:size-[3px] before:-translate-x-1/2 before:rounded-full before:bg-[color:var(--td-calendar-busy-dot)] before:content-['']",
-          }}
-          classNames={{
-            // SCHED-07: bold + coloured text ONLY — deliberately no
-            // background/ring. react-day-picker v10 sets no `aria-current`
-            // of its own (verified against its own DayButton/DayPicker
-            // source before this was written) so there's nothing to
-            // suppress here beyond not adding a visual ring — do not
-            // "fix" this back in.
-            //
-            // The trailing `!` (Tailwind v4's important modifier) is load-
-            // bearing, not decoration: on a weekend, this same cell also
-            // carries `modifiersClassNames.weekend`'s
-            // `[&>button]:text-muted-foreground` below, and both compile to
-            // an equal-specificity `.<modifier> > button { color: … }` rule
-            // — which one wins is decided by Tailwind's generated-CSS
-            // source order, not by the order these two class strings are
-            // concatenated onto the cell's `class` attribute, so reordering
-            // the JSX alone would not have been a real fix. Without `!`,
-            // today-on-a-weekend rendered grey instead of today-red
-            // (SCHED-07); `!important` here forces today's colour to win
-            // regardless of stylesheet order, without touching index.css or
-            // any `--td-*` token.
-            today: "[&>button]:font-bold [&>button]:text-[color:var(--td-calendar-today)]!",
-            // SCHED-08: a 24px filled circle — `size-6` (Tailwind's 24px)
-            // plus `rounded-full` on a square box is exactly a 12px
-            // corner radius, the measured figure, not merely "looks round."
-            selected:
-              "[&>button]:bg-[color:var(--td-calendar-selected)] [&>button]:text-white [&>button]:font-bold [&>button]:hover:bg-[color:var(--td-calendar-selected)]",
-            day_button: cn(
-              buttonVariants({ variant: "ghost" }),
-              "size-6 w-6 rounded-full p-0 font-normal aria-selected:opacity-100",
-            ),
-          }}
-          className="mx-auto"
+          className="w-full rounded-md border border-border bg-background px-2 py-1 pr-7 text-sm outline-none focus-visible:ring-1 focus-visible:ring-ring"
         />
+        {typed !== "" && (
+          <button
+            type="button"
+            aria-label="Clear"
+            onClick={() => setTyped("")}
+            className="-translate-y-1/2 absolute top-1/2 right-1.5 rounded-sm p-0.5 text-muted-foreground hover:text-foreground"
+          >
+            <X className="size-3.5" />
+          </button>
+        )}
+      </div>
 
-        {/*
+      {preview !== null && (
+        <button
+          type="button"
+          data-testid="scheduler-date-preview"
+          onClick={commitPreview}
+          className="flex flex-col items-start gap-0.5 rounded-md border border-border px-2 py-1.5 text-left hover:bg-accent"
+        >
+          <span className="flex items-center gap-1.5 font-medium">
+            {preview.dateString !== null ? (
+              <Repeat className="size-3.5" />
+            ) : (
+              <CalendarDays className="size-3.5" />
+            )}
+            {format(parseDayKey(preview.day) ?? now, "EEE d MMM")}
+            {preview.dateString !== null && (
+              <span className="text-muted-foreground">
+                → {preview.forever ? "Forever" : "Ends"}
+              </span>
+            )}
+          </span>
+          <span className="text-muted-foreground text-xs">
+            {(() => {
+              const count = datesWithTasks.get(preview.day) ?? 0;
+              return count === 0 ? "No tasks" : `${count} task${count === 1 ? "" : "s"}`;
+            })()}
+          </span>
+        </button>
+      )}
+
+      <div className="flex flex-col">
+        {quickOptionDefs.map((option) => (
+          <QuickOption
+            key={option.key}
+            icon={option.icon}
+            label={option.label}
+            hint={option.hint}
+            onClick={() => commitDay(option.day)}
+          />
+        ))}
+        {/* SCHED-03: only offered once a date already exists. */}
+        {dateDay !== null && (
+          <QuickOption
+            icon={CircleSlash}
+            label="No Date"
+            hint={null}
+            onClick={() => commitDay(null)}
+          />
+        )}
+      </div>
+
+      <Calendar
+        mode="single"
+        weekStartsOn={1}
+        // `today` follows this component's own injected `now`, not
+        // react-day-picker's reading of the system clock. Everything else
+        // here already derives from `now` — SCHED-02's Today/Tomorrow
+        // hints, the preview line above — so leaving DayPicker on its own
+        // clock let the calendar's "today" cell disagree with every other
+        // date in the same popover. It also made SCHED-07's own test pass
+        // on exactly one day in history: it asserts `data-today="true"` on
+        // 2026-09-10, the reference capture instant, through an attribute
+        // DayPicker derived from the real date, so the suite went red the
+        // morning after and would have stayed red for good.
+        today={now}
+        // SCHED-06's own captured header reads "M T W T F S S" — a
+        // single letter per weekday — where react-day-picker's own
+        // default formatter ("cccccc", date-fns's 2-letter standalone
+        // form) renders "Mo Tu We Th Fr Sa Su" instead. Overridden here
+        // rather than left at the default, which this ticket's own
+        // reference measurement would otherwise silently diverge from.
+        formatters={{ formatWeekdayName: (day) => format(day, "EEEEE") }}
+        month={month}
+        onMonthChange={setMonth}
+        selected={parseDayKey(dateDay)}
+        onSelect={(day) => {
+          if (day !== undefined) {
+            commitDay(localDayKey(day));
+          }
+        }}
+        modifiers={{
+          weekend: (day) => day.getDay() === 0 || day.getDay() === 6,
+          busy: (day) => datesWithTasks.has(localDayKey(day)),
+        }}
+        modifiersClassNames={{
+          // SCHED-10: dimmed independently of today/busy — `--muted-
+          // foreground` already resolves to the measured rgb(204,204,204)
+          // under this surface's dark theme (index.css's own `.dark
+          // [data-surface="todo"]` block), so this reuses that token
+          // rather than adding a second literal for the identical colour.
+          weekend: "[&>button]:text-muted-foreground",
+          // SCHED-09: a 3×3px dot drawn with `::before`, no extra DOM
+          // node — the `day` cell below is already `position: relative`
+          // (Calendar's own base `day` classNames), which is what lets
+          // this dot position against the cell rather than the page.
+          busy: "before:absolute before:bottom-0.5 before:left-1/2 before:size-[3px] before:-translate-x-1/2 before:rounded-full before:bg-[color:var(--td-calendar-busy-dot)] before:content-['']",
+        }}
+        classNames={{
+          // SCHED-07: bold + coloured text ONLY — deliberately no
+          // background/ring. react-day-picker v10 sets no `aria-current`
+          // of its own (verified against its own DayButton/DayPicker
+          // source before this was written) so there's nothing to
+          // suppress here beyond not adding a visual ring — do not
+          // "fix" this back in.
+          //
+          // The trailing `!` (Tailwind v4's important modifier) is load-
+          // bearing, not decoration: on a weekend, this same cell also
+          // carries `modifiersClassNames.weekend`'s
+          // `[&>button]:text-muted-foreground` below, and both compile to
+          // an equal-specificity `.<modifier> > button { color: … }` rule
+          // — which one wins is decided by Tailwind's generated-CSS
+          // source order, not by the order these two class strings are
+          // concatenated onto the cell's `class` attribute, so reordering
+          // the JSX alone would not have been a real fix. Without `!`,
+          // today-on-a-weekend rendered grey instead of today-red
+          // (SCHED-07); `!important` here forces today's colour to win
+          // regardless of stylesheet order, without touching index.css or
+          // any `--td-*` token.
+          today: "[&>button]:font-bold [&>button]:text-[color:var(--td-calendar-today)]!",
+          // SCHED-08: a 24px filled circle — `size-6` (Tailwind's 24px)
+          // plus `rounded-full` on a square box is exactly a 12px
+          // corner radius, the measured figure, not merely "looks round."
+          selected:
+            "[&>button]:bg-[color:var(--td-calendar-selected)] [&>button]:text-white [&>button]:font-bold [&>button]:hover:bg-[color:var(--td-calendar-selected)]",
+          day_button: cn(
+            buttonVariants({ variant: "ghost" }),
+            "size-6 w-6 rounded-full p-0 font-normal aria-selected:opacity-100",
+          ),
+        }}
+        className="mx-auto"
+      />
+
+      {/*
           Todoist's own bottom row (pass2-2026-09-11.md §5: "A Time button
           and a Repeat button sit at the bottom, below the calendar" —
           Time first, Repeat second, exactly this row's own order). The
@@ -664,25 +697,25 @@ export function TaskSchedulePopover({
           that same checkbox and input relocated inside it verbatim (see
           that file's own header comment).
         */}
-        <div className="flex items-center gap-2">
-          {/*
+      <div className="flex items-center gap-2">
+        {/*
             Gated on `dateDay !== null` for the identical reason the
             former inline checkbox was: there is no time-of-day to attach
             to an unset date.
           */}
-          {dateDay !== null && (
-            <Button
-              type="button"
-              variant="ghost"
-              onClick={() => setTimeDialogOpen(true)}
-              className="h-8 w-fit justify-start gap-2 px-2 font-normal text-muted-foreground"
-            >
-              <Clock className="size-4" />
-              Time
-            </Button>
-          )}
+        {dateDay !== null && (
+          <Button
+            type="button"
+            variant="ghost"
+            onClick={() => setTimeDialogOpen(true)}
+            className="h-8 w-fit justify-start gap-2 px-2 font-normal text-muted-foreground"
+          >
+            <Clock className="size-4" />
+            Time
+          </Button>
+        )}
 
-          {/*
+        {/*
             Todoist's own Repeat control (issue #227, SCHED-14 — never
             previously built here). Unlike Time (gated on
             `dateDay !== null`), this is never gated: a recurrence's own
@@ -690,16 +723,21 @@ export function TaskSchedulePopover({
             SCHED-04's typed input already does, so there is no missing
             precondition here the way there is for a time-of-day.
           */}
-          {showRepeatControl && (
+        {showRepeatControl && (
+          <div className="flex w-fit items-center gap-0.5">
             <DropdownMenu.Root>
               <DropdownMenu.Trigger asChild>
                 <Button
                   type="button"
                   variant="ghost"
+                  // Issue #293: once a rule is set the trigger carries the
+                  // rule's own name, and the menu it opens is named for the
+                  // rule rather than for "Repeat" — both driven on Todoist.
+                  aria-label={recurrenceLabel ?? "Repeat"}
                   className="h-8 w-fit justify-start gap-2 px-2 font-normal text-muted-foreground"
                 >
                   <Repeat className="size-4" />
-                  Repeat
+                  {recurrenceLabel ?? "Repeat"}
                 </Button>
               </DropdownMenu.Trigger>
               <DropdownMenu.Portal>
@@ -762,10 +800,20 @@ export function TaskSchedulePopover({
                   {repeatOptions.map((option) => (
                     <DropdownMenu.Item
                       key={option.key}
-                      className={repeatItemClassName}
+                      className={cn(repeatItemClassName, "justify-between")}
                       onSelect={() => commitRepeatPhrase(option.phrase, option.day)}
                     >
                       {option.label}
+                      {/*
+                        Issue #293: the active rule carries a check that the
+                        plain Repeat menu's items do not. Compared against the
+                        stored phrase rather than the rendered label, since
+                        the label is re-derived per open and the phrase is
+                        what the Task actually holds.
+                      */}
+                      {option.phrase === activeRecurrence && (
+                        <Check aria-hidden="true" className="size-3.5" />
+                      )}
                     </DropdownMenu.Item>
                   ))}
                   {/*
@@ -785,11 +833,130 @@ export function TaskSchedulePopover({
                   >
                     Custom…
                   </DropdownMenu.Item>
+                  {/*
+                    Issue #293's seventh item, present only once a rule is
+                    set. Removal has two doors in Todoist — this and the
+                    standalone button beside the trigger — and both leave the
+                    date alone.
+                  */}
+                  {activeRecurrence !== null && (
+                    <DropdownMenu.Item
+                      className={repeatItemClassName}
+                      onSelect={clearRecurrenceKeepingDate}
+                    >
+                      Clear
+                    </DropdownMenu.Item>
+                  )}
                 </DropdownMenu.Content>
               </DropdownMenu.Portal>
             </DropdownMenu.Root>
-          )}
-        </div>
+            {/*
+                The standalone half of the two-part control. `Clear
+                recurrence` is deliberately NOT `No Date`: it drops the rule
+                and keeps the day, which is the distinction meologue had no
+                way to express at all before this — `No Date` takes the date
+                with it.
+              */}
+            {activeRecurrence !== null && (
+              <Button
+                type="button"
+                variant="ghost"
+                aria-label="Clear recurrence"
+                onClick={clearRecurrenceKeepingDate}
+                className="size-8 shrink-0 text-muted-foreground"
+              >
+                <X className="size-4" />
+              </Button>
+            )}
+          </div>
+        )}
+      </div>
+    </>
+  );
+
+  // Anchored popover at wide widths, bottom sheet below — the same
+  // `useWideLayout()` split `todo-nav.tsx` and `task-detail-view.tsx` already
+  // make, and for the same reason. Issue #253 moved Date off
+  // `TaskScheduleSheet` onto this component on every surface, and this
+  // component had no narrow variant, so on a 426px Android viewport the Date
+  // picker rendered as a 250px (`--td-popover-width`) card pinned to the
+  // viewport's top-left with its own input clipped under the status bar —
+  // measured on device, issue #282. Deadline and Priority, which still open
+  // `TaskScheduleSheet`, were a correct bottom sheet on the same row in the
+  // same session, so the app was inconsistent with itself.
+  //
+  // The sheet is also what Todoist *Android* does: its Date picker is a
+  // full-width bottom sheet with a drag handle and a `Date` title, where
+  // Todoist web's is the anchored popover this file was built from. Parity is
+  // per platform (ratified 2026-09-14), so both shells are correct — each for
+  // its own reference.
+  if (!wide) {
+    return (
+      <>
+        <Sheet open={open} onOpenChange={setOpen}>
+          <SheetTrigger asChild>{trigger}</SheetTrigger>
+          <SheetContent
+            data-testid="scheduler-view"
+            // Same reason as the popover's own copy below: this content is
+            // portalled to `document.body`, outside `chat-shell-layout.tsx`'s
+            // `data-surface="todo"` div, so without re-declaring it here every
+            // `--td-*` token resolves to nothing.
+            data-surface="todo"
+            className="gap-2 p-3 text-sm"
+          >
+            {/* Radix's Dialog wants a title, and Todoist Android's own Date
+                sheet has a visible one — so this is an accessibility
+                requirement and a parity row satisfied by the same element. */}
+            <SheetTitle className="px-1 pb-1 font-medium text-base">Date</SheetTitle>
+            {scheduleFields}
+          </SheetContent>
+        </Sheet>
+        <TaskTimeDialog
+          open={timeDialogOpen}
+          onOpenChange={setTimeDialogOpen}
+          time={dateTime}
+          onSave={onSetTime}
+          onEscape={() => setOpen(false)}
+        />
+      </>
+    );
+  }
+
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>{trigger}</PopoverTrigger>
+      <PopoverContent
+        data-testid="scheduler-view"
+        // Radix's `Popover.Portal` renders to `document.body` by default —
+        // a sibling of `chat-shell-layout.tsx`'s own `data-surface="todo"`
+        // div, not a descendant of it, so every `--td-*` token (and the
+        // overridden `--muted`/`--border`/etc. base ones) this component
+        // reads would otherwise resolve to nothing: found live, in a real
+        // browser, as an entirely unstyled card (no background, no
+        // border, no radius, no shadow) sitting at the viewport's origin
+        // — none of it visible from a jsdom test, which never lays
+        // anything out or portals anywhere real. Re-declaring the
+        // attribute here re-establishes the scope directly on the
+        // portaled node itself, which is all index.css's attribute
+        // selector ever required in the first place.
+        data-surface="todo"
+        className="flex flex-col gap-2 p-2 text-sm"
+        style={{
+          width: "var(--td-popover-width)",
+          minHeight: "var(--td-popover-min-height)",
+          borderRadius: "var(--td-popover-radius)",
+          background: "var(--td-popover-background)",
+          border: "1px solid var(--td-popover-border)",
+          boxShadow: "var(--td-popover-shadow)",
+        }}
+        // See `ignoreOutsideWhileTimeDialogOpen`'s own comment above —
+        // both handlers get the guard since either one alone stopping the
+        // eventual dismiss is enough, and a pointer-down and a focus
+        // change don't always arrive in the same order.
+        onFocusOutside={ignoreOutsideWhileTimeDialogOpen}
+        onPointerDownOutside={ignoreOutsideWhileTimeDialogOpen}
+      >
+        {scheduleFields}
       </PopoverContent>
       <TaskTimeDialog
         open={timeDialogOpen}

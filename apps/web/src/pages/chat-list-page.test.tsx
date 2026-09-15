@@ -134,6 +134,7 @@ function fakeTaskStore(tasks: Task[] = []): TaskStore {
     list: vi.fn(async () => tasks),
     listByProject: vi.fn(async () => []),
     listChildren: vi.fn(async () => []),
+    countChildren: vi.fn(async () => ({ done: 0, total: 0 })),
     listInSection: vi.fn(async () => []),
     listDescendants: vi.fn(async () => []),
     listCompleted: vi.fn(async () => []),

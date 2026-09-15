@@ -86,6 +86,26 @@ export interface TaskStore {
    */
   listChildren(parentId: string): Promise<Task[]>;
   /**
+   * How many direct sub-tasks `parentId` has, and how many of those are
+   * done — the two numbers a `done/total` progress badge needs (issue #298).
+   *
+   * Deliberately NOT a flag on listChildren() above. That query's
+   * `completedAt IS NULL` is its definition, not an incidental filter, and
+   * its other caller depends on that meaning to decide whether to render a
+   * nested sub-tree at all. A flag would make one query answer two questions
+   * and force every caller to know which it wanted, which is the confusion
+   * this method exists to end: the row badge previously read
+   * `listChildren(...).length`, so a parent with two finished sub-tasks
+   * counted `0` rather than `2/2` — the badge emptied as work got done.
+   *
+   * `total` counts **completed and active children alike, tombstones
+   * excluded**. The two exclusions listChildren() applies are not the same
+   * kind of thing: a completed sub-task still exists and belongs in `2/2`,
+   * a deleted one does not exist at all. Folding both into "not active"
+   * would report `1/1` where Todoist reports `2/2`.
+   */
+  countChildren(parentId: string): Promise<{ done: number; total: number }>;
+  /**
    * Active and completed Tasks (tombstones excluded) directly filed in
    * Section `sectionId` — a Section's own top-level members, before
    * ../project-store.ts's deleteSection/archiveSection walk each one's

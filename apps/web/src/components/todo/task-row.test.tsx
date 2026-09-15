@@ -1174,10 +1174,23 @@ describe("TaskRow", () => {
       expect(screen.queryByText("3")).not.toBeInTheDocument();
     });
 
-    it("shows the sub-task count, icon plus number, once there are sub-tasks", () => {
-      renderRow({ task: task({ content: "call mum" }), subtaskCount: 3 });
+    it("shows sub-task progress as done/total, once there are sub-tasks", () => {
+      // Issue #298 changed this from a bare number. It read
+      // `listChildren(...).length` — the *active* children — so a parent
+      // whose sub-tasks were all finished counted 0 and the badge emptied as
+      // work got done. `subtaskCount` is now the total and `subtaskDone` the
+      // finished half; this assertion changed deliberately rather than being
+      // relaxed to keep passing.
+      renderRow({ task: task({ content: "call mum" }), subtaskCount: 3, subtaskDone: 1 });
 
-      expect(screen.getByText("3")).toBeInTheDocument();
+      expect(screen.getByText("1/3")).toBeInTheDocument();
+      expect(screen.getByText("1 of 3 sub-tasks done")).toBeInTheDocument();
+    });
+
+    it("still shows the badge when every sub-task is done", () => {
+      renderRow({ task: task({ content: "call mum" }), subtaskCount: 2, subtaskDone: 2 });
+
+      expect(screen.getByText("2/2")).toBeInTheDocument();
     });
 
     it("previews a Description's first line as rendered markdown beneath the title — ROW-07", () => {
@@ -1478,6 +1491,35 @@ describe("TaskRow", () => {
 
       expect(onRename).not.toHaveBeenCalled();
       expect(await screen.findByRole("button", { name: "buy milk" })).toBeInTheDocument();
+    });
+  });
+  describe("issue #303: the swipe contract", () => {
+    // `data-swipe-target` alone does nothing. `use-swipe-actions.ts` reads
+    // pointer events, and without `touch-action: pan-y` the browser's own
+    // compositor claims the horizontal axis for panning and ends the sequence
+    // in `pointercancel` before the recogniser's threshold is reached.
+    // `entry-bubble.tsx` — the only other caller of that recogniser — carries
+    // the identical class, and `swipe-recognizer.ts:194` names it as the
+    // reason its arithmetic holds.
+    //
+    // This shipped without it. Driven on the device 2026-09-15: the row
+    // computed `touch-action: auto` and no left swipe ever opened the
+    // scheduler, while every jsdom test stayed green — jsdom has no
+    // compositor, so it can never observe the cancel. This test is therefore
+    // a class-name assertion on purpose: it guards the half of the contract
+    // that a unit test is structurally incapable of exercising.
+    it("puts touch-pan-y on the same element that carries the swipe target", () => {
+      renderRow();
+      const box = rowBox();
+
+      expect(box).toHaveAttribute("data-swipe-target");
+      // `classList.contains`, never `className.toContain`. The substring form
+      // passes for `touch-pan-yX` — caught here by a mutation that was
+      // supposed to fail and didn't, which is the same "a check broad enough
+      // to match two subjects cannot fail loudly" shape this file's own
+      // breakpoint notes warn about, reproduced inside the test written to
+      // guard against it.
+      expect(box.classList.contains("touch-pan-y")).toBe(true);
     });
   });
 });

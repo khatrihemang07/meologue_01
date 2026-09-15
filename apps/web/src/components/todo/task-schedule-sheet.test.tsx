@@ -110,4 +110,26 @@ describe("TaskScheduleSheet", () => {
       expect(onSetPriority).toHaveBeenCalledWith("1", 3);
     });
   });
+
+  it("colours each priority option, as the row menu's picker already does", () => {
+    // Todoist colours its priority options wherever it offers them — red,
+    // orange, blue, and an unfilled P4. This sheet was the one picker in
+    // meologue rendering four identical text buttons, even though
+    // `--td-priority-picker-1..4` already existed (ADR 0069) and
+    // `task-command-menu.tsx` already read them.
+    renderSheet();
+
+    const swatches = screen
+      .getAllByRole("button")
+      .filter((b) => /^P[1-4]$/.test(b.textContent ?? ""))
+      .map((b) => b.querySelector("span")?.getAttribute("style") ?? "");
+
+    expect(swatches).toHaveLength(4);
+    for (const style of swatches) {
+      expect(style).toContain("background-color");
+    }
+    // Four distinct colours, not one repeated — the assertion that would
+    // survive someone wiring every option to the same token.
+    expect(new Set(swatches).size).toBe(4);
+  });
 });

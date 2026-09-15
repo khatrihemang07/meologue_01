@@ -93,6 +93,7 @@ function createFakeTaskStore(): TaskStore {
     // fake included, must carry all twenty-one.
     listByProject: vi.fn(async () => []),
     listChildren: vi.fn(async () => []),
+    countChildren: vi.fn(async () => ({ done: 0, total: 0 })),
     listInSection: vi.fn(async () => []),
     listDescendants: vi.fn(async () => []),
     listCompleted: vi.fn(async () => []),
