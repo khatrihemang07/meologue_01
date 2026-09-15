@@ -9,7 +9,7 @@
 import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { WIDE_LAYOUT_QUERY } from "@/hooks/use-wide-layout";
-import { TaskSchedulePopover } from "./task-schedule-popover";
+import { isOwnedPortalTarget, TaskSchedulePopover } from "./task-schedule-popover";
 
 const NOW = new Date(2026, 8, 10, 12, 0); // Thu 10 Sep 2026, local noon
 
@@ -749,7 +749,16 @@ describe("TaskSchedulePopover", () => {
       expect(within(dialog).getByLabelText("Start time")).toHaveValue("14:30");
     });
 
-    it("Save commits the drafted time through the same onSetTime callback the inline field used, and returns to the scheduler", () => {
+    // Issue #326: Save closes the *whole* scheduler, not just this dialog —
+    // unlike Cancel (the test below this one), which returns to it. This
+    // used to look identical to Cancel only because nothing here told the
+    // two apart yet; `handleTimeSave` (task-schedule-popover.tsx) now makes
+    // the difference explicit with its own `setOpen(false)`. jsdom can
+    // verify that explicit call reliably (it's an ordinary synchronous
+    // state update, not the portalled dismiss-ordering race the rest of
+    // this ticket is about) — see the Cancel test below for what jsdom
+    // still can't see.
+    it("Save commits the drafted time through the same onSetTime callback the inline field used, and closes the whole scheduler (issue #326)", () => {
       const { onSetTime } = renderPopover({ dateDay: "2026-09-05", dateTime: null });
       open();
       const dialog = openTimeDialog();
@@ -764,8 +773,7 @@ describe("TaskSchedulePopover", () => {
       expect(
         screen.queryByRole("dialog", { name: "Select start and end time" }),
       ).not.toBeInTheDocument();
-      // Back in the scheduler, not closed entirely.
-      expect(screen.getByTestId("scheduler-view")).toBeInTheDocument();
+      expect(screen.queryByTestId("scheduler-view")).not.toBeInTheDocument();
     });
 
     it("Save with 'Add a time' unchecked commits null — the dialog's own mirror of the inline field's existing clear path", () => {
@@ -779,6 +787,23 @@ describe("TaskSchedulePopover", () => {
       expect(onSetTime).toHaveBeenCalledWith(null);
     });
 
+    // Issue #326's own bug (Cancel closing the whole scheduler, though
+    // documented as returning to it) was invisible to this exact test
+    // before the fix, and this assertion alone still can't prove the real
+    // fix holds: `classifyOutsideInteraction` (task-schedule-popover.tsx,
+    // above `TaskSchedulePopoverProps`) only has anything to classify once
+    // Radix actually dispatches `onPointerDownOutside`/`onInteractOutside`,
+    // and it does that from a deferred, `document`-level "click" listener
+    // registered after a real "pointerdown". `fireEvent.click(...)` below
+    // fires a bare "click" with no preceding "pointerdown" at all, so that
+    // dispatch — and the flushSync-ordering race issue #326 is actually
+    // about — never runs in jsdom, fixed or not (see `isOwnedPortalTarget`'s
+    // own describe block, below every `describe` in this file, for the part
+    // of the fix that genuinely is unit-testable). What this test *can*
+    // verify honestly is the wiring — Cancel never reaches `onSetTime`, and
+    // `scheduler-view` is still there right after. That the scheduler stays
+    // open through the real dismiss race live in a browser is captured
+    // evidence, not something this suite asserts.
     it("Cancel discards the draft: onSetTime is never called, and the Task's own time is unchanged next time the dialog opens", () => {
       const { onSetTime } = renderPopover({ dateDay: "2026-09-05", dateTime: "09:00" });
       open();
@@ -1010,9 +1035,14 @@ describe("TaskSchedulePopover", () => {
       // A phrase, resolved to its first occurrence — never a second
       // rule-shaped value, and never a direct Task mutation from here.
       expect(onPickRecurrence).toHaveBeenCalledWith("every 2 days", expect.any(String));
+      // `commitRepeatPhrase` (task-schedule-popover.tsx) has always closed
+      // the scheduler on a successful Save — deliberate, and unlike Cancel
+      // it was never issue #326's bug (that ordinary synchronous
+      // `setOpen(false)` call has no dismiss-ordering race to lose).
+      expect(screen.queryByTestId("scheduler-view")).not.toBeInTheDocument();
     });
 
-    it("a rule with no occurrence left lands in the typed field rather than committing or vanishing", async () => {
+    it("a rule with no occurrence left lands in the typed field rather than committing or vanishing, and leaves the scheduler open", async () => {
       const { onPickRecurrence } = renderPopover();
       open();
       const menu = openRepeatMenu();
@@ -1034,6 +1064,41 @@ describe("TaskSchedulePopover", () => {
       // Save neither lies nor looks broken.
       expect(onPickRecurrence).not.toHaveBeenCalled();
       expect(screen.getByPlaceholderText("Type a date")).toHaveValue("every day ending 1 Jan 2020");
+      // `handleCustomRepeatSave`'s own comment (task-schedule-popover.tsx)
+      // has always said the scheduler deliberately stays open on this
+      // branch — issue #326 is what actually made that true: the dialog
+      // still closes itself unconditionally on submit, so before the fix
+      // this branch rode the identical accidental dismiss Cancel's bug did.
+      expect(screen.getByTestId("scheduler-view")).toBeInTheDocument();
+    });
+
+    // Issue #326: Cancel on this dialog shared the exact same bug the Time
+    // dialog had — both reuse the identical `DialogPrimitive.Close` and the
+    // identical popover-side guard (`classifyOutsideInteraction`). As with
+    // that dialog's own Cancel test above, jsdom can't reproduce the real
+    // dismiss-ordering race — the deferred, `flushSync`-wrapped outside
+    // dispatch Radix runs off a real "pointerdown"/"click" pair never
+    // happens under `fireEvent.click(...)` — so this only verifies the
+    // wiring: Cancel never reaches `onPickRecurrence`, and `scheduler-view`
+    // is still there right after.
+    it("Cancel discards the draft: onPickRecurrence is never called, and the scheduler stays open (issue #326)", async () => {
+      const { onPickRecurrence } = renderPopover();
+      open();
+      const menu = openRepeatMenu();
+      fireEvent.click(within(menu).getByRole("menuitem", { name: "Custom…" }));
+      await vi.waitFor(() => {
+        expect(screen.getByRole("dialog", { name: "Custom repeat" })).toBeInTheDocument();
+      });
+
+      const dialog = screen.getByRole("dialog", { name: "Custom repeat" });
+      fireEvent.change(within(dialog).getByRole("spinbutton", { name: "Every" }), {
+        target: { value: "2" },
+      });
+      fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+
+      expect(onPickRecurrence).not.toHaveBeenCalled();
+      expect(screen.queryByRole("dialog", { name: "Custom repeat" })).not.toBeInTheDocument();
+      expect(screen.getByTestId("scheduler-view")).toBeInTheDocument();
     });
 
     it("hides the Repeat entry point once a typed Recurrence is already resolving to a preview", () => {
@@ -1112,5 +1177,68 @@ describe("TaskSchedulePopover", () => {
       // fed the `open` prop back in.
       expect(screen.getByTestId("scheduler-view")).toBeInTheDocument();
     });
+  });
+});
+
+// Issue #326's real fix (`classifyOutsideInteraction`, task-schedule-
+// popover.tsx's own comment above `TaskSchedulePopoverProps`) classifies an
+// outside interaction by its real DOM target instead of by
+// `timeDialogOpen`/`customRepeatOpen` React state — state (and a ref
+// mirroring it, the first attempt at this fix) loses a real dismiss-
+// ordering race in a browser: Radix defers a non-modal Popover's own
+// outside-pointerdown check to the click that follows Cancel's pointerdown,
+// by which point `DialogPrimitive.Close`'s own `onClick` has already
+// flipped that state to `false` in the same synchronous flush. jsdom never
+// runs that deferred, `flushSync`-wrapped dispatch at all — `fireEvent.
+// click` fires a bare "click" with no preceding "pointerdown", which is the
+// event Radix's own outside-detection actually keys off, so no jsdom test
+// (this file's `fireEvent.click(...Cancel...)` tests included, see their
+// own comments) can exercise the race itself, fixed or not. What jsdom
+// *can* exercise honestly is the classification `classifyOutsideInteraction`
+// reduces to — `isOwnedPortalTarget`, a pure function of a DOM node — in
+// isolation, with real elements built by hand rather than through Radix's
+// own event pipeline. The real check is that this still holds in a browser
+// (see this ticket's own commit message for what was driven there).
+describe("isOwnedPortalTarget (issue #326's target classification, tested directly)", () => {
+  function elementWithTestId(testId: string): HTMLElement {
+    const el = document.createElement("div");
+    el.setAttribute("data-testid", testId);
+    document.body.appendChild(el);
+    return el;
+  }
+
+  it("is true for the Time dialog's own root node", () => {
+    const dialog = elementWithTestId("time-dialog");
+    expect(isOwnedPortalTarget(dialog)).toBe(true);
+  });
+
+  it("is true for a descendant of the Custom-repeat dialog's own root node — e.g. its Cancel/Save buttons", () => {
+    const dialog = elementWithTestId("custom-repeat-dialog");
+    const cancelButton = document.createElement("button");
+    dialog.appendChild(cancelButton);
+    expect(isOwnedPortalTarget(cancelButton)).toBe(true);
+  });
+
+  // The Custom-repeat dialog's own "On date" calendar is itself a second,
+  // independently-portalled Radix Popover (task-custom-repeat-dialog.tsx's
+  // own `custom-repeat-date-popover`) — a portal breaks DOM containment at
+  // every level it's used, not just the first, so this needs its own
+  // `data-testid` in `OWNED_PORTAL_SELECTOR`, not just the dialog's.
+  it("is true for a day cell inside the Custom-repeat dialog's own end-date calendar popover", () => {
+    const calendarPopover = elementWithTestId("custom-repeat-date-popover");
+    const dayCell = document.createElement("button");
+    calendarPopover.appendChild(dayCell);
+    expect(isOwnedPortalTarget(dayCell)).toBe(true);
+  });
+
+  it("is false for a node outside every owned dialog — a genuine outside click", () => {
+    const outside = document.createElement("div");
+    document.body.appendChild(outside);
+    expect(isOwnedPortalTarget(outside)).toBe(false);
+  });
+
+  it("is false for null and for a non-Element EventTarget (the shape `originalEvent.target` is typed to allow)", () => {
+    expect(isOwnedPortalTarget(null)).toBe(false);
+    expect(isOwnedPortalTarget(window)).toBe(false);
   });
 });
