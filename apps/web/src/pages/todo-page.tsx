@@ -1284,6 +1284,15 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
             // duplicating that logic.
             onComplete={() => handleComplete(openTask.id, openTask.content, openTask.dateString)}
             onUncomplete={() => uncompleteTask(openTask.id)}
+            // Issue #302: the detail view's own overflow menu reuses the
+            // identical handlers the row's own `TaskCommandMenu`/dedicated
+            // button already call — `copyTaskLink`, `removeTask` and
+            // `handleCompleteForeverTask` (this file's own "adapts to the
+            // task-shaped callback" trio, just above) — rather than this
+            // page growing a second copy of any of the three.
+            onCopyLink={() => copyTaskLink(openTask)}
+            onDelete={() => removeTask(openTask.id)}
+            onCompleteForever={() => handleCompleteForeverTask(openTask)}
             onOpenSchedule={() => handleOpenSchedule(openTask.id)}
             onSetDate={setTaskDate}
             onSetDateString={setTaskDateString}
