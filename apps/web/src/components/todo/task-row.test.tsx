@@ -960,16 +960,26 @@ describe("TaskRow", () => {
   // pass or fail independent of any class on the element. What's actually
   // load-bearing, and what this asserts instead, is the exact utility
   // classes Tailwind mechanically turns into that CSS: `hidden` (the base,
-  // no-hover state) overridden only by a hover-capable media query, on
-  // Edit/Date/Comment specifically. More carries no `hidden` at all: it
-  // has to stay the one thing a touch reader can always tap, since it's
-  // now the only door onto the other three's own actions at rest.
+  // no-hover state) overridden only by a hover-capable media query.
+  //
+  // Issue #309: More used to be the one exception — it carried no `hidden`
+  // at all, because it was the only door onto the full command set (Edit,
+  // Date, Priority, Deadline, Labels, Move to…, Copy link, Delete) on a
+  // touch-only device. #302's detail sheet (inline Date/Priority/Deadline/
+  // Labels/Project fields, plus its own `⋮` overflow for Copy link/Complete
+  // forever/Delete) and #308's long-press lift (reordering) between them
+  // give a touch reader a door onto every one of those actions without
+  // this menu, so More now rides the identical `hidden pointer-fine:flex`
+  // gate as the other three — this asserts it does, on a device that
+  // reports coarse-and-hoverless (a genuine touchscreen, not a Tauri
+  // misreport), the exact device this file's own `pointer-fine` doc
+  // comment names.
   //
   // Issue #224 widened that media query from plain `(hover: hover)` to
   // `(hover: hover),(pointer: fine)` — `task-row-content.tsx`'s own comment
   // explains why: a Tauri desktop window can misreport `(hover: none)` for
   // a real mouse, and OR-ing in `(pointer: fine)` is what stops that
-  // misreport from also taking these three buttons away on a build the real
+  // misreport from also taking these four buttons away on a build the real
   // device fix above was never about. It now rides the `pointer-fine`
   // variant declared in index.css rather than an inline arbitrary one.
   //
@@ -981,18 +991,52 @@ describe("TaskRow", () => {
   // buttons was fully visible on every row. The class name and the applied
   // style are two different claims; only rendering the real stylesheet
   // settles the second, which is what the side-by-side rig is for.
-  it("only More actions renders unconditionally — Edit, Date and Comment are hidden outside a hover-or-fine-pointer device", () => {
+  it("Edit, Date, Comment, More and the drag handle are all hidden outside a hover-or-fine-pointer device — asserts the `pointer-fine` gate `(hover: hover) OR (pointer: fine)`, none render on a coarse-and-hoverless touchscreen", () => {
     renderRow({ task: task({ content: "call mum" }) });
 
-    for (const label of ['Edit "call mum"', 'Date "call mum"', 'Comment on "call mum"']) {
+    for (const label of [
+      'Edit "call mum"',
+      'Date "call mum"',
+      'Comment on "call mum"',
+      'More actions for "call mum"',
+    ]) {
       const button = screen.getByRole("button", { name: label });
       expect(button).toHaveClass("hidden");
       expect(button).toHaveClass("pointer-fine:flex");
     }
 
-    const more = screen.getByRole("button", { name: 'More actions for "call mum"' });
-    expect(more).not.toHaveClass("hidden");
-    expect(more).toHaveClass("flex");
+    const handle = screen.getByTestId("task-drag-handle");
+    expect(handle).toHaveClass("hidden");
+    expect(handle).toHaveClass("pointer-fine:flex");
+  });
+
+  // Issue #309's own "inset reclaimed" acceptance criterion, spelled out
+  // separately from the test above even though it reads the identical two
+  // classes off the identical element: this is the ONE assertion in this
+  // file that the checkbox's own 12px inset actually depends on. `hidden`
+  // (not `opacity-0`) is what removes the handle from this row's flex
+  // layout on a coarse-and-hoverless device rather than merely fading it in
+  // place, still reserving the 32px (24px handle + this row's own `gap-2`)
+  // it used to. jsdom lays out no real flexbox (no `css: true`, per the
+  // test above's own doc comment), so nothing here can observe the
+  // checkbox's rendered x-position the way the device measurement that
+  // drove this ticket did — this asserts the ONE class choice that
+  // measurement depends on instead. This ticket deliberately does NOT add
+  // compensating padding once the grip is gone — see task-row-content.tsx's
+  // own doc comment on this button for the measurement (12px is already
+  // right; the row itself is 32px too deep, so "restoring" the old inset
+  // would overshoot).
+  it("the drag handle carries `hidden`, not an unconditional `flex` — issue #309's inset-reclaimed criterion depends on it leaving the flex layout, not merely fading in place at full width", () => {
+    renderRow({ task: task({ content: "call mum" }) });
+
+    const handle = screen.getByTestId("task-drag-handle");
+    expect(handle).toHaveClass("hidden");
+    // Whole-token check, not `className.includes("flex")` — that substring
+    // would also match `pointer-fine:flex` itself and pass even if `hidden`
+    // were dropped, the exact `touch-pan-y`/`touch-pan-yX` trap this repo's
+    // own history already names (task-row-content.tsx's `touch-pan-y`
+    // comment).
+    expect(handle).not.toHaveClass("flex");
   });
 
   it("opens the full command menu on right-click", () => {
