@@ -79,6 +79,74 @@ describe("nextEntriesPageParam", () => {
   });
 });
 
+describe("resetEntriesPagingToNewest", () => {
+  it("does nothing when History's query has never been observed", async () => {
+    const { resetEntriesPagingToNewest, queryClient } = await importFresh();
+
+    resetEntriesPagingToNewest();
+
+    expect(queryClient.getQueryData(ENTRIES_QUERY_KEY)).toBeUndefined();
+  });
+
+  it("does nothing with only one page loaded — nothing to trim", async () => {
+    const { resetEntriesPagingToNewest, queryClient, ENTRIES_PAGE_SIZE } = await importFresh();
+    const original = { pages: [[entry({ id: "1" })]], pageParams: [{ limit: ENTRIES_PAGE_SIZE }] };
+    queryClient.setQueryData(ENTRIES_QUERY_KEY, original);
+
+    resetEntriesPagingToNewest();
+
+    expect(queryClient.getQueryData(ENTRIES_QUERY_KEY)).toEqual(original);
+  });
+
+  it("drops every page but the newest, and every pageParam but the first, with no store call at all", async () => {
+    const { resetEntriesPagingToNewest, queryClient, ENTRIES_PAGE_SIZE } = await importFresh();
+    const boundary = { createdAt: "2026-01-05T00:00:00.000Z", id: "boundary" };
+    const pageOne = [entry({ id: "1" })];
+    const pageTwo = [entry({ id: "2" })];
+    const pageThree = [entry({ id: "3" })];
+    queryClient.setQueryData(ENTRIES_QUERY_KEY, {
+      pages: [pageOne, pageTwo, pageThree],
+      pageParams: [
+        { limit: ENTRIES_PAGE_SIZE },
+        { before: boundary, limit: ENTRIES_PAGE_SIZE },
+        { before: boundary, limit: ENTRIES_PAGE_SIZE },
+      ],
+    });
+
+    resetEntriesPagingToNewest();
+
+    expect(queryClient.getQueryData(ENTRIES_QUERY_KEY)).toEqual({
+      pages: [pageOne],
+      pageParams: [{ limit: ENTRIES_PAGE_SIZE }],
+    });
+  });
+
+  // The property that lets a reader keep paging back up afterward without
+  // ever seeing a gap or a duplicate: `nextEntriesPageParam`'s cursor is
+  // the oldest Entry actually loaded, not an offset, so re-fetching a page
+  // this trimmed away is indistinguishable from fetching it for the first
+  // time.
+  it("leaves the newest page's own content untouched, so paging back up afterward starts from the identical cursor", async () => {
+    const { resetEntriesPagingToNewest, nextEntriesPageParam, queryClient, ENTRIES_PAGE_SIZE } =
+      await importFresh();
+    const pageOne = Array.from({ length: ENTRIES_PAGE_SIZE }, (_, i) => entry({ id: String(i) }));
+    queryClient.setQueryData(ENTRIES_QUERY_KEY, {
+      pages: [pageOne, [entry({ id: "older" })]],
+      pageParams: [
+        { limit: ENTRIES_PAGE_SIZE },
+        { before: { createdAt: pageOne[0]?.createdAt, id: "0" }, limit: ENTRIES_PAGE_SIZE },
+      ],
+    });
+
+    resetEntriesPagingToNewest();
+
+    const cached = queryClient.getQueryData(ENTRIES_QUERY_KEY) as {
+      pages: Entry[][];
+    };
+    expect(nextEntriesPageParam(cached.pages[0] as Entry[])).toEqual(nextEntriesPageParam(pageOne));
+  });
+});
+
 describe("refreshNewestEntriesPage", () => {
   it("does nothing when History's query has never been observed", async () => {
     const { refreshNewestEntriesPage } = await importFresh();

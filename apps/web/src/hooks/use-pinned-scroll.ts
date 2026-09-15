@@ -18,6 +18,20 @@ const NEWEST_THRESHOLD_PX = 24;
  */
 const OLDEST_THRESHOLD_PX = 24;
 
+/**
+ * The newest-end jump's own convergence budget, bounded because a
+ * virtualized thread (History) sizes a row it hasn't measured yet by
+ * *estimate*, so `el.scrollHeight` right after a jump can be several times
+ * its real, laid-out value — landing "0px from the bottom" of a document
+ * that is itself still wrong. Only re-measurement, spread across real
+ * animation frames as newly-visible rows actually mount, corrects it; see
+ * `scrollToNewest`'s own comment for the loop this bounds. 12 is generous
+ * against what convergence costs live, but never infinite — a genuinely
+ * pathological case (geometry that never stops moving) settles anyway once
+ * this runs out, rather than chasing it forever.
+ */
+const SCROLL_TO_NEWEST_MAX_FRAMES = 12;
+
 export interface UsePinnedScrollOptions {
   /** Off entirely for pages with no pinned thread — Settings is the only one. */
   enabled: boolean;
@@ -171,20 +185,124 @@ export function usePinnedScroll({
     return el.scrollHeight - el.scrollTop - el.clientHeight <= NEWEST_THRESHOLD_PX;
   }, []);
 
+  // The re-assert loop's own in-flight handle. A ref, not local state: this
+  // runs entirely outside React's render cycle (successive
+  // `requestAnimationFrame` callbacks calling straight back into DOM/
+  // virtualizer APIs), and a fresh call to `scrollToNewest` — a second
+  // Send while the previous jump is still converging, a resize arriving
+  // mid-chase — has to be able to cancel whatever the previous call was
+  // still chasing rather than run two convergence loops on top of each
+  // other.
+  const scrollToNewestFrameRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (scrollToNewestFrameRef.current !== null) {
+        cancelAnimationFrame(scrollToNewestFrameRef.current);
+      }
+    };
+  }, []);
+
+  // Issue #142's fix, extended to the newest-end jump: the identical
+  // estimate problem the seek's own convergence loop (history.tsx) exists
+  // for. History's virtualizer sizes a row it hasn't measured yet by
+  // *estimate*; after a seek pages in many older Entries most rows are
+  // still unmeasured, so `el.scrollHeight` itself — not just where
+  // `scrollTop` lands inside it — is temporarily wrong. A single
+  // assignment (the old body of this function) can't tell the difference:
+  // right after `el.scrollTop = el.scrollHeight` (or the virtualizer's own
+  // `scrollToIndex(newestIndex, {align: "end"})`, via `scrollToNewestIndex`),
+  // `isAtNewest()` already reads `0px away` — both numbers came from the
+  // exact same, still-wrong estimate — and only *looks* wrong once the
+  // newly-visible rows actually render, measure, and correct `scrollHeight`
+  // out from under that position. That correction is exactly the
+  // "distFromBottom: 0, scrollHeight climbing 6,021 → 15,529 → 45,652px"
+  // overshoot measured live, and it is also what left `scrollToNewest`
+  // landing in the MIDDLE of an inflated document instead of at the true
+  // newest Entry — the same root cause behind both "returning to the
+  // Composer always lands on the same wrong day" (routed through
+  // `usePinnedScroll`'s own `watch` effect below) and "sending while
+  // scrolled up lands on the wrong window" (`forceToNewest`).
+  //
+  // The fix mirrors history.tsx's own "page until you arrive": one
+  // synchronous assertion first (so every existing caller that reads
+  // `scrollTop`/`awayFromNewest` immediately after calling this — a click
+  // on the jump-to-newest control, the `forceToNewest` effect — still sees
+  // the jump happen in the same tick, unchanged), then up to
+  // `SCROLL_TO_NEWEST_MAX_FRAMES` real animation frames that each check
+  // whether `el.scrollHeight` has stopped moving since the frame before
+  // AND the element now genuinely reads `isAtNewest()` against that
+  // settled height, re-issuing the same jump on every frame that hasn't.
+  // Checking "scrollHeight is stable" rather than trusting `isAtNewest()`
+  // alone is what actually detects the estimate correcting itself — see
+  // the paragraph above for why `isAtNewest()` alone reads `true`
+  // immediately regardless of whether the height it was computed against
+  // was ever real.
+  //
+  // For an ordinary, non-virtualized thread (Reflection's Conversation,
+  // `scrollToNewestIndex` left undefined — see that option's own doc
+  // comment) `el.scrollHeight` is already the real, laid-out height with
+  // nothing left to measure: the first assertion already lands exactly
+  // right, and the loop's very first frame finds the height unchanged and
+  // `isAtNewest()` already true, so it settles having done nothing further
+  // — a strict improvement over the old single-assignment behaviour, not a
+  // behaviour change: the visible jump is identical, synchronous, and
+  // instant; the loop is a bounded, otherwise-inert safety net on top of
+  // it.
   const scrollToNewest = useCallback(() => {
+    if (scrollToNewestFrameRef.current !== null) {
+      cancelAnimationFrame(scrollToNewestFrameRef.current);
+      scrollToNewestFrameRef.current = null;
+    }
+
     // Issue #83: give the caller's own idea of "newest" (the virtualizer's
     // scrollToIndex, for History) first refusal — see
     // `scrollToNewestIndex`'s own doc comment for why this is a boolean
-    // hand-off rather than either function unconditionally winning.
-    if (scrollToNewestIndex?.()) {
+    // hand-off rather than either function unconditionally winning. Returns
+    // the scroll element's own `scrollHeight` right after asserting, so the
+    // loop below has a baseline to compare later frames against without a
+    // second, separate read of its own (issue #81: `scrollHeight` forces a
+    // synchronous layout of the whole pinned list, so this file already
+    // goes out of its way not to read it redundantly — see the "reads
+    // scrollHeight once" tests in use-pinned-scroll.test.tsx).
+    const assertOnce = (): number | null => {
+      if (scrollToNewestIndex?.()) {
+        return null;
+      }
+      const el = scrollRef.current;
+      if (!el) {
+        return null;
+      }
+      const height = el.scrollHeight;
+      el.scrollTop = height;
+      return height;
+    };
+
+    const firstHeight = assertOnce();
+    if (scrollRef.current === null) {
       return;
     }
-    const el = scrollRef.current;
-    if (!el) {
-      return;
-    }
-    el.scrollTop = el.scrollHeight;
-  }, [scrollToNewestIndex]);
+
+    let lastScrollHeight = firstHeight ?? scrollRef.current.scrollHeight;
+    let frame = 0;
+    const step = () => {
+      frame += 1;
+      const el = scrollRef.current;
+      if (el === null) {
+        scrollToNewestFrameRef.current = null;
+        return;
+      }
+      const stable = el.scrollHeight === lastScrollHeight;
+      if ((stable && isAtNewest()) || frame >= SCROLL_TO_NEWEST_MAX_FRAMES) {
+        scrollToNewestFrameRef.current = null;
+        return;
+      }
+      lastScrollHeight = el.scrollHeight;
+      assertOnce();
+      scrollToNewestFrameRef.current = requestAnimationFrame(step);
+    };
+    scrollToNewestFrameRef.current = requestAnimationFrame(step);
+  }, [scrollToNewestIndex, isAtNewest]);
 
   const setPinned = useCallback((next: boolean) => {
     pinnedRef.current = next;
