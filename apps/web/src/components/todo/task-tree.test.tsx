@@ -3,6 +3,8 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { toast } from "sonner";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { OPEN_SCHEDULE_EVENT } from "@/lib/todo-keymap";
+import { mouseDragLeft, swipeDown, swipeLeft } from "@/test/swipe";
 import { TaskTree } from "./task-tree";
 
 vi.mock("sonner", () => {
@@ -548,5 +550,99 @@ describe("TaskTree", () => {
         : [];
       expect(measured.map((el) => el.getAttribute("data-task-id"))).toEqual(["a"]);
     });
+  });
+});
+
+describe("swipe-to-schedule (issue #303)", () => {
+  // Reuses `use-swipe-actions.ts`'s shared recogniser — the identical one
+  // History's own bubbles use (that hook's own header comment) — rather
+  // than growing a second one for Tasks. This block is deliberately light:
+  // the recogniser's own arithmetic (vertical-bail, flick/latch, edge
+  // exclusion) is already mutation-tested in `swipe-recognizer.test.ts` and
+  // `use-swipe-actions.test.tsx`; what's new *here* is only the wiring —
+  // which row's own popover a swipe on THIS tree opens, and that a nested
+  // sub-task's own swipe never also opens its parent's.
+
+  it("opens the swiped row's own schedule popover, pre-filled with its date and offering to clear it", () => {
+    renderTree({ tasks: [task({ id: "1", content: "buy milk", date: "2026-09-20" })] });
+    expect(screen.queryByTestId("scheduler-view")).not.toBeInTheDocument();
+
+    swipeLeft(rowBox("buy milk"));
+
+    expect(screen.getByTestId("scheduler-view")).toBeInTheDocument();
+    // Pre-filled: "No Date" only ever renders once `dateDay !== null`
+    // (task-schedule-popover.tsx's own `quickOptionDefs` filter) — this is
+    // both proof the right Task's own date reached the popover and the
+    // "way to clear it" the ticket's own acceptance criterion asks for.
+    expect(screen.getByRole("button", { name: "No Date" })).toBeInTheDocument();
+  });
+
+  it("does not open anything for a vertical drag — the row scrolls instead", () => {
+    // Mutation check: this is the test that must fail if
+    // `use-swipe-actions.ts`'s reuse of the vertical-bail discrimination
+    // were ever bypassed for Task rows specifically.
+    renderTree({ tasks: [task({ content: "buy milk" })] });
+
+    swipeDown(rowBox("buy milk"));
+
+    expect(screen.queryByTestId("scheduler-view")).not.toBeInTheDocument();
+  });
+
+  it("does nothing on a pointer device — the row's own hover actions serve there", () => {
+    renderTree({ tasks: [task({ content: "buy milk" })] });
+
+    mouseDragLeft(rowBox("buy milk"));
+
+    expect(screen.queryByTestId("scheduler-view")).not.toBeInTheDocument();
+  });
+
+  it("opens a swiped sub-task's own popover, not its parent's", async () => {
+    // The recogniser is attached once, at this tree's own top level (depth
+    // 1) — not once per nested TaskTree — so a nested sub-task's own
+    // pointer events have to reach it by bubbling through the parent row's
+    // `<li>` (issue #192 already nests a sub-task's own `<ul>` there).
+    const parent = task({ id: "parent", content: "Parent", date: null });
+    const child = task({ id: "child", content: "Child", parentId: "parent", date: "2026-09-20" });
+    renderTree({
+      tasks: [parent],
+      listTaskChildren: vi.fn(async (parentId: string) => (parentId === "parent" ? [child] : [])),
+    });
+    await screen.findByText("Child");
+
+    swipeLeft(rowBox("Child"));
+
+    // Exactly one popover opened...
+    expect(screen.getAllByTestId("scheduler-view")).toHaveLength(1);
+    // ...and it's the Child's own: "No Date" only renders for a Task that
+    // already has a date, which only Child does here.
+    expect(screen.getByRole("button", { name: "No Date" })).toBeInTheDocument();
+  });
+
+  it("dispatches OPEN_SCHEDULE_EVENT exactly once for a nested sub-task's own swipe", async () => {
+    // The test above can't tell "opened once" from "the identical open
+    // fired twice" — both a correct single recogniser AND a second, wrongly
+    // enabled one at the nested level resolve to the SAME `[data-swipe-
+    // target]` element (the swipe hook walks up from the touched node, so
+    // which container's own listener happened to run first makes no
+    // difference to what it finds) and so produce the identical,
+    // idempotent-looking open. Counting the underlying event is what
+    // actually catches a second recogniser racing the first — this is the
+    // test that fails if `enabled: depth === 1` above were widened to
+    // `enabled: true` for every nested level too.
+    const dispatchSpy = vi.spyOn(document, "dispatchEvent");
+    const parent = task({ id: "parent", content: "Parent" });
+    const child = task({ id: "child", content: "Child", parentId: "parent" });
+    renderTree({
+      tasks: [parent],
+      listTaskChildren: vi.fn(async (parentId: string) => (parentId === "parent" ? [child] : [])),
+    });
+    await screen.findByText("Child");
+
+    swipeLeft(rowBox("Child"));
+
+    const scheduleDispatches = dispatchSpy.mock.calls.filter(
+      ([event]) => event instanceof CustomEvent && event.type === OPEN_SCHEDULE_EVENT,
+    );
+    expect(scheduleDispatches).toHaveLength(1);
   });
 });

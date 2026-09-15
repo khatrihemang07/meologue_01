@@ -363,4 +363,95 @@ describe("useSwipeActions", () => {
     expect(target.style.transform).toBe("");
     expect(target.style.transition).toBe("");
   });
+
+  describe("screen-edge exclusion", () => {
+    // Android's own gesture navigation claims a horizontal drag that begins
+    // within ~150px of either screen edge for itself (back/forward/recents)
+    // before a single `pointermove` reaches this hook — captured on device,
+    // issue #303. A narrow phone viewport (426 CSS px, this ticket's own
+    // measurement) is used throughout rather than jsdom's 1024px default, so
+    // the exclusion band actually overlaps a plausible finger position.
+    afterEach(() => {
+      vi.unstubAllGlobals();
+    });
+
+    it("refuses a swipe starting within the exclusion band of the left edge", () => {
+      vi.stubGlobal("innerWidth", 426);
+      const onOpen = vi.fn();
+      render(<Thread onOpen={onOpen} />);
+      const target = bubble("one");
+
+      fireEvent.pointerDown(target, {
+        pointerId: 1,
+        pointerType: "touch",
+        clientX: 100,
+        clientY: 100,
+      });
+      fireEvent.pointerMove(target, {
+        pointerId: 1,
+        pointerType: "touch",
+        clientX: 40,
+        clientY: 100,
+      });
+
+      expect(target.style.transform).toBe("");
+    });
+
+    it("refuses a swipe starting within the exclusion band of the right edge", () => {
+      vi.stubGlobal("innerWidth", 426);
+      const onOpen = vi.fn();
+      render(<Thread onOpen={onOpen} />);
+      const target = bubble("one");
+
+      fireEvent.pointerDown(target, {
+        pointerId: 1,
+        pointerType: "touch",
+        clientX: 400,
+        clientY: 100,
+      });
+      fireEvent.pointerMove(target, {
+        pointerId: 1,
+        pointerType: "touch",
+        clientX: 340,
+        clientY: 100,
+      });
+
+      expect(target.style.transform).toBe("");
+    });
+
+    it("still swipes from the middle of a narrow, 426px-wide viewport", () => {
+      vi.stubGlobal("innerWidth", 426);
+      const onOpen = vi.fn();
+      render(<Thread onOpen={onOpen} />);
+
+      // 213 (the midpoint) is comfortably outside both 150px bands.
+      const target = bubble("one");
+      fireEvent.pointerDown(target, {
+        pointerId: 1,
+        pointerType: "touch",
+        clientX: 213,
+        clientY: 100,
+      });
+      fireEvent.pointerMove(target, {
+        pointerId: 1,
+        pointerType: "touch",
+        clientX: 200,
+        clientY: 100,
+      });
+      fireEvent.pointerMove(target, {
+        pointerId: 1,
+        pointerType: "touch",
+        clientX: 150,
+        clientY: 100,
+      });
+      fireEvent.pointerUp(target, {
+        pointerId: 1,
+        pointerType: "touch",
+        clientX: 150,
+        clientY: 100,
+      });
+
+      expect(onOpen).toHaveBeenCalledTimes(1);
+    });
+  });
 });
