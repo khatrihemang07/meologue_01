@@ -1,5 +1,5 @@
 import type { Event, Project, Task } from "@meologue/core";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   describeEventLine,
   eventDayHeading,
@@ -387,6 +387,51 @@ describe("eventDayHeading", () => {
   it("reads an absolute day for an Event further in the past", () => {
     expect(eventDayHeading("2020-01-01T00:00:00.000Z")).not.toBe("Today");
     expect(eventDayHeading("2020-01-01T00:00:00.000Z")).not.toBe("Yesterday");
+  });
+
+  // Issue #296's sweep: the "further in the past" fallback used to do
+  // `formatDay(occurredAt.slice(0, 10))`, slicing the UTC calendar day
+  // straight out of the instant — a different calendar than the
+  // `isToday`/`isYesterday` branches above it, which are local-aware. For
+  // an Event more than a day old (so it always lands in the fallback,
+  // regardless of which calendar answers), the sliced UTC day and the
+  // local day can name different calendar dates — these two tests pin
+  // both directions the same way lib/local-day-key.test.ts's own suite
+  // does: a Device east of UTC whose local day is AHEAD of UTC's, and one
+  // west of UTC whose local day is BEHIND it.
+  describe("the fallback answers in the local calendar, not UTC's", () => {
+    afterEach(() => {
+      vi.useRealTimers();
+      vi.unstubAllEnvs();
+    });
+
+    it("for a Device east of UTC, an Event just after local midnight is filed under the local day, not the UTC day before it", () => {
+      vi.stubEnv("TZ", "Asia/Kolkata");
+      vi.useFakeTimers({ toFake: ["Date"] });
+      // "Now" is two days later, local — well outside isToday/isYesterday
+      // for the Event below, so this exercises the fallback branch
+      // regardless of which calendar it answers in.
+      vi.setSystemTime(new Date(2026, 8, 17, 10, 0, 0));
+
+      // 2026-09-14T18:46:00.000Z is 2026-09-15 00:16 IST (+05:30) — the
+      // exact shape issue #290 measured for advanceRecurring/postpone.
+      // The old `.slice(0, 10)` mechanics would have named the 14th (the
+      // UTC day); the local day is the 15th.
+      expect(eventDayHeading("2026-09-14T18:46:00.000Z")).toBe("15 Sep");
+    });
+
+    it("for a Device west of UTC, an Event just before local midnight is filed under the local day, not the UTC day after it", () => {
+      vi.stubEnv("TZ", "America/Los_Angeles");
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(new Date(2026, 8, 17, 10, 0, 0));
+
+      // 2026-09-15T06:45:00.000Z is 2026-09-14 23:45 in America/Los_Angeles
+      // (UTC-7 in September) — UTC has already rolled to the 15th while
+      // local time is still the 14th. The old `.slice(0, 10)` mechanics
+      // would have named the 15th (the UTC day); the local day is the
+      // 14th.
+      expect(eventDayHeading("2026-09-15T06:45:00.000Z")).toBe("14 Sep");
+    });
   });
 });
 

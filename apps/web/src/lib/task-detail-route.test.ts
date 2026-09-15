@@ -1,6 +1,11 @@
 import type { Task } from "@meologue/core";
 import { describe, expect, it } from "vitest";
-import { taskDetailPath, taskDetailSlug, taskIdFromParam } from "./task-detail-route";
+import {
+  hasCommentReplyIntent,
+  taskDetailPath,
+  taskDetailSlug,
+  taskIdFromParam,
+} from "./task-detail-route";
 
 function task(overrides: Partial<Task> = {}): Task {
   return {
@@ -75,5 +80,43 @@ describe("taskDetailPath / taskIdFromParam", () => {
   it("returns null for a param carrying no recognisable id", () => {
     expect(taskIdFromParam("not-a-task-id")).toBeNull();
     expect(taskIdFromParam("")).toBeNull();
+  });
+});
+
+// Issue #306: `taskDetailPath`'s own `commentIntent` option, and
+// `hasCommentReplyIntent`'s read of it back out of a URL's search params —
+// the door a Task row's comment badge opens onto "land in the thread,
+// ready to reply" (ROW-08, matching Todoist's own `?intent=reply`).
+describe("taskDetailPath commentIntent / hasCommentReplyIntent", () => {
+  it("appends ?intent=reply only when commentIntent is requested", () => {
+    const t = task({ content: "Buy milk" });
+
+    expect(taskDetailPath(t, { commentIntent: true })).toBe(
+      `/todo/task/buy-milk-${t.id}?intent=reply`,
+    );
+    expect(taskDetailPath(t, { commentIntent: false })).toBe(`/todo/task/buy-milk-${t.id}`);
+    // The default from earlier callers (`taskDetailPath(t)`, no options at
+    // all) is unaffected — a bookmarked or copied link stays the bare
+    // address, not something a reader could mistake for carrying an
+    // instruction they never asked to be issued.
+    expect(taskDetailPath(t)).toBe(`/todo/task/buy-milk-${t.id}`);
+  });
+
+  it("still recovers the Task's id when the address carries the intent — the id parser never sees the query string", () => {
+    const t = task();
+    const path = taskDetailPath(t, { commentIntent: true });
+    const [routeParam] = path.split("?");
+
+    expect(taskIdFromParam((routeParam as string).split("/").pop() as string)).toBe(t.id);
+  });
+
+  it("reads ?intent=reply back out of a URL's search params", () => {
+    expect(hasCommentReplyIntent(new URLSearchParams("intent=reply"))).toBe(true);
+  });
+
+  it("is false for no intent at all, or an unrecognised one — an exact match, not a guess", () => {
+    expect(hasCommentReplyIntent(new URLSearchParams(""))).toBe(false);
+    expect(hasCommentReplyIntent(new URLSearchParams("intent=edit"))).toBe(false);
+    expect(hasCommentReplyIntent(new URLSearchParams("Intent=reply"))).toBe(false);
   });
 });

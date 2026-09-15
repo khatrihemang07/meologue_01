@@ -94,26 +94,38 @@ describe("taskFieldsFromQuickAdd", () => {
       }
     });
 
-    it("a recurring Task's resolved date overrides an unrelated plain date token", () => {
+    // Before issue #291, this test's whole point was that "daily" is
+    // completion-anchored regardless of any due date, so its resolved
+    // date landed on `now` even when an unrelated "tomorrow" token also
+    // matched — proving the override in taskFieldsFromQuickAdd's own
+    // header comment ("recurrence.date, when present, is the one true due
+    // date") was doing real work, not just coinciding with result.date.
+    // #291 retired that exception (../../packages/core/src/recurrence/
+    // recurrence.ts's module doc comment): a bare "every day" is now
+    // due-anchored like every other frequency, so a dueDate that happens
+    // to be present at *creation* time is used as the anchor here too —
+    // the identical behaviour "every month"/"every year" (already
+    // due-anchored) already had, and this file's own header comment on
+    // `taskFieldsFromQuickAdd` already named for "monthly starting
+    // tomorrow". That means this specific input can no longer demonstrate
+    // the override diverging from a coincidental date token — every bare
+    // word in RECURRENCE_WORD_TO_PHRASE now resolves to a phase-locked
+    // frequency that trivially matches its own origin, so recurrence.date
+    // and the coincidental "tomorrow" token always agree. This test is
+    // kept as a correctness check of the new, uniform due-anchoring
+    // instead: "daily starting tomorrow" resolves to tomorrow, not today.
+    it('"daily starting tomorrow" is due-anchored to the coincidental "tomorrow" token, matching every other bare recurrence word (issue #291)', () => {
       // "daily starting tomorrow" — "starting" isn't a clause a bare word
       // understands (RECURRENCE_WORD_TO_PHRASE's own header comment: a
       // bare word maps onto a fixed literal phrase, nothing more), so
       // "tomorrow" is left to parse as its own, independent plain date
       // token (result.date, 2026-09-03) alongside the separately-
-      // recognised "daily" recurrence token. The recurring Task's
-      // resolved date is still the one true due date
-      // (taskFieldsFromQuickAdd's own header comment explains why) —
-      // and "every day" is completion-anchored regardless of any due
-      // date (../../packages/core/src/recurrence/parser.ts's
-      // resolveAnchor), so its firstOccurrence anchors to `now` and,
-      // matching trivially, lands on today — not on "tomorrow"'s plain
-      // date token, proving the override is real rather than the two
-      // values merely coinciding.
+      // recognised "daily" recurrence token, and that token is what
+      // resolveRecurrence receives as `dueDate`.
       const result = fields("review daily starting tomorrow");
 
       expect(result.dateString).toBe("every day");
-      expect(result.date).toBe(NOW);
-      expect(result.date).not.toBe("2026-09-03");
+      expect(result.date).toBe("2026-09-03");
     });
 
     it("no recurrence token leaves dateString null and date untouched", () => {

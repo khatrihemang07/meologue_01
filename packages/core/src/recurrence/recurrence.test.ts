@@ -44,42 +44,130 @@ const occurrence = (date: string): RecurrenceOutcome => ({ kind: "occurrence", d
 const ended: RecurrenceOutcome = { kind: "ended" };
 
 const CASES: readonly Case[] = [
-  // --- Daily / weekly, and the exception that makes them completion-
-  // anchored even without a bang. A dueDate *after* now (an early
-  // completion) is the one scenario where a due-anchored computation
-  // would actually diverge from a completion-anchored one for an
-  // interval-1 daily/weekly rule — see ./engine.ts's own comment on why
-  // that's otherwise unobservable for these two frequencies.
+  // --- Daily / weekly. Issue #291: these two used to be forced
+  // completion-anchored regardless of the bang (a dueDate *after* now —
+  // an early completion, i.e. a postponement — was the one scenario
+  // where that diverged from due-anchoring). Todoist, driven live on both
+  // web and Android
+  // (meologue-parity-docs/todoist/live-audit-dom/recurrence-reschedule-todoist-2026-09-14.json),
+  // resumes a postponed daily/weekly Task from its postponed due date
+  // plus one interval instead, so `every day`/`every week` are now
+  // due-anchored like every other bare frequency, and only `every!
+  // day`/`every! week` still anchor to completion.
   {
-    description: '"every day" is completion-anchored even with a future dueDate — no bang needed',
+    description:
+      '"every day" (no bang) is due-anchored, like every other frequency — a future dueDate (a postponement) wins over `now` (issue #291)',
     dateString: "every day",
     reference: { dueDate: "2026-01-10", now: "2026-01-05" },
-    expect: occurrence("2026-01-06"),
+    expect: occurrence("2026-01-11"),
   },
   {
-    description: '"every! day" is identical to "every day" — the bang is redundant here',
+    description:
+      '"every! day" is completion-anchored — the bang now genuinely diverges from bare "every day" (it no longer merely repeats it, since #291)',
     dateString: "every! day",
     reference: { dueDate: "2026-01-10", now: "2026-01-05" },
     expect: occurrence("2026-01-06"),
   },
   {
-    description: '"every week" is completion-anchored even with a future dueDate — no bang needed',
+    description:
+      '"every week" (no bang) is due-anchored, like every other frequency — a future dueDate (a postponement) wins over `now` (issue #291)',
     dateString: "every week",
     reference: { dueDate: "2026-01-10", now: "2026-01-05" },
-    expect: occurrence("2026-01-12"),
+    expect: occurrence("2026-01-17"),
   },
   {
-    description: '"every! week" is identical to "every week" — the bang is redundant here',
+    description:
+      '"every! week" is completion-anchored — the bang now genuinely diverges from bare "every week" (it no longer merely repeats it, since #291)',
     dateString: "every! week",
     reference: { dueDate: "2026-01-10", now: "2026-01-05" },
     expect: occurrence("2026-01-12"),
   },
 
-  // --- Monthly: `every` vs `every!` genuinely diverge (day-of-month
-  // phase), unlike the bare daily/weekly cases above.
+  // --- Issue #291's own three scope cases, restated directly against the
+  // engine (not just the parity artifact's DOM capture): completed on
+  // time is unaffected, completed overdue still floors at "never in the
+  // past," and completed early/postponed now lands on due + interval
+  // rather than now + interval — the one case that used to regress.
+  {
+    description: '"every day" completed exactly on its due date (on time) lands on tomorrow',
+    dateString: "every day",
+    reference: { dueDate: "2026-01-05", now: "2026-01-05" },
+    expect: occurrence("2026-01-06"),
+  },
   {
     description:
-      '"every month" (no bang) keeps the due date\'s own day-of-month, not the completion day',
+      '"every day" completed while overdue by one day still floors at tomorrow, never back into the past',
+    dateString: "every day",
+    reference: { dueDate: "2026-01-04", now: "2026-01-05" },
+    expect: occurrence("2026-01-06"),
+  },
+  {
+    description:
+      '"every day" postponed six days out and completed early lands six days later than completion-anchoring would give — the Android-corroborated case from issue #291\'s own comment thread (postponed Mon 21 Sep, completed 15 Sep, landed 22 Sep, not 16 Sep)',
+    dateString: "every day",
+    reference: { dueDate: "2026-09-21", now: "2026-09-15" },
+    expect: occurrence("2026-09-22"),
+  },
+  {
+    description: '"every week" completed exactly on its due date (on time) lands one week out',
+    dateString: "every week",
+    reference: { dueDate: "2026-01-05", now: "2026-01-05" },
+    expect: occurrence("2026-01-12"),
+  },
+  {
+    description:
+      '"every week" completed while overdue by one day still steps from its due date, never back into the past — unlike daily, one weekly interval alone already clears `now` here, so this is the trivial half of the floor; the eighteen-months-late yearly case above is the half that needs more than one step',
+    dateString: "every week",
+    reference: { dueDate: "2026-01-04", now: "2026-01-05" },
+    expect: occurrence("2026-01-11"),
+  },
+  {
+    description:
+      '"every week" postponed into the future and completed early lands on the postponed date plus one week, not one week after `now`',
+    dateString: "every week",
+    reference: { dueDate: "2026-01-19", now: "2026-01-05" },
+    expect: occurrence("2026-01-26"),
+  },
+
+  // --- Issue #301, the two cases that settle it. Driven on Todoist web
+  // 2026-09-15 and recorded in
+  // meologue-parity-docs/todoist/live-audit-dom/recurrence-overdue-weekly-2026-09-15.json.
+  //
+  // These exist because every earlier overdue probe used `every day`,
+  // where a one-day interval has no weekday phase and no interval parity
+  // to lose — so the fixture could not separate "step whole intervals
+  // from the due date" from "max(due, today) + one interval", and the
+  // second was written into the corpus as the general rule. It is wrong
+  // for anything longer than a day.
+  {
+    description:
+      '"every week" overdue by more than one interval steps whole weeks from its due date, keeping the weekday — Todoist web, driven: due Mon 31 Aug, completed Tue 15 Sep, lands Mon 21 Sep (issue #301). `max(due, today) + interval` would give Tue 22 Sep and lose the Monday',
+    dateString: "every week",
+    reference: { dueDate: "2026-08-31", now: "2026-09-15" },
+    expect: occurrence("2026-09-21"),
+  },
+  {
+    description:
+      '"every 2 weeks" overdue by more than one interval keeps its interval PARITY as well as its weekday — Todoist web, driven: due Mon 17 Aug, completed Tue 15 Sep, lands Mon 28 Sep (issue #301). This is the case the weekly probe above cannot discriminate: "next matching Monday" gives 21 Sep, `max(due, today) + interval` gives Tue 29 Sep, and only stepping 17 Aug -> 31 Aug -> 14 Sep -> 28 Sep gives what Todoist actually did',
+    dateString: "every 2 weeks",
+    reference: { dueDate: "2026-08-17", now: "2026-09-15" },
+    expect: occurrence("2026-09-28"),
+  },
+
+  // --- Monthly: `every` vs `every!` genuinely diverge (day-of-month
+  // phase), unlike the bare daily/weekly cases above — this was already
+  // due-anchored before #291, so these three (on time / overdue /
+  // postponed-and-completed-early) are a regression check that the
+  // already-correct rule stayed correct, not a behaviour change.
+  {
+    description: '"every month" (no bang) completed exactly on its due date (on time)',
+    dateString: "every month",
+    reference: { dueDate: "2026-01-15", now: "2026-01-15" },
+    expect: occurrence("2026-02-15"),
+  },
+  {
+    description:
+      '"every month" (no bang) completed while overdue keeps the due date\'s own day-of-month, not the completion day',
     dateString: "every month",
     reference: { dueDate: "2026-01-15", now: "2026-01-20" },
     expect: occurrence("2026-02-15"),
@@ -89,6 +177,13 @@ const CASES: readonly Case[] = [
     dateString: "every! month",
     reference: { dueDate: "2026-01-15", now: "2026-01-20" },
     expect: occurrence("2026-02-20"),
+  },
+  {
+    description:
+      "\"every month\" (no bang) postponed to next month and completed early lands one further month out, on the postponed date's own day, not `now`'s",
+    dateString: "every month",
+    reference: { dueDate: "2026-02-01", now: "2026-01-20" },
+    expect: occurrence("2026-03-01"),
   },
   {
     description:
@@ -522,10 +617,17 @@ describe("parseRecurrence — grammar shape a date-only assertion can't show", (
     expect(withBang).toMatchObject({ kind: "parsed", rule: { anchor: "completion" } });
   });
 
-  it('a bare "every week" resolves to "completion" even without a bang — the exception applied once, at parse time', () => {
-    const result = parseRecurrence("every week");
-    expect(result).toMatchObject({ kind: "parsed", rule: { anchor: "completion" } });
-  });
+  it(
+    'a bare "every week" resolves to "due", the same as every other frequency — issue #291 ' +
+      'retired the exception that used to force it (and bare "every day") to "completion" ' +
+      'regardless of the bang; only "every! week" still resolves to "completion"',
+    () => {
+      const withoutBang = parseRecurrence("every week");
+      const withBang = parseRecurrence("every! week");
+      expect(withoutBang).toMatchObject({ kind: "parsed", rule: { anchor: "due" } });
+      expect(withBang).toMatchObject({ kind: "parsed", rule: { anchor: "completion" } });
+    },
+  );
 
   it('"every 3rd friday" parses its ordinal and weekday separately, not as a weekday-list', () => {
     const result = parseRecurrence("every 3rd friday");

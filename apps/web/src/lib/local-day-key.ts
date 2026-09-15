@@ -1,3 +1,5 @@
+import type { LocalDayKey } from "@meologue/core";
+
 /**
  * `localDayKey`/`parseDayKey` — a `Date` <-> `YYYY-MM-DD` conversion pair
  * for a calendar-cell `Date`, as opposed to an Entry's `createdAt` instant.
@@ -82,12 +84,22 @@
  * in UTC for any Device east of UTC — so slicing the ISO string would
  * silently name the wrong day. Reading the local fields the `Date` was
  * actually constructed from sidesteps the conversion entirely.
+ *
+ * Returns `@meologue/core`'s `LocalDayKey` (issue #300), not a bare
+ * `string`: this function is the one producer the brand's own doc comment
+ * (`packages/core/src/local-day-key.ts`) names, so every `TaskStore`
+ * `today` parameter that requires `LocalDayKey` accepts this function's
+ * result directly and rejects `new Date().toISOString()` (or any other
+ * plain `string`) at compile time instead of at 00:16 local. The cast
+ * below is the brand's one genuine construction site — the six lines
+ * above already guarantee the `YYYY-MM-DD` shape the type promises, this
+ * only tells the type checker what those lines already ensure.
  */
-export function localDayKey(date: Date): string {
+export function localDayKey(date: Date): LocalDayKey {
   const year = date.getFullYear();
   const month = String(date.getMonth() + 1).padStart(2, "0");
   const day = String(date.getDate()).padStart(2, "0");
-  return `${year}-${month}-${day}`;
+  return `${year}-${month}-${day}` as LocalDayKey;
 }
 
 /**

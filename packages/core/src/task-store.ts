@@ -1,3 +1,4 @@
+import type { LocalDayKey } from "./local-day-key";
 import type { Task } from "./task-types";
 
 /**
@@ -261,7 +262,7 @@ export interface TaskStore {
    * deliberately rather than by running out.
    *
    * Throws if `dateString` doesn't parse, or parses but its own
-   * `starting`/`ending`/`for` bound has already elapsed as of `now`
+   * `starting`/`ending`/`for` bound has already elapsed as of `today`
    * (`{ kind: "ended" }`) — quick-add-task.ts's `resolveRecurrence`
    * silently discards either outcome because there's no Task yet to
    * report an error against there; here one already exists, and the
@@ -271,16 +272,45 @@ export interface TaskStore {
    * before either throw becomes reachable — advanceRecurring()'s own doc
    * comment gives the identical reasoning. Clears `seq`.
    *
-   * `now` is a full instant (`new Date().toISOString()`, the identical
-   * shape advanceRecurring's `completedAt` and postpone's `today` both
-   * take) rather than a bare day — only its first ten characters matter
-   * to `../recurrence/`'s engine, sliced off internally the same way
-   * advanceRecurring's own mechanics does, so every picker-facing caller
-   * can pass "now" the one way it already does everywhere else in this
-   * interface instead of learning a special day-only shape for this one
-   * setter.
+   * **`today` must already be a floating local day** (apps/web's
+   * `lib/local-day-key.ts`'s `localDayKey`, not `new Date().toISOString()`)
+   * — issue #296, the identical correction issue #290 made to
+   * advanceRecurring/postpone above. This parameter used to be named
+   * `now` and documented as "a full instant … sliced off internally," on
+   * the theory that only the first ten characters mattered so any
+   * instant would do. That theory was wrong the same way it was wrong for
+   * advanceRecurring: this method's own two real callers
+   * (task-row-content.tsx, task-detail-view.tsx) threaded
+   * `new Date().toISOString()` through, whose first ten characters name
+   * the UTC calendar day, not the Device's own — for any reader east of
+   * UTC, a window each night as wide as their own offset. Since
+   * `../recurrence/`'s engine only anchors a fresh grant to `today`
+   * (never advances past a floor the way advanceRecurring's completion
+   * does), the consequence here is a Recurrence granted against the
+   * wrong day rather than a Task returning already-due — see
+   * `../recurrence/recurrence.ts`'s `firstOccurrence` for what "anchor"
+   * means. `today` exists so the caller resolves the local day itself
+   * and hands this method an already-correct floating day, rather than
+   * this method (or its first ten characters) guessing one out of an
+   * instant it has no way to interpret correctly.
+   *
+   * **Unlike advanceRecurring, this method takes no separate instant.**
+   * advanceRecurring needs one because it may stamp `completedAt` (its
+   * "ended" outcome); setDateString never writes an instant-shaped column
+   * — `updatedAt` is left to `updateIfLive`'s own default `this.now()`
+   * read, exactly the way `postpone`'s own doc comment explains for its
+   * identical single `today` parameter. So this setter's shape mirrors
+   * `postpone`'s, not `advanceRecurring`'s, once the actual columns it
+   * touches are read rather than assumed.
+   *
+   * **`today`'s type, not just its doc comment, now rules out the bug
+   * (issue #300).** `LocalDayKey` (./local-day-key.ts) is constructible
+   * only through `localDayKey()` (apps/web) or an explicit parse — never
+   * through `new Date().toISOString()`, which is a bare `string`. The
+   * three paragraphs above describe the bug this type makes uncompilable
+   * rather than merely documented.
    */
-  setDateString(id: string, dateString: string | null, now: string): Promise<void>;
+  setDateString(id: string, dateString: string | null, today: LocalDayKey): Promise<void>;
   /**
    * Sets `labelIds` and clears `seq` — mirrors the other #169-era setters
    * above for the same reason: a caller building its own patch object
@@ -376,10 +406,32 @@ export interface TaskStore {
    *
    * `completedAt` is a real timestamp, exactly like complete()'s own
    * parameter above — this is a completion event even though it doesn't
-   * set the `completedAt` column — and its first ten characters become
-   * the recurrence engine's floating "now," the identical technique
-   * ../task-views.ts's today() uses to derive a day-granular boundary
-   * from a full timestamp.
+   * set the `completedAt` column.
+   *
+   * `today` is the **floating calendar day** the recurrence engine treats
+   * as "now" — issue #290's fix. This method used to derive that day
+   * itself, by slicing `completedAt`'s first ten characters the same way
+   * ../task-views.ts's today() derives a day-granular boundary from a full
+   * timestamp; that only works when `completedAt` is already a floating
+   * string, and every real caller instead threads through
+   * `new Date().toISOString()`, a UTC instant. Slicing *that* names the
+   * UTC calendar day, not the Device's own — for any reader east of UTC,
+   * a window each night as wide as their own offset, the recurrence engine
+   * is handed a "now" a day early, and since it only ever returns a date
+   * strictly after "now" (see ../recurrence/recurrence.ts's own doc
+   * comment on skipping missed occurrences), a day-early "now" can return
+   * an occurrence that's already today — the Task completes and
+   * immediately reappears due today instead of moving forward. `today`
+   * exists so the caller — apps/web's use-tasks.ts, the one layer that
+   * knows the Device's own local time — resolves that day itself (via
+   * lib/local-day-key.ts's `localDayKey`, whose own doc comment names this
+   * exact trap) and hands this method an already-correct floating day,
+   * rather than this method guessing one out of an instant it has no way
+   * to interpret correctly. `completedAt` still supplies `updatedAt` (and
+   * `completedAt` itself, for the "ended" outcome below) — an instant is
+   * exactly the right shape for those columns, just the wrong one for
+   * recurrence arithmetic, which is why this method needs both rather than
+   * one implying the other.
    *
    * A bounded rule (a `starting`/`ending`/`for` clause whose window has
    * elapsed — ../recurrence/'s `{ kind: "ended" }` outcome) has no next
@@ -396,8 +448,17 @@ export interface TaskStore {
    * tombstone or an unknown id — checked before either throw becomes
    * reachable, the same ordering setDeadline's own doc comment explains
    * for the identical reason. Clears `seq`.
+   *
+   * **`today` is `LocalDayKey` (./local-day-key.ts), issue #300** — the
+   * type-level version of the two paragraphs above: constructible only
+   * through `localDayKey()`/an explicit parse, so `completedAt` (a plain
+   * `string`, still an instant) can no longer reach this parameter by
+   * accident, the exact swap that compiled before this ticket despite the
+   * two arguments meaning different things. `completedAt` itself stays a
+   * plain `string` — see local-day-key.ts's own header comment for why the
+   * instant side is deliberately not branded too.
    */
-  advanceRecurring(id: string, completedAt: string): Promise<void>;
+  advanceRecurring(id: string, completedAt: string, today: LocalDayKey): Promise<void>;
   /**
    * Ends a recurring Task's series and files it as an ordinary completed
    * Task — Shift+Click on a recurring task's checkbox ("Complete and
@@ -420,13 +481,29 @@ export interface TaskStore {
    * exactly why a Task with no `dateString` can use it too. `today` is a
    * floating date-or-datetime string in ../task-views.ts's today()'s own
    * encoding — only its first ten characters matter, the calendar day
-   * "tomorrow" is computed from (../recurrence/'s tomorrowOf). Preserves
+   * "tomorrow" is computed from (../recurrence/'s tomorrowOf).
+   *
+   * **`today` must already be a floating local day** (lib/local-day-key.ts's
+   * `localDayKey` on apps/web's side, not `new Date().toISOString()`) —
+   * issue #290. This parameter has always been named `today` rather than
+   * `now`, which was itself the tell: a caller that instead threaded a UTC
+   * instant through it was relying on ../recurrence/'s `tomorrowOf` (via
+   * `parseFloating`) silently slicing the first ten characters, which
+   * names the UTC calendar day rather than the Device's own. For any
+   * reader east of UTC that's a day early for a window each night as wide
+   * as their own offset — see advanceRecurring's own doc comment above for
+   * the full account of why a day-early "now" is a correctness bug here,
+   * not a cosmetic one. Preserves
    * whichever shape `date` already had: a timed `date` keeps its
    * time-of-day on the new day; an all-day `date` stays all-day. No-op
    * against a tombstone or a Task with no `date` at all — there is
    * nothing to postpone. Clears `seq`.
+   *
+   * **`today` is `LocalDayKey` (./local-day-key.ts), issue #300** — see
+   * `advanceRecurring`'s own doc comment above for what the type now rules
+   * out that the doc comment alone used to only ask nicely for.
    */
-  postpone(id: string, today: string): Promise<void>;
+  postpone(id: string, today: LocalDayKey): Promise<void>;
   /**
    * Tombstone, never a hard delete (ADR 0028's rule, applied to Tasks).
    * `seq IS NULL` means "no acknowledgement from the server yet," which

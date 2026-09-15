@@ -1,8 +1,8 @@
 import type { Label, Project, Task } from "@meologue/core";
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { useState } from "react";
 import { MemoryRouter } from "react-router";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { OPEN_COMMAND_MENU_EVENT, OPEN_SCHEDULE_EVENT } from "@/lib/todo-keymap";
 import { TaskRow } from "./task-row";
 
@@ -682,6 +682,119 @@ describe("TaskRow", () => {
     expect(screen.queryByTestId("scheduler-view")).not.toBeInTheDocument();
   });
 
+  // Issue #296: this row's own `TaskSchedulePopover` wiring (the "No Date"
+  // clear and the Repeat menu's "Every day" pick, both inside
+  // `task-row-content.tsx`) used to thread `new Date().toISOString()`
+  // through `onSetDateString`'s third argument — `TaskStore.setDateString`'s
+  // own doc comment (packages/core) says that parameter (`today`) has
+  // always meant a floating local calendar day, never an instant. Slicing
+  // an instant's first ten characters names the UTC day, not the Device's
+  // own, for a window each night as wide as the Device's own UTC offset —
+  // the identical shape of bug issue #290 fixed for
+  // `advanceRecurringTask`/`postponeTask` in use-tasks.ts, and
+  // `task-detail-view.test.tsx`'s own identical suite covers the sibling
+  // call site. These tests pin both directions the same way: a Device
+  // east of UTC before its own midnight has reached UTC, and one west of
+  // UTC after local time has already rolled into UTC's next day.
+  describe("issue #296 — onSetDateString receives the local day, not UTC's", () => {
+    afterEach(() => {
+      vi.useRealTimers();
+      vi.unstubAllEnvs();
+    });
+
+    function renderRowWithOnSetDateString(
+      taskOverrides: Partial<Task>,
+      onSetDateString: (id: string, dateString: string | null, today: string) => void,
+    ) {
+      renderRow({
+        task: task({ id: "1", content: "call mum", ...taskOverrides }),
+        detailActions: {
+          projects: [],
+          labels: [],
+          onOpenDetail: vi.fn(),
+          onSetPriority: vi.fn(),
+          onSetDate: vi.fn(),
+          onSetDateString,
+          datesWithTasks: new Map(),
+          onSetProject: vi.fn(),
+          onSetLabels: vi.fn(),
+          onCopyLink: vi.fn(),
+          onRename: vi.fn(),
+          commentCountFor: vi.fn(() => 0),
+        },
+      });
+    }
+
+    it("clearing the date with No Date reports the local day for a Device east of UTC, before its own midnight has reached UTC", () => {
+      vi.stubEnv("TZ", "Asia/Kolkata");
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(new Date(2026, 8, 15, 0, 16, 18));
+
+      const onSetDateString = vi.fn();
+      renderRowWithOnSetDateString(
+        { date: "2026-09-14", dateString: "every day" },
+        onSetDateString,
+      );
+
+      fireEvent.click(screen.getByRole("button", { name: 'Date "call mum"' }));
+      fireEvent.click(screen.getByRole("button", { name: "No Date" }));
+
+      expect(onSetDateString).toHaveBeenCalledWith("1", null, "2026-09-15");
+    });
+
+    it("clearing the date with No Date reports the local day for a Device west of UTC, once local time has already rolled into UTC's next day", () => {
+      vi.stubEnv("TZ", "America/Los_Angeles");
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(new Date(2026, 8, 14, 23, 45, 0));
+
+      const onSetDateString = vi.fn();
+      renderRowWithOnSetDateString(
+        { date: "2026-09-13", dateString: "every day" },
+        onSetDateString,
+      );
+
+      fireEvent.click(screen.getByRole("button", { name: 'Date "call mum"' }));
+      fireEvent.click(screen.getByRole("button", { name: "No Date" }));
+
+      expect(onSetDateString).toHaveBeenCalledWith("1", null, "2026-09-14");
+    });
+
+    it("picking 'Every day' from the Repeat menu reports the local day for a Device east of UTC, before its own midnight has reached UTC", () => {
+      vi.stubEnv("TZ", "Asia/Kolkata");
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(new Date(2026, 8, 15, 0, 16, 18));
+
+      const onSetDateString = vi.fn();
+      renderRowWithOnSetDateString({ date: null, dateString: null }, onSetDateString);
+
+      fireEvent.click(screen.getByRole("button", { name: 'Date "call mum"' }));
+      // Radix's `DropdownMenu.Trigger` opens on `pointerdown`, not `click`
+      // — task-schedule-popover.test.tsx's own `openRepeatMenu` helper
+      // establishes this identically for the same "Repeat" button.
+      fireEvent.pointerDown(screen.getByRole("button", { name: "Repeat" }));
+      const menu = screen.getByTestId("repeat-menu");
+      fireEvent.click(within(menu).getByRole("menuitem", { name: "Every day" }));
+
+      expect(onSetDateString).toHaveBeenCalledWith("1", "every day", "2026-09-15");
+    });
+
+    it("picking 'Every day' from the Repeat menu reports the local day for a Device west of UTC, once local time has already rolled into UTC's next day", () => {
+      vi.stubEnv("TZ", "America/Los_Angeles");
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(new Date(2026, 8, 14, 23, 45, 0));
+
+      const onSetDateString = vi.fn();
+      renderRowWithOnSetDateString({ date: null, dateString: null }, onSetDateString);
+
+      fireEvent.click(screen.getByRole("button", { name: 'Date "call mum"' }));
+      fireEvent.pointerDown(screen.getByRole("button", { name: "Repeat" }));
+      const menu = screen.getByTestId("repeat-menu");
+      fireEvent.click(within(menu).getByRole("menuitem", { name: "Every day" }));
+
+      expect(onSetDateString).toHaveBeenCalledWith("1", "every day", "2026-09-14");
+    });
+  });
+
   // Issue #253: "Deadline…" is unchanged by this ticket — it still opens
   // the shared `TaskScheduleSheet`, not the Date popover.
   it("the More-actions 'Deadline…' item still calls onOpenSchedule, not the scheduler popover", () => {
@@ -1004,6 +1117,57 @@ describe("TaskRow", () => {
       expect(screen.queryByText("Inbox")).not.toBeInTheDocument();
     });
 
+    // Issue #310 (ROW-10/AROW-14): Todoist suppresses a Task row's own
+    // Project badge inside that Project's own view — the page's own
+    // heading already names it — and shows it everywhere else
+    // (Today/Upcoming/Search/a Filter). `suppressProjectBadge` is the
+    // caller-supplied flag `task-tree.tsx` derives from `projectId !==
+    // null`; this row itself only has to obey it.
+    it("hides the Project badge when suppressProjectBadge is set, even though the Task has a Project", () => {
+      renderRow({
+        task: task({ content: "call mum", projectId: "project-1" }),
+        suppressProjectBadge: true,
+        detailActions: {
+          projects: [project({ id: "project-1", name: "Errands" })],
+          labels: [],
+          onOpenDetail: vi.fn(),
+          onSetPriority: vi.fn(),
+          onSetDate: vi.fn(),
+          onSetDateString: vi.fn(),
+          datesWithTasks: new Map(),
+          onSetProject: vi.fn(),
+          onSetLabels: vi.fn(),
+          onCopyLink: vi.fn(),
+          onRename: vi.fn(),
+          commentCountFor: vi.fn(() => 0),
+        },
+      });
+
+      expect(screen.queryByText("Errands")).not.toBeInTheDocument();
+    });
+
+    it("still shows the Project badge when suppressProjectBadge is omitted (Today/Upcoming's own default)", () => {
+      renderRow({
+        task: task({ content: "call mum", projectId: "project-1" }),
+        detailActions: {
+          projects: [project({ id: "project-1", name: "Errands" })],
+          labels: [],
+          onOpenDetail: vi.fn(),
+          onSetPriority: vi.fn(),
+          onSetDate: vi.fn(),
+          onSetDateString: vi.fn(),
+          datesWithTasks: new Map(),
+          onSetProject: vi.fn(),
+          onSetLabels: vi.fn(),
+          onCopyLink: vi.fn(),
+          onRename: vi.fn(),
+          commentCountFor: vi.fn(() => 0),
+        },
+      });
+
+      expect(screen.getByText("Errands")).toBeInTheDocument();
+    });
+
     it("shows no sub-task count when there are none", () => {
       renderRow({ task: task({ content: "call mum" }), subtaskCount: 0 });
 
@@ -1066,11 +1230,16 @@ describe("TaskRow", () => {
     // (`row-and-detail.md:120`; singular confirmed live,
     // `flow10-ROW-09-both.json`'s `"1 comment"` reading) — this used to be
     // a plain, non-interactive `<span>`.
-    it("renders the comment badge as a link to the Task's own detail route, singular wording at 1", () => {
+    // Issue #306: `?intent=reply` closes ROW-08's one remaining
+    // divergence — Todoist's own badge carries it too
+    // (`taskDetailPath`'s own doc comment, task-detail-route.ts, has the
+    // full reasoning for why it rides the SAME address as a query
+    // parameter rather than a second route).
+    it("renders the comment badge as a link to the Task's own detail route, carrying the reply intent, singular wording at 1", () => {
       renderRow({ task: task({ id: "1", content: "call mum" }), commentCount: 1 });
 
       const link = screen.getByRole("link", { name: "1 comment" });
-      expect(link).toHaveAttribute("href", "/todo/task/call-mum-1");
+      expect(link).toHaveAttribute("href", "/todo/task/call-mum-1?intent=reply");
     });
 
     it("pluralises the comment badge's wording above 1", () => {
