@@ -238,6 +238,9 @@ function renderView(overrides: Partial<Parameters<typeof TaskDetailView>[0]> = {
     onRename: vi.fn(),
     onComplete: vi.fn(),
     onUncomplete: vi.fn(),
+    onCopyLink: vi.fn(),
+    onDelete: vi.fn(),
+    onCompleteForever: vi.fn(),
     onOpenSchedule: vi.fn(),
     onSetDate: vi.fn(),
     onSetDateString: vi.fn(),
@@ -1660,6 +1663,95 @@ describe("TaskDetailView", () => {
       expect(onComplete).toHaveBeenCalled();
     });
   });
+
+  // Issue #302 — the header's own `⋮` overflow menu. `fireEvent.pointerDown`
+  // then `fireEvent.click` mirrors `task-row.test.tsx`'s identical Radix
+  // `DropdownMenu` pattern for the row's own "More actions" menu.
+  describe("Issue #302 — the detail sheet's own overflow menu", () => {
+    function openOverflow() {
+      fireEvent.pointerDown(screen.getByRole("button", { name: "Task actions" }));
+    }
+
+    it("carries an overflow control in the header, reachable by touch", () => {
+      renderView();
+
+      // A plain <button>, not gated behind `pointer-fine`/hover the way
+      // the row's own hover-revealed actions are (`HOVER_REVEAL_CLASSES`,
+      // task-row-content.tsx) — ADET-02's own gap was a narrow, touch-only
+      // reader having no door onto Delete at all.
+      expect(screen.getByRole("button", { name: "Task actions" })).toBeInTheDocument();
+    });
+
+    it("offers Copy link to task, which calls onCopyLink", () => {
+      const onCopyLink = vi.fn();
+      renderView({ onCopyLink });
+
+      openOverflow();
+      fireEvent.click(screen.getByRole("menuitem", { name: "Copy link to task" }));
+
+      expect(onCopyLink).toHaveBeenCalledTimes(1);
+    });
+
+    it("Delete task confirms first — selecting it alone never calls onDelete", () => {
+      const onDelete = vi.fn();
+      renderView({ task: task({ content: "buy milk" }), onDelete });
+
+      openOverflow();
+      fireEvent.click(screen.getByRole("menuitem", { name: "Delete task" }));
+
+      expect(onDelete).not.toHaveBeenCalled();
+      // `ConfirmDialog` renders `role="alertdialog"`, not `"dialog"`
+      // (alert-dialog.tsx's own comment on why) — genuinely distinct from
+      // this view's own outer `role="dialog"`, so this query can only ever
+      // match the confirmation, never the sheet itself.
+      expect(screen.getByRole("alertdialog", { name: "Delete task?" })).toBeInTheDocument();
+    });
+
+    it("confirming the Delete task dialog calls onDelete, matching the row menu's own confirm-first delete", () => {
+      const onDelete = vi.fn();
+      renderView({ task: task({ content: "buy milk" }), onDelete });
+
+      openOverflow();
+      fireEvent.click(screen.getByRole("menuitem", { name: "Delete task" }));
+      fireEvent.click(screen.getByRole("button", { name: "Delete" }));
+
+      expect(onDelete).toHaveBeenCalledTimes(1);
+    });
+
+    it("does not offer Complete forever for a non-recurring Task", () => {
+      renderView({ task: task({ dateString: null }) });
+
+      openOverflow();
+
+      expect(screen.queryByRole("menuitem", { name: "Complete forever" })).not.toBeInTheDocument();
+    });
+
+    it("offers Complete forever for a recurring Task, and it ends the series without deleting it", () => {
+      const onCompleteForever = vi.fn();
+      const onDelete = vi.fn();
+      renderView({ task: task({ dateString: "every day" }), onCompleteForever, onDelete });
+
+      openOverflow();
+      fireEvent.click(screen.getByRole("menuitem", { name: "Complete forever" }));
+
+      expect(onCompleteForever).toHaveBeenCalledTimes(1);
+      expect(onDelete).not.toHaveBeenCalled();
+    });
+
+    it("shows when the Task was added", () => {
+      // Noon UTC (this suite's own established "safe" instant —
+      // history.test.tsx's identical `T12:00:00.000Z` convention) so the
+      // calendar day this asserts holds under any real local timezone;
+      // the clock half is intentionally left unasserted digit-for-digit,
+      // since that half genuinely does vary with the runner's own
+      // timezone, correctly so.
+      renderView({ task: task({ createdAt: "2026-08-26T12:00:00.000Z" }) });
+
+      openOverflow();
+
+      expect(screen.getByText(/^Added on 26 Aug \d{1,2}:\d{2}\s?[AP]M$/)).toBeInTheDocument();
+    });
+  });
 });
 
 // `installMatchMedia`/`removeMatchMedia` mirror use-wide-layout.test.ts's
@@ -1696,6 +1788,29 @@ describe("TaskDetailView on a narrow screen", () => {
 
     expect(screen.getByRole("dialog")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Close" })).not.toBeInTheDocument();
+  });
+
+  // Issue #302's own acceptance criterion: the narrow (bottom-sheet) shell
+  // specifically has to carry the overflow control, stated explicitly here
+  // rather than left implicit — CLAUDE.md's own "breakpoint trap" note
+  // names exactly this suite (task-schedule-popover.test.tsx's 59
+  // assertions silently changed subject) as the reason a query broad
+  // enough to match both shells proves nothing on its own. `matchMedia` is
+  // pinned to `false` in THIS test, not inherited from the global stub
+  // (`test/setup.ts`) or the wide-screen default this same describe block
+  // already overrides for its sibling above.
+  it("BREAKPOINT: narrow (<900px, bottom sheet) — the overflow control is present and opens the menu", () => {
+    installMatchMedia(false);
+
+    renderView();
+
+    const trigger = screen.getByRole("button", { name: "Task actions" });
+    expect(trigger).toBeInTheDocument();
+
+    fireEvent.pointerDown(trigger);
+
+    expect(screen.getByRole("menuitem", { name: "Copy link to task" })).toBeInTheDocument();
+    expect(screen.getByRole("menuitem", { name: "Delete task" })).toBeInTheDocument();
   });
 });
 

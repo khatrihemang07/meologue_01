@@ -58,8 +58,17 @@
  */
 import type { Comment, Event, Label, Project, Section, Task } from "@meologue/core";
 import { uiPriorityOf } from "@meologue/core";
-import { ChevronLeft, ChevronRight, Pencil, Trash2, X } from "lucide-react";
-import { Dialog as DialogPrimitive } from "radix-ui";
+import {
+  CheckCheck,
+  ChevronLeft,
+  ChevronRight,
+  Copy,
+  MoreVertical,
+  Pencil,
+  Trash2,
+  X,
+} from "lucide-react";
+import { Dialog as DialogPrimitive, DropdownMenu } from "radix-ui";
 import type * as React from "react";
 import { forwardRef, Suspense, useEffect, useRef, useState } from "react";
 import { useOutletContext } from "react-router";
@@ -74,7 +83,7 @@ import { ConfirmDialog } from "@/components/ui/alert-dialog";
 import { useAutoGrowTextarea } from "@/hooks/use-auto-grow-textarea";
 import { useTaskDateState } from "@/hooks/use-task-date-state";
 import { useWideLayout } from "@/hooks/use-wide-layout";
-import { deviceUtcOffsetMinutes, formatCommentTimestamp } from "@/lib/entry-day";
+import { deviceUtcOffsetMinutes, formatClockTime, formatCommentTimestamp } from "@/lib/entry-day";
 import { isRenderableEvent } from "@/lib/format-event";
 import { formatDay, formatTaskDate } from "@/lib/format-task-date";
 import { localDayKey } from "@/lib/local-day-key";
@@ -130,6 +139,42 @@ export interface TaskDetailViewProps {
    */
   onComplete: () => void;
   onUncomplete: () => void;
+  /**
+   * Copies this Task's own link (issue #302) — the header's overflow menu's
+   * "Copy link to task" item, reusing `TaskDetailActions.onCopyLink`
+   * (`task-row.tsx`'s own doc comment), the identical door the row's
+   * `TaskCommandMenu` already opens onto the same capability. This view
+   * takes zero arguments, not a `(task: Task) => void` — unlike that
+   * bundle, this view already has exactly one Task in scope and no reason
+   * to make every caller re-bind it.
+   */
+  onCopyLink: () => void;
+  /**
+   * Deletes this Task outright (issue #302) — the header's overflow menu's
+   * "Delete task" item, reached only after this view's own `ConfirmDialog`
+   * confirms (`TaskDetailBody`'s own doc comment on why that dialog lives
+   * here rather than being left to whichever caller renders this view: a
+   * caller can supply the real mutation, since this view already asks
+   * before ever calling it, matching the row menu's identical two-step
+   * shape). Deleting the Task this view is currently showing is what
+   * closes it — this view calls no `onClose` of its own: `openTask`
+   * (`todo-page.tsx`/`composer-page.tsx`) simply stops resolving once the
+   * Task is gone, which is the identical mechanism a Task disappearing out
+   * from under an open detail view already has to handle for a Sync-driven
+   * delete from another Device.
+   */
+  onDelete: () => void;
+  /**
+   * Ends this Task's recurring series without deleting it (issue #302) —
+   * exposes `task-row.tsx`'s own `onCompleteForever` (that prop's own doc
+   * comment: "Shift+Click on the checkbox... and a dedicated button" are
+   * its only two doors before this ticket) on a third surface, the detail
+   * view's own overflow menu. Rendered there only when `task.dateString`
+   * is non-null — a non-recurring Task has no series to end, the identical
+   * gate the row's own dedicated button already applies
+   * (`task-row-content.tsx`'s `isRecurring`).
+   */
+  onCompleteForever: () => void;
   /** Opens the shared `TaskScheduleSheet` — this file's own header comment on why Deadline/Priority funnel through the one door rather than each growing a picker of its own. Date no longer does (issue #253) — see `onSetDate`/`onSetDateString`/`datesWithTasks` below. */
   onOpenSchedule: () => void;
   /** Sets or clears the Task's `date` (issue #253) — reaches this view's own `TaskSchedulePopover` instance for the Date attribute, mirroring `task-row-content.tsx`'s identical wiring. */
@@ -537,6 +582,126 @@ function CommentComposer({ onSubmit }: { onSubmit: (text: string) => void }) {
   );
 }
 
+/**
+ * "Added on 26 Aug 10:37 AM" (issue #302) — the wording and shape Todoist's
+ * own overflow menu was measured carrying live
+ * (`meologue-parity-docs/todoist/parity-ledger-android.md`'s ADET-02/
+ * ADET-15 rows: day-then-month, no year, followed by a clock time).
+ * `task.createdAt` is a real UTC instant (`task-types.ts`'s own doc
+ * comment on the field), so this composes the identical two formatters
+ * `formatCommentTimestamp` above already composes for a Comment's own
+ * timestamp — `formatDay` (this file's own "d MMM", year-less by design)
+ * off the LOCAL day the instant falls on (`localDayKey(new Date(...))`,
+ * not a UTC slice of the string), plus `formatClockTime`'s identical
+ * clock. Returns `null` for a value `Date` can't parse, the same
+ * "say nothing rather than something wrong" `formatCommentTimestamp`
+ * already follows.
+ */
+function formatAddedOn(createdAt: string): string | null {
+  const parsed = new Date(createdAt);
+  if (Number.isNaN(parsed.getTime())) {
+    return null;
+  }
+  const clock = formatClockTime(createdAt);
+  if (clock === null) {
+    return null;
+  }
+  return `Added on ${formatDay(localDayKey(parsed))} ${clock}`;
+}
+
+const overflowItemClassName =
+  "flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-sm outline-none data-highlighted:bg-muted data-highlighted:text-foreground";
+
+/**
+ * The detail sheet's own `⋮` overflow menu (issue #302) — Copy link,
+ * Delete and (recurring Tasks only) Complete forever, plus a non-
+ * interactive "Added on …" stamp. This is a second, narrower
+ * `DropdownMenu.Root` alongside `TaskCommandMenu`'s (task-command-menu.tsx),
+ * not that component reused wholesale: that menu's own seven items —
+ * Edit, Date…, Priority, Deadline…, Labels, Move to… — either have no
+ * meaning here (Edit is this whole view; there is no second "Move to…"
+ * picker to keep in sync with the sidebar's own Project attribute a few
+ * lines below) or would need a parallel, harder-to-follow prop surface on
+ * this file just to reach three items this ticket actually asks for. The
+ * three real actions below still call back into this app's existing
+ * TaskStore doors — `onCopyLink`/`onDelete`/`onCompleteForever`
+ * (`TaskDetailViewProps`'s own doc comments) — the identical mutations
+ * `TaskCommandMenu`'s own "Copy link to task"/"Delete" items and the row's
+ * dedicated Complete-forever button already call, not a parallel set
+ * built for this surface.
+ */
+function TaskDetailOverflowMenu({
+  task,
+  open,
+  onOpenChange,
+  onCopyLink,
+  onCompleteForever,
+  onRequestDelete,
+}: {
+  task: Task;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  onCopyLink: () => void;
+  onCompleteForever: () => void;
+  onRequestDelete: () => void;
+}) {
+  // A recurring Task never actually carries `completedAt` alongside a
+  // non-null `dateString` (`TaskStore.completeForever`/`advanceRecurring`'s
+  // own mechanics both clear `dateString` the moment a recurring Task's
+  // series ends), so this reads as belt-and-braces against
+  // `task-row-content.tsx`'s identical `isRecurring && !isCompleted` gate
+  // on its own dedicated button, not a case this file has actually
+  // observed happening on its own.
+  const isRecurring = task.dateString !== null && task.completedAt === null;
+  const addedOn = formatAddedOn(task.createdAt);
+  return (
+    <DropdownMenu.Root open={open} onOpenChange={onOpenChange}>
+      <DropdownMenu.Trigger asChild>
+        <button
+          type="button"
+          aria-label="Task actions"
+          className="flex size-8 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground aria-expanded:opacity-100"
+        >
+          <MoreVertical aria-hidden="true" className="size-4" />
+        </button>
+      </DropdownMenu.Trigger>
+      <DropdownMenu.Portal>
+        <DropdownMenu.Content
+          align="end"
+          className="z-50 flex w-56 flex-col gap-0.5 rounded-lg border border-border bg-popover p-1 text-popover-foreground shadow-lg data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0"
+        >
+          {addedOn !== null && (
+            <>
+              <p className="px-2 py-1.5 text-muted-foreground text-xs">{addedOn}</p>
+              <DropdownMenu.Separator className="my-1 h-px bg-border" />
+            </>
+          )}
+          <DropdownMenu.Item className={overflowItemClassName} onSelect={onCopyLink}>
+            <Copy aria-hidden="true" className="size-3.5" />
+            Copy link to task
+          </DropdownMenu.Item>
+          {isRecurring && (
+            <DropdownMenu.Item className={overflowItemClassName} onSelect={onCompleteForever}>
+              <CheckCheck aria-hidden="true" className="size-3.5" />
+              Complete forever
+            </DropdownMenu.Item>
+          )}
+          <DropdownMenu.Item
+            className={cn(
+              overflowItemClassName,
+              "text-destructive data-highlighted:bg-destructive/10",
+            )}
+            onSelect={onRequestDelete}
+          >
+            <Trash2 aria-hidden="true" className="size-3.5" />
+            Delete task
+          </DropdownMenu.Item>
+        </DropdownMenu.Content>
+      </DropdownMenu.Portal>
+    </DropdownMenu.Root>
+  );
+}
+
 function TaskDetailBody({
   task,
   project,
@@ -550,6 +715,9 @@ function TaskDetailBody({
   onRename,
   onComplete,
   onUncomplete,
+  onCopyLink,
+  onDelete,
+  onCompleteForever,
   onOpenSchedule,
   onSetDate,
   onSetDateString,
@@ -721,6 +889,18 @@ function TaskDetailBody({
   const [pickingProject, setPickingProject] = useState(false);
   const [pickingLabels, setPickingLabels] = useState(false);
   const [subtaskDraft, setSubtaskDraft] = useState("");
+  // Issue #302: the header's own `⋮` overflow menu, and the "Delete task?"
+  // confirmation its own "Delete task" item opens — a second, dedicated
+  // dialog rather than reusing `todo-page.tsx`'s own `confirmingId`/
+  // `ConfirmDialog` pair: that pair lives at the PAGE level (only
+  // `todo-page.tsx` renders it), where `composer-page.tsx`'s own
+  // `TaskDetailView` instance has never needed one before this ticket.
+  // Owning it here, mirroring `confirmingCommentId`/`discardConfirmOpen`
+  // just above, is what makes it work identically for both callers rather
+  // than needing `composer-page.tsx` to grow page-level delete-confirm
+  // machinery of its own just to match.
+  const [overflowOpen, setOverflowOpen] = useState(false);
+  const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
   // CMT-03: deleting a Comment confirms first (ours used to delete with no
   // confirmation at all) — one dialog for the whole thread, named by which
   // Comment it's currently open for, mirroring `todo-page.tsx`'s own
@@ -1092,6 +1272,19 @@ function TaskDetailBody({
         >
           <ChevronRight aria-hidden="true" className="size-4" />
         </button>
+        {/* Issue #302: the overflow menu — reachable on touch, and not
+            gated on `wide` the way Close below is, since ADET-02's own gap
+            was exactly this: a narrow reader had no door onto Delete
+            except closing this whole sheet and finding the row behind
+            it. */}
+        <TaskDetailOverflowMenu
+          task={task}
+          open={overflowOpen}
+          onOpenChange={setOverflowOpen}
+          onCopyLink={onCopyLink}
+          onCompleteForever={onCompleteForever}
+          onRequestDelete={() => setDeleteConfirmOpen(true)}
+        />
         {wide && (
           <DialogPrimitive.Close asChild>
             <button
@@ -1565,6 +1758,23 @@ function TaskDetailBody({
                   onRemoveComment(confirmingCommentId);
                 }
               }}
+            />
+
+            {/* Issue #302: deleting a Task from the overflow menu confirms
+              first — verbatim wording matching `todo-page.tsx`'s own
+              `ConfirmDialog` for the row menu's identical "Delete" item
+              (that file's own ROW-06 comment has the reasoning for why
+              only the interpolated title gets `inlineProse`, not the
+              surrounding sentence). `onDelete` is the real mutation; this
+              view calls no `onClose` of its own afterward — `task-detail-
+              view.tsx`'s own `onDelete` doc comment has the reason. */}
+            <ConfirmDialog
+              open={deleteConfirmOpen}
+              onOpenChange={setDeleteConfirmOpen}
+              title="Delete task?"
+              description={<>The {inlineProse(task.content)} task will be permanently deleted.</>}
+              confirmLabel="Delete"
+              onConfirm={onDelete}
             />
 
             {/* Activity (issue #184, ADR 0056) — collapsed by default, open
