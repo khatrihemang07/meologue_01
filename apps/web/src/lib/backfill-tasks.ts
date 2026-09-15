@@ -213,6 +213,32 @@ export async function backfillTasksFromHistory(
       continue;
     }
 
+    // Issue #296's sweep named this `?? entry.createdAt.slice(0, 10)`
+    // fallback as "worth checking, not established." Established now:
+    // `entryDayKey` (lib/entry-day.ts) returns `null` in exactly one case
+    // — `Number.isNaN(Date.parse(createdAt))`, i.e. `createdAt` doesn't
+    // parse as a `Date` AT ALL, not merely "parses to a UTC instant that
+    // names the wrong local day." Every Entry this codebase itself ever
+    // creates gets `createdAt` from `new Date().toISOString()`
+    // (use-history.ts's `sendEntry`/`commitEntryEdit`, both `capturedAt`),
+    // always a valid, parseable instant — so for any Entry this app wrote,
+    // `entryDayKey` never returns `null` and this fallback never runs.
+    // The one door it exists for is data this app didn't write itself —
+    // a restored backup or an external import carrying a malformed
+    // `createdAt` (`backups-defeat-migrated-everywhere.md`'s own point:
+    // an old or foreign data shape can reappear indefinitely).
+    //
+    // That's also why this ISN'T issue #296's UTC-vs-local bug, despite
+    // matching its `.slice(0, 10)` shape: the other two instances slice a
+    // *valid* UTC instant, which names a real but wrong calendar day for a
+    // reader east of UTC. Here the slice only ever runs on a string that
+    // has already failed to parse as a `Date` at all — there is no valid
+    // instant underneath it to convert correctly in either calendar, UTC
+    // or local. Slicing it is a "produce *some* day-shaped string rather
+    // than throw" default for already-corrupt input, not a mis-conversion
+    // of good input. Left as-is: fixing a UTC/local mismatch has no
+    // meaning against a value that was never a valid timestamp to begin
+    // with.
     const capturedDay = entryDayKey(entry.createdAt, offsetMinutes) ?? entry.createdAt.slice(0, 10);
     const quickAddOptions: QuickAddOptions = { now: capturedDay, smartDates: true, language };
     const { body, tasks: promoted } = promoteBareCheckboxes(

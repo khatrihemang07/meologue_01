@@ -29,6 +29,7 @@ import type { Event, Project, Task } from "@meologue/core";
 import { format, formatDistanceToNow, isToday, isYesterday } from "date-fns";
 import { formatDay } from "@/lib/format-task-date";
 import { flattenCommentPreview } from "@/lib/inline-markdown";
+import { localDayKey } from "@/lib/local-day-key";
 import { taskDetailPath } from "@/lib/task-detail-route";
 
 /** How long an Event reads as "5 minutes ago" rather than an absolute time — a day, matching the day-grouping headers themselves. */
@@ -59,6 +60,35 @@ export function isRenderableEvent(event: Event): boolean {
  * "Yesterday", or an absolute day beyond that (`formatDay`'s own "Sep 3"
  * shape, reused from Task scheduling rather than a second date formatter
  * for the identical job).
+ *
+ * **All three branches now answer in the same calendar (issue #296's
+ * sweep).** `isToday`/`isYesterday` (date-fns) are local-aware — they
+ * compare against the Device's own current local midnight — but the
+ * fallback used to do `formatDay(occurredAt.slice(0, 10))`, slicing the
+ * UTC calendar day straight out of `occurredAt`'s own instant. For a
+ * reader east of UTC, an Event that occurred just after local midnight
+ * was correctly headed "Today," then correctly "Yesterday" the next day —
+ * and from the day after that, permanently filed one day EARLIER than
+ * every other surface would place it, because the fallback's UTC day
+ * disagreed with the two branches above it that produced "Today"/
+ * "Yesterday" in the first place. Lower severity than the two
+ * TaskStore.setDateString/advanceRecurring instances this same sweep
+ * found (this mislabels history rather than misscheduling a future Task),
+ * but the identical shape: an instant handed to something that wants a
+ * floating local day.
+ *
+ * The fix reuses `date` — already parsed above for `isToday`/
+ * `isYesterday` — through `lib/local-day-key.ts`'s `localDayKey`, which
+ * reads that same `Date`'s local fields directly (`getFullYear`/
+ * `getMonth`/`getDate`) rather than converting through UTC. That keeps
+ * all three branches answering against the identical notion of "local
+ * day" `isToday`/`isYesterday` already use — the Device's own *current*
+ * offset — rather than `lib/entry-day.ts`'s `entryDayKey`, which needs an
+ * explicit `offsetMinutes` a caller supplies (typically an Entry's own
+ * stored creation-time offset). An Event carries no such stored offset of
+ * its own, and mixing "current device offset" for two branches with "some
+ * other offset" for the third would reintroduce the exact
+ * disagreement-between-branches this fix removes.
  */
 export function eventDayHeading(occurredAt: string): string {
   const date = new Date(occurredAt);
@@ -68,7 +98,7 @@ export function eventDayHeading(occurredAt: string): string {
   if (isYesterday(date)) {
     return "Yesterday";
   }
-  return formatDay(occurredAt.slice(0, 10));
+  return formatDay(localDayKey(date));
 }
 
 /**

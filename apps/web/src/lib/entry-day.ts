@@ -30,6 +30,26 @@ export function deviceUtcOffsetMinutes(): number {
 
 const DAY_MS = 86_400_000;
 
+// Issue #296's sweep named this `.toISOString().slice(0, 10)` as "probably
+// intentional... not read closely enough to say." Read closely now, and
+// confirmed correct, not a third instance: `dayKey` is never an instant
+// here, it is always already a resolved local day (a `YYYY-MM-DD` key this
+// module's own `entryDayKey` produced, or the identical shape a caller
+// built the same way) — `formatDaySeparator` below, this function's only
+// caller, documents that explicitly ("Both keys are plain YYYY-MM-DD in
+// the Device's local day"). The UTC anchor (`T00:00:00.000Z`) is not a
+// timezone conversion of anything real-world; it is this function's own
+// private arithmetic trick for "add/subtract N whole calendar days to a
+// date string" — UTC days are always exactly 86,400,000ms, so anchoring
+// there and doing plain millisecond math can never land on the wrong
+// day the way the same arithmetic would if it anchored to the Device's
+// own local midnight instead, which shifts by 23 or 25 hours across a DST
+// transition. `../../packages/core/src/recurrence/calendar.ts`'s own
+// `epochOf`/`addDays` lean on the identical trick for the identical
+// reason, on the identical kind of floating value. Nothing here ever
+// reads or writes a real UTC instant; UTC is borrowed purely as a
+// DST-proof ruler for whole-day arithmetic on a value that was already
+// local before this function ever saw it.
 function shiftDayKey(dayKey: string, days: number): string | null {
   const parsed = Date.parse(`${dayKey}T00:00:00.000Z`);
   if (Number.isNaN(parsed)) {

@@ -135,6 +135,41 @@ export interface TaskRowContentProps {
    * Overdue section) keeps the badge exactly as before.
    */
   suppressDateBadge?: boolean;
+  /**
+   * Issue #310 (ROW-10/AROW-14, parity-ledger.md + parity-ledger-android.md):
+   * Todoist shows a Task row's Project badge only in a **cross-project**
+   * view — Today, Upcoming, Search, a Filter — and suppresses it inside
+   * that Project's own view, where the page's own heading already names
+   * it and the badge repeats a fact the reader isn't asking for
+   * (`meologue-parity-docs/todoist/live-audit-dom/row-badges-2026-09-15.json`
+   * § ROW-10). Threaded down exactly like `suppressDateBadge` above:
+   * `task-tree.tsx` is the one place that knows whether the whole tree
+   * it's rendering belongs to one Project (its own `projectId` prop,
+   * non-null) or is Inbox (`null`) — same signal `handleOutdent` already
+   * reads there for an unrelated reason — and passes `projectId !== null`
+   * straight through. Today/Upcoming (`today-view.tsx`, `upcoming-view.tsx`)
+   * render `TaskRow` directly and never set this, so they default to
+   * `false` and keep the badge, unchanged.
+   *
+   * **A Section inside a Project inherits this, not by a second flag but
+   * because there isn't a second code path to give one.** `task-list.tsx`
+   * groups a Project's own Tasks into per-Section buckets, but every
+   * bucket — unsectioned or not — is still just another `TaskTree` call
+   * with the SAME `projectId`, this Project's own id, never `null`. A
+   * Section is "inside a Project" in exactly the sense Todoist's own
+   * distinction cares about (its own project/section identity, not a
+   * separate context), so the one `projectId !== null` check already
+   * covers it without this file — or any caller — needing to know
+   * Sections exist at all.
+   *
+   * A filter that happens to select a single Project was NOT driven live
+   * before this fix shipped (issue #310's own "worth deciding rather than
+   * assuming") — `filter-view.tsx` renders its own row markup, not
+   * `TaskRowContent`, so it is entirely unaffected by this prop either
+   * way; that omission is deliberate, not an oversight, until Todoist's
+   * own behaviour there is established.
+   */
+  suppressProjectBadge?: boolean;
 }
 
 /**
@@ -201,6 +236,7 @@ export function TaskRowContent({
   scheduleOpen,
   onScheduleOpenChange,
   suppressDateBadge = false,
+  suppressProjectBadge = false,
 }: TaskRowContentProps) {
   // Issue #225: inline row editing, which did not exist before this
   // ticket. Driven on the live app after the ticket's first pass shipped
@@ -337,7 +373,7 @@ export function TaskRowContent({
     task.deadline !== null ||
     isRecurring ||
     resolvedLabels.length > 0 ||
-    projectName !== null ||
+    (projectName !== null && !suppressProjectBadge) ||
     subtaskCount > 0 ||
     commentCount > 0;
   const draggable =
@@ -760,7 +796,14 @@ export function TaskRowContent({
             {resolvedLabels.map((label) => (
               <LabelBadge key={label.id} label={label} />
             ))}
-            {projectName !== null && <span className="truncate">{projectName}</span>}
+            {/* Issue #310 (ROW-10/AROW-14): this Project's own view already
+                says which Project it is in the page's own heading —
+                `suppressProjectBadge`'s own doc comment above carries the
+                full reasoning, including why a Section inherits this for
+                free rather than needing a second flag. */}
+            {projectName !== null && !suppressProjectBadge && (
+              <span className="truncate">{projectName}</span>
+            )}
             {/* `task.dateString` verbatim — "the string is the truth"
                 (task-types.ts's own doc comment) — stays alongside the ↻
                 DATE-04 now appends to `dateDisplay.text` itself; the two
@@ -798,23 +841,24 @@ export function TaskRowContent({
               // plural `"2 comments"` from `flow2-ROW-06-07-08-todoist.
               // json`) — this used to be a plain, non-interactive `<span>`.
               // `taskDetailPath` (task-detail-route.ts) is the one place
-              // this app already builds a Task's own detail address; no
-              // `?intent=reply` equivalent is added here because
-              // `task-detail-view.tsx` has no query-param door onto
-              // focusing its comment composer to answer that intent (its
-              // `CommentComposer` is a plain always-visible field with no
-              // read of `useSearchParams` at all) — building that focus
-              // behaviour is a separate piece of work this row's own fix
-              // doesn't take on, so the link's destination is the bare
-              // detail path, same place the title/Comment hover action
-              // already open.
+              // this app already builds a Task's own detail address, and
+              // issue #306 is what closed the one remaining divergence
+              // ROW-08 disclosed: `commentIntent: true` appends the same
+              // `?intent=reply` Todoist's own badge carries (that
+              // function's own doc comment has the full "why a query
+              // param, on the same address" reasoning), and
+              // `task-detail-view.tsx`'s `TaskDetailView` now reads it
+              // (via `todo-page.tsx`'s `hasCommentReplyIntent`) to open its
+              // comment composer already expanded and focused rather than
+              // at rest — CMT-11's own doc comment (task-detail-view.tsx)
+              // covers that behaviour in full.
               // `stopPropagation` keeps this link's own navigation from
               // also bubbling into whatever ancestor click handling this
               // row picks up in the future — the same defensive posture
               // the checkbox's Shift+Click branch above already takes for
               // a different reason.
               <Link
-                to={taskDetailPath(task)}
+                to={taskDetailPath(task, { commentIntent: true })}
                 aria-label={`${commentCount} comment${commentCount === 1 ? "" : "s"}`}
                 onClick={(event) => event.stopPropagation()}
                 className="flex items-center gap-0.5 hover:underline"
@@ -915,16 +959,31 @@ export function TaskRowContent({
         datesWithTasks={detailActions.datesWithTasks}
         onPickDay={(day) => {
           setScheduleDay(day);
-          // A plain date (or "No Date") ends any Recurrence the Task
-          // already had — TaskSchedulePopover's own doc comment names
-          // this a deliberate, disclosed design decision, mirrored here
-          // from task-schedule-sheet.tsx's own former identical wiring.
-          if (task.dateString !== null) {
-            detailActions.onSetDateString(task.id, null, new Date().toISOString());
+          // SCHED-15: only "No Date" ends a Recurrence now — picking a day
+          // postpones this occurrence and keeps the rule. The previous
+          // comment here called clearing on every pick "a deliberate,
+          // disclosed design decision", and it was; it was also wrong
+          // against the reference, and it silently ended a series every
+          // time a repeating Task was rescheduled. `task-detail-view.tsx`'s
+          // own identical handler carries the full account and the
+          // artifact it was driven from — this file mirrors it, as it
+          // already mirrored the behaviour being replaced.
+          //
+          // `localDayKey(new Date())`, not `new Date().toISOString()` —
+          // issue #296. `TaskStore.setDateString`'s own `today` parameter
+          // has always meant a floating local day, never an instant;
+          // passing the instant relied on ../recurrence/'s engine silently
+          // slicing its first ten characters, which names the UTC
+          // calendar day rather than this Device's own — see
+          // TaskStore.setDateString's own doc comment (packages/core) for
+          // the full account, and issue #290 for the identical fix applied
+          // to advanceRecurring/postpone.
+          if (day === null && task.dateString !== null) {
+            detailActions.onSetDateString(task.id, null, localDayKey(new Date()));
           }
         }}
         onPickRecurrence={(dateString) =>
-          detailActions.onSetDateString(task.id, dateString, new Date().toISOString())
+          detailActions.onSetDateString(task.id, dateString, localDayKey(new Date()))
         }
         trigger={
           <button

@@ -112,9 +112,11 @@ function computeOccurrence(
 
   // The anchor is already resolved onto the rule by the parser
   // (rule.anchor) — this function only ever reads it, never re-derives
-  // the `!`/day-week exception itself. A due-anchored rule with no prior
-  // due date (a Task being scheduled for the first time) has nothing to
-  // anchor to but now.
+  // the bang itself (issue #291 retired the one case this used to have to
+  // re-derive: `every day`/`every week` are no longer a special-cased
+  // exception to the bang — see ../recurrence.ts's module doc comment). A
+  // due-anchored rule with no prior due date (a Task being scheduled for
+  // the first time) has nothing to anchor to but now.
   const originEpoch =
     rule.anchor === "due" && dueFloating !== null ? dueFloating.epoch : nowFloating.epoch;
 

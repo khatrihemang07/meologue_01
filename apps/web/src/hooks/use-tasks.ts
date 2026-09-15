@@ -3,6 +3,7 @@ import type {
   EntryStore,
   EventStore,
   LabelStore,
+  LocalDayKey,
   ProjectStore,
   Task,
   TaskStore,
@@ -10,6 +11,7 @@ import type {
 import { mintId, orderKeyBetween } from "@meologue/core";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { type RecordEventInput, useEvents } from "@/hooks/use-events";
+import { localDayKey } from "@/lib/local-day-key";
 import { queryClient } from "@/lib/query-client";
 import { COMPLETED_TASKS_QUERY_KEY, ENTRIES_QUERY_KEY, TASKS_QUERY_KEY } from "@/lib/query-keys";
 import { requestSync } from "@/lib/sync-runner";
@@ -124,17 +126,25 @@ export interface UseTasksResult {
    * none of which any surface could do before this ticket
    * (TaskStore.setDateString's own doc comment carries the full
    * reasoning, including why `date` is recomputed by the store itself
-   * rather than trusted from the caller). `now` is threaded through
-   * rather than read here, the one exception to this file's own
-   * `new Date().toISOString()`-at-the-mutation convention: the popover
-   * already reads a single `now` once per open to keep its quick options
-   * and its typed preview from disagreeing about what day "today" is,
-   * and reusing that same instant for the commit is what keeps a
-   * commit's resolved date matching the preview the reader just clicked,
-   * rather than a second, independent clock read that could in principle
-   * roll over a calendar day between the two.
+   * rather than trusted from the caller).
+   *
+   * `today` (renamed from `now` — issue #296) is threaded through from
+   * each call site rather than read inside this hook, unlike
+   * `advanceRecurringTask`/`postponeTask` below: this hook isn't "the one
+   * layer that knows the Device's own local time" for this setter the way
+   * it is for those two, because both of this setter's real callers
+   * (task-row-content.tsx, task-detail-view.tsx) fire it synchronously
+   * from inside `TaskSchedulePopover`'s own `onPickDay`/`onPickRecurrence`
+   * callbacks, each of which already has its own single clock read right
+   * there. Issue #296 found those two call sites threading
+   * `new Date().toISOString()` through this parameter — a UTC instant
+   * where TaskStore.setDateString's own doc comment says a floating local
+   * day (`lib/local-day-key.ts`'s `localDayKey`) is wanted, the identical
+   * shape of bug issue #290 fixed for `advanceRecurringTask`/
+   * `postponeTask`. The fix lives at those two call sites, not here: this
+   * function still only forwards whatever it's given.
    */
-  setTaskDateString: (id: string, dateString: string | null, now: string) => void;
+  setTaskDateString: (id: string, dateString: string | null, today: LocalDayKey) => void;
   /**
    * Replaces a Task's `labelIds` wholesale — TaskStore.setLabelIds's own
    * doc comment on why "read, splice, write back the whole array" is the
@@ -606,14 +616,14 @@ export function useTasks(
     mutationFn: async ({
       id,
       dateString,
-      now,
+      today,
     }: {
       id: string;
       dateString: string | null;
-      now: string;
+      today: LocalDayKey;
     }) => {
       const before = await findTask(id);
-      await taskStore.setDateString(id, dateString, now);
+      await taskStore.setDateString(id, dateString, today);
       if (before) {
         recordTaskEvent(before, "updated", { dateString, lastDateString: before.dateString });
       }
@@ -621,8 +631,8 @@ export function useTasks(
     onSuccess: afterLocalWrite,
   });
 
-  function setTaskDateString(id: string, dateString: string | null, now: string) {
-    setDateStringMutation.mutate({ id, dateString, now });
+  function setTaskDateString(id: string, dateString: string | null, today: LocalDayKey) {
+    setDateStringMutation.mutate({ id, dateString, today });
   }
 
   const setLabelIdsMutation = useMutation({
@@ -687,10 +697,24 @@ export function useTasks(
   // reaching for "complete this recurring Task" has no reason to think
   // about what timestamp that means any more than completeTask's own
   // caller does.
+  //
+  // `today` is `localDayKey`'s reading of this same clock read, not
+  // `new Date().toISOString()` sliced down — issue #290. This hook is the
+  // one layer that knows the Device's own local time, which is exactly why
+  // TaskStore.advanceRecurring takes `today` as its own argument rather
+  // than deriving it from `completedAt`: a UTC instant's first ten
+  // characters name the UTC calendar day, not the Device's, and for a
+  // reader east of UTC that's a day early for a window each night as wide
+  // as their own offset — see TaskStore.advanceRecurring's own doc comment
+  // (packages/core) for the full consequence of handing the recurrence
+  // engine a "now" that's a day early. One `Date` read, like issue #196's
+  // own `remove()` convention, rather than two independent clock reads
+  // that could disagree by a millisecond straddling midnight.
   const advanceRecurringMutation = useMutation({
     mutationFn: async (id: string) => {
       const before = await findTask(id);
-      await taskStore.advanceRecurring(id, new Date().toISOString());
+      const completedAt = new Date();
+      await taskStore.advanceRecurring(id, completedAt.toISOString(), localDayKey(completedAt));
       // TaskStore.advanceRecurring's own doc comment: "this is a
       // completion event too — they set completedAt for real" (an ended
       // series) or advance dateString to the next occurrence, neither of
@@ -726,7 +750,14 @@ export function useTasks(
   const postponeMutation = useMutation({
     mutationFn: async (id: string) => {
       const before = await findTask(id);
-      await taskStore.postpone(id, new Date().toISOString());
+      // `localDayKey(new Date())`, not `new Date().toISOString()` — issue
+      // #290. TaskStore.postpone's own `today` parameter has always meant
+      // a floating local day, never an instant; passing the instant relied
+      // on ../recurrence/'s `tomorrowOf` silently slicing its first ten
+      // characters, which names the UTC calendar day rather than this
+      // Device's own. See TaskStore.postpone's own doc comment
+      // (packages/core) for the full account.
+      await taskStore.postpone(id, localDayKey(new Date()));
       // A reschedule like any other setDate call — TaskStore.postpone's
       // own doc comment: "a plain one-day shift of date." The resulting
       // value is read back from the store rather than recomputed here,

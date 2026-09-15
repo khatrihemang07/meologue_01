@@ -9,6 +9,7 @@ import type {
   FilterStore,
   Label,
   LabelStore,
+  LocalDayKey,
   Project,
   ProjectStore,
   Section,
@@ -179,8 +180,8 @@ export interface EntryStoreOutletContext {
   setTaskDate: (id: string, date: string | null) => void;
   setTaskDeadline: (id: string, deadline: string | null) => void;
   setTaskPriority: (id: string, priority: number) => void;
-  /** Sets or clears a Task's Recurrence (issue #227) — use-tasks.ts's own `setTaskDateString` doc comment. */
-  setTaskDateString: (id: string, dateString: string | null, now: string) => void;
+  /** Sets or clears a Task's Recurrence (issue #227) — use-tasks.ts's own `setTaskDateString` doc comment. `today` (not an instant — issue #296) is what that doc comment now names it. */
+  setTaskDateString: (id: string, dateString: string | null, today: LocalDayKey) => void;
   /** Replaces a Task's Labels wholesale — use-tasks.ts's own `setTaskLabels` doc comment. */
   setTaskLabels: (id: string, labelIds: string[]) => void;
   /** Sets a Task's Description (issue #180) — use-tasks.ts's own `setTaskDescription` doc comment. */
@@ -513,7 +514,7 @@ function noopSetTaskPriority(_id: string, _priority: number) {}
 
 // Issue #227 — the not-ready stand-in for `setTaskDateString`, same
 // reasoning as the three setters just above.
-function noopSetTaskDateString(_id: string, _dateString: string | null, _now: string) {}
+function noopSetTaskDateString(_id: string, _dateString: string | null, _today: string) {}
 
 // Issue #178's Task detail view — the not-ready stand-in for `setTaskLabels`,
 // same reasoning as the four setters just above.

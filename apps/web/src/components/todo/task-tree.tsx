@@ -550,6 +550,15 @@ export function TaskTree({
             onMoveToSection={
               onMoveToSection && ((sectionId) => onMoveToSection(row.task.id, sectionId))
             }
+            // Issue #310: this whole tree belongs to one Project
+            // (`projectId` non-null) or is Inbox (`null`) — the same
+            // signal `handleOutdent` already reads `projectId` for
+            // elsewhere in this file — so a Project's own view (and every
+            // Section bucket `task-list.tsx` renders inside it, all of
+            // them this same non-null `projectId`) suppresses the badge
+            // that would otherwise repeat the Project this screen is
+            // already titled with.
+            suppressProjectBadge={projectId !== null}
           />
         ) : (
           <TaskTreeRow
@@ -736,6 +745,10 @@ function TaskTreeRow({
       onMoveDown={onMoveDown}
       onIndent={onIndent}
       onOutdent={onOutdent}
+      // Issue #310: see the identical check's own comment at this file's
+      // other `TaskRow` call site (the completed-row branch, above) —
+      // same signal, same reasoning, this row just isn't `completedTasks`.
+      suppressProjectBadge={projectId !== null}
     >
       {children.length > 0 && (
         <TaskTree

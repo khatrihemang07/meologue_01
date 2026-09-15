@@ -1,4 +1,4 @@
-import type { Event, Task } from "@meologue/core";
+import type { Comment, Event, Task } from "@meologue/core";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { useState } from "react";
@@ -129,6 +129,24 @@ function task(overrides: Partial<Task> = {}): Task {
     sectionId: null,
     parentId: null,
     description: null,
+    ...overrides,
+  };
+}
+
+// The identical shape task-detail-view.test.tsx's own local `comment()`
+// fixture uses — this file had no need of one until issue #306's own
+// comment-badge tests below.
+function comment(overrides: Partial<Comment> = {}): Comment {
+  return {
+    id: "c1",
+    deviceId: "device-a",
+    taskId: "1",
+    text: "sounds good",
+    createdAt: "2026-01-01T00:00:00.000Z",
+    updatedAt: "2026-01-01T00:00:00.000Z",
+    seq: 1,
+    syncedAt: "2026-01-01T00:00:00.000Z",
+    deletedAt: null,
     ...overrides,
   };
 }
@@ -541,6 +559,83 @@ describe("TodoPage", () => {
     fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" });
 
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+
+  // Issue #306: a Task row's comment badge now links with `?intent=reply`
+  // (ROW-08, task-row-content.tsx) so activating it lands the reader "in
+  // the thread, ready to reply" rather than merely on the Task — the
+  // acceptance criteria this describe block works through one at a time.
+  describe("issue #306 — a comment badge opens the thread ready to reply", () => {
+    function commentedTask(overrides: Partial<Task> = {}): Task {
+      return task({ id: DETAIL_TASK_ID, content: "call mum", ...overrides });
+    }
+
+    it("activating the row's comment badge opens the detail view with the composer already expanded and focused", async () => {
+      renderTodoPage(
+        inboxContext([commentedTask()], {
+          comments: [comment({ id: "c1", taskId: DETAIL_TASK_ID, text: "sounds good" })],
+        }),
+      );
+
+      const badge = await screen.findByRole("link", { name: "1 comment" });
+      expect(badge).toHaveAttribute(
+        "href",
+        expect.stringContaining(`/todo/task/call-mum-${DETAIL_TASK_ID}?intent=reply`),
+      );
+      fireEvent.click(badge);
+
+      const dialog = await screen.findByRole("dialog");
+      const field = within(dialog).getByLabelText("Add a comment");
+      expect(
+        within(dialog).queryByRole("button", { name: "Open comment editor" }),
+      ).not.toBeInTheDocument();
+      expect(document.activeElement).toBe(field);
+    });
+
+    // The regression the ticket calls out by name: every other way of
+    // reaching the identical Task's detail view must still leave the
+    // composer collapsed at rest.
+    it("the Task's own bare address (no intent) still opens the view with the composer collapsed, as any other route does", async () => {
+      renderTodoPage(
+        inboxContext([commentedTask()], {
+          comments: [comment({ id: "c1", taskId: DETAIL_TASK_ID, text: "sounds good" })],
+        }),
+        `/todo/task/call-mum-${DETAIL_TASK_ID}`,
+      );
+
+      const dialog = await screen.findByRole("dialog");
+      expect(
+        within(dialog).getByRole("button", { name: "Open comment editor" }),
+      ).toBeInTheDocument();
+      expect(within(dialog).queryByLabelText("Add a comment")).not.toBeInTheDocument();
+    });
+
+    it("an out-of-date slug alongside the intent still resolves to the right Task, composer expanded", async () => {
+      renderTodoPage(
+        inboxContext([commentedTask()], {
+          comments: [comment({ id: "c1", taskId: DETAIL_TASK_ID, text: "sounds good" })],
+        }),
+        `/todo/task/some-old-slug-${DETAIL_TASK_ID}?intent=reply`,
+      );
+
+      const dialog = await screen.findByRole("dialog");
+      expect(within(dialog).getByTestId("task-detail-title")).toHaveTextContent("call mum");
+      expect(within(dialog).getByLabelText("Add a comment")).toBeInTheDocument();
+    });
+
+    it("an unrelated ?intent= value leaves the composer collapsed — an exact match only", async () => {
+      renderTodoPage(
+        inboxContext([commentedTask()], {
+          comments: [comment({ id: "c1", taskId: DETAIL_TASK_ID, text: "sounds good" })],
+        }),
+        `/todo/task/call-mum-${DETAIL_TASK_ID}?intent=edit`,
+      );
+
+      const dialog = await screen.findByRole("dialog");
+      expect(
+        within(dialog).getByRole("button", { name: "Open comment editor" }),
+      ).toBeInTheDocument();
+    });
   });
 
   it("reads an empty Inbox as a real state, not a blank panel", () => {

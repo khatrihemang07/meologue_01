@@ -3,7 +3,7 @@ import { today, upcoming } from "@meologue/core";
 import { useQuery } from "@tanstack/react-query";
 import { Search } from "lucide-react";
 import { Suspense, useEffect, useMemo, useRef, useState } from "react";
-import { Link, useLocation, useNavigate, useParams } from "react-router";
+import { Link, useLocation, useNavigate, useParams, useSearchParams } from "react-router";
 import { toast } from "sonner";
 import { BackToChats } from "@/components/back-to-chats";
 import { inlineProse } from "@/components/inline-prose";
@@ -36,7 +36,7 @@ import { localDayKey } from "@/lib/local-day-key";
 import { sectionsQueryKey, tasksInProjectQueryKey } from "@/lib/query-keys";
 import type { QuickAddTaskFields } from "@/lib/quick-add-task";
 import { useSettingsStore } from "@/lib/settings";
-import { taskDetailPath, taskIdFromParam } from "@/lib/task-detail-route";
+import { hasCommentReplyIntent, taskDetailPath, taskIdFromParam } from "@/lib/task-detail-route";
 import { commitTaskTitle } from "@/lib/task-title-commit";
 import { OPEN_QUICK_ADD_EVENT } from "@/lib/todo-keymap";
 import { useEntryStore } from "@/pages/entry-store-layout";
@@ -297,6 +297,11 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
   // the identical duplicate-affordance shape todo-nav.tsx's own header
   // comment already avoids for its `<nav>` landmark.
   const wide = useWideLayout();
+  // Issue #306: `?intent=reply` (a Task row's comment badge,
+  // `taskDetailPath`'s own `commentIntent` option) read back out of the
+  // current URL — `openCommentComposer` below is this page's one use of
+  // it, threaded down to `TaskDetailView`.
+  const [searchParams] = useSearchParams();
 
   // Which background view renders *behind* the Task detail modal/sheet —
   // this file's own header comment on `TodoBackgroundView`/`backgroundPath`
@@ -682,6 +687,12 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
       : null;
   const openTaskProject: Project | null =
     openTask === null ? null : (projects.find((p) => p.id === openTask.projectId) ?? null);
+  // Issue #306: only meaningful while a Task's own detail route is
+  // actually the active route (`openTask !== null` covers that, since
+  // `hasCommentReplyIntent` reads whatever `?intent=` the *current* URL
+  // carries regardless — a `?intent=reply` left over on some other route
+  // would otherwise read as true there too).
+  const openCommentComposer = openTask !== null && hasCommentReplyIntent(searchParams);
 
   // The open Task's own Section, for the breadcrumb — a *second*,
   // independent `listSections` query rather than reusing `sections`
@@ -1351,6 +1362,7 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
             onAddComment={(text) => addComment(openTask.id, text)}
             onEditComment={editComment}
             onRemoveComment={removeComment}
+            openCommentComposer={openCommentComposer}
             subtasks={openTaskSubtasks}
             onAddSubtask={(content) => addTask(content, { parentId: openTask.id })}
             onCompleteSubtask={(id) => {

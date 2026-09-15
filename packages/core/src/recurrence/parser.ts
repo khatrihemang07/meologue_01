@@ -146,7 +146,7 @@ export function parseRecurrence(input: string): RecurrenceParseResult {
     rule: {
       frequency,
       interval,
-      anchor: resolveAnchor(frequency, interval, bang),
+      anchor: resolveAnchor(bang),
       time,
       startBound,
       endBound,
@@ -279,24 +279,33 @@ function stripFiller(core: string): string {
 }
 
 /**
- * Resolves the literal `!` and the day/week exception into one concrete
- * anchor, once, so nothing downstream has to re-derive it: `every day`
- * and `every week` (interval 1, no larger number, no explicit weekday
- * list) are completion-anchored regardless of the bang — the exception
- * issue #170 names as "the detail most descriptions get wrong" — while
- * every longer interval ("every 3 days", "every other week") and every
- * fixed-weekday rule follows the bang literally: due-anchored without it,
- * completion-anchored with it.
+ * Resolves the literal `!` into a concrete anchor, once, so nothing
+ * downstream has to re-derive it: due-anchored without the bang,
+ * completion-anchored with it — uniformly, for every frequency and every
+ * interval.
+ *
+ * This used to carve out an exception for `every day` and `every week`
+ * (interval 1, no larger number, no explicit weekday list): issue #170
+ * called their being completion-anchored regardless of the bang "the
+ * detail most descriptions get wrong," on the theory that a bare daily or
+ * weekly cadence inherently means "do it again from whenever you actually
+ * did it." Issue #291 retired that theory — driven live against both
+ * Todoist web and Android
+ * (meologue-parity-docs/todoist/live-audit-dom/recurrence-reschedule-todoist-2026-09-14.json),
+ * a postponed daily or weekly Task there resumes from its postponed due
+ * date plus one interval, not from the completion date, on both
+ * platforms independently. A Task postponed six days out and then
+ * completed landed six days later than completion-anchoring would have
+ * given — not a rounding difference, a different rule. `every!` still
+ * means "count from when I actually did it": a user-typed opt-in the
+ * "Custom repeat" dialog surfaces explicitly as "Based on: Scheduled
+ * date / Completed date" (issue #292), so the bang alone decides the
+ * anchor now, with no per-frequency carve-out left to apply.
+ *
+ * No longer takes `frequency`/`interval` — the retired exception above
+ * was the only reason this ever needed to know either, and the bang is
+ * the whole decision now.
  */
-function resolveAnchor(
-  frequency: RecurrenceFrequency,
-  interval: number,
-  bang: boolean,
-): "due" | "completion" {
-  const bareDailyOrWeekly =
-    interval === 1 && (frequency.kind === "daily" || frequency.kind === "weekly");
-  if (bareDailyOrWeekly) {
-    return "completion";
-  }
+function resolveAnchor(bang: boolean): "due" | "completion" {
   return bang ? "completion" : "due";
 }

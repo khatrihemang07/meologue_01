@@ -1,6 +1,7 @@
 import { and, desc, eq, inArray, isNull, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/sqlite-proxy";
 import { withDefaultLabelIds } from "../label-fields";
+import type { LocalDayKey } from "../local-day-key";
 import { firstOccurrence, nextOccurrenceAfterCompletion, tomorrowOf } from "../recurrence";
 import {
   assertValidDate,
@@ -411,7 +412,7 @@ export class SqliteTaskStore implements TaskStore {
   // Reads the Task first, mirroring advanceRecurring/setParent above: the
   // tombstone no-op has to be checked before either throw below becomes
   // reachable.
-  async setDateString(id: string, dateString: string | null, now: string): Promise<void> {
+  async setDateString(id: string, dateString: string | null, today: LocalDayKey): Promise<void> {
     const current = await this.get(id);
     if (current === undefined) {
       return;
@@ -423,10 +424,14 @@ export class SqliteTaskStore implements TaskStore {
       await this.updateIfLive(id, { dateString: null });
       return;
     }
-    // Only the calendar day matters to ../recurrence/'s engine — the
-    // identical `.slice(0, 10)` advanceRecurring's own mechanics applies
-    // to `completedAt` above.
-    const outcome = firstOccurrence(dateString, { dueDate: current.date, now: now.slice(0, 10) });
+    // `today` — not a slice of a caller-supplied instant — is the
+    // recurrence engine's floating anchor (issue #296, the identical
+    // correction issue #290 made to advanceRecurring/postpone above: see
+    // TaskStore.setDateString's own doc comment for why "only the first
+    // ten characters matter" was never a safe reason to accept an instant
+    // here). The caller resolves the local day and passes it here already
+    // correct; no slicing happens in this method any more.
+    const outcome = firstOccurrence(dateString, { dueDate: current.date, now: today });
     if (outcome.kind === "refused") {
       throw new Error(
         `"${dateString}" is not a recurrence rule ../recurrence/ accepts: ${outcome.reason}`,
@@ -434,7 +439,7 @@ export class SqliteTaskStore implements TaskStore {
     }
     if (outcome.kind === "ended") {
       throw new Error(
-        `"${dateString}" has no occurrence left as of ${now} — its own starting/ending/for bound has already elapsed`,
+        `"${dateString}" has no occurrence left as of ${today} — its own starting/ending/for bound has already elapsed`,
       );
     }
     await this.updateIfLive(id, { date: outcome.date, dateString });
@@ -518,7 +523,7 @@ export class SqliteTaskStore implements TaskStore {
   // to be checked before either throw below becomes reachable, and
   // there's no `dateString` to re-parse for a row that isn't live in the
   // first place.
-  async advanceRecurring(id: string, completedAt: string): Promise<void> {
+  async advanceRecurring(id: string, completedAt: string, today: LocalDayKey): Promise<void> {
     const current = await this.get(id);
     if (current === undefined) {
       return;
@@ -528,13 +533,15 @@ export class SqliteTaskStore implements TaskStore {
         `advanceRecurring called on Task ${id}, which has no recurrence (dateString is null)`,
       );
     }
-    // ../task-views.ts's today() reads `now` the identical way — only the
-    // calendar day matters to ../recurrence/'s engine, never the exact
-    // instant a completion happened at.
-    const now = completedAt.slice(0, 10);
+    // `today` — not a slice of `completedAt` — is the recurrence engine's
+    // floating "now" (issue #290: `completedAt` is a UTC instant, and
+    // slicing it named the UTC calendar day, not the Device's own; see
+    // TaskStore.advanceRecurring's own doc comment for the full
+    // consequence). The caller resolves the local day and passes it here
+    // already correct.
     const outcome = nextOccurrenceAfterCompletion(current.dateString, {
       dueDate: current.date,
-      now,
+      now: today,
     });
     if (outcome.kind === "refused") {
       throw new Error(
@@ -579,7 +586,7 @@ export class SqliteTaskStore implements TaskStore {
   // setParent/advanceRecurring above, to know whether `date` carries a
   // time-of-day to preserve on the new day — postpone has no rule of its
   // own to re-parse, but it still needs the Task's *current* shape.
-  async postpone(id: string, today: string): Promise<void> {
+  async postpone(id: string, today: LocalDayKey): Promise<void> {
     const current = await this.get(id);
     if (current === undefined || current.date === null) {
       return;

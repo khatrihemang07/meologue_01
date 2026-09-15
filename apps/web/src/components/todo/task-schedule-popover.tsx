@@ -123,9 +123,24 @@ function ordinal(day: number): string {
   }
 }
 
-/** Shared by every Repeat-menu item — deliberately not `task-command-menu.tsx`'s own identical-looking `itemClassName` (that file is out of scope here; this is its own copy, not an import, so the two are free to diverge). */
+/**
+ * Shared by every Repeat-menu item — deliberately not `task-command-
+ * menu.tsx`'s own identical-looking `itemClassName` (that file is out of
+ * scope here; this is its own copy, not an import, so the two are free to
+ * diverge). The highlight itself, though, is the SAME `data-highlighted:
+ * bg-muted data-highlighted:text-foreground` pair every other
+ * `DropdownMenu.Item` in this app already uses (`project-view.tsx`,
+ * `labels-view.tsx`, `task-command-menu.tsx`'s own `itemClassName`) — an
+ * earlier version of this menu hardcoded Todoist's own captured
+ * `bg-white/10` wash instead, which is exactly the "matching paint, not
+ * structure" this ticket's brief warns against (THEME-01: meologue paints
+ * its own palette). `--muted`/`--foreground` under this file's own
+ * `data-surface="todo"` dark scope (index.css) already resolve close
+ * enough to Todoist's own hover tint for this to look right on screen
+ * without repeating its literal.
+ */
 const repeatItemClassName =
-  "flex cursor-pointer items-center rounded-md px-2 py-1.5 text-sm outline-none data-highlighted:bg-white/10";
+  "flex cursor-pointer items-center rounded-md px-2 py-1.5 text-sm outline-none data-highlighted:bg-muted data-highlighted:text-foreground";
 
 export interface TaskSchedulePopoverProps {
   /** The trigger this popover anchors under — task-schedule-sheet.tsx's own "Date" button. */
@@ -729,16 +744,32 @@ export function TaskSchedulePopover({
                 <DropdownMenu.Content
                   data-testid="repeat-menu"
                   align="start"
-                  className="flex flex-col gap-0.5 p-1 text-sm"
-                  style={{
-                    width: "282px",
-                    borderRadius: "10px",
-                    background: "rgb(40, 40, 40)",
-                    border: "1px solid rgb(61, 61, 61)",
-                    boxShadow: "rgba(0, 0, 0, 0.12) 0px 0px 8px 0px",
-                    zIndex: 1000,
-                    color: "rgb(255, 255, 255)",
-                  }}
+                  // SCHED-14 measured Todoist's own dark-theme PAINT here —
+                  // 282px wide, radius 10px, `rgb(40,40,40)` background,
+                  // `1px solid rgb(61,61,61)` border, a `rgba(0,0,0,.12) 0 0
+                  // 8px` shadow, white text — but this file's own header
+                  // comment (and the issue's own brief) is explicit that
+                  // what's being matched is structure/items/wording, not
+                  // paint: THEME-01 already ratifies meologue keeping its
+                  // own palette over Todoist's literals. So this reuses the
+                  // ordinary `bg-popover`/`border-border`/`shadow-lg`/
+                  // `rounded-lg` classes every other `DropdownMenu.Content`
+                  // in this app already carries (`project-view.tsx`,
+                  // `labels-view.tsx`, `task-command-menu.tsx`), only the
+                  // 282px width kept as measured structure. Under this
+                  // file's own `data-surface="todo"` dark scope (index.css)
+                  // those tokens resolve to `--radius: 10px`,
+                  // `--popover: rgb(31,31,31)` and `--popover-foreground:
+                  // rgb(255,255,255)` — close enough to Todoist's own
+                  // literals that nothing here looks different on screen,
+                  // only the surface it draws from changed. `z-[70]` (not
+                  // Tailwind's usual `z-50` those sibling menus use)
+                  // mirrors `task-time-dialog.tsx`'s own identical reason:
+                  // this menu is portalled as a *descendant of* this
+                  // popover's own `z-[60]` content (`ui/popover.tsx`), so it
+                  // needs a higher index to paint above it, not Todoist's
+                  // unrelated captured `z-index: 1000`.
+                  className="z-[70] flex w-[282px] flex-col gap-0.5 rounded-lg border border-border bg-popover p-1 text-popover-foreground text-sm shadow-lg"
                   // The identical hand-off task-command-menu.tsx's own
                   // "Date…" item needed for issue #255: focusing
                   // `typedInputRef` straight from "Custom…"'s `onSelect`

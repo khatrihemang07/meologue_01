@@ -1,4 +1,4 @@
-import type { Label, Project, Task } from "@meologue/core";
+import type { Label, LocalDayKey, Project, Task } from "@meologue/core";
 import type { PointerEvent, ReactNode } from "react";
 import { useEffect, useState } from "react";
 import { TaskRowContent } from "@/components/todo/task-row-content";
@@ -44,9 +44,11 @@ export interface TaskDetailActions {
    * Sets or clears the Task's Recurrence phrase (issue #253) —
    * `TaskStore.setDateString`'s own doc comment (task-schedule-sheet.tsx)
    * has the reasoning for why `date` is recomputed by the store rather
-   * than trusted from a caller.
+   * than trusted from a caller. `today` (not an instant — issue #296,
+   * `lib/local-day-key.ts`'s `localDayKey`) is what `task-row-content.tsx`
+   * threads through here.
    */
-  onSetDateString: (id: string, dateString: string | null, now: string) => void;
+  onSetDateString: (id: string, dateString: string | null, today: LocalDayKey) => void;
   /**
    * Day-keys carrying at least one active Task, mapped to how many —
    * threaded straight through to `TaskSchedulePopover`'s identical prop
@@ -258,6 +260,8 @@ export interface TaskRowProps {
   children?: ReactNode;
   /** Threaded straight through to `TaskRowContent` — see that prop's own doc comment (task-row-content.tsx). Defaults to `false` there when omitted. */
   suppressDateBadge?: boolean;
+  /** Threaded straight through to `TaskRowContent` — issue #310, see that prop's own doc comment (task-row-content.tsx) for the full Section/filter reasoning. Defaults to `false` there when omitted. */
+  suppressProjectBadge?: boolean;
 }
 
 /**
@@ -343,6 +347,7 @@ export function TaskRow({
   onMoveToSection,
   children,
   suppressDateBadge,
+  suppressProjectBadge,
 }: TaskRowProps) {
   // The full command set's own open state (issue #178) — right-click
   // anywhere on the row, the `.` key while a Task row has focus (issue
@@ -487,6 +492,7 @@ export function TaskRow({
         scheduleOpen={scheduleOpen}
         onScheduleOpenChange={setScheduleOpen}
         suppressDateBadge={suppressDateBadge}
+        suppressProjectBadge={suppressProjectBadge}
       />
       {/*
         This row's own sub-tasks, if any — `TaskTreeRow` (task-tree.tsx)
