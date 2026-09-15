@@ -9,6 +9,7 @@ import type {
   FilterStore,
   Label,
   LabelStore,
+  LocalDayKey,
   Project,
   ProjectStore,
   Section,
@@ -180,7 +181,7 @@ export interface EntryStoreOutletContext {
   setTaskDeadline: (id: string, deadline: string | null) => void;
   setTaskPriority: (id: string, priority: number) => void;
   /** Sets or clears a Task's Recurrence (issue #227) — use-tasks.ts's own `setTaskDateString` doc comment. `today` (not an instant — issue #296) is what that doc comment now names it. */
-  setTaskDateString: (id: string, dateString: string | null, today: string) => void;
+  setTaskDateString: (id: string, dateString: string | null, today: LocalDayKey) => void;
   /** Replaces a Task's Labels wholesale — use-tasks.ts's own `setTaskLabels` doc comment. */
   setTaskLabels: (id: string, labelIds: string[]) => void;
   /** Sets a Task's Description (issue #180) — use-tasks.ts's own `setTaskDescription` doc comment. */

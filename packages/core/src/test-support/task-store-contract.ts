@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { orderKeyBetween } from "../order-key";
 import type { TaskStore } from "../task-store";
+import { dayKey } from "./day-key-fixture";
 import { task } from "./task-fixture";
 
 /**
@@ -501,7 +502,7 @@ export function taskStoreContract(createStore: () => TaskStore | Promise<TaskSto
       await store.upsert([task({ id: "a", seq: 5 })]);
 
       // 2026-01-05 is itself a Monday.
-      await store.setDateString("a", "every monday", "2026-01-05");
+      await store.setDateString("a", "every monday", dayKey("2026-01-05"));
 
       const [found] = await store.list();
       expect(found).toMatchObject({
@@ -515,7 +516,7 @@ export function taskStoreContract(createStore: () => TaskStore | Promise<TaskSto
     it("anchors a due-anchored phrase off the Task's own current date, not `today`", async () => {
       await store.upsert([task({ id: "a", date: "2026-01-15", seq: 5 })]);
 
-      await store.setDateString("a", "every month", "2026-01-20");
+      await store.setDateString("a", "every month", dayKey("2026-01-20"));
 
       const [found] = await store.list();
       // The 15th's own phase survives into next month, exactly as
@@ -528,7 +529,7 @@ export function taskStoreContract(createStore: () => TaskStore | Promise<TaskSto
     it("clears the Recurrence and leaves date untouched", async () => {
       await store.upsert([task({ id: "a", dateString: "every day", date: "2026-01-05", seq: 5 })]);
 
-      await store.setDateString("a", null, "2026-01-10");
+      await store.setDateString("a", null, dayKey("2026-01-10"));
 
       const [found] = await store.list();
       expect(found).toMatchObject({ id: "a", dateString: null, date: "2026-01-05", seq: null });
@@ -537,7 +538,7 @@ export function taskStoreContract(createStore: () => TaskStore | Promise<TaskSto
     it("replaces an existing Recurrence with a different one", async () => {
       await store.upsert([task({ id: "a", dateString: "every day", date: "2026-01-05", seq: 5 })]);
 
-      await store.setDateString("a", "every year", "2026-01-05");
+      await store.setDateString("a", "every year", dayKey("2026-01-05"));
 
       const [found] = await store.list();
       expect(found).toMatchObject({ dateString: "every year", date: "2026-01-05" });
@@ -547,7 +548,7 @@ export function taskStoreContract(createStore: () => TaskStore | Promise<TaskSto
       await store.upsert([task({ id: "a", seq: 1 })]);
 
       await expect(
-        store.setDateString("a", "not a recurrence rule", "2026-01-05"),
+        store.setDateString("a", "not a recurrence rule", dayKey("2026-01-05")),
       ).rejects.toThrow();
     });
 
@@ -562,13 +563,13 @@ export function taskStoreContract(createStore: () => TaskStore | Promise<TaskSto
       await store.upsert([task({ id: "a", date: "2026-01-01", seq: 1 })]);
 
       await expect(
-        store.setDateString("a", "every day ending 8 Jan", "2026-01-09"),
+        store.setDateString("a", "every day ending 8 Jan", dayKey("2026-01-09")),
       ).rejects.toThrow();
     });
 
     it("no-ops against an unknown id", async () => {
       await expect(
-        store.setDateString("never-seen", "every day", "2026-01-05"),
+        store.setDateString("never-seen", "every day", dayKey("2026-01-05")),
       ).resolves.toBeUndefined();
     });
   });
@@ -763,7 +764,7 @@ export function taskStoreContract(createStore: () => TaskStore | Promise<TaskSto
     it("advances date and clears seq, but never sets completedAt — a recurring Task never enters the completed list", async () => {
       await store.upsert([task({ id: "a", dateString: "every day", date: "2026-01-05", seq: 5 })]);
 
-      await store.advanceRecurring("a", "2026-01-05T00:00:00.000Z", "2026-01-05");
+      await store.advanceRecurring("a", "2026-01-05T00:00:00.000Z", dayKey("2026-01-05"));
 
       const [found] = await store.list();
       expect(found).toMatchObject({ id: "a", date: "2026-01-06", completedAt: null, seq: null });
@@ -775,7 +776,7 @@ export function taskStoreContract(createStore: () => TaskStore | Promise<TaskSto
         task({ id: "a", dateString: "every month", date: "2026-01-15", seq: 5 }),
       ]);
 
-      await store.advanceRecurring("a", "2026-01-20T00:00:00.000Z", "2026-01-20");
+      await store.advanceRecurring("a", "2026-01-20T00:00:00.000Z", dayKey("2026-01-20"));
 
       const [found] = await store.list();
       expect(found).toMatchObject({ date: "2026-02-15" });
@@ -787,7 +788,7 @@ export function taskStoreContract(createStore: () => TaskStore | Promise<TaskSto
     it("skips missed occurrences — a yearly task completed eighteen months late lands two years out, not one", async () => {
       await store.upsert([task({ id: "a", dateString: "every year", date: "2025-01-01", seq: 5 })]);
 
-      await store.advanceRecurring("a", "2026-07-01T00:00:00.000Z", "2026-07-01");
+      await store.advanceRecurring("a", "2026-07-01T00:00:00.000Z", dayKey("2026-07-01"));
 
       const [found] = await store.list();
       expect(found).toMatchObject({ date: "2027-01-01" });
@@ -798,7 +799,7 @@ export function taskStoreContract(createStore: () => TaskStore | Promise<TaskSto
         task({ id: "a", dateString: "every day ending 8 Jan", date: "2026-01-01", seq: 5 }),
       ]);
 
-      await store.advanceRecurring("a", "2026-01-08T00:00:00.000Z", "2026-01-08");
+      await store.advanceRecurring("a", "2026-01-08T00:00:00.000Z", dayKey("2026-01-08"));
 
       expect(await store.list()).toEqual([]);
       const [found] = await store.listCompleted();
@@ -814,7 +815,7 @@ export function taskStoreContract(createStore: () => TaskStore | Promise<TaskSto
       await store.upsert([task({ id: "a", dateString: null, seq: 5 })]);
 
       await expect(
-        store.advanceRecurring("a", "2026-01-05T00:00:00.000Z", "2026-01-05"),
+        store.advanceRecurring("a", "2026-01-05T00:00:00.000Z", dayKey("2026-01-05")),
       ).rejects.toThrow();
     });
 
@@ -822,13 +823,13 @@ export function taskStoreContract(createStore: () => TaskStore | Promise<TaskSto
       await store.upsert([task({ id: "a", dateString: "not a recurrence rule", seq: 5 })]);
 
       await expect(
-        store.advanceRecurring("a", "2026-01-05T00:00:00.000Z", "2026-01-05"),
+        store.advanceRecurring("a", "2026-01-05T00:00:00.000Z", dayKey("2026-01-05")),
       ).rejects.toThrow();
     });
 
     it("no-ops against an unknown id", async () => {
       await expect(
-        store.advanceRecurring("never-seen", "2026-01-05T00:00:00.000Z", "2026-01-05"),
+        store.advanceRecurring("never-seen", "2026-01-05T00:00:00.000Z", dayKey("2026-01-05")),
       ).resolves.toBeUndefined();
     });
 
@@ -848,7 +849,7 @@ export function taskStoreContract(createStore: () => TaskStore | Promise<TaskSto
       // already-resolved local day — is the 6th. A `today` of the 6th
       // steps the daily rule to the 7th; the old completedAt-slicing
       // mechanics would have landed on the 6th instead.
-      await store.advanceRecurring("a", "2026-01-05T23:00:00.000Z", "2026-01-06");
+      await store.advanceRecurring("a", "2026-01-05T23:00:00.000Z", dayKey("2026-01-06"));
 
       const [found] = await store.list();
       expect(found).toMatchObject({ date: "2026-01-07" });
@@ -879,7 +880,7 @@ export function taskStoreContract(createStore: () => TaskStore | Promise<TaskSto
     it("moves an overdue Task's date to tomorrow, relative to `today` — not to the day after the stale date", async () => {
       await store.upsert([task({ id: "a", date: "2025-06-01", seq: 5 })]);
 
-      await store.postpone("a", "2026-01-05");
+      await store.postpone("a", dayKey("2026-01-05"));
 
       const [found] = await store.list();
       expect(found).toMatchObject({ date: "2026-01-06", seq: null });
@@ -888,7 +889,7 @@ export function taskStoreContract(createStore: () => TaskStore | Promise<TaskSto
     it("preserves a timed date's own time-of-day on the new day", async () => {
       await store.upsert([task({ id: "a", date: "2025-06-01T09:00", seq: 5 })]);
 
-      await store.postpone("a", "2026-01-05");
+      await store.postpone("a", dayKey("2026-01-05"));
 
       const [found] = await store.list();
       expect(found).toMatchObject({ date: "2026-01-06T09:00" });
@@ -897,7 +898,7 @@ export function taskStoreContract(createStore: () => TaskStore | Promise<TaskSto
     it("no-ops against a Task with no date at all — there's nothing to postpone", async () => {
       await store.upsert([task({ id: "a", date: null, seq: 5 })]);
 
-      await store.postpone("a", "2026-01-05");
+      await store.postpone("a", dayKey("2026-01-05"));
 
       const [found] = await store.list();
       expect(found).toMatchObject({ date: null, seq: 5 });
@@ -965,9 +966,9 @@ export function taskStoreContract(createStore: () => TaskStore | Promise<TaskSto
       // advanceRecurring's own no-op check runs before its "no
       // dateString" throw for the identical reason — the tombstoned Task
       // above was never given one either.
-      await store.advanceRecurring("a", "2026-01-05T00:00:00.000Z", "2026-01-05");
+      await store.advanceRecurring("a", "2026-01-05T00:00:00.000Z", dayKey("2026-01-05"));
       await store.completeForever("a", "2026-01-05T00:00:00.000Z");
-      await store.postpone("a", "2026-01-05");
+      await store.postpone("a", dayKey("2026-01-05"));
 
       expect(await store.list()).toEqual([]);
       expect(await store.listCompleted()).toEqual([]);
@@ -1505,7 +1506,7 @@ export function taskStoreContract(createStore: () => TaskStore | Promise<TaskSto
       });
       await store.upsert([original]);
 
-      await store.advanceRecurring("a", "2026-05-01T00:00:00.000Z", "2026-05-01");
+      await store.advanceRecurring("a", "2026-05-01T00:00:00.000Z", dayKey("2026-05-01"));
 
       const found = await store.get("a");
       expect(found?.updatedAt).toBe("2026-05-01T00:00:00.000Z");
@@ -1530,7 +1531,7 @@ export function taskStoreContract(createStore: () => TaskStore | Promise<TaskSto
       const original = task({ id: "a", seq: 5, date: "2025-06-01" });
       await store.upsert([original]);
 
-      await store.postpone("a", "2026-01-05");
+      await store.postpone("a", dayKey("2026-01-05"));
 
       const found = await store.get("a");
       expect(found?.updatedAt).not.toBe("2026-01-05");

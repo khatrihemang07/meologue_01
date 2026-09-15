@@ -3,6 +3,7 @@ import type {
   EntryStore,
   EventStore,
   LabelStore,
+  LocalDayKey,
   ProjectStore,
   Task,
   TaskStore,
@@ -143,7 +144,7 @@ export interface UseTasksResult {
    * `postponeTask`. The fix lives at those two call sites, not here: this
    * function still only forwards whatever it's given.
    */
-  setTaskDateString: (id: string, dateString: string | null, today: string) => void;
+  setTaskDateString: (id: string, dateString: string | null, today: LocalDayKey) => void;
   /**
    * Replaces a Task's `labelIds` wholesale — TaskStore.setLabelIds's own
    * doc comment on why "read, splice, write back the whole array" is the
@@ -617,7 +618,7 @@ export function useTasks(
     }: {
       id: string;
       dateString: string | null;
-      today: string;
+      today: LocalDayKey;
     }) => {
       const before = await findTask(id);
       await taskStore.setDateString(id, dateString, today);
@@ -628,7 +629,7 @@ export function useTasks(
     onSuccess: afterLocalWrite,
   });
 
-  function setTaskDateString(id: string, dateString: string | null, today: string) {
+  function setTaskDateString(id: string, dateString: string | null, today: LocalDayKey) {
     setDateStringMutation.mutate({ id, dateString, today });
   }
 

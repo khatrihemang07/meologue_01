@@ -69,6 +69,8 @@ export type { LabelColour } from "./label-colors";
 export { DEFAULT_LABEL_COLOUR, isValidLabelColour, LABEL_COLOURS } from "./label-colors";
 export type { LabelStore } from "./label-store";
 export type { Label } from "./label-types";
+export type { LocalDayKey } from "./local-day-key";
+export { isLocalDayKey, mustParseLocalDayKey, parseLocalDayKey } from "./local-day-key";
 export { compareByOrder, orderKeyBetween } from "./order-key";
 export { MAX_SECTIONS_PER_PROJECT } from "./project-fields";
 export type { ProjectStore } from "./project-store";

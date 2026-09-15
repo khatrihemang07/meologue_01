@@ -1,4 +1,5 @@
 import { withDefaultLabelIds } from "../label-fields";
+import type { LocalDayKey } from "../local-day-key";
 import { compareByOrder } from "../order-key";
 import { firstOccurrence, nextOccurrenceAfterCompletion, tomorrowOf } from "../recurrence";
 import {
@@ -234,7 +235,7 @@ export class InMemoryTaskStore implements TaskStore {
   // own doc comment for the full reasoning. "No-op against a tombstone"
   // checked here the same way advanceRecurring's own does, before either
   // throw below becomes reachable.
-  async setDateString(id: string, dateString: string | null, today: string): Promise<void> {
+  async setDateString(id: string, dateString: string | null, today: LocalDayKey): Promise<void> {
     const existing = this.tasks.get(id);
     if (existing === undefined || existing.deletedAt !== null) {
       return;
@@ -355,7 +356,7 @@ export class InMemoryTaskStore implements TaskStore {
   // own doc comment for the full reasoning. "No-op against a tombstone"
   // is checked here the same way setParent's own no-op check is: before
   // either throw below becomes reachable.
-  async advanceRecurring(id: string, completedAt: string, today: string): Promise<void> {
+  async advanceRecurring(id: string, completedAt: string, today: LocalDayKey): Promise<void> {
     const existing = this.tasks.get(id);
     if (existing === undefined || existing.deletedAt !== null) {
       return;
@@ -424,7 +425,7 @@ export class InMemoryTaskStore implements TaskStore {
   // comment. Reads the Task first, the same as setParent/
   // advanceRecurring above, to know whether `date` carries a time-of-day
   // to preserve on the new day.
-  async postpone(id: string, today: string): Promise<void> {
+  async postpone(id: string, today: LocalDayKey): Promise<void> {
     const existing = this.tasks.get(id);
     if (existing === undefined || existing.deletedAt !== null || existing.date === null) {
       return;

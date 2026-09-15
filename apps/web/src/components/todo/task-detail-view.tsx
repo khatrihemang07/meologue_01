@@ -56,7 +56,7 @@
  * component," with no fan-in of its own to build: nothing else in this
  * view can open a Task's Date.
  */
-import type { Comment, Event, Label, Project, Section, Task } from "@meologue/core";
+import type { Comment, Event, Label, LocalDayKey, Project, Section, Task } from "@meologue/core";
 import { uiPriorityOf } from "@meologue/core";
 import {
   ChevronLeft,
@@ -145,7 +145,7 @@ export interface TaskDetailViewProps {
   /** Sets or clears the Task's `date` (issue #253) — reaches this view's own `TaskSchedulePopover` instance for the Date attribute, mirroring `task-row-content.tsx`'s identical wiring. */
   onSetDate: (id: string, date: string | null) => void;
   /** Sets or clears the Task's Recurrence phrase (issue #253) — `TaskStore.setDateString`'s own doc comment (task-schedule-sheet.tsx) has the reasoning for why `date` is recomputed by the store rather than trusted from a caller. `today` (not an instant — issue #296, `lib/local-day-key.ts`'s `localDayKey`) is what this view threads through below. */
-  onSetDateString: (id: string, dateString: string | null, today: string) => void;
+  onSetDateString: (id: string, dateString: string | null, today: LocalDayKey) => void;
   /** Day-keys carrying at least one active Task, mapped to how many — threaded straight through to `TaskSchedulePopover`'s identical prop (its own doc comment: SCHED-09's calendar dot and SCHED-04's preview subline share this one source). */
   datesWithTasks: ReadonlyMap<string, number>;
   onSetProject: (projectId: string | null) => void;
