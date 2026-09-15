@@ -1548,4 +1548,225 @@ export function taskStoreContract(createStore: () => TaskStore | Promise<TaskSto
       expect((tombstone?.updatedAt as string) > original.updatedAt).toBe(true);
     });
   });
+
+  // Issue #244: Sync's acknowledgement write path, the Task-shaped sibling
+  // of entry-store-contract.ts's own "applyAcknowledged() (issue #216)"
+  // block and mirrored case for case against it. The defect it closes is
+  // the narrower sibling of #218's: a local write landing between the push
+  // going out and the response coming back — here a *completion*, which is
+  // what issue #244 actually observed — reverted by the acknowledgement AND
+  // stamped with a `seq`, so `pending()` stops seeing it and nothing ever
+  // re-pushes it. It cannot reuse applyPulled's rule: ADR 0065 tolerates
+  // the Server holding an OLDER `updated_at`, so an ordering guard would
+  // refuse the acknowledgement forever and the row would re-push every
+  // tick. See TaskStore.applyAcknowledged's own doc comment
+  // (../task-store.ts).
+  describe("applyAcknowledged() (issue #244)", () => {
+    it("confirms a Task that has not changed since it was pushed, clearing pending", async () => {
+      const pushed = task({ id: "a", content: "buy milk", seq: null });
+      await store.upsert([pushed]);
+
+      await store.applyAcknowledged([
+        {
+          asPushed: pushed,
+          confirmed: task({
+            id: "a",
+            content: "buy milk",
+            seq: 7,
+            syncedAt: "2026-01-02T00:00:00.000Z",
+          }),
+        },
+      ]);
+
+      expect(await store.pending()).toEqual([]);
+      expect(await store.get("a")).toMatchObject({ id: "a", seq: 7 });
+    });
+
+    // ADR 0065's tolerated divergence, exactly as the Entry contract pins
+    // it: an edit landing on identical content leaves the Server with an
+    // OLDER updatedAt than this Device. The acknowledgement must still
+    // land, or the Task never clears pending and re-pushes forever.
+    it("confirms an unchanged Task even when the Server's updatedAt is older than this Device's", async () => {
+      const pushed = task({
+        id: "a",
+        content: "same content",
+        updatedAt: "2026-02-01T00:00:00.000Z",
+        seq: null,
+      });
+      await store.upsert([pushed]);
+
+      await store.applyAcknowledged([
+        {
+          asPushed: pushed,
+          confirmed: task({
+            id: "a",
+            content: "same content",
+            updatedAt: "2026-01-01T00:00:00.000Z",
+            seq: 7,
+            syncedAt: "2026-01-02T00:00:00.000Z",
+          }),
+        },
+      ]);
+
+      expect(await store.pending()).toEqual([]);
+    });
+
+    // **The defect issue #244 reported, at store level.** The Task was
+    // ticked while the request carrying its creation was still in flight,
+    // so the acknowledgement coming back is for the un-completed row.
+    it("does not undo a completion made after the push went out", async () => {
+      const pushed = task({ id: "a", content: "buy milk", seq: null });
+      await store.upsert([pushed]);
+      await store.complete("a", "2026-01-01T00:05:00.000Z");
+
+      await store.applyAcknowledged([
+        {
+          asPushed: pushed,
+          confirmed: task({
+            id: "a",
+            content: "buy milk",
+            completedAt: null,
+            seq: 7,
+            syncedAt: "2026-01-02T00:00:00.000Z",
+          }),
+        },
+      ]);
+
+      expect(await store.get("a")).toMatchObject({
+        completedAt: "2026-01-01T00:05:00.000Z",
+      });
+    });
+
+    // The half that is the actual lost write. Surviving in the store is
+    // not what issue #244 saw go wrong; what it saw was `"tasks": []` on
+    // every push afterwards, because `pending()` is exactly `seq IS NULL`
+    // and the acknowledgement had stamped a real `seq` over it.
+    it("leaves that completion pending, so the next Sync pushes it", async () => {
+      const pushed = task({ id: "a", content: "buy milk", seq: null });
+      await store.upsert([pushed]);
+      await store.complete("a", "2026-01-01T00:05:00.000Z");
+
+      await store.applyAcknowledged([
+        {
+          asPushed: pushed,
+          confirmed: task({
+            id: "a",
+            content: "buy milk",
+            completedAt: null,
+            seq: 7,
+            syncedAt: "2026-01-02T00:00:00.000Z",
+          }),
+        },
+      ]);
+
+      const pending = await store.pending();
+      expect(pending.map((t) => t.id)).toEqual(["a"]);
+      expect(pending[0]).toMatchObject({
+        seq: null,
+        completedAt: "2026-01-01T00:05:00.000Z",
+      });
+    });
+
+    // Not only completions — any local mutation in that window. `rename`
+    // stands for every setter, since they all route through the one
+    // `updateIfLive` door that stamps `updatedAt`/`seq`.
+    it("does not undo a rename made after the push went out", async () => {
+      const pushed = task({ id: "a", content: "buy milk", seq: null });
+      await store.upsert([pushed]);
+      await store.rename("a", "buy oat milk");
+
+      await store.applyAcknowledged([
+        {
+          asPushed: pushed,
+          confirmed: task({ id: "a", content: "buy milk", seq: 7 }),
+        },
+      ]);
+
+      expect(await store.get("a")).toMatchObject({ content: "buy oat milk", seq: null });
+    });
+
+    // ADR 0059: full rows are acknowledged precisely so a write the Server
+    // REFUSED (because the row is tombstoned there) teaches this Device the
+    // tombstone. That has to keep working for Tasks too.
+    it("carries back a tombstone the Server refused the write against", async () => {
+      const pushed = task({ id: "a", content: "an edit the Server will refuse", seq: null });
+      await store.upsert([pushed]);
+
+      await store.applyAcknowledged([
+        {
+          asPushed: pushed,
+          confirmed: task({
+            id: "a",
+            content: "",
+            seq: 9,
+            syncedAt: "2026-01-02T00:00:00.000Z",
+            deletedAt: "2026-01-02T00:00:00.000Z",
+          }),
+        },
+      ]);
+
+      expect(await store.list()).toEqual([]);
+      expect(await store.get("a")).toBeUndefined();
+    });
+
+    // Search is maintained from whatever survived, never from the
+    // confirmation — the one place a refused acknowledgement could
+    // otherwise still appear to have landed (SqliteTaskStore.applyPulled's
+    // own "two FTS5 tables" comment gives the mechanism).
+    it("indexes the Task that survived, not the confirmation it refused", async () => {
+      const pushed = task({ id: "a", content: "a recurring chore", seq: null });
+      await store.upsert([pushed]);
+      await store.rename("a", "a finished errand");
+
+      await store.applyAcknowledged([
+        {
+          asPushed: pushed,
+          confirmed: task({ id: "a", content: "a recurring chore", seq: 7 }),
+        },
+      ]);
+
+      expect((await store.search("errand")).map((t) => t.id)).toEqual(["a"]);
+      expect(await store.search("recurring")).toEqual([]);
+    });
+
+    // The guard is a raw `=` on `updated_at` where every other comparison
+    // needs normalising, because it compares a row against a snapshot of
+    // ITSELF rather than across writers. This pins that, because the
+    // obvious justification ("a pending row is always client-written") is
+    // false: Merge marks every row it writes as pending while taking
+    // `updated_at` straight from the Backup file, which may hold the
+    // Server's six-digit shape.
+    it("confirms a pending Task whose updatedAt is in the Server's shape, not this client's", async () => {
+      const merged = task({
+        id: "a",
+        content: "folded in by a Merge",
+        updatedAt: "2026-09-05T16:23:02.794113Z",
+        seq: null,
+        syncedAt: null,
+      });
+      await store.upsert([merged]);
+
+      await store.applyAcknowledged([
+        {
+          asPushed: merged,
+          confirmed: task({
+            id: "a",
+            content: "folded in by a Merge",
+            updatedAt: "2026-09-05T16:23:02.794113Z",
+            seq: 11,
+            syncedAt: "2026-09-07T00:00:00.000Z",
+          }),
+        },
+      ]);
+
+      expect(await store.pending()).toEqual([]);
+      expect(await store.get("a")).toMatchObject({ id: "a", seq: 11 });
+    });
+
+    it("is a no-op on an empty batch", async () => {
+      await store.upsert([task({ id: "a", seq: 1 })]);
+      await store.applyAcknowledged([]);
+      expect((await store.list()).map((t) => t.id)).toEqual(["a"]);
+    });
+  });
 }

@@ -183,40 +183,31 @@ test("a completed Task's look — decoration and colour — agrees across every 
   // composer.spec.ts's own Day-block test uses and documents at length: a
   // virtualized row can be unmounted and remounted between a click landing
   // and React's onChange running, snapping a controlled checkbox back.
+  // Only the CLICK is retried, and only for that reason.
   //
-  // The outer `toPass` goes one step further, covering a SEPARATE race this
-  // spec's own investigation found (captured on a Playwright trace of a
-  // real failure): the tick's own `/v1/sync` push can go out with
-  // `"tasks":[]` — the Entry's checklist text flips to `- [x]` and a
-  // `completed` Event is pushed in the very same request, but the Task
-  // row's own `completed_at` write never gets marked dirty for THAT
-  // request's outbox, and every poll afterwards keeps sending an empty
-  // `tasks` array too — `since_task_seq` never moves again on its own.
-  // Nothing local is wrong (the checkbox stays checked, the store's own
-  // read of it is correct); this is the sync layer failing to notice one
-  // particular write, intermittently — observed once in roughly every 6-10
-  // runs here, unrelated to load. Un-ticking and re-ticking manufactures a
-  // fresh local write for the outbox to notice, which is what actually
-  // recovers it; a longer passive wait does not; a captured trace showed
-  // 13 straight `/v1/sync` round trips over 56s, all 200 OK, after the one
-  // that should have carried the Task.
-  //
-  // This is a real, reportable gap in the completion→sync path, not
-  // something this spec's own assertions should paper over — see this
-  // file's own report for the full trace. The retry only exists so THIS
-  // spec's own coverage of #237 doesn't depend on winning that race.
+  // Issue #244 is why this used to be more than that. An outer `toPass`
+  // wrapped an un-tick/re-tick recovery around `waitForTaskCompleted` too,
+  // on a 90s budget, because the tick's own `/v1/sync` push could go out
+  // with `"tasks":[]` and never recover — the Entry's checklist flipping to
+  // `- [x]` and a `completed` Event going out in the very same request
+  // while the Task row's completion was silently dropped from the outbox
+  // forever. That was a real lost write, not a slow one: sync's
+  // acknowledgement arm wrote Tasks through `TaskStore.upsert()` wholesale,
+  // so an acknowledgement for the Task's creation, landing after the tick,
+  // stamped a `seq` over the `seq: null` the completion had just set and
+  // `pending()` never saw the row again. Fixed by
+  // `TaskStore.applyAcknowledged` (ADR 0068's #244 amendment), so the wait
+  // below is an ordinary wait again and belongs outside the retry, exactly
+  // where composer.spec.ts keeps its own.
   const dayRow = page.getByTestId("day-tasks-row").locator("li", { hasText: body });
   const checkbox = dayRow.getByRole("checkbox");
   await expect(checkbox).toBeVisible();
   await expect(async () => {
-    if (await checkbox.isChecked()) {
-      await checkbox.click();
-      await expect(checkbox).not.toBeChecked({ timeout: 1_000 });
-    }
     await checkbox.click();
     await expect(checkbox).toBeChecked({ timeout: 1_000 });
-    await waitForTaskCompleted(body, SERVER_A_DATABASE, 15_000);
-  }).toPass({ timeout: 90_000 });
+  }).toPass({ timeout: 15_000 });
+
+  await waitForTaskCompleted(body, SERVER_A_DATABASE, 15_000);
 
   // Sanity check on the comparison itself, independent of any variant:
   // the two custom properties the whole test hinges on telling apart must

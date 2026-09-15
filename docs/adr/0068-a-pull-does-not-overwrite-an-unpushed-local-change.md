@@ -191,3 +191,42 @@ guard compares against its own pushed value and a single `setWhere` cannot carry
 per row. The guard still lives inside the statement rather than in a read-then-write, so no `await`
 sits between deciding and writing — the same property `applyPulled` protects, and for the same
 reason: this method exists because of a write that interleaves with a Sync round trip.
+
+## Amendment (issue #244): the acknowledgement rule reaches Tasks, and the scope claim above was read too widely
+
+The amendment above derived its rule in general terms and shipped it for **Entries only**. Nothing
+in it said so. Three releases later a Task ticked from the Day block was losing its completion
+permanently, by that exact mechanism: the push carrying the Task's creation was still in flight when
+the user ticked it, `complete()` cleared `seq`, and then `applyAcknowledgedTasks` wrote the
+creation's acknowledgement through `TaskStore.upsert()` — wholesale, stamping a real `seq` over the
+`seq: null` the tick had just set. `pending()` is exactly `seq IS NULL`, so from that moment the
+Task was invisible to the outbox. The captured trace shows what that looks like from outside: 13
+consecutive `/v1/sync` round trips over 56s, every one 200 OK, every one carrying `"tasks": []`,
+while the Entry beside the Task displayed a ticked box. A lost write, and ADR 0048's divergence
+reached from a different direction.
+
+`TaskStore.applyAcknowledged` and `AcknowledgedTask` now mirror the Entry pair exactly, including
+all three "easy to get wrong" details above. Nothing in the rule needed changing — only applying.
+
+**What actually delayed this is worth recording, because it was a comment, not a gap.** Two
+sentences read as decisions and were not:
+
+- The Consequences section above says "**Every mutable stream is covered now (issue #218)**". True,
+  and about the **pull** arm only — #218 extended `applyPulled` across the streams. Read at a
+  glance it answers "are Tasks covered?" with a yes that was never about this arm.
+- `TaskStore.applyPulled`'s own doc comment carried #218's pull rule across to Tasks faithfully and
+  then added "`upsert` above stays wholesale and is what the acknowledged arm keeps using" — an
+  assertion of current behaviour in the voice of a decision, with **no reason given why Tasks were
+  immune to the race #216 had already named for Entries.** They were not immune. Anyone checking
+  "was this considered for Tasks?" found a sentence that looked settled and contained no argument.
+
+Both now say which arm they mean.
+
+**Still unguarded, and deliberately not fixed here: Projects, Sections, Labels and Comments.** Their
+acknowledgement arms still run through `upsert()`. The structural argument that damned Tasks applies
+to all four unchanged — each clears `seq` on a local edit, each is acknowledged wholesale — but that
+is an argument, not evidence, and this ADR's own #218 scope note was written to resist exactly this
+step ("six speculative changes to Sync at once"). What separates Tasks is that the race was
+*observed in the field and then reproduced deterministically*, which none of the other four has
+been. Filed rather than assumed; see the issue tracker. `Event` remains genuinely exempt for the
+reason given above — append-only, nothing can make one pending.

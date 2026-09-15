@@ -33,6 +33,29 @@ export interface TaskSearchOptions {
 }
 
 /**
+ * Issue #244: what Sync's acknowledgement arm hands the Task store — the
+ * Task-shaped sibling of AcknowledgedEntry (./store.ts, issue #216), whose
+ * own doc comment carries the full reasoning and is not repeated here.
+ *
+ * The short version, because it is the reason this type exists at all: an
+ * acknowledgement cannot be applied unconditionally, because the user can
+ * edit a row between the push going out and the response coming back —
+ * **ticking a Task is exactly such an edit** — and applying it then reverts
+ * that edit *and* stamps a `seq`, so `pending()` (which is exactly
+ * `seq IS NULL`) stops seeing the row and nothing ever re-pushes it. Nor
+ * can it be guarded on `updatedAt` the way TaskStore.applyPulled is: ADR
+ * 0065 tolerates the Server holding an *older* `updatedAt`, so that guard
+ * would refuse the acknowledgement forever and the row would re-push on
+ * every tick.
+ */
+export interface AcknowledgedTask {
+  /** The Server's current row for this id, as ADR 0059 returns it — a full row, so a write the Server refused against a tombstone teaches this Device the tombstone. */
+  readonly confirmed: Task;
+  /** The row this Device sent, exactly as `pending()` handed it over. Only its `updatedAt` is read. */
+  readonly asPushed: Task;
+}
+
+/**
  * The Task-shaped sibling of EntryStore (./store.ts) — a second store
  * interface beside it, not a widening of it (ADR 0047: `EntryStore` is
  * Entry-specific down to its method names, `list`/`upsert`/`pending`/
@@ -142,18 +165,58 @@ export interface TaskStore {
   listCompleted(): Promise<Task[]>;
   /** One Task by id, or undefined if unknown or tombstoned. */
   get(id: string): Promise<Task | undefined>;
-  /** Sync's write path: upsert wholesale, exactly as EntryStore.upsert does. */
+  /**
+   * Writes rows wholesale, exactly as EntryStore.upsert does — the right
+   * shape for a local creation (there is deliberately no `add`, this
+   * interface's own header comment above).
+   *
+   * **No longer Sync's acknowledgement write path** (issue #244): that
+   * moved to applyAcknowledged below, for the identical reason
+   * EntryStore.upsert stopped being Entries' in issue #216. Until then
+   * this method's own doc comment asserted that the acknowledged arm
+   * "stays wholesale" without giving any reason Tasks were immune to the
+   * race #216 had already named for Entries — and they were not. See
+   * applyAcknowledged for what that cost.
+   */
   upsert(tasks: Task[]): Promise<void>;
   /**
    * Sync's **pull** write path (issue #218) — the Cursor-read rows in a
    * SyncResponse, never the acknowledged ones. Mirrors
-   * EntryStore.applyPulled exactly (../store.ts's own doc comment carries
+   * EntryStore.applyPulled exactly (./store.ts's own doc comment carries
    * the full rule and every reason behind it): an incoming row is applied
    * unless the local row is pending (`seq IS NULL`) and strictly newer by
-   * `updatedAt`, and even then a tombstone still wins. `upsert` above
-   * stays wholesale and is what the acknowledged arm keeps using.
+   * `updatedAt`, and even then a tombstone still wins. The acknowledged
+   * arm is applyAcknowledged below, not this method and not `upsert` —
+   * see AcknowledgedTask above for why an `updatedAt` guard cannot be
+   * reused there.
    */
   applyPulled(tasks: Task[]): Promise<void>;
+  /**
+   * Sync's **acknowledgement** write path (issue #244), mirroring
+   * EntryStore.applyAcknowledged's issue #216 fix exactly — see that
+   * method's own doc comment (./store.ts) for the full rule and the
+   * reasoning behind every clause.
+   *
+   * Applies each confirmation **only while the local row is still the one
+   * that was pushed**, compared on `updatedAt` against `asPushed`. A row
+   * edited since the push — completed, say — is left exactly as it is,
+   * and left pending, so the next Sync tick carries the newer edit instead
+   * of the acknowledgement quietly undoing it. A row that is no longer
+   * pending is confirmed unconditionally: it has nothing local left to
+   * lose, which is what keeps a redelivered acknowledgement idempotent.
+   *
+   * What it cost to not have this, in the words of the report that found
+   * it (issue #244): a Task ticked from the Day block, while the push
+   * carrying that same Task's creation was still in flight, had the
+   * creation's acknowledgement applied wholesale over it — stamping a real
+   * `seq` over the `seq: null` complete() had just set, and clearing
+   * `completedAt` back to null. `pending()` then saw nothing, so the tick's
+   * own request and every request after it pushed `"tasks": []` — 13 round
+   * trips over 56s, all 200 OK — while the Entry beside the Task showed a
+   * ticked box. A lost write, and exactly the divergence ADR 0048 exists
+   * to prevent, reached from a different direction.
+   */
+  applyAcknowledged(rows: readonly AcknowledgedTask[]): Promise<void>;
   /**
    * Sets `completedAt` and clears `seq` — a completion is a change like
    * any other, and clearing `seq` is what makes it pending() so sync picks
