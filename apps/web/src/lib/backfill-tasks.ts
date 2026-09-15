@@ -49,9 +49,15 @@ import type {
   Task,
   TaskStore,
 } from "@meologue/core";
-import { englishQuickAddLanguage, mintId as mintTaskId, orderKeyBetween } from "@meologue/core";
+import {
+  englishQuickAddLanguage,
+  mintId as mintTaskId,
+  orderKeyBetween,
+  parseLocalDayKey,
+} from "@meologue/core";
 import { promotedTaskToTask } from "@/hooks/use-history";
 import { deviceUtcOffsetMinutes, entryDayKey } from "@/lib/entry-day";
+import { localDayKey } from "@/lib/local-day-key";
 import { type ChecklistConfidenceGate, promoteBareCheckboxes } from "@/lib/promote-tasks";
 import { queryClient } from "@/lib/query-client";
 import { ENTRIES_QUERY_KEY } from "@/lib/query-keys";
@@ -240,7 +246,19 @@ export async function backfillTasksFromHistory(
     // meaning against a value that was never a valid timestamp to begin
     // with.
     const capturedDay = entryDayKey(entry.createdAt, offsetMinutes) ?? entry.createdAt.slice(0, 10);
-    const quickAddOptions: QuickAddOptions = { now: capturedDay, smartDates: true, language };
+    // `capturedDay` is a genuine `LocalDayKey` whenever `entryDayKey`
+    // itself produced it (the overwhelming common case — see the comment
+    // above). The `.slice(0, 10)` fallback only ever runs against
+    // already-corrupt `createdAt` data (a restored backup or external
+    // import), and that comment's own "produce *some* day-shaped string
+    // rather than throw" intent means this can't become a `mustParse
+    // LocalDayKey` that would abort the whole backfill run over one bad
+    // Entry (issue #314): `parseLocalDayKey` checks the shape, and only
+    // the pathological non-`YYYY-MM-DD` slice — never realistic — falls
+    // back to today, a real day rather than an ill-shaped string leaking
+    // into `QuickAddOptions.now`.
+    const now = parseLocalDayKey(capturedDay) ?? localDayKey(new Date());
+    const quickAddOptions: QuickAddOptions = { now, smartDates: true, language };
     const { body, tasks: promoted } = promoteBareCheckboxes(
       entry.body,
       mintId,

@@ -1,3 +1,4 @@
+import type { LocalDayKey } from "../local-day-key";
 import type { QuickAddLanguage } from "./language";
 
 /**
@@ -127,13 +128,12 @@ export interface QuickAddOptions {
   /** Defaults to ./en.ts's `englishQuickAddLanguage`. */
   language?: QuickAddLanguage;
   /**
-   * A floating `YYYY-MM-DD` or `YYYY-MM-DDTHH:MM` reference instant — the
-   * same encoding and the same "caller supplies it, this module never
-   * reads the system clock" convention ../task-views.ts's `today()`
-   * uses, for the identical testability reason. Required — not
-   * `?`-optional, unlike every other field below — even with
-   * `smartDates: false`: see parseQuickAdd's own header comment for why
-   * that setting doesn't relax this. `{deadline}` and `!reminder`
+   * A floating `YYYY-MM-DD` reference day — the same "caller supplies it,
+   * this module never reads the system clock" convention
+   * ../task-views.ts's `today()` uses, for the identical testability
+   * reason. Required — not `?`-optional, unlike every other field below —
+   * even with `smartDates: false`: see parseQuickAdd's own header comment
+   * for why that setting doesn't relax this. `{deadline}` and `!reminder`
    * (./rules.ts) are sigil-marked and always active, and resolving a
    * year-less absolute date inside either one still needs to know what
    * "today" is. Requiring it in the type, rather than only checking at
@@ -141,8 +141,18 @@ export interface QuickAddOptions {
    * (every real one does — this is the composer's own clock) gets a
    * compile error for forgetting it, not a working build that throws the
    * first time a user types `{27 Jan}`.
+   *
+   * `LocalDayKey`, not a bare `string` (issue #314): `../local-day-key.ts`
+   * originally left this field unbranded because its own sole two
+   * construction sites (`apps/web/.../task-schedule-popover.tsx`) were
+   * off-limits while that file was under concurrent rework; #314 closes
+   * that gap once the file was clear. Every real caller already hands
+   * this a day-only value produced by `localDayKey()`/`entryDayKey()`
+   * (never `YYYY-MM-DDTHH:MM` in practice, despite this field's older doc
+   * comment implying that shape was live here too), so branding it costs
+   * nothing beyond that one file's own parameter type.
    */
-  now: string;
+  now: LocalDayKey;
   /**
    * Turns off the eager/natural-language family of rules entirely — the
    * clean call-site distinction issue #170's Part A brief asks for,

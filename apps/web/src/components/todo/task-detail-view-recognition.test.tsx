@@ -1,4 +1,5 @@
 import type { Comment, Label, Project, Task } from "@meologue/core";
+import { mustParseLocalDayKey } from "@meologue/core";
 import { fireEvent, render, screen, within } from "@testing-library/react";
 import { useEffect, useRef, useState } from "react";
 import { MemoryRouter, Outlet, Route, Routes } from "react-router";
@@ -368,7 +369,12 @@ describe("DET-07 — recognition in the detail title", () => {
         onCommit={onCommit}
         onCancel={vi.fn()}
         autoFocus={false}
-        extraPlugins={[quickAddRecognitionPlugin(() => ({ now: "2026-09-10", smartDates: true }))]}
+        extraPlugins={[
+          quickAddRecognitionPlugin(() => ({
+            now: mustParseLocalDayKey("2026-09-10"),
+            smartDates: true,
+          })),
+        ]}
       />,
     );
 

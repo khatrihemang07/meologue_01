@@ -10,6 +10,7 @@
  * form.
  */
 import type {
+  LocalDayKey,
   QuickAddOptions,
   QuickAddResult,
   QuickAddToken,
@@ -233,7 +234,7 @@ export function resolveRecurrencePhrase(raw: string): string {
 function resolveRecurrence(
   recurrenceToken: QuickAddToken | undefined,
   dueDate: string | null,
-  now: string,
+  now: LocalDayKey,
 ): { date: string | null; dateString: string | null } {
   if (recurrenceToken === undefined) {
     return { date: null, dateString: null };

@@ -12,6 +12,8 @@
  * the string that got parsed.
  */
 
+import type { LocalDayKey } from "../local-day-key";
+
 export type Weekday =
   | "sunday"
   | "monday"
@@ -126,8 +128,15 @@ export interface RecurrenceReference {
    * the day it was given," issue #191). Both still treat `now` as an
    * absolute floor — no occurrence before today is ever returned by
    * either — only whether today itself counts as "before" differs.
+   *
+   * `LocalDayKey`, not a bare `string` (issue #314, closing the one gap
+   * issue #300 left open — see `../local-day-key.ts`'s own header comment
+   * for why it stopped short here originally): produced only by
+   * `apps/web`'s `localDayKey()` or by this package's own
+   * `parseLocalDayKey`/`mustParseLocalDayKey`, never by slicing a UTC
+   * instant.
    */
-  readonly now: string;
+  readonly now: LocalDayKey;
 }
 
 /**

@@ -31,6 +31,8 @@
  * `/` menu read the Reference picker's already-computed state for the same
  * transaction and defer to it, per ADR 0046.
  */
+
+import { type LocalDayKey, mustParseLocalDayKey } from "@meologue/core";
 import { baseKeymap, chainCommands, splitBlock } from "prosemirror-commands";
 import { history } from "prosemirror-history";
 import { InputRule, inputRules, undoInputRule } from "prosemirror-inputrules";
@@ -1223,9 +1225,22 @@ export function slashPlugin(): Plugin<SlashMenuState | null> {
  * parse in step with the highlight") — one function computing "now" for
  * quick-add purposes, not two that could drift apart.
  */
-export function quickAddOptionsNow(): { now: string; smartDates: boolean } {
+export function quickAddOptionsNow(): { now: LocalDayKey; smartDates: boolean } {
+  const day = entryDayKey(new Date().toISOString(), deviceUtcOffsetMinutes());
+  if (day === null) {
+    // Not reachable for any real `Date`: `new Date().toISOString()` is
+    // always parseable, so `entryDayKey` only returns `null` here if the
+    // runtime's own `Date` is broken. Thrown rather than papered over with
+    // a slice-derived fallback day, which would reintroduce the exact
+    // "UTC instant sliced into a local day key" shape issues #290/#296
+    // exist to close.
+    throw new Error("quickAddOptionsNow: entryDayKey rejected the current instant");
+  }
+  // `mustParseLocalDayKey` — a real parse, not an `as LocalDayKey` cast —
+  // is what turns `entryDayKey`'s already-validated `YYYY-MM-DD` result
+  // into the branded value (issue #314).
   return {
-    now: entryDayKey(new Date().toISOString(), deviceUtcOffsetMinutes()) ?? "",
+    now: mustParseLocalDayKey(day),
     smartDates: useSettingsStore.getState().smartDatesEnabled,
   };
 }
