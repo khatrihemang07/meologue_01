@@ -504,10 +504,10 @@ describe("settings store", () => {
       expect(useSettingsStore.getState().serverUrl).toBe("");
     });
 
-    it("normalises before storing: trims whitespace and strips exactly one trailing slash", () => {
+    it("normalises before storing: trims whitespace and strips every trailing slash", () => {
       useSettingsStore.getState().setServerUrl("  https://phone.example:41207///  ");
 
-      expect(useSettingsStore.getState().serverUrl).toBe("https://phone.example:41207//");
+      expect(useSettingsStore.getState().serverUrl).toBe("https://phone.example:41207");
     });
 
     it("does not throw when localStorage refuses the write, and still updates the store", () => {
@@ -629,16 +629,59 @@ describe("settings store", () => {
   });
 
   describe("normaliseServerUrl", () => {
+    // Already-clean input passes through untouched — proves the function is idempotent.
+    it("leaves an already-normalised URL unchanged", () => {
+      expect(normaliseServerUrl("https://h.ts.net")).toBe("https://h.ts.net");
+    });
+
     it("trims surrounding whitespace", () => {
       expect(normaliseServerUrl("  https://phone.example:41207  ")).toBe(
         "https://phone.example:41207",
       );
     });
 
-    it("strips exactly one trailing slash", () => {
-      expect(normaliseServerUrl("https://phone.example:41207///")).toBe(
-        "https://phone.example:41207//",
-      );
+    // A single trailing slash is stripped.
+    it("strips a single trailing slash", () => {
+      expect(normaliseServerUrl("https://h.ts.net/")).toBe("https://h.ts.net");
+    });
+
+    // The regression this fix closes: the old `replace(/\/$/, "")` removed
+    // exactly one slash, so this input came out as "https://h.ts.net/" —
+    // still a surviving trailing slash, still a 405 once concatenated with
+    // "/v1/sync" (see this file's own header comment).
+    it("strips two trailing slashes, not just one", () => {
+      expect(normaliseServerUrl("https://h.ts.net//")).toBe("https://h.ts.net");
+    });
+
+    it("strips three trailing slashes", () => {
+      expect(normaliseServerUrl("https://h.ts.net///")).toBe("https://h.ts.net");
+    });
+
+    // Trim and trailing-slash stripping both apply to the same value.
+    it("trims whitespace and strips a trailing slash together", () => {
+      expect(normaliseServerUrl("  https://h.ts.net/  ")).toBe("https://h.ts.net");
+    });
+
+    // ADR 0011: an empty Server URL means Sync is off — normalising must
+    // never turn "unset" into some other value.
+    it("leaves an empty URL empty", () => {
+      expect(normaliseServerUrl("")).toBe("");
+    });
+
+    // Only *trailing* slashes go — a real path segment survives.
+    it("keeps a real path while stripping its trailing slash", () => {
+      expect(normaliseServerUrl("https://h.ts.net/base/")).toBe("https://h.ts.net/base");
+    });
+
+    // The actual consequence this fix prevents: both callers build a request
+    // URL by concatenation (`${url}/v1/sync` in sync-transport.ts,
+    // `${url}/v1/health` in server-check.ts), so a surviving trailing slash
+    // yields "//v1/sync", which 405s. Pin the built path directly, not just
+    // the normaliser's own output.
+    it("builds a clean /v1/sync path from a URL with trailing slashes", () => {
+      const path = `${normaliseServerUrl("https://h.ts.net//")}/v1/sync`;
+      expect(path).toBe("https://h.ts.net/v1/sync");
+      expect(path).not.toContain("//v1");
     });
   });
 });
@@ -698,6 +741,17 @@ describe("settings store cold start", () => {
 
   it("picks up an already-stored server URL", async () => {
     localStorage.setItem("meologue.server-url", "https://phone.example:41207");
+    const { useSettingsStore: fresh } = await import("./settings");
+    expect(fresh.getState().serverUrl).toBe("https://phone.example:41207");
+  });
+
+  // The read-side half of this fix: a value left in the old broken shape —
+  // written by a build whose normaliser stripped only one trailing slash, or
+  // carried over by a Backup Restore (readStoredServerUrl's own doc
+  // comment) — is normalised when read back at module load, not only when
+  // written through setServerUrl.
+  it("normalises an already-stored server URL left in the old broken shape", async () => {
+    localStorage.setItem("meologue.server-url", "https://phone.example:41207//");
     const { useSettingsStore: fresh } = await import("./settings");
     expect(fresh.getState().serverUrl).toBe("https://phone.example:41207");
   });

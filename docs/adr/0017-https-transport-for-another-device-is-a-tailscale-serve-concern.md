@@ -4,6 +4,11 @@
 
 Accepted
 
+Extended by [0081](0081-an-insecure-origin-names-the-https-address-that-would-work.md), which
+narrows what an insecure-context failure says — pointing the reader at the HTTPS address that
+would work — without touching the `isSecureContext` check, the no-fallback rule, or the
+Serve-not-Funnel boundary this ADR decided.
+
 ## Context
 
 The web app stores Entries in SQLite over OPFS (ADR 0007), which browsers only open in a secure

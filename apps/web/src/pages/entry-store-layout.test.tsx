@@ -1,5 +1,6 @@
 import type {
   CommentStore,
+  Entry,
   EntryStore,
   EventStore,
   LabelStore,
@@ -8,10 +9,10 @@ import type {
 } from "@meologue/core";
 import { sync } from "@meologue/core";
 import { QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { useEffect } from "react";
-import { MemoryRouter, Route, Routes } from "react-router";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { MemoryRouter, Route, Routes, useNavigate } from "react-router";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   deferCommentStoreUntilOpen,
   deferEventStoreUntilOpen,
@@ -160,8 +161,13 @@ async function importFresh() {
 let activeUseEntryStore: typeof UseEntryStore;
 
 function Probe() {
-  const { disabled, message } = activeUseEntryStore();
-  return <p>{`disabled:${disabled} message:${message ?? "none"}`}</p>;
+  const { disabled, message, messageAction } = activeUseEntryStore();
+  return (
+    <>
+      <p>{`disabled:${disabled} message:${message ?? "none"}`}</p>
+      <p>{`action:${messageAction?.href ?? "none"}`}</p>
+    </>
+  );
 }
 
 // Issue #110's regression probe: records every mount/unmount of whatever
@@ -221,6 +227,8 @@ describe("EntryStoreLayout", () => {
     const fresh = await importFresh();
     // Pre-attached so Node doesn't flag this as an unhandled rejection in
     // the window before EntryStoreLayout's own .then() catches it.
+    // No message on this fixture on purpose: this pins that an empty
+    // message produces the plain sentence with no dangling " ()".
     const rejection = Promise.reject(new fresh.StorageUnavailableError());
     rejection.catch(() => {});
     createDriver.mockReturnValue(rejection);
@@ -241,10 +249,163 @@ describe("EntryStoreLayout", () => {
     await waitFor(() =>
       expect(
         screen.getByText(
-          "disabled:true message:meologue can't store Entries here — try a non-private window over HTTPS or localhost.",
+          "disabled:true message:meologue can't store Entries here — this browser wouldn't open storage. Try a non-private window.",
         ),
       ).toBeInTheDocument(),
     );
+  });
+
+  // Issue #159's own regression: the originating DOMException's name/message
+  // used to reach only the console, invisible on a tablet with no devtools —
+  // this pins that a non-empty error message is appended in parentheses so
+  // it reaches the reader too.
+  it("appends the originating error's own message in parentheses when StorageUnavailableError carries one", async () => {
+    const fresh = await importFresh();
+    const rejection = Promise.reject(
+      new fresh.StorageUnavailableError("SecurityError: The operation is insecure."),
+    );
+    rejection.catch(() => {});
+    createDriver.mockReturnValue(rejection);
+    activeUseEntryStore = fresh.useEntryStore;
+
+    render(
+      <QueryClientProvider client={fresh.queryClient}>
+        <MemoryRouter initialEntries={["/"]}>
+          <Routes>
+            <Route element={<fresh.EntryStoreLayout />}>
+              <Route path="/" element={<Probe />} />
+            </Route>
+          </Routes>
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+
+    await waitFor(() =>
+      expect(
+        screen.getByText(
+          "disabled:true message:meologue can't store Entries here — this browser wouldn't open storage. Try a non-private window. (SecurityError: The operation is insecure.)",
+        ),
+      ).toBeInTheDocument(),
+    );
+  });
+
+  // Checked before StorageUnavailableError in describeOpenError, and must
+  // NOT read the same as that branch's sentence above: this one names a fix
+  // (a different URL) rather than only a cause, so the two sentences read
+  // as genuinely different failures on screen, mirroring OpenTimeoutError's
+  // own "must not read the same as the fallback" test below.
+  it("puts a distinct, HTTP-specific message on the outlet when the context is insecure", async () => {
+    const fresh = await importFresh();
+    const rejection = Promise.reject(new fresh.InsecureContextError());
+    rejection.catch(() => {});
+    createDriver.mockReturnValue(rejection);
+    activeUseEntryStore = fresh.useEntryStore;
+
+    render(
+      <QueryClientProvider client={fresh.queryClient}>
+        <MemoryRouter initialEntries={["/"]}>
+          <Routes>
+            <Route element={<fresh.EntryStoreLayout />}>
+              <Route path="/" element={<Probe />} />
+            </Route>
+          </Routes>
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+
+    await waitFor(() =>
+      expect(
+        screen.getByText(
+          "disabled:true message:meologue can't store Entries over plain HTTP — open this page over HTTPS, or on localhost.",
+        ),
+      ).toBeInTheDocument(),
+    );
+  });
+
+  // httpsOriginHint (@/lib/https-origin-hint.ts) reads window.location
+  // directly rather than taking a parameter here — describeOpenError calls
+  // it with no argument — so the only reliable way to control it under
+  // jsdom is stubbing window.location itself for the two cases below,
+  // mirroring data-section.test.tsx's own Object.defineProperty pattern for
+  // the identical reason (Location's setters throw on jsdom for a bare
+  // property assignment).
+  describe("the InsecureContextError action link", () => {
+    let originalLocation: Location;
+
+    afterEach(() => {
+      Object.defineProperty(window, "location", {
+        configurable: true,
+        value: originalLocation,
+      });
+    });
+
+    it("yields an action href on an http: .ts.net origin", async () => {
+      originalLocation = window.location;
+      Object.defineProperty(window, "location", {
+        configurable: true,
+        value: {
+          ...originalLocation,
+          protocol: "http:",
+          hostname: "hemangs-macbook-air-1.tail28560e.ts.net",
+        },
+      });
+
+      const fresh = await importFresh();
+      const rejection = Promise.reject(new fresh.InsecureContextError());
+      rejection.catch(() => {});
+      createDriver.mockReturnValue(rejection);
+      activeUseEntryStore = fresh.useEntryStore;
+
+      render(
+        <QueryClientProvider client={fresh.queryClient}>
+          <MemoryRouter initialEntries={["/"]}>
+            <Routes>
+              <Route element={<fresh.EntryStoreLayout />}>
+                <Route path="/" element={<Probe />} />
+              </Route>
+            </Routes>
+          </MemoryRouter>
+        </QueryClientProvider>,
+      );
+
+      await waitFor(() =>
+        expect(
+          screen.getByText("action:https://hemangs-macbook-air-1.tail28560e.ts.net/"),
+        ).toBeInTheDocument(),
+      );
+    });
+
+    it("yields no action on a non-.ts.net http origin", async () => {
+      originalLocation = window.location;
+      Object.defineProperty(window, "location", {
+        configurable: true,
+        value: {
+          ...originalLocation,
+          protocol: "http:",
+          hostname: "192.168.1.5",
+        },
+      });
+
+      const fresh = await importFresh();
+      const rejection = Promise.reject(new fresh.InsecureContextError());
+      rejection.catch(() => {});
+      createDriver.mockReturnValue(rejection);
+      activeUseEntryStore = fresh.useEntryStore;
+
+      render(
+        <QueryClientProvider client={fresh.queryClient}>
+          <MemoryRouter initialEntries={["/"]}>
+            <Routes>
+              <Route element={<fresh.EntryStoreLayout />}>
+                <Route path="/" element={<Probe />} />
+              </Route>
+            </Routes>
+          </MemoryRouter>
+        </QueryClientProvider>,
+      );
+
+      await waitFor(() => expect(screen.getByText("action:none")).toBeInTheDocument());
+    });
   });
 
   // Issue #159, AC "a hung open and a rejected open are distinguishable on
@@ -609,5 +770,178 @@ describe("EntryStoreLayout", () => {
     // the six facades genuinely forwards its own catch-up method(s), not
     // merely that a registry object happens to type-check.
     await expect(syncPromise).resolves.toBeUndefined();
+  });
+});
+
+// The bug this covers: a browser reload starts `useHistory`'s infinite
+// query cold — one page — so the newest-end jump in History always lands
+// against a real, mostly-measured `scrollHeight`. Returning to the
+// Composer from another route inside the app is not a reload — this layout
+// sits above `/composer`, `/reflect`, `/digest` and `/todo*` alike and
+// never unmounts between them (issue #110, this file's own describe block
+// above), so the query it owns keeps every page the reader scrolled back
+// through earlier, and a freshly-mounted, virtualized History renders all
+// of it sight-unseen at estimated row heights — the root cause behind
+// "returning to the Composer lands on a wrong day instead of the newest
+// Entry" (see `resetEntriesPagingToNewest`'s own doc comment,
+// entries-pagination.ts, for the full mechanism). These tests exercise the
+// fix through the real routing + real `useHistory` this layout wires
+// together, not a unit test of the trimming function in isolation
+// (entries-pagination.test.ts already owns that).
+describe("EntryStoreLayout resetting Composer's pagination on a fresh visit", () => {
+  function historyEntry(overrides: Partial<Entry> = {}): Entry {
+    return {
+      id: "entry",
+      deviceId: "device-a",
+      body: "hello",
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+      seq: 1,
+      syncedAt: "2026-01-01T00:00:00.000Z",
+      deletedAt: null,
+      ...overrides,
+    };
+  }
+
+  // Reads straight off `useEntryStore()` rather than duplicating History's
+  // own rendering — this describe block is testing whether the CACHE gets
+  // trimmed on the route transition, not how History renders whatever it's
+  // handed (history.test.tsx already owns that).
+  function PaginationProbe() {
+    const { entries, pagination } = activeUseEntryStore();
+    return (
+      <>
+        <p data-testid="count">{entries.length}</p>
+        <button type="button" onClick={pagination.fetchMore}>
+          Load older
+        </button>
+      </>
+    );
+  }
+
+  // A real route change, not a prop change — `resetEntriesPagingToNewest`'s
+  // own call site (entry-store-layout.tsx) keys off `useLocation().pathname`
+  // specifically because only a genuine navigation should trim anything.
+  function NavButtons() {
+    const navigate = useNavigate();
+    return (
+      <>
+        <button type="button" onClick={() => navigate("/reflect")}>
+          Go reflect
+        </button>
+        <button type="button" onClick={() => navigate("/composer")}>
+          Go composer
+        </button>
+      </>
+    );
+  }
+
+  it("drops every page but the newest when the reader returns to /composer from Reflect, matching a reload's own starting point", async () => {
+    const { ENTRIES_PAGE_SIZE } = await import("@/lib/entries-pagination");
+    const pageOne = Array.from({ length: ENTRIES_PAGE_SIZE }, (_, i) =>
+      historyEntry({
+        id: `newest-${i}`,
+        createdAt: `2026-02-01T00:${String(59 - i).padStart(2, "0")}:00.000Z`,
+      }),
+    );
+    const pageTwo = [historyEntry({ id: "older-1", createdAt: "2026-01-01T00:00:00.000Z" })];
+    const store = createFakeStore();
+    store.list = vi.fn(async (pageParam?: { before?: unknown }) =>
+      pageParam?.before ? pageTwo : pageOne,
+    );
+    const taskStore = createFakeTaskStore();
+    openMock.mockResolvedValue({ store, taskStore, deviceId: "device-a" });
+
+    const fresh = await importFresh();
+    activeUseEntryStore = fresh.useEntryStore;
+
+    render(
+      <QueryClientProvider client={fresh.queryClient}>
+        <MemoryRouter initialEntries={["/composer"]}>
+          <NavButtons />
+          <Routes>
+            <Route element={<fresh.EntryStoreLayout />}>
+              <Route path="/composer" element={<PaginationProbe />} />
+              <Route path="/reflect" element={<p>on reflect</p>} />
+            </Route>
+          </Routes>
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+
+    await waitFor(() =>
+      expect(screen.getByTestId("count")).toHaveTextContent(String(ENTRIES_PAGE_SIZE)),
+    );
+
+    // Scrolls back once — the same accumulation a reader paging up through
+    // History produces — before ever leaving the Composer.
+    fireEvent.click(screen.getByRole("button", { name: "Load older" }));
+    await waitFor(() =>
+      expect(screen.getByTestId("count")).toHaveTextContent(
+        String(ENTRIES_PAGE_SIZE + pageTwo.length),
+      ),
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Go reflect" }));
+    await screen.findByText("on reflect");
+
+    fireEvent.click(screen.getByRole("button", { name: "Go composer" }));
+
+    // Back on /composer: only the newest page survives the round trip —
+    // not the two pages the earlier scroll-back left cached, and no extra
+    // `store.list` call either (the trim itself does no fetch — see
+    // `resetEntriesPagingToNewest`'s own doc comment on why page zero
+    // needs none).
+    await waitFor(() =>
+      expect(screen.getByTestId("count")).toHaveTextContent(String(ENTRIES_PAGE_SIZE)),
+    );
+    expect(store.list).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not touch the cache on an ordinary re-render that never leaves /composer", async () => {
+    const { ENTRIES_PAGE_SIZE } = await import("@/lib/entries-pagination");
+    const pageOne = Array.from({ length: ENTRIES_PAGE_SIZE }, (_, i) =>
+      historyEntry({
+        id: `newest-${i}`,
+        createdAt: `2026-02-01T00:${String(59 - i).padStart(2, "0")}:00.000Z`,
+      }),
+    );
+    const pageTwo = [historyEntry({ id: "older-1", createdAt: "2026-01-01T00:00:00.000Z" })];
+    const store = createFakeStore();
+    store.list = vi.fn(async (pageParam?: { before?: unknown }) =>
+      pageParam?.before ? pageTwo : pageOne,
+    );
+    const taskStore = createFakeTaskStore();
+    openMock.mockResolvedValue({ store, taskStore, deviceId: "device-a" });
+
+    const fresh = await importFresh();
+    activeUseEntryStore = fresh.useEntryStore;
+
+    render(
+      <QueryClientProvider client={fresh.queryClient}>
+        <MemoryRouter initialEntries={["/composer"]}>
+          <Routes>
+            <Route element={<fresh.EntryStoreLayout />}>
+              <Route path="/composer" element={<PaginationProbe />} />
+            </Route>
+          </Routes>
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+
+    await waitFor(() =>
+      expect(screen.getByTestId("count")).toHaveTextContent(String(ENTRIES_PAGE_SIZE)),
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Load older" }));
+
+    // Both pages stay loaded — nothing about clicking "Load older" itself
+    // is a route change, so the reset this describe block exists to test
+    // must never fire here.
+    await waitFor(() =>
+      expect(screen.getByTestId("count")).toHaveTextContent(
+        String(ENTRIES_PAGE_SIZE + pageTwo.length),
+      ),
+    );
   });
 });

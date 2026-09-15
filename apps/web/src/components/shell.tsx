@@ -136,6 +136,19 @@ export interface ShellSearchConfig {
   label?: string;
 }
 
+/**
+ * A link offered alongside an error message, for the failures that have
+ * somewhere to go rather than only something to report. Named and exported
+ * here, beside `ShellSearchConfig`, because Shell is what decides how one
+ * renders — `EntryStoreOutletContext` and `describeOpenError` both reference
+ * this rather than each re-declaring `{ href, label }`, so adding a third
+ * field is one edit instead of three.
+ */
+export interface MessageAction {
+  href: string;
+  label: string;
+}
+
 interface ShellProps {
   title: ReactNode;
   /**
@@ -158,6 +171,15 @@ interface ShellProps {
   /** Trailing app-bar action — e.g. the History/Settings links on the Composer page. */
   action?: ReactNode;
   message?: string;
+  /**
+   * An ordinary link rendered under `message`, for the failures that have
+   * somewhere to go — today, an insecure origin pointing at the HTTPS one
+   * that can actually store Entries. A plain `<a>` and not a router link:
+   * the destination is a different origin, which is the entire point, and an
+   * insecure context restricts powerful APIs rather than navigation, so the
+   * tap works from the very page that is failing.
+   */
+  messageAction?: MessageAction;
   children: ReactNode;
   /** Rendered after `children`, in the same scrollable region — e.g. the Composer page's History. */
   footer?: ReactNode;
@@ -242,6 +264,7 @@ export function Shell({
   back,
   action,
   message,
+  messageAction,
   children,
   footer,
   composerSlot,
@@ -564,6 +587,11 @@ export function Shell({
                 </div>
               )}
               {message && <p className="text-sm text-destructive">{message}</p>}
+              {messageAction && (
+                <a className="text-sm underline" href={messageAction.href}>
+                  {messageAction.label}
+                </a>
+              )}
               {children}
               {footer}
             </div>

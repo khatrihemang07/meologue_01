@@ -9,8 +9,23 @@
 /** The OPFS pool VFS refused to install because another tab already holds it. */
 export class SecondTabError extends Error {}
 
-/** No usable storage in this browsing context — private browsing, or insecure origin. */
+/** The browser refused a legitimate attempt to open OPFS — private browsing, quota, an engine quirk. */
 export class StorageUnavailableError extends Error {}
+
+/**
+ * This origin can never have OPFS, so no attempt was made: the page is on
+ * plain HTTP to something other than `localhost`, and browsers gate OPFS
+ * behind a secure context (ADR 0017).
+ *
+ * Deliberately a sibling of `StorageUnavailableError` rather than a subclass
+ * of it. The two differ in the only way that matters to a reader: this one is
+ * fixable from where they are standing — open the same app on an HTTPS origin
+ * and it works — where `StorageUnavailableError` means the browser turned down
+ * an attempt that should have succeeded, and mostly isn't theirs to fix. A
+ * subclass would also make `describeOpenError`'s `instanceof` chain silently
+ * order-dependent: check the parent first and this branch never fires.
+ */
+export class InsecureContextError extends Error {}
 
 /**
  * The worker backing the web target's SqliteDriver (`sqlite-worker.web.ts`)

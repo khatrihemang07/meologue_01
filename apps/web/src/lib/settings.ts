@@ -568,9 +568,21 @@ function writeStoredTheme(theme: Theme): void {
   }
 }
 
+/**
+ * Normalised on the way out, not only on the way in. Writing through
+ * `setServerUrl` is not the only way this key acquires a value: one written
+ * by an older build (whose normaliser stripped a single trailing slash), or
+ * restored from a Backup carrying that older shape, is read straight back
+ * here at module load and used for every request afterwards. Normalising
+ * only on write would leave those permanently broken with no way to fix
+ * them but retyping the address — and the failure they produce (a 405 on
+ * Sync, "couldn't reach" on health) never points at the URL. Cheap, total,
+ * and idempotent with the write-side call, so a value that is already
+ * clean passes through untouched.
+ */
 function readStoredServerUrl(): string {
   try {
-    return localStorage.getItem(SERVER_URL_KEY) ?? "";
+    return normaliseServerUrl(localStorage.getItem(SERVER_URL_KEY) ?? "");
   } catch {
     return "";
   }
@@ -580,9 +592,23 @@ function readStoredServerUrl(): string {
  * Exported so the Settings page can show the user exactly what was stored
  * without reading it back — a read-back would return the *previous* value
  * when the write was refused, silently blanking what they typed.
+ *
+ * Strips *every* trailing slash, not just one. Both callers that turn this
+ * value into a request build the path by concatenation — `${url}/v1/sync`
+ * (sync-transport.ts) and `${url}/v1/health` (server-check.ts) — so a single
+ * surviving slash yields `//v1/sync`, which matches none of the Server's
+ * `/v1` routes. It falls through to the static-file service instead, and
+ * that serves only GET and HEAD: a Sync POST comes back **405 Method Not
+ * Allowed**, while the health GET comes back **200 with `index.html`**,
+ * which the reachability check then fails to parse and reports as
+ * "couldn't reach". One stray slash, two unrelated-looking errors, and
+ * neither names the cause. `replace(/\/$/, "")` removed exactly one, so
+ * `https://host//` — what a paste of an already-normalised address plus a
+ * typed slash produces — survived as `https://host/` and failed exactly
+ * that way.
  */
 export function normaliseServerUrl(url: string): string {
-  return url.trim().replace(/\/$/, "");
+  return url.trim().replace(/\/+$/, "");
 }
 
 function writeStoredServerUrl(url: string): void {
