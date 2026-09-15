@@ -1324,4 +1324,33 @@ describe("TaskRow", () => {
       expect(await screen.findByRole("button", { name: "buy milk" })).toBeInTheDocument();
     });
   });
+  describe("issue #303: the swipe contract", () => {
+    // `data-swipe-target` alone does nothing. `use-swipe-actions.ts` reads
+    // pointer events, and without `touch-action: pan-y` the browser's own
+    // compositor claims the horizontal axis for panning and ends the sequence
+    // in `pointercancel` before the recogniser's threshold is reached.
+    // `entry-bubble.tsx` — the only other caller of that recogniser — carries
+    // the identical class, and `swipe-recognizer.ts:194` names it as the
+    // reason its arithmetic holds.
+    //
+    // This shipped without it. Driven on the device 2026-09-15: the row
+    // computed `touch-action: auto` and no left swipe ever opened the
+    // scheduler, while every jsdom test stayed green — jsdom has no
+    // compositor, so it can never observe the cancel. This test is therefore
+    // a class-name assertion on purpose: it guards the half of the contract
+    // that a unit test is structurally incapable of exercising.
+    it("puts touch-pan-y on the same element that carries the swipe target", () => {
+      renderRow();
+      const box = rowBox();
+
+      expect(box).toHaveAttribute("data-swipe-target");
+      // `classList.contains`, never `className.toContain`. The substring form
+      // passes for `touch-pan-yX` — caught here by a mutation that was
+      // supposed to fail and didn't, which is the same "a check broad enough
+      // to match two subjects cannot fail loudly" shape this file's own
+      // breakpoint notes warn about, reproduced inside the test written to
+      // guard against it.
+      expect(box.classList.contains("touch-pan-y")).toBe(true);
+    });
+  });
 });
