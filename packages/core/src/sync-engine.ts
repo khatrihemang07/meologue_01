@@ -203,18 +203,24 @@ export async function sync(options: SyncEngineOptions): Promise<void> {
     }
     const syncedAt = now();
     const pushedById = new Map(tasksToPush.map((task) => [task.id, task]));
-    const acknowledged: AcknowledgedTask[] = [];
-    for (const wireTask of wireTasks) {
-      const asPushed = pushedById.get(wireTask.id);
-      if (asPushed === undefined) {
-        continue;
-      }
-      const existing = await taskStore.get(wireTask.id);
-      acknowledged.push({
-        confirmed: fromWireTaskOutput(wireTask, syncedAt, existing),
-        asPushed,
-      });
-    }
+    // Paired down to the rows this request actually pushed *before* the
+    // `get()`s, not after: an acknowledgement with no pushed row is dropped
+    // anyway, so reading the local Task for one would be a wasted query.
+    // The `get()`s themselves stay inside one `Promise.all`, as they were
+    // before this arm gained its guard — `SYNC_BATCH_SIZE` is 500, so
+    // awaiting them one at a time would turn a Restore-sized backlog's
+    // single pass into 500 serial store reads per tick.
+    const acknowledged: AcknowledgedTask[] = await Promise.all(
+      wireTasks
+        .flatMap((wireTask) => {
+          const asPushed = pushedById.get(wireTask.id);
+          return asPushed === undefined ? [] : [{ wireTask, asPushed }];
+        })
+        .map(async ({ wireTask, asPushed }) => {
+          const existing = await taskStore.get(wireTask.id);
+          return { confirmed: fromWireTaskOutput(wireTask, syncedAt, existing), asPushed };
+        }),
+    );
     await taskStore.applyAcknowledged(acknowledged);
   }
 
