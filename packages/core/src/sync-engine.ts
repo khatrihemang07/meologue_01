@@ -20,7 +20,8 @@ import {
 import type { ProjectStore } from "./project-store";
 import { PROTOCOL_VERSION, ROW_SHAPE_EPOCH, SYNC_BATCH_SIZE } from "./protocol";
 import type { AcknowledgedEntry, EntryStore } from "./store";
-import type { TaskStore } from "./task-store";
+import type { AcknowledgedTask, TaskStore } from "./task-store";
+import type { Task } from "./task-types";
 import type { WireSyncRequest, WireSyncResponse } from "./wire";
 
 export type SyncTransport = (request: WireSyncRequest) => Promise<WireSyncResponse>;
@@ -184,20 +185,43 @@ export async function sync(options: SyncEngineOptions): Promise<void> {
   // no real gain: the `get`/`fromWireTaskOutput` mapping is the only part
   // worth sharing, and each keeps it inline rather than behind a third,
   // shared helper.
+  //
+  // Issue #244: `applyAcknowledged()`, not `upsert()`, and it needs the
+  // rows as *pushed* alongside the Server's confirmations — `tasksToPush`
+  // is exactly that, read from `pending()` before the request went out.
+  // This is the Task-shaped sibling of the `acknowledged_entries` block
+  // below, which issue #216 moved off `upsert()` for the identical reason;
+  // see that block's own comment for the pairing rule (matched by id, never
+  // by position) and TaskStore.applyAcknowledged's doc comment
+  // (./task-store.ts) for what leaving Tasks on the wholesale write cost.
   async function applyAcknowledgedTasks(
     wireTasks: WireSyncResponse["acknowledged_tasks"],
+    tasksToPush: readonly Task[],
   ): Promise<void> {
     if (wireTasks.length === 0) {
       return;
     }
     const syncedAt = now();
-    const incomingTasks = await Promise.all(
-      wireTasks.map(async (wireTask) => {
-        const existing = await taskStore.get(wireTask.id);
-        return fromWireTaskOutput(wireTask, syncedAt, existing);
-      }),
+    const pushedById = new Map(tasksToPush.map((task) => [task.id, task]));
+    // Paired down to the rows this request actually pushed *before* the
+    // `get()`s, not after: an acknowledgement with no pushed row is dropped
+    // anyway, so reading the local Task for one would be a wasted query.
+    // The `get()`s themselves stay inside one `Promise.all`, as they were
+    // before this arm gained its guard — `SYNC_BATCH_SIZE` is 500, so
+    // awaiting them one at a time would turn a Restore-sized backlog's
+    // single pass into 500 serial store reads per tick.
+    const acknowledged: AcknowledgedTask[] = await Promise.all(
+      wireTasks
+        .flatMap((wireTask) => {
+          const asPushed = pushedById.get(wireTask.id);
+          return asPushed === undefined ? [] : [{ wireTask, asPushed }];
+        })
+        .map(async ({ wireTask, asPushed }) => {
+          const existing = await taskStore.get(wireTask.id);
+          return { confirmed: fromWireTaskOutput(wireTask, syncedAt, existing), asPushed };
+        }),
     );
-    await taskStore.upsert(incomingTasks);
+    await taskStore.applyAcknowledged(acknowledged);
   }
 
   // Issue #218 / ADR 0068 (extended to Tasks): applyPulled(), not
@@ -205,8 +229,8 @@ export async function sync(options: SyncEngineOptions): Promise<void> {
   // position in the log, which can therefore be older than a local change
   // still waiting to be pushed. See TaskStore.applyPulled's own doc
   // comment (./task-store.ts) and EntryStore.applyPulled's (./store.ts)
-  // for the rule and why the acknowledged arm above stays on upsert()
-  // deliberately.
+  // for the rule, and AcknowledgedTask's (./task-store.ts) for why the
+  // acknowledged arm above needs a *different* guard rather than this one.
   async function applyPulledTasks(wireTasks: WireSyncResponse["tasks"]): Promise<void> {
     if (wireTasks.length === 0) {
       return;
@@ -391,7 +415,7 @@ export async function sync(options: SyncEngineOptions): Promise<void> {
       await store.setCursor(response.cursor);
     }
 
-    await applyAcknowledgedTasks(response.acknowledged_tasks);
+    await applyAcknowledgedTasks(response.acknowledged_tasks, tasksToPush);
     await applyPulledTasks(response.tasks);
     if (response.task_cursor > taskCursor) {
       await taskStore.setCursor(response.task_cursor);
@@ -421,8 +445,8 @@ export async function sync(options: SyncEngineOptions): Promise<void> {
     //
     // The repetition also has a property the abstraction would remove:
     // **the two arms are visibly different per stream, and must be.** Entries
-    // run `applyAcknowledged` and `applyPulled`; the other five run `upsert`
-    // and `applyPulled`. That asymmetry is load-bearing (ADR 0068's
+    // and Tasks run `applyAcknowledged` and `applyPulled`; the other four run
+    // `upsert` and `applyPulled`. That asymmetry is load-bearing (ADR 0068's
     // amendment for #216 says why) and a shared helper would have to
     // special-case it, hiding exactly the difference a reader most needs to
     // see. `applyIncomingTasks` was that helper for Tasks, serving both

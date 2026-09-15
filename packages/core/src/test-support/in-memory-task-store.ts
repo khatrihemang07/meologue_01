@@ -15,7 +15,7 @@ import {
   withDefaultStructureFields,
 } from "../task-fields";
 import { matchesSubstring, matchesWholeWord } from "../task-search";
-import type { TaskSearchOptions, TaskStore } from "../task-store";
+import type { AcknowledgedTask, TaskSearchOptions, TaskStore } from "../task-store";
 import type { Task } from "../task-types";
 import { isAtLeastAsNewAs } from "../updated-at";
 
@@ -179,6 +179,31 @@ export class InMemoryTaskStore implements TaskStore {
         entry.deletedAt !== null;
       if (apply) {
         this.tasks.set(entry.id, entry);
+      }
+    }
+  }
+
+  /**
+   * Mirrors SqliteTaskStore.applyAcknowledged() (issue #244) — see
+   * TaskStore.applyAcknowledged's doc comment (../task-store.ts) for the
+   * rule, and the real store for why the `updatedAt` equality here is raw
+   * rather than normalised (both sides are the same row, one of them a
+   * snapshot of itself).
+   */
+  async applyAcknowledged(rows: readonly AcknowledgedTask[]): Promise<void> {
+    for (const { confirmed, asPushed } of rows) {
+      const normalized = withDefaultDayOrder(
+        withDefaultDescription(
+          withDefaultStructureFields(
+            withDefaultDateString(withDefaultLabelIds(withDefaultSchedulingFields(confirmed))),
+          ),
+        ),
+      );
+      const local = this.tasks.get(normalized.id);
+      const apply =
+        local === undefined || local.seq !== null || local.updatedAt === asPushed.updatedAt;
+      if (apply) {
+        this.tasks.set(normalized.id, normalized);
       }
     }
   }

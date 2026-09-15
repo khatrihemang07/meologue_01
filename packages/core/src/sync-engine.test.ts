@@ -401,6 +401,93 @@ describe("sync engine", () => {
     expect((await stores.store.list())[0]).toMatchObject({ seq: 4 });
   });
 
+  // Issue #244, and the Task-shaped sibling of the three tests above.
+  //
+  // The report is "ticking a Task from the Day block intermittently leaves
+  // the completion permanently unsynced", and its triage established that
+  // the Day block shares one completion door with every other surface —
+  // so the asymmetry it names is not in the handler. It is here: Entries
+  // got issue #216's guarded acknowledgement write and Tasks were left on
+  // the wholesale `upsert()`.
+  //
+  // Driven at the level it actually happens: the tick lands *while the
+  // request carrying the Task's creation is still in flight*, so
+  // `pending()` had already been read and the acknowledgement coming back
+  // is for the row as it was BEFORE the tick.
+  it("does not let an acknowledgement undo a completion made while the push was in flight", async () => {
+    const stores = newStores();
+    await stores.taskStore.upsert([task({ id: "task-1", content: "buy milk", seq: null })]);
+
+    const transport = vi.fn(async (request) => {
+      expect(request.tasks).toEqual([expect.objectContaining({ completed_at: null })]);
+      // The tick lands after the push was built, before the response is
+      // applied — the window this ticket is about.
+      await stores.taskStore.complete("task-1", "2026-01-01T00:05:00.000Z");
+      return {
+        ...emptyResponse,
+        acknowledged_tasks: [wireTaskOutput({ id: "task-1", completed_at: null, seq: 4 })],
+      } satisfies WireSyncResponse;
+    });
+
+    await sync({ ...stores, transport, deviceId: DEVICE_ID });
+
+    expect(await stores.taskStore.get("task-1")).toMatchObject({
+      completedAt: "2026-01-01T00:05:00.000Z",
+      seq: null,
+    });
+  });
+
+  // The half that reproduces what the issue actually recorded. Surviving
+  // in the store is not the symptom anyone saw; the symptom is that every
+  // subsequent `/v1/sync` push carried `"tasks": []` — 13 requests over
+  // 56s, all 200 OK — because the acknowledgement had stamped a `seq` over
+  // the `seq: null` the completion set, and `pending()` is exactly
+  // `seq IS NULL`. Nothing is left to ever re-push the completion, so the
+  // Task row never learns it completed while the Entry beside it shows a
+  // ticked box. That is the divergence ADR 0048 exists to prevent.
+  it("still pushes a completion that raced an acknowledgement, on the next round", async () => {
+    const stores = newStores();
+    await stores.taskStore.upsert([task({ id: "task-1", content: "buy milk", seq: null })]);
+
+    const racingTransport = vi.fn(async () => {
+      await stores.taskStore.complete("task-1", "2026-01-01T00:05:00.000Z");
+      return {
+        ...emptyResponse,
+        acknowledged_tasks: [wireTaskOutput({ id: "task-1", completed_at: null, seq: 4 })],
+      } satisfies WireSyncResponse;
+    });
+    await sync({ ...stores, transport: racingTransport, deviceId: DEVICE_ID });
+
+    let pushedOnTheNextRound: WireSyncRequest["tasks"] = [];
+    const nextTransport = vi.fn(async (request) => {
+      pushedOnTheNextRound = request.tasks;
+      return emptyResponse;
+    });
+    await sync({ ...stores, transport: nextTransport, deviceId: DEVICE_ID });
+
+    expect(pushedOnTheNextRound).toEqual([
+      expect.objectContaining({ id: "task-1", completed_at: "2026-01-01T00:05:00.000Z" }),
+    ]);
+  });
+
+  // ADR 0059's whole purpose still has to work for Tasks too: an
+  // acknowledgement for a Task nothing has touched since the push clears
+  // its pending mark, so the row does not re-push on every tick forever.
+  it("still clears pending when the acknowledged Task has not changed since the push", async () => {
+    const stores = newStores();
+    await stores.taskStore.upsert([task({ id: "task-1", content: "buy milk", seq: null })]);
+
+    const transport = vi.fn(async () => ({
+      ...emptyResponse,
+      acknowledged_tasks: [wireTaskOutput({ id: "task-1", seq: 4 })],
+    }));
+
+    await sync({ ...stores, transport, deviceId: DEVICE_ID });
+
+    expect(await stores.taskStore.pending()).toEqual([]);
+    expect(await stores.taskStore.get("task-1")).toMatchObject({ seq: 4 });
+  });
+
   // The Task-shaped sibling of the test above, over `task_cursor` instead
   // of `cursor` — the two Cursors are tracked, and must never regress,
   // completely independently of one another.
