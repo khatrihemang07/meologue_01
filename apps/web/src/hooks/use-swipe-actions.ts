@@ -31,6 +31,28 @@ const SPRING_BACK_EASING = "cubic-bezier(0.22, 0.61, 0.36, 1)";
 /** Marks an element as something a swipe can pick up. */
 export const SWIPE_TARGET_ATTRIBUTE = "data-swipe-target";
 
+/**
+ * How close to either screen edge a swipe may not *begin* — Android's own
+ * gesture navigation claims a horizontal drag that starts inside this margin
+ * for itself (back/forward/recents) before a single `pointermove` ever
+ * reaches this hook. Captured on device (issue #303): a swipe starting
+ * within ~150px of an edge left the app entirely, mid-capture, rather than
+ * reaching the row underneath the finger. There is no way for this
+ * recogniser to out-compete the platform for a gesture it never gets to
+ * see, so the fix is to never start tracking one that begins this close to
+ * an edge in the first place.
+ *
+ * Measured against `window.innerWidth` — the same viewport the system's own
+ * edge-swipe zones are a margin of — never a container's own bounding rect:
+ * the row that happens to be under the finger has nothing to do with where
+ * Android's gesture nav claims the gesture.
+ */
+const EDGE_EXCLUSION_PX = 150;
+
+function isNearScreenEdge(x: number): boolean {
+  return x < EDGE_EXCLUSION_PX || x > window.innerWidth - EDGE_EXCLUSION_PX;
+}
+
 export interface SwipeActionsOptions {
   /**
    * Called once, on release, when the swipe travelled far enough or fast
@@ -137,6 +159,11 @@ export function useSwipeActions({ onOpen, enabled = true }: SwipeActionsOptions)
       // mouse travel would take it away again. A mouse reaches Edit, Copy
       // and Delete through the hover buttons and right-click instead.
       if (event.pointerType === "mouse") return;
+      // The system owns the edges — see EDGE_EXCLUSION_PX's own doc comment.
+      // Checked before the `[data-swipe-target]` lookup below, not after:
+      // a pointer this close to an edge is never a candidate at all,
+      // regardless of what it landed on.
+      if (isNearScreenEdge(event.clientX)) return;
       const found =
         event.target instanceof Element
           ? event.target.closest<HTMLElement>(`[${SWIPE_TARGET_ATTRIBUTE}]`)
