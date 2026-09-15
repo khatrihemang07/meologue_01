@@ -826,25 +826,38 @@ describe("TaskSchedulePopover", () => {
       expect(onPickRecurrence).toHaveBeenCalledWith("every year", "2026-09-10");
     });
 
-    it("'Custom…' focuses the 'Type a date' input instead of committing anything, and leaves the scheduler open", async () => {
+    /**
+     * Issue #292 replaced this item's behaviour outright. Until it landed,
+     * "Custom…" closed the menu and focused the "Type a date" input —
+     * #227's own disclosed scope cut, which read on screen as a dead menu
+     * item. The two tests here previously asserted that focus hand-off;
+     * they now assert the dialog, because the old behaviour is what the
+     * ticket exists to remove, not a contract it broke by accident.
+     */
+    it("'Custom…' opens the Custom repeat dialog and commits nothing on its own", async () => {
       const { onPickRecurrence, onPickDay } = renderPopover();
       open();
       const menu = openRepeatMenu();
 
       fireEvent.click(within(menu).getByRole("menuitem", { name: "Custom…" }));
 
-      // The focus hand-off happens on the menu's own `onCloseAutoFocus`
-      // (issue #255's own precedent) — real, not synthetic in jsdom, so
-      // it lands asynchronously once Radix tears the menu down.
+      // The dialog opens on the menu's own `onCloseAutoFocus` (issue
+      // #255's precedent, reused) — real, not synthetic in jsdom, so it
+      // lands asynchronously once Radix has torn the menu down.
       await vi.waitFor(() => {
-        expect(screen.getByPlaceholderText("Type a date")).toHaveFocus();
+        expect(screen.getByRole("dialog", { name: "Custom repeat" })).toBeInTheDocument();
       });
       expect(onPickRecurrence).not.toHaveBeenCalled();
       expect(onPickDay).not.toHaveBeenCalled();
+      // The scheduler stays open beneath it. This is the assertion that
+      // would have caught the Radix trap the two-step hand-off exists for:
+      // a dialog opened straight from `onSelect` opens and is immediately
+      // dismissed along with the popover, which looks identical to the
+      // dead item #292 is removing.
       expect(screen.getByTestId("scheduler-view")).toBeInTheDocument();
     });
 
-    it("'Custom…' leaves whatever text is already typed in place — it only focuses, never clears or resets", async () => {
+    it("'Custom…' leaves whatever text is already typed in place — opening the dialog never clears the field", async () => {
       // The Repeat control itself only shows while there's no active
       // recurrence preview (the test below this one), so the case this
       // is actually guarding is a Task with a plain date already typed —
@@ -859,9 +872,53 @@ describe("TaskSchedulePopover", () => {
       fireEvent.click(within(menu).getByRole("menuitem", { name: "Custom…" }));
 
       await vi.waitFor(() => {
-        expect(screen.getByPlaceholderText("Type a date")).toHaveFocus();
+        expect(screen.getByRole("dialog", { name: "Custom repeat" })).toBeInTheDocument();
       });
       expect(screen.getByPlaceholderText("Type a date")).toHaveValue("21 sep");
+    });
+
+    it("saving the dialog commits through onPickRecurrence — the same door the typed phrase uses", async () => {
+      const { onPickRecurrence } = renderPopover();
+      open();
+      const menu = openRepeatMenu();
+      fireEvent.click(within(menu).getByRole("menuitem", { name: "Custom…" }));
+      await vi.waitFor(() => {
+        expect(screen.getByRole("dialog", { name: "Custom repeat" })).toBeInTheDocument();
+      });
+
+      const dialog = screen.getByRole("dialog", { name: "Custom repeat" });
+      fireEvent.change(within(dialog).getByRole("spinbutton", { name: "Every" }), {
+        target: { value: "2" },
+      });
+      fireEvent.click(within(dialog).getByRole("button", { name: "Save" }));
+
+      // A phrase, resolved to its first occurrence — never a second
+      // rule-shaped value, and never a direct Task mutation from here.
+      expect(onPickRecurrence).toHaveBeenCalledWith("every 2 days", expect.any(String));
+    });
+
+    it("a rule with no occurrence left lands in the typed field rather than committing or vanishing", async () => {
+      const { onPickRecurrence } = renderPopover();
+      open();
+      const menu = openRepeatMenu();
+      fireEvent.click(within(menu).getByRole("menuitem", { name: "Custom…" }));
+      await vi.waitFor(() => {
+        expect(screen.getByRole("dialog", { name: "Custom repeat" })).toBeInTheDocument();
+      });
+
+      const dialog = screen.getByRole("dialog", { name: "Custom repeat" });
+      fireEvent.click(within(dialog).getByRole("radio", { name: "On date (inclusive)" }));
+      fireEvent.change(within(dialog).getByRole("textbox", { name: "Repeat until date" }), {
+        target: { value: "01/01/2020" },
+      });
+      fireEvent.click(within(dialog).getByRole("button", { name: "Save" }));
+
+      // Nothing is committed — the rule's bound is already in the past, so
+      // it has no occurrence to land on. The phrase is not dropped either:
+      // it goes into the field that renders this grammar's own refusal, so
+      // Save neither lies nor looks broken.
+      expect(onPickRecurrence).not.toHaveBeenCalled();
+      expect(screen.getByPlaceholderText("Type a date")).toHaveValue("every day ending 1 Jan 2020");
     });
 
     it("hides the Repeat entry point once a typed Recurrence is already resolving to a preview", () => {
