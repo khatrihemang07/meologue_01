@@ -572,8 +572,27 @@ export function TaskRowContent({
           // is the keyboard reorder target (arrow keys to move, Alt+arrows
           // to indent), so it has to become visible when tabbed to or the
           // whole reordering path is invisible to a keyboard reader.
+          //
+          // Issue #309: `hidden pointer-fine:flex`, not merely
+          // `HOVER_REVEAL_CLASSES`'s opacity toggle — the same pair
+          // Edit/Date/Comment already carry below. On a device that reports
+          // BOTH `(pointer: coarse)` AND `(hover: none)` (a genuine
+          // touchscreen, per this file's own `pointer-fine` doc comment)
+          // `hidden` wins and the button drops OUT of this flex row's
+          // layout entirely, not merely to zero opacity — which is what
+          // reclaims the 32px (24px handle + this row's own `gap-2`) it
+          // used to reserve, landing the checkbox at this box's own
+          // `paddingLeft` (12px) with nothing added to compensate. Reordering
+          // on such a device is the long-press lift (#308, `task-row.tsx`'s
+          // own `onContextMenu`/pointer wiring), not this handle — this
+          // component's own `onKeyDown` below (arrow keys, Alt+arrows) is
+          // unreached with the handle hidden, but a touch-only device has no
+          // arrow keys to press either. On a pointer device (fine pointer,
+          // or genuine hover) `pointer-fine:flex` restores it exactly as
+          // before, and the keyboard reorder/reparent path below is
+          // untouched.
           className={cn(
-            "flex size-6 shrink-0 touch-none cursor-grab items-center justify-center rounded text-muted-foreground active:cursor-grabbing",
+            "hidden pointer-fine:flex size-6 shrink-0 touch-none cursor-grab items-center justify-center rounded text-muted-foreground active:cursor-grabbing",
             HOVER_REVEAL_CLASSES,
           )}
         >
@@ -952,13 +971,26 @@ export function TaskRowContent({
           ))}
         </select>
       )}
-      {/* Edit/Date/Comment: hidden by default, revealed on a device this
-          file's own `HOVER_REVEAL_CLASSES` (above) judges capable of hover —
-          see that constant's own doc comment for why the condition
-          widened beyond plain `(hover: hover)`. More stays unconditional:
-          it is the one door onto Edit/Date/Comment's own actions (via the
-          command menu) that a touch reader — genuinely coarse, not merely
-          misreported — can always reach.
+      {/* Edit/Date/Comment/More: hidden by default, revealed on a device
+          this file's own `HOVER_REVEAL_CLASSES` (above) judges capable of
+          hover — see that constant's own doc comment for why the condition
+          widened beyond plain `(hover: hover)`.
+
+          Issue #309: More used to stay unconditional — "the one door onto
+          Edit/Date/Comment's own actions… that a touch reader can always
+          reach" — while #178's full command set (Edit, Date, Priority,
+          Deadline, Labels, Move to…, Copy link, Delete) had nowhere else to
+          go on a phone. It has one now: #302's detail sheet renders Date,
+          Priority, Deadline, Labels and Project as inline attribute fields
+          in its own body, and its own `⋮` overflow carries Copy link,
+          Complete forever and Delete — the same three actions this menu's
+          own Copy-link/Delete items duplicate. "Edit" here just calls
+          `onOpenDetail`, the identical destination the title button already
+          opens on a single tap. Nothing this menu offers is missing from
+          that path, so More can now ride the identical `hidden
+          pointer-fine:flex` gate as the other three, and a touch reader
+          loses no capability — checked against #178's own full list, not
+          assumed.
 
           Edit is issue #225's own measured inline-rename trigger — driven
           on Todoist directly: hovering a row mounts Complete, Edit, Date,
@@ -1065,7 +1097,7 @@ export function TaskRowContent({
             type="button"
             aria-label={`More actions for "${task.content}"`}
             className={cn(
-              "flex -my-1 size-11 shrink-0 items-center justify-center rounded-md text-muted-foreground transition hover:bg-muted hover:text-foreground",
+              "hidden pointer-fine:flex -my-1 size-11 shrink-0 items-center justify-center rounded-md text-muted-foreground transition hover:bg-muted hover:text-foreground",
               HOVER_REVEAL_CLASSES,
               "aria-expanded:opacity-100",
             )}
