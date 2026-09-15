@@ -59,6 +59,7 @@ import { useWideLayout } from "@/hooks/use-wide-layout";
 import { localDayKey, parseDayKey } from "@/lib/local-day-key";
 import { resolveRecurrencePhrase } from "@/lib/quick-add-task";
 import { cn } from "@/lib/utils";
+import { TaskCustomRepeatDialog } from "./task-custom-repeat-dialog";
 import { TaskTimeDialog } from "./task-time-dialog";
 
 /** One resolved "Type a date" preview — either a plain date or a Recurrence, never both (mirrors quick-add-task.ts's own resolveRecurrence: "a recognised recurrence's own computed first occurrence overrides whatever plain date token also matched"). */
@@ -268,15 +269,24 @@ export function TaskSchedulePopover({
   // down inside it needs the identical treatment for as long as it's
   // open, not just the opening instant.
   const [timeDialogOpen, setTimeDialogOpen] = useState(false);
-  function ignoreOutsideWhileTimeDialogOpen(event: { preventDefault: () => void }) {
-    if (timeDialogOpen) {
+  // Issue #292's `TaskCustomRepeatDialog` is the second dialog this popover
+  // opens, and it is portalled exactly the same way — so it needs the same
+  // guard, for the same reason, or opening it dismisses the scheduler out
+  // from under itself. Both flags are OR-ed into one predicate rather than
+  // given a guard each: the question `DismissableLayer` is really asking is
+  // "is one of my own dialogs holding focus right now", and answering it
+  // per-dialog is how the next one gets added without its guard.
+  const [customRepeatOpen, setCustomRepeatOpen] = useState(false);
+  function ignoreOutsideWhileDialogOpen(event: { preventDefault: () => void }) {
+    if (timeDialogOpen || customRepeatOpen) {
       event.preventDefault();
     }
   }
-  // "Type a date" — read by the Repeat menu's own "Custom…" item below,
-  // which focuses this exact input rather than opening a second dialog
-  // (this ticket's own disclosed scope cut: Todoist's dedicated custom-
-  // recurrence dialog isn't built here).
+  // "Type a date". Issue #292 moved "Custom…" off this input and onto a
+  // real dialog (`TaskCustomRepeatDialog`), so this ref is no longer that
+  // item's destination — it stays because `handleCustomRepeatSave` below
+  // falls back to this field for a rule the engine can't place, which is
+  // the one path that still needs to put text here and focus it.
   const typedInputRef = useRef<HTMLInputElement>(null);
   // Set by "Custom…"'s own `onSelect`, read once by the Repeat menu's
   // `onCloseAutoFocus` below — the identical two-step handoff issue #255
@@ -288,6 +298,11 @@ export function TaskSchedulePopover({
   // torn down, not merely been told to — is the one signal that a
   // same-tick focus() won't just get yanked back.
   const focusInputAfterRepeatCloseRef = useRef(false);
+  // The identical hand-off for issue #292's "Custom…" item, which opens a
+  // portalled Radix `Dialog` instead of focusing an input. Same race, same
+  // signal, same reason it can't be done in `onSelect` — see that item's
+  // own comment below.
+  const openCustomRepeatAfterRepeatCloseRef = useRef(false);
 
   // Re-seed on every open, mirroring DatePickerSheet's own identical
   // reasoning (date-picker-sheet.tsx's header comment): a dismiss never
@@ -331,6 +346,37 @@ export function TaskSchedulePopover({
   function commitRepeatPhrase(phrase: string, day: string) {
     onPickRecurrence(phrase, day);
     setOpen(false);
+  }
+
+  /**
+   * Issue #292's Custom repeat dialog commits through the identical door
+   * every other recurrence in this file uses — it hands back a *phrase*,
+   * the same text someone could have typed, and that phrase is resolved
+   * here by the same `resolveSchedulePreview` the typed input runs on every
+   * keystroke. Not `firstOccurrence` directly: the typed path already
+   * answers "what day does this rule start on, and is it even placeable",
+   * and calling the engine a second way here is how the two paths would
+   * eventually disagree about the same phrase.
+   *
+   * `resolveSchedulePreview` returns `null` when a rule parses but has no
+   * occurrence to land on — a bound already in the past ("ending 1 Jan
+   * 2020") is the reachable case, since this dialog's own "On date" field
+   * will happily accept one. Committing then would set a Recurrence whose
+   * next occurrence doesn't exist, and dropping it silently would make Save
+   * look broken. So the phrase goes into the "Type a date" field instead,
+   * focused: that field already renders this exact grammar's own live
+   * preview and refusal, so the reader lands looking at their own rule in
+   * the one place that explains why it didn't take, and can edit it there.
+   * The scheduler deliberately stays open in that branch.
+   */
+  function handleCustomRepeatSave(phrase: string) {
+    const resolved = resolveSchedulePreview(phrase, nowKey, dateDay);
+    if (resolved?.dateString != null) {
+      commitRepeatPhrase(resolved.dateString, resolved.day);
+      return;
+    }
+    setTyped(phrase);
+    typedInputRef.current?.focus();
   }
 
   // SCHED-14's five named cadences, each resolved through the identical
@@ -794,6 +840,15 @@ export function TaskSchedulePopover({
                   // focus to the trigger) is what lets the focus land on
                   // the input instead and stick there.
                   onCloseAutoFocus={(event) => {
+                    if (openCustomRepeatAfterRepeatCloseRef.current) {
+                      openCustomRepeatAfterRepeatCloseRef.current = false;
+                      // Same reason the focus case below preventDefault()s:
+                      // returning focus to the trigger here would yank it
+                      // back out of the dialog that is about to autofocus.
+                      event.preventDefault();
+                      setCustomRepeatOpen(true);
+                      return;
+                    }
                     if (!focusInputAfterRepeatCloseRef.current) {
                       return;
                     }
@@ -831,18 +886,27 @@ export function TaskSchedulePopover({
                     </DropdownMenu.Item>
                   ))}
                   {/*
-                    Todoist's own dedicated custom-recurrence dialog isn't
-                    built here (this ticket's own disclosed scope cut) —
-                    this focuses the "Type a date" input instead, already
-                    pre-filled with whatever Recurrence the Task currently
-                    has (this file's own re-seed-on-open effect above), so
-                    a reader lands somewhere they can type a custom phrase
-                    rather than a dead end.
+                    Issue #292: this now opens Todoist's own dedicated
+                    Custom repeat dialog (`task-custom-repeat-dialog.tsx`,
+                    captured 2026-09-15 in `live-audit-dom/custom-repeat-
+                    dialog-todoist-2026-09-15.json`) rather than focusing
+                    the "Type a date" input, which was #227's disclosed
+                    scope cut and read as a dead end: the menu closed and
+                    nothing appeared.
+
+                    It opens through the SAME two-step hand-off the focus
+                    case above needed, and for the same reason — setting a
+                    ref here and acting in `onCloseAutoFocus` — because a
+                    Radix `Dialog` opened straight from `onSelect` fights
+                    this menu's own `FocusScope` while it is still tearing
+                    down (issue #255's root cause). A dialog losing that
+                    race doesn't error; it opens and is immediately
+                    dismissed, which looks exactly like a dead menu item.
                   */}
                   <DropdownMenu.Item
                     className={repeatItemClassName}
                     onSelect={() => {
-                      focusInputAfterRepeatCloseRef.current = true;
+                      openCustomRepeatAfterRepeatCloseRef.current = true;
                     }}
                   >
                     Custom…
@@ -932,6 +996,21 @@ export function TaskSchedulePopover({
           onSave={onSetTime}
           onEscape={() => setOpen(false)}
         />
+        {/*
+          Rendered on the narrow branch too, because `scheduleFields` — and
+          so the whole Repeat menu, "Custom…" included — is shared by both
+          layouts. Omitting it here would leave the item reachable on a
+          phone with nothing behind it, which is the dead end #292 exists to
+          remove, reintroduced at the one width nobody tests in jsdom.
+        */}
+        <TaskCustomRepeatDialog
+          open={customRepeatOpen}
+          onOpenChange={setCustomRepeatOpen}
+          recurrence={activeRecurrence}
+          onSave={handleCustomRepeatSave}
+          onEscape={() => setOpen(false)}
+          now={now}
+        />
       </>
     );
   }
@@ -963,12 +1042,12 @@ export function TaskSchedulePopover({
           border: "1px solid var(--td-popover-border)",
           boxShadow: "var(--td-popover-shadow)",
         }}
-        // See `ignoreOutsideWhileTimeDialogOpen`'s own comment above —
+        // See `ignoreOutsideWhileDialogOpen`'s own comment above —
         // both handlers get the guard since either one alone stopping the
         // eventual dismiss is enough, and a pointer-down and a focus
         // change don't always arrive in the same order.
-        onFocusOutside={ignoreOutsideWhileTimeDialogOpen}
-        onPointerDownOutside={ignoreOutsideWhileTimeDialogOpen}
+        onFocusOutside={ignoreOutsideWhileDialogOpen}
+        onPointerDownOutside={ignoreOutsideWhileDialogOpen}
       >
         {scheduleFields}
       </PopoverContent>
@@ -982,6 +1061,20 @@ export function TaskSchedulePopover({
         // own default close, so this popover closes with it rather than
         // being left open behind a now-closed Time dialog.
         onEscape={() => setOpen(false)}
+      />
+      <TaskCustomRepeatDialog
+        open={customRepeatOpen}
+        onOpenChange={setCustomRepeatOpen}
+        // The Task's own stored phrase, so opening "Custom…" on a recurring
+        // Task reads as editing the rule it already has rather than
+        // starting from a blank one — the identical reason this file's own
+        // `typed` seeds from `dateString` (header comment).
+        recurrence={activeRecurrence}
+        onSave={handleCustomRepeatSave}
+        // Same SCHED-11 follow-up as the Time dialog above: Escape closes
+        // this layer and the scheduler beneath it together.
+        onEscape={() => setOpen(false)}
+        now={now}
       />
     </Popover>
   );

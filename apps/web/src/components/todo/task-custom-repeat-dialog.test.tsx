@@ -382,3 +382,56 @@ describe("every emitted phrase parses (issue #292's own real guard)", () => {
     },
   );
 });
+
+/**
+ * The narrowing these cover is a real way to lose a rule, not a cosmetic
+ * gap: the five units this dialog offers cannot express a named-weekday or
+ * ordinal-weekday frequency, so a Task carrying one seeds the Day/1 fallback
+ * and Save — pressed without touching a single control — would replace it.
+ * The warning is the only thing standing between a reader and a rule that
+ * quietly becomes daily, so it is asserted on both sides: present exactly
+ * when a rule is about to be narrowed, absent every other time.
+ */
+describe("a rule the controls can't express is announced, not silently narrowed (issue #292)", () => {
+  const WARNING = "custom-repeat-unrepresentable";
+
+  it("names the phrase it is about to replace, in the phrase's own words", () => {
+    renderDialog("every friday");
+
+    const warning = screen.getByTestId(WARNING);
+    expect(warning.textContent).toContain("every friday");
+    expect(warning.textContent).toContain("Saving replaces it");
+  });
+
+  it("warns for an ordinal weekday too", () => {
+    renderDialog("every 3rd friday");
+
+    expect(screen.getByTestId(WARNING).textContent).toContain("every 3rd friday");
+  });
+
+  it("stays silent for every rule the controls CAN express", () => {
+    for (const phrase of ["every day", "every 2 weeks", "every workday", "every! 3 months"]) {
+      const { unmount } = render(<Harness recurrence={phrase} onSave={vi.fn()} />);
+      expect(screen.queryByTestId(WARNING), `warned for ${phrase}`).toBeNull();
+      unmount();
+    }
+  });
+
+  it("stays silent for a Task with no recurrence at all", () => {
+    renderDialog(null);
+    expect(screen.queryByTestId(WARNING)).toBeNull();
+  });
+
+  it("stays silent for text the grammar already refuses — there is no rule to lose", () => {
+    renderDialog("every blue moon");
+    expect(screen.queryByTestId(WARNING)).toBeNull();
+  });
+
+  it("still seeds the halves that DO survive the narrowing, so the warning isn't the only signal", () => {
+    renderDialog("every! friday ending 1 jan 2027");
+
+    expect(screen.getByRole("radio", { name: "Completed date" })).toBeChecked();
+    expect(screen.getByRole("radio", { name: "On date (inclusive)" })).toBeChecked();
+    expect(screen.getByTestId(WARNING)).toBeTruthy();
+  });
+});

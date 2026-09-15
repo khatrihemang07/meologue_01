@@ -4,7 +4,11 @@
  * alone decides the anchor now, `../../../../packages/core/src/recurrence/
  * parser.ts`'s `resolveAnchor`). Captured live 2026-09-15
  * (`meologue-parity-docs/todoist/live-audit-dom/
- * recurrence-reschedule-todoist-2026-09-14.json`): `role="dialog"`, named
+ * custom-repeat-dialog-todoist-2026-09-15.json`, with the four
+ * `screenshots/custom-repeat-*-2026-09-15.png` beside it — that capture is
+ * the one that opened the unit dropdown and the "On date" reveal, which
+ * the earlier `recurrence-reschedule-todoist-2026-09-14.json` never did):
+ * `role="dialog"`, named
  * "Custom repeat", 480×403, `rgb(31,31,31)` background, 10px radius,
  * `rgba(0,0,0,.16) 0 2px 8px` shadow — a `<form>` with three groups
  * ("Based on", "Every", "Ends") plus Cancel/Save.
@@ -57,9 +61,19 @@
  * `deriveDraft` below falls back to the captured Day/1 default for the
  * *frequency* half of the draft in that case, while still seeding
  * "Based on" and "Ends" correctly (those never depended on the frequency
- * at all) — reopening this dialog on such a rule and clicking Save without
- * touching anything else silently narrows it to a plain daily rule, which
- * is disclosed here rather than pretended not to happen.
+ * at all) — so opening this dialog on such a rule and clicking Save without
+ * touching anything else would replace it with a plain daily rule.
+ *
+ * That is a real way to lose a rule, so the dialog **says so on screen**
+ * (`unrepresentablePhrase` below, and the warning at the top of the form)
+ * rather than only in this comment: a reader who opens Custom… on a Task
+ * that repeats "every friday" is told, in the phrase's own words, that
+ * saving replaces it. A comment cannot warn the person it happens to, and
+ * the failure is otherwise invisible until the next occurrence lands on the
+ * wrong day. What Todoist shows in the same situation was never captured —
+ * its unit list is identical, so it has the same problem — so this line is
+ * meologue's own, and the ledger records it as a divergence rather than a
+ * match.
  *
  * **The "On date" field's default is this dialog's own choice, not
  * Todoist's.** The reference capture recorded Todoist's own default as
@@ -188,6 +202,32 @@ function defaultDraft(today: Date): Draft {
  * and "Ends" still seed correctly in that case, since neither depends on
  * the frequency.
  */
+/**
+ * The Task's own phrase when this dialog's controls cannot express it, and
+ * `null` when they can — the exact condition under which `deriveDraft`
+ * below discards the frequency it parsed and falls back to Day/1.
+ * Deliberately the same `frequencyToUnit(...) === null` test that produces
+ * the narrowing, rather than a second list of "unsupported" kinds kept
+ * alongside it: one of those two would eventually be updated without the
+ * other, and the failure mode is a warning that stops appearing for a rule
+ * that is still being narrowed.
+ *
+ * A phrase that doesn't parse at all is NOT reported here. `deriveDraft`
+ * falls back for that too, but there is no rule to lose — the Task is
+ * carrying text the engine already refuses, and telling someone a rule
+ * they never had is about to be replaced would be a lie.
+ */
+function unrepresentablePhrase(recurrence: string | null): string | null {
+  if (recurrence === null) {
+    return null;
+  }
+  const parsed = parseRecurrence(recurrence);
+  if (parsed.kind !== "parsed") {
+    return null;
+  }
+  return frequencyToUnit(parsed.rule.frequency.kind) === null ? recurrence : null;
+}
+
 function deriveDraft(recurrence: string | null, today: Date): Draft {
   const fallback = defaultDraft(today);
   if (recurrence === null) {
@@ -299,6 +339,16 @@ export function TaskCustomRepeatDialog({
 }: TaskCustomRepeatDialogProps) {
   const [draft, setDraft] = useState<Draft>(() => deriveDraft(recurrence, now));
   const [endDateText, setEndDateText] = useState(() => formatDayKeyForInput(draft.endDateKey));
+  // The phrase this dialog is about to narrow, or `null` when it can
+  // represent what the Task already holds. Held in state and written by the
+  // same re-seed effect as `draft`, rather than derived per render from the
+  // `recurrence` prop: both answer the same question — "what was on the Task
+  // when this dialog opened" — and computing one from a live prop while the
+  // other is frozen at open is how the warning would end up describing a
+  // rule the controls below no longer reflect.
+  const [unrepresentable, setUnrepresentable] = useState<string | null>(() =>
+    unrepresentablePhrase(recurrence),
+  );
   const [unitMenuOpen, setUnitMenuOpen] = useState(false);
   const [calendarOpen, setCalendarOpen] = useState(false);
   const unitMenuRef = useRef<HTMLDivElement>(null);
@@ -322,6 +372,7 @@ export function TaskCustomRepeatDialog({
       const seeded = deriveDraft(recurrence, now);
       setDraft(seeded);
       setEndDateText(formatDayKeyForInput(seeded.endDateKey));
+      setUnrepresentable(unrepresentablePhrase(recurrence));
       setUnitMenuOpen(false);
       setCalendarOpen(false);
     }
@@ -399,6 +450,32 @@ export function TaskCustomRepeatDialog({
           </DialogPrimitive.Description>
 
           <form onSubmit={handleSave} className="flex flex-1 flex-col gap-4 overflow-auto">
+            {/*
+              The dropdown's five units cannot express every frequency the
+              grammar parses (this file's own header comment) — a named
+              weekday ("every friday", the Repeat menu's own "Week" item) or
+              an ordinal weekday ("every 3rd friday") seeds `deriveDraft`'s
+              Day/1 fallback. Without this line, opening the dialog on such a
+              Task and pressing Save — changing nothing — would replace the
+              rule with a plain daily one, and the reader would have no way
+              to know that had happened until the next occurrence landed on
+              the wrong day. Saying so is not a parity claim: what Todoist
+              shows in the same situation was never captured (its own unit
+              list is identical, so it has the same problem to solve), and
+              inventing its wording would be guessing. This is meologue's
+              own disclosure, recorded as a divergence rather than dressed
+              up as a match.
+            */}
+            {unrepresentable !== null && (
+              <p
+                data-testid="custom-repeat-unrepresentable"
+                className="rounded-md px-2 py-1.5 text-xs"
+                style={{ background: "rgb(60, 45, 45)", color: "rgb(255, 209, 209)" }}
+              >
+                This Task repeats “{unrepresentable}”, which can’t be built here. Saving replaces
+                it.
+              </p>
+            )}
             <fieldset className="flex flex-col gap-1">
               <legend className="text-xs font-medium" style={{ color: "rgb(169, 169, 169)" }}>
                 Based on
