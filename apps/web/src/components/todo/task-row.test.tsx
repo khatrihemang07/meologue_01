@@ -1117,6 +1117,57 @@ describe("TaskRow", () => {
       expect(screen.queryByText("Inbox")).not.toBeInTheDocument();
     });
 
+    // Issue #310 (ROW-10/AROW-14): Todoist suppresses a Task row's own
+    // Project badge inside that Project's own view — the page's own
+    // heading already names it — and shows it everywhere else
+    // (Today/Upcoming/Search/a Filter). `suppressProjectBadge` is the
+    // caller-supplied flag `task-tree.tsx` derives from `projectId !==
+    // null`; this row itself only has to obey it.
+    it("hides the Project badge when suppressProjectBadge is set, even though the Task has a Project", () => {
+      renderRow({
+        task: task({ content: "call mum", projectId: "project-1" }),
+        suppressProjectBadge: true,
+        detailActions: {
+          projects: [project({ id: "project-1", name: "Errands" })],
+          labels: [],
+          onOpenDetail: vi.fn(),
+          onSetPriority: vi.fn(),
+          onSetDate: vi.fn(),
+          onSetDateString: vi.fn(),
+          datesWithTasks: new Map(),
+          onSetProject: vi.fn(),
+          onSetLabels: vi.fn(),
+          onCopyLink: vi.fn(),
+          onRename: vi.fn(),
+          commentCountFor: vi.fn(() => 0),
+        },
+      });
+
+      expect(screen.queryByText("Errands")).not.toBeInTheDocument();
+    });
+
+    it("still shows the Project badge when suppressProjectBadge is omitted (Today/Upcoming's own default)", () => {
+      renderRow({
+        task: task({ content: "call mum", projectId: "project-1" }),
+        detailActions: {
+          projects: [project({ id: "project-1", name: "Errands" })],
+          labels: [],
+          onOpenDetail: vi.fn(),
+          onSetPriority: vi.fn(),
+          onSetDate: vi.fn(),
+          onSetDateString: vi.fn(),
+          datesWithTasks: new Map(),
+          onSetProject: vi.fn(),
+          onSetLabels: vi.fn(),
+          onCopyLink: vi.fn(),
+          onRename: vi.fn(),
+          commentCountFor: vi.fn(() => 0),
+        },
+      });
+
+      expect(screen.getByText("Errands")).toBeInTheDocument();
+    });
+
     it("shows no sub-task count when there are none", () => {
       renderRow({ task: task({ content: "call mum" }), subtaskCount: 0 });
 
