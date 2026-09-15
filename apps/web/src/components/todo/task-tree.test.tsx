@@ -512,6 +512,123 @@ describe("TaskTree", () => {
     vi.useRealTimers();
   });
 
+  // Issue #308, on-device diagnosis: the row's own box still carries
+  // `touch-pan-y` (issue #303, for swipe-to-schedule) once armed, so the
+  // compositor claims the vertical axis and cancels the pointer stream
+  // after the first real move — traced as `pointerdown` → `contextmenu`
+  // → one `pointermove` → `pointercancel` → `lostpointercapture`, and
+  // confirmed fixed on-device with a non-passive `touchmove` listener.
+  // jsdom has no compositor and cannot reproduce that cancellation at all
+  // (this file's own header comment on `getBoundingClientRect`/pointer
+  // capture already leans on the identical limitation) — what follows is
+  // NOT a claim that the gesture works, only that arming/disarming a
+  // drag registers and unregisters the fix's own listener the way it has
+  // to for the fix to have any chance of doing so on a real device.
+  describe("the touchmove blocker that keeps a scroll from cancelling an armed drag (issue #308)", () => {
+    function armViaGrip(label: string) {
+      const handle = dragHandle(label);
+      fireEvent.pointerDown(handle, { pointerId: 1, clientY: 10 });
+      return handle;
+    }
+
+    /** The one `("touchmove", fn, { passive: false })` call `addEventListener` sees, or `undefined` if none was made. */
+    function touchMoveBlockerCall(addSpy: ReturnType<typeof vi.spyOn>) {
+      return addSpy.mock.calls.find((call: unknown[]) => call[0] === "touchmove");
+    }
+
+    it("registers a touchmove listener with passive: false the moment a drag arms, natively — not through React's own (passive) onTouchMove", async () => {
+      const addSpy = vi.spyOn(document, "addEventListener");
+      const a = task({ id: "a", content: "a", orderKey: "A" });
+      renderTree({ tasks: [a] });
+
+      await waitFor(() => expect(screen.getByText("a")).toBeInTheDocument());
+      expect(touchMoveBlockerCall(addSpy)).toBeUndefined();
+
+      armViaGrip("a");
+
+      const call = touchMoveBlockerCall(addSpy);
+      expect(call).toBeDefined();
+      expect(call?.[1]).toBeInstanceOf(Function);
+      // The load-bearing option, per the on-device finding: React's own
+      // root touch listeners are passive, and `preventDefault()` from a
+      // passive listener is a silent no-op — this has to be the one
+      // exception.
+      expect(call?.[2]).toEqual({ passive: false });
+    });
+
+    it("removes the identical listener again on a normal release", async () => {
+      const addSpy = vi.spyOn(document, "addEventListener");
+      const removeSpy = vi.spyOn(document, "removeEventListener");
+      const a = task({ id: "a", content: "a", orderKey: "A" });
+      renderTree({ tasks: [a] });
+
+      await waitFor(() => expect(screen.getByText("a")).toBeInTheDocument());
+      const handle = armViaGrip("a");
+      const blocker = touchMoveBlockerCall(addSpy)?.[1];
+      expect(blocker).toBeDefined();
+
+      fireEvent.pointerUp(handle, { pointerId: 1, clientY: 10 });
+
+      expect(removeSpy).toHaveBeenCalledWith("touchmove", blocker);
+    });
+
+    it("removes the identical listener on a cancel too, not only on a clean release", async () => {
+      const addSpy = vi.spyOn(document, "addEventListener");
+      const removeSpy = vi.spyOn(document, "removeEventListener");
+      const a = task({ id: "a", content: "a", orderKey: "A" });
+      renderTree({ tasks: [a] });
+
+      await waitFor(() => expect(screen.getByText("a")).toBeInTheDocument());
+      const handle = armViaGrip("a");
+      const blocker = touchMoveBlockerCall(addSpy)?.[1];
+
+      fireEvent.pointerCancel(handle, { pointerId: 1 });
+
+      expect(removeSpy).toHaveBeenCalledWith("touchmove", blocker);
+    });
+
+    it("never registers a second listener for a drag that is already armed", async () => {
+      const addSpy = vi.spyOn(document, "addEventListener");
+      const a = task({ id: "a", content: "a", orderKey: "A" });
+      renderTree({ tasks: [a] });
+
+      await waitFor(() => expect(screen.getByText("a")).toBeInTheDocument());
+      const handle = armViaGrip("a");
+      // A second, redundant pointerdown on the SAME already-armed drag —
+      // `handlePointerDown`'s own `if (drag !== null) return` guard
+      // (task-tree.tsx, pre-#308) is what this is actually pinning for
+      // THIS entry point; without it, a reader whose finger jitters
+      // mid-hold could leak one listener per jitter. `armDrag`'s own
+      // identical guard is the one load-bearing for the long-press entry
+      // point instead (`armLiftFromLongPress` has no guard of its own),
+      // which this grip-only test does not exercise.
+      fireEvent.pointerDown(handle, { pointerId: 1, clientY: 20 });
+
+      const touchMoveCalls = addSpy.mock.calls.filter((call: unknown[]) => call[0] === "touchmove");
+      expect(touchMoveCalls).toHaveLength(1);
+    });
+
+    // The registered function's own body, not just its existence — pins
+    // what actually makes it the fix rather than an inert no-op.
+    it("the registered listener actually calls preventDefault on the event it receives", async () => {
+      const addSpy = vi.spyOn(document, "addEventListener");
+      const a = task({ id: "a", content: "a", orderKey: "A" });
+      renderTree({ tasks: [a] });
+
+      await waitFor(() => expect(screen.getByText("a")).toBeInTheDocument());
+      armViaGrip("a");
+
+      const blocker = touchMoveBlockerCall(addSpy)?.[1] as
+        | ((event: TouchEvent) => void)
+        | undefined;
+      expect(blocker).toBeDefined();
+      const fakeEvent = { preventDefault: vi.fn() } as unknown as TouchEvent;
+      blocker?.(fakeEvent);
+
+      expect(fakeEvent.preventDefault).toHaveBeenCalledTimes(1);
+    });
+  });
+
   // ROW-14 (parity-ledger.md), the user's 2026-09-13 decision to match
   // Todoist: a completed Task interleaves inline, at its own `orderKey`
   // position, in this same list — not in a separate collapsed disclosure.

@@ -63,7 +63,7 @@
 import { MAX_TASK_NESTING_DEPTH, type Task } from "@meologue/core";
 import { useQuery } from "@tanstack/react-query";
 import type { PointerEvent } from "react";
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { type TaskDetailActions, TaskRow } from "@/components/todo/task-row";
 import { useSwipeActions } from "@/hooks/use-swipe-actions";
@@ -196,6 +196,75 @@ export function TaskTree({
   // is a property of *this level*, not of which two Tasks are involved.
   const canNest = depth < MAX_TASK_NESTING_DEPTH;
 
+  // Issue #308, diagnosed and verified on the device, not from jsdom
+  // (which has no compositor and so cannot produce this at all): once
+  // armed, the row's own box still carries `touch-pan-y` (issue #303's
+  // own class, for swipe-to-schedule — the grip survives this because it
+  // separately carries `touch-none`, `task-row-content.tsx`'s own grip
+  // markup), so the browser is still entitled to claim the vertical axis
+  // for its own panning. Traced on-device event order: `pointerdown` →
+  // `contextmenu` → ONE `pointermove` → `pointercancel` →
+  // `lostpointercapture` — the compositor takes the axis and kills the
+  // pointer stream after the very first real move, before this level's
+  // own `handlePointerMove` ever sees enough of them to compute a verdict
+  // that reorders anything. `touch-action` is decided at the touch's own
+  // start and is immune to changing it mid-gesture, so the fix isn't a
+  // class — it's suppressing the browser's own default action on
+  // `touchmove` directly, and ONLY for the duration of an armed drag: a
+  // permanent listener would take vertical scrolling away from every
+  // reader dragging a finger down an un-armed row, a worse regression
+  // than the one this fixes.
+  //
+  // A ref, not state: this holds a listener FUNCTION, compared for
+  // identity against nothing a render needs to read, and is written from
+  // plain start/stop calls below, never from a render itself.
+  const touchMoveBlockerRef = useRef<((event: TouchEvent) => void) | null>(null);
+
+  /**
+   * Registered NATIVELY, with `addEventListener`, never through JSX's
+   * `onTouchMove` — React's own root listener for that event is
+   * `{ passive: true }` (React's own default for every touch/wheel
+   * listener, to keep the main thread free to scroll without waiting on
+   * a handler), and `preventDefault()` called from inside a passive
+   * listener is a silent no-op, not an error: the on-device trace above
+   * is what caught that, since nothing about it would ever surface as a
+   * thrown exception or a failing assertion. `{ passive: false }` here is
+   * what actually gives this listener the standing to cancel the
+   * browser's own pan.
+   *
+   * On `document`, not the row itself: `touchmove` is a legacy `Touch`
+   * event, not a `PointerEvent`, and nothing guarantees it follows
+   * `setPointerCapture`'s own retargeting the way a genuine pointer event
+   * does. `document` sees it regardless of which element the finger is
+   * physically over as the drag continues across other rows.
+   */
+  const blockTouchScroll = useCallback(() => {
+    const blocker = (event: TouchEvent) => {
+      event.preventDefault();
+    };
+    touchMoveBlockerRef.current = blocker;
+    document.addEventListener("touchmove", blocker, { passive: false });
+  }, []);
+
+  /** The inverse of `blockTouchScroll` — every exit from an armed drag (a commit, a cancel, or this component going away mid-drag) has to reach this, or a reader's very next scroll on an unrelated row would silently stop working. */
+  const unblockTouchScroll = useCallback(() => {
+    const blocker = touchMoveBlockerRef.current;
+    if (blocker === null) return;
+    document.removeEventListener("touchmove", blocker);
+    touchMoveBlockerRef.current = null;
+  }, []);
+
+  // The unmount case `handlePointerUp`/`handlePointerCancel` below can't
+  // cover themselves: a `TaskTree` going away mid-drag (an Escape-driven
+  // route change, a Task deleted out from under an in-flight drag) still
+  // has to give scrolling back to the rest of the page. `useCallback`
+  // (empty deps, same as `blockTouchScroll` above) is what keeps this
+  // effect from re-running every render: both functions only ever touch
+  // the ref above, never anything that changes between renders, so a
+  // stable identity costs nothing and is what a `[]` dependency array can
+  // honestly claim.
+  useEffect(() => unblockTouchScroll, [unblockTouchScroll]);
+
   // Issue #303: swiping a row left opens its own `TaskSchedulePopover` —
   // reusing `use-swipe-actions.ts`'s shared recogniser, the identical one
   // `history.tsx`'s own bubbles use, rather than growing a second one.
@@ -301,6 +370,7 @@ export function TaskTree({
     if (drag !== null) return;
     setDrag({ taskId, pointerId });
     setOverTarget(null);
+    blockTouchScroll();
     try {
       captureTarget.setPointerCapture(pointerId);
     } catch {
@@ -373,6 +443,7 @@ export function TaskTree({
         void handleNestDrop(taskId, targetId);
       }
     }
+    unblockTouchScroll();
     setDrag(null);
     setOverTarget(null);
   }
@@ -384,6 +455,7 @@ export function TaskTree({
     } catch {
       // Already released, or capture never succeeded.
     }
+    unblockTouchScroll();
     setDrag(null);
     setOverTarget(null);
   }
