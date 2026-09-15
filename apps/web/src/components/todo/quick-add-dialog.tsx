@@ -113,12 +113,29 @@
  * closing the whole dialog) AND `closeAutocompleteRef.current?.()`
  * (actually closing the popup) in the same synchronous tick, rather than
  * leaving the second half to a keydown that will never arrive.
+ *
+ * **Issue #265 — discarding an unsaved title now confirms first.** Split
+ * out of #261 (whose own acceptance criteria bundled the Escape/popup fix
+ * above with this, deliberately left out as unmeasured at the time). Before
+ * this, every dismissal here — the editor's own Escape `onCancel`, the
+ * footer's Cancel button, and Radix `Root`'s own `onOpenChange` (Escape
+ * without a popup open, an outside click, the X button) — called
+ * `onOpenChange(false)` unconditionally, silently discarding whatever was
+ * typed. Live Todoist (both its modal Quick Add and, corroborated
+ * separately, Todoist Android's own composer — this ticket's own capture,
+ * 2026-09-15) confirms first whenever the field holds text, and closes with
+ * no prompt at all when it's empty. `requestDismiss` (below, next to
+ * `hasText`) is the one door all of the above now go through instead,
+ * reusing `task-detail-view.tsx`'s DET-15 `requestCancelEditing` shape
+ * rather than inventing a second one; its own doc comment there, and
+ * `requestDismiss`'s here, have the rest.
  */
 import { parseQuickAdd, uiPriorityOf } from "@meologue/core";
 import { X } from "lucide-react";
 import { Dialog as DialogPrimitive } from "radix-ui";
-import { Suspense, useRef } from "react";
+import { Suspense, useEffect, useRef, useState } from "react";
 import { LazyTaskTitleEditor } from "@/components/todo/lazy-task-title-editor";
+import { ConfirmDialog } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import type { AutocompleteEntry } from "@/lib/quick-add-autocomplete";
 import { type QuickAddTaskFields, taskFieldsForRename } from "@/lib/quick-add-task";
@@ -199,6 +216,17 @@ export function QuickAddDialog({
   // directly through this instead, the identical shape
   // `task-detail-view.tsx`'s `dismissGuardRef` already uses.
   const closeAutocompleteRef = useRef<(() => void) | null>(null);
+  // Issue #265 — the discard confirmation's own `onCloseAutoFocus` (below)
+  // needs somewhere real to send focus back to when it closes without a
+  // Discard, and it opens programmatically (never from a click Radix can
+  // treat as "the trigger"), so its own default falls back to
+  // `document.body` exactly as `task-detail-view.tsx`'s DET-15 fix found.
+  // Unlike that file, this dialog has exactly one focusable editor
+  // (title only, always mounted, never swapped for another), so a plain
+  // `querySelector` scoped to this ref at close time is enough — no
+  // `focusin` listener tracking "whichever editor last had it" is needed
+  // here.
+  const contentRef = useRef<HTMLDivElement | null>(null);
 
   const composer = useQuickAddComposer({
     onAdd,
@@ -211,6 +239,61 @@ export function QuickAddDialog({
     // surface.
     onCommitted: () => onOpenChange(false),
   });
+
+  // Issue #265 follow-up — a live pass found the discard confirmation
+  // itself firing on a genuinely empty reopened Quick Add. Root cause,
+  // confirmed by reading `use-quick-add-composer.ts`: this dialog is
+  // always mounted (`todo-page.tsx` renders `<QuickAddDialog open=
+  // {quickAddOpen} .../>` unconditionally, only toggling `open`), so
+  // `composer`'s own state outlives any single open/close cycle.
+  // `composer.value` — the "live mirror" `onChange` updates on every
+  // keystroke — is what `hasText` reads, but NOTHING resets it when a
+  // dismissal ends the session without a commit: `commit`/`remount` are
+  // the only two functions that ever touch it, and neither Discard nor
+  // Cancel/Escape/an outside click/the X button call either. So after
+  // type → Escape → Discard, `composer.value` still reads "buy milk" —
+  // stale, not merely uncleared — even once Radix has torn the old
+  // `LazyTaskTitleEditor` down and the next open mounts a genuinely fresh
+  // one. (`composer.seed`, the OTHER piece `remount` also owns, is
+  // usually fine on its own — plain typing never touches it — which is
+  // why the reopened editor itself really was empty; the bug is a stale
+  // mirror, not an unclear field. Except "Remove date" also calls
+  // `remount(stripped)`, so a type → Remove date → Escape → Discard cycle
+  // leaves `seed` stale too, the identical bug one layer deeper — this
+  // fix covers that path as well.)
+  //
+  // The fix matches this repo's own precedent for exactly this bug class:
+  // `task-time-dialog.tsx`'s and `task-custom-repeat-dialog.tsx`'s own
+  // "re-seed the local draft on the open transition, never while already
+  // open" `useEffect` (their own comments: "a dismiss never commits, so
+  // the next open must reflect reality, not an abandoned draft"). Those
+  // two re-seed FROM a prop (`time`/the Task's own repeat rule); Quick Add
+  // has no such source of truth to re-seed from — its own "reality" is
+  // simply blank — so this resets straight to `""`, reusing
+  // `composer.remount` (the identical primitive `removeDate` below
+  // already trusts) rather than resetting `value`/`seed`/`resetKey` by
+  // hand here. This is deliberately unconditional (every open, not only
+  // when something was actually left stale) and applies uniformly to
+  // every dismissal route — Discard, Cancel, Escape, an outside click, the
+  // X button all funnel through the identical `requestDismiss`/Radix
+  // `onOpenChange` wiring below with no door-specific state to clean up,
+  // so fixing the shared `composer` fixes every door at once rather than
+  // patching `hasText` or any one handler.
+  //
+  // Also answers "does anything else the composer holds leak the same
+  // way" (asked directly during review): no — `hasDate`/`hasPriority`/
+  // `uiPriority`/`preview` below are all pure derivations of `composer.
+  // value` via `parseQuickAdd`/`taskFieldsForRename`, recomputed fresh
+  // every render, not separate stored state. Quick Add has no project/
+  // label picker of its own yet (this file's own header comment: "a
+  // different ticket's surface"), so `composer.value` was the only actual
+  // piece of draft state to leak.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: re-seed only on the open transition (`task-time-dialog.tsx`'s own biome-ignore, identical reason) — not on every `composer` identity change, which is a fresh object every render regardless.
+  useEffect(() => {
+    if (open) {
+      composer.remount("");
+    }
+  }, [open]);
 
   // Live preview of the current line's own parse — the identical
   // `parseQuickAdd`/`taskFieldsForRename` pipeline `commit` itself will
@@ -227,7 +310,58 @@ export function QuickAddDialog({
   // Issue #264: the one thing that decides 66px vs 97px. Trimmed so
   // whitespace-only input still reads as "empty" — the identical check
   // "Add task" already uses below to decide whether it's enabled.
+  //
+  // Issue #265 reuses this same check for the discard guard below, and it
+  // is already safe against the trap this repo has been bitten by before
+  // (a ProseMirror placeholder decoration making an empty editor read as
+  // non-empty via `textContent`, `prosemirror-placeholder-fakes-nonempty`):
+  // `composer.value` is set from `onChange`, which `task-title-editor.tsx`
+  // feeds with `titleTextFromDoc(nextState.doc)` — the MODEL doc's own
+  // `textContent`, not the DOM's. The placeholder ("Add task") is painted
+  // by `placeholderPlugin` as a `Decoration.widget`, which lives outside
+  // the document entirely (`task-title-editor.tsx`'s own `decorations`
+  // prop, gated on `state.doc.content.size > 0` — the widget only renders
+  // when the doc IS empty). So `doc.textContent`, and therefore
+  // `composer.value`, never contains it: an empty field reads as `""`
+  // here, not `"Add task"`. Verified by reading that source, not assumed.
   const hasText = composer.value.trim() !== "";
+
+  // Issue #265 — the shared door every dismissal route below now goes
+  // through, replacing three independent unconditional `onOpenChange(false)`
+  // calls (the editor's own Escape `onCancel`, the footer's Cancel button,
+  // and Radix `Root`'s own `onOpenChange`, which Escape without a popup
+  // open, an outside click, and the X button all funnel into). The shape
+  // is `task-detail-view.tsx`'s `requestCancelEditing`/`dismissGuardRef`
+  // pair for DET-15, simplified for this surface: Quick Add has only one
+  // "editing" state (open/closed), not DET-15's separate "is the form in
+  // edit mode" question, so one function suffices in place of that file's
+  // two.
+  //
+  // Wording measured live against Todoist's own modal Quick Add
+  // (2026-09-15, this ticket's own capture) and matched verbatim — same
+  // heading, same body, same Cancel/Discard button order. Not shared as a
+  // constant with DET-15's identical strings: no caller in this codebase
+  // pulls `ConfirmDialog` copy from a shared module today (every existing
+  // caller — `entry-actions.tsx`, `sessions-page.tsx`, `task-detail-view.tsx`
+  // — inlines its own title/description/confirmLabel), so introducing one
+  // module for two four-word/six-word literals would be new structure this
+  // codebase doesn't otherwise use, not a simplification.
+  const [discardConfirmOpen, setDiscardConfirmOpen] = useState(false);
+  // Set only by the confirm's own Discard button (below), read only by its
+  // `onCloseAutoFocus` — distinguishes "this confirm is closing because the
+  // whole dialog is closing" (skip the focus-restore) from "this confirm is
+  // closing back to the still-open composer" (restore focus to the editor),
+  // the identical role `task-detail-view.tsx`'s own `discardConfirmedRef`
+  // plays for DET-15.
+  const discardConfirmedRef = useRef(false);
+
+  function requestDismiss() {
+    if (hasText) {
+      setDiscardConfirmOpen(true);
+      return;
+    }
+    onOpenChange(false);
+  }
 
   function removeDate() {
     // `composer.remount` is what actually changes what's on screen —
@@ -241,7 +375,28 @@ export function QuickAddDialog({
   }
 
   return (
-    <DialogPrimitive.Root open={open} onOpenChange={onOpenChange}>
+    <DialogPrimitive.Root
+      open={open}
+      onOpenChange={(next) => {
+        // Issue #265 — Radix only ever calls this with `false` (opening is
+        // this component's own `open` prop, not something Root decides for
+        // itself), for every dismissal it drives directly: Escape when the
+        // autocomplete popup isn't open (`onEscapeKeyDown` below only
+        // intercepts the popup-open case), an outside click (no
+        // `onPointerDownOutside` override here — there is nothing else for
+        // it to do), and the X button (`DialogPrimitive.Close` calls this
+        // same `onOpenChange` under Radix's own hood). Routing all three
+        // through `requestDismiss` is what makes them agree with the
+        // editor's own Escape `onCancel` and the footer's Cancel button
+        // below, rather than three doors independently deciding whether
+        // there's something worth confirming.
+        if (next) {
+          onOpenChange(next);
+          return;
+        }
+        requestDismiss();
+      }}
+    >
       <DialogPrimitive.Portal>
         <DialogPrimitive.Overlay
           className={cn(
@@ -249,6 +404,7 @@ export function QuickAddDialog({
           )}
         />
         <DialogPrimitive.Content
+          ref={contentRef}
           aria-label="Quick Add"
           data-testid="quick-add"
           className={DIALOG_CLASSES}
@@ -277,7 +433,14 @@ export function QuickAddDialog({
                   commitOnBlur={false}
                   onChange={composer.setValue}
                   onCommit={composer.commit}
-                  onCancel={() => onOpenChange(false)}
+                  // Issue #265 — this is the door Escape actually travels
+                  // through whenever the autocomplete popup ISN'T open:
+                  // `task-title-editor.tsx`'s own `commitKeymap` binds
+                  // `Escape` to call this prop directly (its own doc
+                  // comment on `onCancel`), and reaches Radix's document-
+                  // capture Escape listener too on the same keystroke — both
+                  // now agree, because both call `requestDismiss`.
+                  onCancel={requestDismiss}
                   className={EDITOR_BOX_CLASSES}
                   extraPlugins={composer.extraPlugins}
                   autocomplete={composer.autocomplete}
@@ -344,12 +507,13 @@ export function QuickAddDialog({
                 )}
               </div>
               <div className="flex items-center gap-2">
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="xs"
-                  onClick={() => onOpenChange(false)}
-                >
+                {/* Issue #265 — this button only ever renders once `hasText`
+                    is true (the `{hasText && (...)}` footer above), so every
+                    real click here already has something worth confirming;
+                    `requestDismiss` still gets the general check, rather
+                    than this call site special-casing "always confirm",
+                    so it stays the one door with the guard, not two. */}
+                <Button type="button" variant="outline" size="xs" onClick={requestDismiss}>
                   Cancel
                 </Button>
                 <Button
@@ -363,6 +527,56 @@ export function QuickAddDialog({
               </div>
             </div>
           )}
+
+          {/* Issue #265 — rendered unconditionally, not nested inside the
+              `hasText` footer above: `discardConfirmOpen` alone controls
+              whether this is open, so a Discard click racing a `hasText`
+              flip in the same tick can't unmount this out from under its
+              own closing animation (`task-detail-view.tsx`'s identical
+              DET-15 comment on its own sibling `ConfirmDialog`).
+              `role="alertdialog"`, not Todoist's own `role="dialog"`: the
+              standing decision on STR-01, STR-03 and DET-15 is to keep
+              `alertdialog` on destructive confirms regardless of what
+              Todoist itself uses, and `ConfirmDialog` already carries that
+              role by hand (`alert-dialog.tsx`'s own top comment) — this is
+              that same ratified divergence again, not a fresh call. Cancel
+              stays focused by default here too (`ConfirmDialog`'s own
+              `cancelRef`), diverging from Todoist's measured default focus
+              on Discard: defaulting focus to the destructive action on a
+              confirm that exists specifically to prevent data loss would
+              undermine the one thing it's for, and a stray Enter would
+              discard the draft it just asked to protect. */}
+          <ConfirmDialog
+            open={discardConfirmOpen}
+            onOpenChange={setDiscardConfirmOpen}
+            title="Discard unsaved changes?"
+            description="Your unsaved changes will be discarded."
+            confirmLabel="Discard"
+            onConfirm={() => {
+              discardConfirmedRef.current = true;
+              onOpenChange(false);
+            }}
+            // Reached only when this closes WITHOUT Discard (Cancel, or its
+            // own Escape) — `discardConfirmedRef` is what tells the two
+            // apart, set only by `onConfirm` just above, the identical
+            // shape `task-detail-view.tsx`'s DET-15 fix uses for the same
+            // reason. Radix's own default would try to restore focus to
+            // whatever "triggered" this dialog's open, which is nothing (it
+            // opens programmatically, from `requestDismiss`) — without this
+            // override that default strands focus on `document.body`
+            // exactly as DET-15 first found; `preventScroll` matches
+            // `ConfirmDialog`'s own `onOpenAutoFocus` call.
+            onCloseAutoFocus={(event) => {
+              if (discardConfirmedRef.current) {
+                discardConfirmedRef.current = false;
+                return;
+              }
+              event.preventDefault();
+              contentRef.current
+                ?.querySelector<HTMLElement>('[contenteditable="true"]')
+                ?.focus({ preventScroll: true });
+            }}
+          />
         </DialogPrimitive.Content>
       </DialogPrimitive.Portal>
     </DialogPrimitive.Root>
