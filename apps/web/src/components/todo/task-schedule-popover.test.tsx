@@ -361,7 +361,7 @@ describe("TaskSchedulePopover", () => {
     });
   });
 
-  describe("calendar (SCHED-06 through SCHED-10)", () => {
+  describe("calendar (SCHED-06 through SCHED-10, plus the six defects measured live 2026-09-15)", () => {
     it("starts the week on Monday", () => {
       renderPopover();
       open();
@@ -470,6 +470,121 @@ describe("TaskSchedulePopover", () => {
       const quietCell = document.querySelector('[data-day="2026-09-15"]');
       expect(busyCell?.className).toContain("before:content-['']");
       expect(quietCell?.className).not.toContain("before:content-['']");
+    });
+
+    it("a day that is both today and selected gets the selected (white-on-coral) treatment, not today-red (defect 1)", () => {
+      // NOW = Thu 10 Sep 2026 (module-level constant above) — seeding
+      // `dateDay` with that same day makes the 10th both `data-today` and
+      // `data-selected` at once, the exact collision defect 1 measured
+      // live: text rgb(226,106,96) on fill rgb(222,76,74), contrast ratio
+      // 1.23:1.
+      renderPopover({ dateDay: "2026-09-10" });
+      open();
+
+      const cell = document.querySelector('[data-day="2026-09-10"]');
+      expect(cell).toHaveAttribute("data-today", "true");
+      expect(cell).toHaveAttribute("data-selected", "true");
+      // The contract, not the paint: `today`'s colour utility is now
+      // scoped with `:not([data-selected=true])`, so on a cell that also
+      // carries `data-selected="true"` this rule cannot match at all —
+      // jsdom can confirm the selector text is exactly this scoped form
+      // (not the old unconditional one), but computing which colour
+      // actually paints needs a real cascade, which jsdom never runs.
+      expect(cell?.className).toContain(
+        "[&:not([data-selected=true])>button]:text-[color:var(--td-calendar-today)]!",
+      );
+      // `selected`'s own white/fill classes are present and — because the
+      // scoped `today` rule above no longer contests them on this cell —
+      // are the only ones left standing. The real check that they
+      // actually render legibly is the live-browser pass this ticket asks
+      // for, not this suite.
+      expect(cell?.className).toContain("bg-[color:var(--td-calendar-selected)]");
+      expect(cell?.className).toContain("text-white");
+    });
+
+    it("the day button carries Todoist's measured hover/focus-visible pill classes, not `ghost`'s translucent hover or an absent focus ring (defects 2/3)", () => {
+      renderPopover();
+      open();
+
+      const dayButton = screen.getByRole("button", { name: /September 20th, 2026/ });
+      // Defect 3: the opaque measured hover pill, via the shared
+      // `--td-calendar-cell-hover` token — not `ghost`'s own translucent
+      // `hover:bg-muted`.
+      expect(dayButton.className).toContain("hover:bg-[color:var(--td-calendar-cell-hover)]");
+      // `ghost`'s own dark-mode hover (`dark:hover:bg-muted/50`,
+      // button.tsx) outranks a bare `hover:` override by CSS specificity
+      // alone (`.dark .cls:hover` beats `.cls:hover` regardless of
+      // stylesheet order) — dark being the only theme Todoist was ever
+      // measured in, this needs its own `dark:` twin of the token, not
+      // just the plain one.
+      expect(dayButton.className).toContain("dark:hover:bg-[color:var(--td-calendar-cell-hover)]");
+      // A plain substring check would false-positive on the token
+      // literal above (it contains "hover:bg-" as a substring of its own
+      // `dark:hover:bg-[...]` form) — split into tokens so only the exact
+      // `hover:bg-muted` / `dark:hover:bg-muted/50` utilities are
+      // asserted absent.
+      const classTokens = dayButton.className.split(" ");
+      expect(classTokens).not.toContain("hover:bg-muted");
+      expect(classTokens).not.toContain("dark:hover:bg-muted/50");
+      // Defect 2: the measured focus-visible pill (the same token at
+      // 30.6% opacity — `rgba(77, 77, 77, 0.306)`), with `ghost`'s own
+      // ring/border neutralised so nothing competes with it.
+      expect(dayButton.className).toContain(
+        "focus-visible:bg-[color:var(--td-calendar-cell-hover)]/[30.6%]",
+      );
+      expect(dayButton.className).toContain("focus-visible:ring-0");
+      expect(dayButton.className).toContain("focus-visible:border-transparent");
+      // NOTE ON WHAT THIS DOES NOT PROVE: jsdom resolves neither `:hover`
+      // nor `:focus-visible` — this only shows the classes carrying the
+      // measured values are present on the element, not that hovering or
+      // focusing it actually paints them. That check is the live-browser
+      // pass.
+    });
+
+    it("outside-month days carry no dimming classes of their own (defect 4)", () => {
+      renderPopover();
+      open();
+
+      // Sep 2026 starts on a Tuesday and the week starts Monday, so the
+      // grid's first row leads with Mon 31 Aug 2026 — an outside day, and
+      // itself a weekday (not a weekend), which isolates the `outside`
+      // dimming this test is about from `weekend`'s own (correct,
+      // untouched) grey.
+      const cell = document.querySelector('[data-day="2026-08-31"]');
+      expect(cell).toHaveAttribute("data-outside", "true");
+      // The base `Calendar` primitive's own `outside` default
+      // (`text-muted-foreground opacity-50`, calendar.tsx) is blanked at
+      // this call site — Todoist showed next-month days painted exactly
+      // like same-weekday current-month ones, no distinguishing class at
+      // all.
+      expect(cell?.className).not.toContain("opacity-50");
+      expect(cell?.className).not.toContain("text-muted-foreground");
+    });
+
+    it("the day button is sized and radiused toward Todoist's measured cell, not the old square 24px circle (defect 5)", () => {
+      renderPopover();
+      open();
+
+      const dayButton = screen.getByRole("button", { name: /September 20th, 2026/ });
+      // Todoist's own cell is ≈30.4×28px; `h-7` (28px) / `w-[30px]` moves
+      // toward that.
+      expect(dayButton.className).toContain("h-7");
+      expect(dayButton.className).toContain("w-[30px]");
+      // The measured 12px selected-pill radius, pinned directly rather
+      // than left to `rounded-full`'s side effect on a now non-square box
+      // (see this key's own comment in task-schedule-popover.tsx for why
+      // `rounded-full` would silently stop being 12px once the box
+      // stopped being square).
+      expect(dayButton.className).toContain("rounded-[12px]");
+      expect(dayButton.className).not.toContain("rounded-full");
+    });
+
+    it("the month caption reads Todoist's short form, 'Sep 2026', not the locale's full month name (defect 6)", () => {
+      renderPopover();
+      open();
+
+      expect(screen.getByText("Sep 2026")).toBeInTheDocument();
+      expect(screen.queryByText("September 2026")).not.toBeInTheDocument();
     });
   });
 
