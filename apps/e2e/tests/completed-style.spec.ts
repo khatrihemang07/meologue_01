@@ -315,6 +315,19 @@ test("a completed Task's look — decoration and colour — agrees across every 
       // Decoration is the cross-surface claim, and the one the original
       // defect broke: no palette scopes `text-decoration-line`, so every
       // surface must agree with every other AND with the setting.
+      //
+      // **This claim is now stale for the Todo-scope surfaces, and is
+      // tracked as #333 rather than quietly narrowed here.** Issue #250 /
+      // ROW-15 re-pointed `--checked-list-text-decoration` inside
+      // `[data-surface="todo"]` to `line-through` *unconditionally*,
+      // overriding all four Settings options, because Todoist was measured
+      // always striking a completed title through whatever the preference
+      // (`index.css`'s own comment names the affected files, including
+      // `task-detail-view.tsx`). So the three Todo surfaces below now fail
+      // here under `gray` and `none` — correctly. Deciding which surfaces
+      // this loop should still hold to the setting is a parity ruling, not
+      // a test edit, which is why #244's branch fixed only this spec's
+      // *locator* and left this line alone.
       expect(style.decoration, `${name} text-decoration-line, ${variant.id}`).toBe(
         variant.decorationLine,
       );
