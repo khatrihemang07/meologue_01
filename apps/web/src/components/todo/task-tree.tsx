@@ -289,23 +289,51 @@ export function TaskTree({
     };
   }
 
+  // Issue #308: the one place both the grip's `pointerdown` and a
+  // long-press on the row's own body actually arm the shared `drag`
+  // state — extracted so the two entry points can't drift into arming it
+  // two different ways. `captureTarget` is deliberately a plain `Element`,
+  // not `event.currentTarget` read inside here: the grip hands this its
+  // own button, `task-row.tsx`'s long-press timer hands this the `<li>`
+  // it fired from (`onLongPressArm`'s own doc comment, TaskRowProps, on
+  // why that timer holds no live event by the time it fires at all).
+  function armDrag(taskId: string, pointerId: number, captureTarget: Element) {
+    if (drag !== null) return;
+    setDrag({ taskId, pointerId });
+    setOverTarget(null);
+    try {
+      captureTarget.setPointerCapture(pointerId);
+    } catch {
+      // jsdom implements no pointer capture at all — nothing to recover.
+    }
+  }
+
   function handlePointerDown(taskId: string) {
     return (event: PointerEvent<HTMLButtonElement>) => {
       if (drag !== null) return;
       // See todo-page.tsx's identical pre-#171 comment on this exact
       // `preventDefault` for why it exists (WKWebView text-selection).
       event.preventDefault();
-      setDrag({ taskId, pointerId: event.pointerId });
-      setOverTarget(null);
-      try {
-        event.currentTarget.setPointerCapture(event.pointerId);
-      } catch {
-        // jsdom implements no pointer capture at all — nothing to recover.
-      }
+      armDrag(taskId, event.pointerId, event.currentTarget);
     };
   }
 
-  function handlePointerMove(event: PointerEvent<HTMLButtonElement>) {
+  // Issue #308's second door onto `armDrag` above — reached from a
+  // long-press on the row's own body once `task-row.tsx`'s own timer
+  // survives the three-way race against scrolling and swipe-to-schedule,
+  // rather than from a `pointerdown` on the grip. No `event` to read
+  // `preventDefault` off here (see `onLongPressArm`'s own doc comment,
+  // TaskRowProps): a still hold that turns into a lift has nothing native
+  // left worth suppressing at the moment this fires — the platform's own
+  // long-press → contextmenu translation is what `task-row.tsx`'s own
+  // `onContextMenu` guards separately, not this.
+  function armLiftFromLongPress(taskId: string) {
+    return (pointerId: number, captureTarget: Element) => {
+      armDrag(taskId, pointerId, captureTarget);
+    };
+  }
+
+  function handlePointerMove(event: PointerEvent<HTMLElement>) {
     if (drag === null || event.pointerId !== drag.pointerId) return;
     const originalIndex = tasks.findIndex((task) => task.id === drag.taskId);
     const { ids, rects } = measureRows(drag.taskId);
@@ -326,7 +354,7 @@ export function TaskTree({
     }
   }
 
-  function handlePointerUp(event: PointerEvent<HTMLButtonElement>) {
+  function handlePointerUp(event: PointerEvent<HTMLElement>) {
     if (drag === null || event.pointerId !== drag.pointerId) return;
     const { taskId, pointerId } = drag;
     try {
@@ -349,7 +377,7 @@ export function TaskTree({
     setOverTarget(null);
   }
 
-  function handlePointerCancel(event: PointerEvent<HTMLButtonElement>) {
+  function handlePointerCancel(event: PointerEvent<HTMLElement>) {
     if (drag === null || event.pointerId !== drag.pointerId) return;
     try {
       event.currentTarget.releasePointerCapture(drag.pointerId);
@@ -574,6 +602,7 @@ export function TaskTree({
             isNestTarget={
               drag !== null && overTarget?.kind === "nest" && overTarget.id === row.task.id
             }
+            isDragging={drag !== null && drag.taskId === row.task.id}
             // The raw, task-taking callbacks — not bound to this row here —
             // so this row's own nested TaskTree (its sub-tasks, if any) can
             // forward them unchanged one level deeper, rather than every
@@ -589,6 +618,7 @@ export function TaskTree({
             onHandlePointerMove={handlePointerMove}
             onHandlePointerUp={handlePointerUp}
             onHandlePointerCancel={handlePointerCancel}
+            onLongPressArm={armLiftFromLongPress(row.task.id)}
             onMoveUp={() => handleMove(row.task.id, row.index, "up")}
             onMoveDown={() => handleMove(row.task.id, row.index, "down")}
             onIndent={() => handleIndent(row.task, row.index)}
@@ -623,6 +653,8 @@ interface TaskTreeRowProps {
   detailActions: TaskDetailActions;
   isDropTarget: boolean;
   isNestTarget: boolean;
+  /** See `TaskTree`'s own `isDragging` call-site comment and `TaskRow`'s identical prop doc (task-row.tsx) — forwarded straight through. */
+  isDragging: boolean;
   // The raw, task-taking callbacks — see this component's own call site in
   // TaskTree above for why these arrive unbound: this row binds each to
   // `task` for its own TaskRow, then forwards the very same function,
@@ -633,9 +665,11 @@ interface TaskTreeRowProps {
   onOpenSchedule: (task: Task) => void;
   onMoveToSection?: (taskId: string, sectionId: string | null) => void;
   onHandlePointerDown: (event: PointerEvent<HTMLButtonElement>) => void;
-  onHandlePointerMove: (event: PointerEvent<HTMLButtonElement>) => void;
-  onHandlePointerUp: (event: PointerEvent<HTMLButtonElement>) => void;
-  onHandlePointerCancel: (event: PointerEvent<HTMLButtonElement>) => void;
+  onHandlePointerMove: (event: PointerEvent<HTMLElement>) => void;
+  onHandlePointerUp: (event: PointerEvent<HTMLElement>) => void;
+  onHandlePointerCancel: (event: PointerEvent<HTMLElement>) => void;
+  /** See `TaskRow`'s own identical prop doc comment (task-row.tsx, TaskRowProps). */
+  onLongPressArm: (pointerId: number, captureTarget: Element) => void;
   onMoveUp: () => void;
   onMoveDown: () => void;
   onIndent: () => void;
@@ -664,6 +698,7 @@ function TaskTreeRow({
   detailActions,
   isDropTarget,
   isNestTarget,
+  isDragging,
   onComplete,
   onCompleteForever,
   onRequestDelete,
@@ -673,6 +708,7 @@ function TaskTreeRow({
   onHandlePointerMove,
   onHandlePointerUp,
   onHandlePointerCancel,
+  onLongPressArm,
   onMoveUp,
   onMoveDown,
   onIndent,
@@ -731,6 +767,7 @@ function TaskTreeRow({
       depth={depth}
       isDropTarget={isDropTarget}
       isNestTarget={isNestTarget}
+      isDragging={isDragging}
       onComplete={() => onComplete(task)}
       onCompleteForever={() => onCompleteForever(task)}
       onRequestDelete={() => onRequestDelete(task)}
@@ -741,6 +778,7 @@ function TaskTreeRow({
       onHandlePointerMove={onHandlePointerMove}
       onHandlePointerUp={onHandlePointerUp}
       onHandlePointerCancel={onHandlePointerCancel}
+      onLongPressArm={onLongPressArm}
       onMoveUp={onMoveUp}
       onMoveDown={onMoveDown}
       onIndent={onIndent}

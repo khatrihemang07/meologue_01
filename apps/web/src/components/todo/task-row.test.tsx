@@ -3,6 +3,7 @@ import { act, fireEvent, render, screen, waitFor, within } from "@testing-librar
 import { useState } from "react";
 import { MemoryRouter } from "react-router";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { HORIZONTAL_THRESHOLD_PX, LONG_PRESS_MS, VERTICAL_BAIL_PX } from "@/lib/swipe-recognizer";
 import { OPEN_COMMAND_MENU_EVENT, OPEN_SCHEDULE_EVENT } from "@/lib/todo-keymap";
 import { TaskRow } from "./task-row";
 
@@ -572,17 +573,111 @@ describe("TaskRow", () => {
     expect(onMoveUp).not.toHaveBeenCalled();
   });
 
-  // The handle only — a pointerdown anywhere else on the row must still let
-  // the browser scroll the list normally on touch, which is the entire
-  // reason the handle exists as a separate element rather than the row
-  // being draggable outright.
-  it("does not put pointer listeners on the row itself, only on the handle", () => {
+  // Issue #308 deliberately contradicts what this test used to assert
+  // ("does not put pointer listeners on the row itself, only on the
+  // handle") — the row's own body is now a long-press-to-lift candidate
+  // too. A mouse is the one pointer type that still gets none of this: it
+  // reaches reorder through the grip and the command menu through
+  // right-click, exactly as before.
+  it("a mouse pointerdown on the row body arms nothing — the grip and right-click still own that pointer", () => {
+    vi.useFakeTimers();
     const onHandlePointerDown = vi.fn();
-    renderRow({ onHandlePointerDown });
+    const onLongPressArm = vi.fn();
+    renderRow({ onHandlePointerDown, onLongPressArm });
 
-    fireEvent.pointerDown(screen.getByText("buy milk"), { pointerId: 1 });
+    fireEvent.pointerDown(screen.getByText("buy milk"), { pointerId: 1, pointerType: "mouse" });
+    act(() => vi.advanceTimersByTime(LONG_PRESS_MS));
 
     expect(onHandlePointerDown).not.toHaveBeenCalled();
+    expect(onLongPressArm).not.toHaveBeenCalled();
+    vi.useRealTimers();
+  });
+
+  // The acceptance criterion this whole ticket turns on: "a test states
+  // which breakpoint and pointer type it asserts." This one asserts
+  // `pointerType: "touch"` on the event itself, never a screen-width
+  // breakpoint — the same per-gesture, not per-device, distinction
+  // `onPointerDown`'s own comment (task-row.tsx) draws for why this isn't
+  // read off `lib/pointer.ts`'s media queries instead.
+  it("holding the row body on a touch pointer arms the lift once LONG_PRESS_MS elapses with no disqualifying movement", () => {
+    vi.useFakeTimers();
+    const onLongPressArm = vi.fn();
+    renderRow({ onLongPressArm });
+
+    const row = screen.getByText("buy milk");
+    fireEvent.pointerDown(row, { pointerId: 7, pointerType: "touch", clientX: 100, clientY: 100 });
+
+    act(() => vi.advanceTimersByTime(LONG_PRESS_MS - 1));
+    expect(onLongPressArm).not.toHaveBeenCalled();
+
+    act(() => vi.advanceTimersByTime(1));
+    expect(onLongPressArm).toHaveBeenCalledTimes(1);
+    expect(onLongPressArm).toHaveBeenCalledWith(7, expect.anything());
+
+    vi.useRealTimers();
+  });
+
+  // "A press that turns into a vertical drag scrolls the list instead of
+  // lifting" (this ticket's own acceptance criterion) — the row's own
+  // timer never gets to arm anything once a real scroll is already
+  // underway.
+  it("a vertical drag past the bail threshold before the timer fires cancels the lift, letting the row scroll instead", () => {
+    vi.useFakeTimers();
+    const onLongPressArm = vi.fn();
+    renderRow({ onLongPressArm });
+
+    const row = screen.getByText("buy milk");
+    fireEvent.pointerDown(row, { pointerId: 7, pointerType: "touch", clientX: 100, clientY: 100 });
+    fireEvent.pointerMove(row, {
+      pointerId: 7,
+      pointerType: "touch",
+      clientX: 100,
+      clientY: 100 + VERTICAL_BAIL_PX + 1,
+    });
+    act(() => vi.advanceTimersByTime(LONG_PRESS_MS));
+
+    expect(onLongPressArm).not.toHaveBeenCalled();
+    vi.useRealTimers();
+  });
+
+  // The third leg of the same race: a horizontal excursion big enough to
+  // read as swipe-to-schedule must not ALSO leave the lift armed once its
+  // timer catches up — `lib/task-lift-recognizer.ts`'s own header comment
+  // on why this reuses swipe-recognizer.ts's identical threshold rather
+  // than a second, independently-tuned one.
+  it("a horizontal drag past the swipe threshold before the timer fires also cancels the lift", () => {
+    vi.useFakeTimers();
+    const onLongPressArm = vi.fn();
+    renderRow({ onLongPressArm });
+
+    const row = screen.getByText("buy milk");
+    fireEvent.pointerDown(row, { pointerId: 7, pointerType: "touch", clientX: 100, clientY: 100 });
+    fireEvent.pointerMove(row, {
+      pointerId: 7,
+      pointerType: "touch",
+      clientX: 100 - (HORIZONTAL_THRESHOLD_PX + 1),
+      clientY: 100,
+    });
+    act(() => vi.advanceTimersByTime(LONG_PRESS_MS));
+
+    expect(onLongPressArm).not.toHaveBeenCalled();
+    vi.useRealTimers();
+  });
+
+  // Releasing before the timer ever fires — a plain tap — must not arm a
+  // lift late, once the pointer is already gone.
+  it("releasing before LONG_PRESS_MS elapses never arms the lift, even once that much time later passes", () => {
+    vi.useFakeTimers();
+    const onLongPressArm = vi.fn();
+    renderRow({ onLongPressArm });
+
+    const row = screen.getByText("buy milk");
+    fireEvent.pointerDown(row, { pointerId: 7, pointerType: "touch", clientX: 100, clientY: 100 });
+    fireEvent.pointerUp(row, { pointerId: 7, pointerType: "touch", clientX: 100, clientY: 100 });
+    act(() => vi.advanceTimersByTime(LONG_PRESS_MS));
+
+    expect(onLongPressArm).not.toHaveBeenCalled();
+    vi.useRealTimers();
   });
 
   it("draws the drop indicator only while it is the drop target", () => {
@@ -611,6 +706,27 @@ describe("TaskRow", () => {
     const box = rowBox();
     expect(box).not.toHaveClass("border-t-primary");
     expect(box).not.toHaveClass("ring-primary");
+  });
+
+  // Issue #308's own required acceptance criterion: "the row visibly lifts
+  // while held." `-translate-y-1` is the specific class that draws it —
+  // asserted as a whole token via `toHaveClass`, not a `className.includes`
+  // check: `className.toContain` would still pass after renaming this
+  // class to, say, `-translate-y-1x` (this repo's own recorded near-miss,
+  // `touch-pan-y`/`touch-pan-yX`), since `toContain` on a string is a
+  // substring test, not a token test.
+  it("draws the lifted-card elevation only while it is the row being dragged", () => {
+    renderRow({ isDragging: true });
+
+    expect(rowBox()).toHaveClass("-translate-y-1");
+    expect(rowBox()).toHaveClass("shadow-lg");
+  });
+
+  it("draws no elevation when the row is not being dragged", () => {
+    renderRow({ isDragging: false });
+
+    expect(rowBox()).not.toHaveClass("-translate-y-1");
+    expect(rowBox()).not.toHaveClass("shadow-lg");
   });
 
   // Issue #253: the Date button now anchors its own `TaskSchedulePopover`
@@ -894,6 +1010,65 @@ describe("TaskRow", () => {
     // until the menu closes again.
     fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
     expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+  });
+
+  /**
+   * `fireEvent.contextMenu` on its own dispatches a plain `MouseEvent`
+   * (testing-library's own default for that event name), which has no
+   * `pointerType` at all — a raw `PointerEvent`, dispatched directly, is
+   * what actually reproduces Android's own long-press → contextmenu
+   * translation (this file's own `onContextMenu` comment, task-row.tsx,
+   * carries the on-device evidence for why that's what arrives there).
+   */
+  function touchContextMenu(target: Element, pointerId = 15) {
+    fireEvent(
+      target,
+      new PointerEvent("contextmenu", {
+        bubbles: true,
+        cancelable: true,
+        pointerType: "touch",
+        pointerId,
+      }),
+    );
+  }
+
+  // Issue #308: a touch long-press on a row that CAN be lifted must not
+  // also pop the command menu — that's the whole point of arming a lift
+  // instead. `onLongPressArm` defined is what marks this row as one of
+  // those (mirrors every other "all seven together" drag prop already
+  // does, TaskRowProps' own header comment).
+  it("does not open the command menu from a touch contextmenu on a row that has a lift to arm", () => {
+    renderRow({ task: task({ content: "call mum" }), onLongPressArm: vi.fn() });
+
+    touchContextMenu(screen.getByRole("listitem"));
+
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+  });
+
+  // A row with no drag handlers at all (Today's own rows) has no lift to
+  // arm — this keeps today's behaviour rather than removing the only
+  // touch door onto its own command menu ahead of #309.
+  it("still opens the command menu from a touch contextmenu on a row with no lift to arm", () => {
+    renderRow({ task: task({ content: "call mum" }), onLongPressArm: undefined });
+
+    touchContextMenu(screen.getByRole("listitem"));
+
+    expect(screen.getByRole("menu")).toBeInTheDocument();
+  });
+
+  // Right-click and the `.` key must still open the menu on a pointer
+  // device (this ticket's own acceptance criterion) — a real right-click
+  // reports `button: 2` on a plain `MouseEvent`, never a `pointerType` at
+  // all, so the touch-only gate above never engages for it. Distinct from
+  // "opens the full command menu on right-click" above only in that it
+  // pins the row IS otherwise lift-armable, since that's the case the
+  // gate could plausibly have broken.
+  it("still opens the command menu on a genuine right-click even when the row has a lift to arm", () => {
+    renderRow({ task: task({ content: "call mum" }), onLongPressArm: vi.fn() });
+
+    fireEvent.contextMenu(screen.getByRole("listitem"));
+
+    expect(screen.getByRole("menu")).toBeInTheDocument();
   });
 
   // Issue #228: the `.` key itself moved off this row entirely, onto
