@@ -45,19 +45,22 @@
  * `TaskStore.advanceRecurring`, and `TaskStore.postpone`'s `today`
  * arguments.
  *
- * **`RecurrenceReference.now` and `QuickAddOptions.now` are NOT branded,
- * on purpose, and this is the one place this type deliberately falls
- * short of issue #300's own suggested shape.** Both are constructed
- * inline in `apps/web/src/components/todo/task-schedule-popover.tsx`
+ * **`RecurrenceReference.now` and `QuickAddOptions.now` are branded too,
+ * closing the gap issue #300 deliberately left open.** #300 stopped short
+ * of these two fields because both are constructed inline in
+ * `apps/web/src/components/todo/task-schedule-popover.tsx`
  * (`{ now }`/`{ dueDate, now }`, from that file's own `now: string`
- * parameter) — a file this change is not permitted to touch (concurrent
- * work on the same checkout). Branding either field would make that
- * file's own two call sites fail to compile with no way to fix them here.
- * Every one of the four historical bugs was a `TaskStore` method, never a
- * bare `RecurrenceReference`/`QuickAddOptions` construction, so scoping
- * the brand to `TaskStore` still closes the entire observed class; the
- * gap this leaves is `task-schedule-popover.tsx`'s own `now` staying an
- * unbranded `string`, tracked as follow-up rather than silently dropped.
+ * parameter) — a file #300 was not permitted to touch (concurrent work on
+ * the same checkout, #303). Issue #314 reaches it once that file was
+ * clear: `resolveSchedulePreview`'s own `now` parameter is now
+ * `LocalDayKey` rather than `string`, and its one call site already hands
+ * it `localDayKey(now)` — a real producer, not a cast — so both inline
+ * object literals produce the branded value through the parameter rather
+ * than casting to it. Every one of the four historical bugs was a
+ * `TaskStore` method, never a bare `RecurrenceReference`/`QuickAddOptions`
+ * construction, so the brand was already closing the entire *observed*
+ * class before this; #314 closes the one *reachable-but-unobserved* gap
+ * the type's own shape still allowed.
  *
  * **Why `completedAt` (the instant `advanceRecurring` also takes) is NOT
  * branded.** Issue #300 raises this as worth considering — the two

@@ -1,8 +1,9 @@
 import type { Task } from "@meologue/core";
+import { mustParseLocalDayKey } from "@meologue/core";
 import { describe, expect, it, vi } from "vitest";
 import { commitTaskTitle, type TaskTitleCommitSetters } from "./task-title-commit";
 
-const NOW = "2026-09-02"; // Wednesday.
+const NOW = mustParseLocalDayKey("2026-09-02"); // Wednesday.
 
 function task(overrides: Partial<Task> = {}): Task {
   return {

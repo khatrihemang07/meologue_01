@@ -1,3 +1,4 @@
+import { mustParseLocalDayKey } from "@meologue/core";
 import { describe, expect, it } from "vitest";
 import {
   highlightSegments,
@@ -9,7 +10,7 @@ import {
   tokenSignature,
 } from "./quick-add-highlight";
 
-const NOW = "2026-09-02"; // Wednesday.
+const NOW = mustParseLocalDayKey("2026-09-02"); // Wednesday.
 
 describe("tokenSignature", () => {
   it("combines kind and lower-cased raw text", () => {

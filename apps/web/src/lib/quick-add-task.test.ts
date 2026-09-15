@@ -1,8 +1,8 @@
-import { parseQuickAdd } from "@meologue/core";
+import { mustParseLocalDayKey, parseQuickAdd } from "@meologue/core";
 import { describe, expect, it } from "vitest";
 import { taskFieldsForRename, taskFieldsFromQuickAdd } from "./quick-add-task";
 
-const NOW = "2026-09-02"; // Wednesday.
+const NOW = mustParseLocalDayKey("2026-09-02"); // Wednesday.
 
 function fields(input: string, options: { smartDates?: boolean } = {}) {
   const parseOptions = { now: NOW, ...options };
