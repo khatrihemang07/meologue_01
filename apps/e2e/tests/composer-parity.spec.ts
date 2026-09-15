@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { entryDocumentToMarkdown, entryMarkdownToDocument } from "../../web/src/lib/entry-document";
+import { entryDocumentToMarkdown } from "../../web/src/lib/entry-document";
 import { entrySchema } from "../../web/src/lib/entry-schema";
 import {
   entryDocumentToCanonical,
@@ -169,18 +169,6 @@ async function replay(
   }
 }
 
-/**
- * Whether a row's expected document contains a checkbox item at all — the
- * one shape whose stored form canonicalises differently from the live
- * document, for the documented separator reason spelled out at the call
- * site below.
- */
-function hasCheckbox(expected: (typeof PARITY_FIXTURE)[number]["expected"]): boolean {
-  return expected.blocks.some(
-    (block) => block.kind === "list" && block.items.some((item) => item.checked !== null),
-  );
-}
-
 test.describe("composer / UpNote parity", () => {
   const replayableRows = PARITY_FIXTURE.filter((row) => row.replayable !== false);
   const skippedRows = PARITY_FIXTURE.filter((row) => row.replayable === false);
@@ -211,33 +199,9 @@ test.describe("composer / UpNote parity", () => {
       // down and read back fails here, at the row that introduced it,
       // rather than surfacing later as "my note changed after I sent it".
       const stored = entryDocumentToMarkdown(document);
-      if (hasCheckbox(row.expected)) {
-        // Exempt, and NOT because the assertion is inconvenient. A
-        // checkbox's mandatory separator space (`entry-document.ts`'s
-        // `needsTaskSeparator`) survives parsing as a leading whitespace
-        // text node by design — inline-markdown.ts's `referencedTaskOf`
-        // says so outright ("not itself typed content ... so it is
-        // stripped before checking what remains") and several call sites
-        // strip it by hand. So a checkbox row's stored form canonicalises
-        // with a leading " " the live document never had, and asserting
-        // equality here would fail on that separator rather than on
-        // anything #239 is about.
-        //
-        // That separator reaching the Composer's own load path as real
-        // text is a genuine defect, filed separately — it is not fixed
-        // here because it predates this ticket and lives in
-        // composer-parity's own files. When it is fixed, DELETE this
-        // branch rather than adjusting it: every row should assert the
-        // round trip.
-        expect(
-          entryMarkdownToCanonical(entryDocumentToMarkdown(entryMarkdownToDocument(stored))),
-          `${row.id} storage is not idempotent`,
-        ).toEqual(entryMarkdownToCanonical(stored));
-      } else {
-        expect(entryMarkdownToCanonical(stored), `${row.id} did not survive storage`).toEqual(
-          row.expected,
-        );
-      }
+      expect(entryMarkdownToCanonical(stored), `${row.id} did not survive storage`).toEqual(
+        row.expected,
+      );
     });
   }
 
