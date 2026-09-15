@@ -157,6 +157,110 @@ function ordinal(day: number): string {
 const repeatItemClassName =
   "flex cursor-pointer items-center rounded-md px-2 py-1.5 text-sm outline-none data-highlighted:bg-muted data-highlighted:text-foreground";
 
+/**
+ * Every node this popover has to treat as "not outside" for
+ * `PopoverContent`'s `DismissableLayer` purposes, even though none of them
+ * are DOM — or React-tree — descendants of it: both dialogs this popover
+ * opens (`TaskTimeDialog`, `TaskCustomRepeatDialog`; Radix always portals
+ * `Dialog.Content` to `document.body`, a sibling of this popover's own
+ * portalled `Content`, not a descendant of it), plus `custom-repeat-date-
+ * popover` — the Custom-repeat dialog's own "On date" calendar, which is a
+ * React descendant of *that* dialog but, being itself a Radix `Popover`,
+ * is *also* portalled straight to `document.body`, a second sibling-not-
+ * descendant hop. A portal breaks DOM containment at every level it's
+ * used, not just the first: leaving that third selector out would make
+ * picking an end date read as a click on THIS popover's own boundary and
+ * dismiss it, stranding the still-open Custom-repeat dialog on screen
+ * behind nothing. Anything a future dialog here portals elsewhere in turn
+ * needs adding the same way.
+ */
+const OWNED_PORTAL_SELECTOR =
+  '[data-testid="time-dialog"], [data-testid="custom-repeat-dialog"], [data-testid="custom-repeat-date-popover"]';
+
+/**
+ * Whether `target` — the real DOM node an outside interaction landed on —
+ * is inside one of `OWNED_PORTAL_SELECTOR`'s nodes. Exported only so
+ * `task-schedule-popover.test.tsx` can exercise this classification
+ * directly; it is issue #326's fix's one piece jsdom can actually verify
+ * (see that test's own comment for why the rest can't be).
+ */
+export function isOwnedPortalTarget(target: EventTarget | null): boolean {
+  return target instanceof Element && target.closest(OWNED_PORTAL_SELECTOR) !== null;
+}
+
+/**
+ * Issue #326: Cancel (and an outside click) on either dialog was *also*
+ * closing this popover, though task-time-dialog.tsx's own header comment
+ * already documented Cancel as returning to the scheduler.
+ *
+ * **A first attempt at this fix (superseded here, not stacked on) kept a
+ * ref mirroring `timeDialogOpen`/`customRepeatOpen` one render-cycle
+ * longer than the state itself, on the theory that the stray dismiss was
+ * an `onFocusOutside` firing once `<body>` regained focus after the
+ * closing dialog's Cancel button left the document. Instrumented in a
+ * real browser, that theory was wrong on two counts that matter:
+ * `onFocusOutside` never fires in this sequence at all, and the event's
+ * `target` at guard time is the still-mounted Cancel button, not `<body>`.
+ * Don't reintroduce a state- or ref-based guard here — see why below.**
+ *
+ * What actually fires is `onPointerDownOutside`/`onInteractOutside`, and
+ * the real mechanism is a race no state or ref can out-wait, only out-
+ * target: `DialogPrimitive.Close`'s own React `onClick` runs first,
+ * synchronously (`overrideProps → executeDispatch → processDispatchQueue →
+ * batchedUpdates`) and flips `timeDialogOpen`/`customRepeatOpen` to
+ * `false` — no `DismissableLayer` involved yet. Only *then* does this
+ * popover's own `DismissableLayer` recognise that same click's target (the
+ * Cancel button) as outside `PopoverContent` — correctly, since the dialog
+ * is portalled as a sibling, not a descendant — and dispatch
+ * `onPointerDownOutside`/`onInteractOutside`: a non-modal Radix `Popover`
+ * defers its own outside-pointerdown check from `pointerdown` to the
+ * trailing `click` (`@radix-ui/react-popover` passes `deferPointerDownOutside:
+ * true` for exactly this shape), and that deferred check runs through
+ * `ReactDOM.flushSync()`. Because React's own delegated click handling
+ * (which is what runs `DialogPrimitive.Close`'s `onClick`) is attached
+ * lower in the DOM than this popover's own plain `document`-level deferred
+ * listener, the state flip is already committed — synchronously, ref and
+ * all — before the guard ever runs. There is no render-cycle a ref can
+ * lag behind that flush by, because the flush is what forces the ref's own
+ * effect to run early too.
+ *
+ * So the guard doesn't ask "is a dialog of mine open" (state) — it asks
+ * "did this interaction land on a node that belongs to one of my own
+ * dialogs" (the event's real DOM target, `isOwnedPortalTarget` above),
+ * which is unaffected by any of the above: the Cancel button is still the
+ * still-mounted node the click landed on regardless of what state has
+ * already committed by the time this runs. The same classification
+ * protects the OPENING case for free — `TaskTimeDialog`/
+ * `TaskCustomRepeatDialog`'s own autofocus moves focus to a node inside
+ * one of `OWNED_PORTAL_SELECTOR`'s dialogs, so `onFocusOutside`'s target is
+ * inside it too, the identical Radix trap issue #255 already named for a
+ * DropdownMenu opening a Popover. Wired to `onFocusOutside`,
+ * `onPointerDownOutside`, AND `onInteractOutside` below on purpose, not
+ * just whichever one instrumentation caught firing this time: Radix calls
+ * `onInteractOutside` alongside whichever of the other two actually fired,
+ * and this file has no way to prove a keyboard-activated Cancel (Enter/
+ * Space on the focused button — never instrumented; see the commit body)
+ * dispatches the identical events a real click does. All three route to
+ * the same target check either way, so wiring all three costs nothing and
+ * bets on nothing.
+ *
+ * Save is still the one action meant to close the scheduler along with the
+ * dialog (see `handleTimeSave` and `commitRepeatPhrase` below) — both call
+ * `setOpen(false)` deliberately rather than leaning on this guard failing
+ * to fire. Clicking Save *also* lands inside `OWNED_PORTAL_SELECTOR`, so
+ * this guard would suppress its own accidental dismiss too if that
+ * explicit call weren't already there — this guard does not, and must
+ * not, distinguish Save from Cancel/outside-click/Escape by anything other
+ * than where the click landed.
+ */
+function classifyOutsideInteraction(
+  event: CustomEvent<{ originalEvent: PointerEvent | FocusEvent }>,
+) {
+  if (isOwnedPortalTarget(event.detail.originalEvent.target)) {
+    event.preventDefault();
+  }
+}
+
 export interface TaskSchedulePopoverProps {
   /** The trigger this popover anchors under — task-schedule-sheet.tsx's own "Date" button. */
   trigger: React.ReactNode;
@@ -256,32 +360,17 @@ export function TaskSchedulePopover({
   const [typed, setTyped] = useState("");
   const [month, setMonth] = useState<Date>(() => parseDayKey(dateDay) ?? now);
   const inputId = useId();
-  // Whether `TaskTimeDialog` is open — read by `PopoverContent`'s own
-  // `onFocusOutside`/`onPointerDownOutside` guards below, this popover's
-  // own version of the Radix trap issue #255 already named for a
-  // DropdownMenu opening a Popover: `TaskTimeDialog`'s own autofocus
-  // moves focus to a node this popover's `Content` doesn't contain (a
-  // sibling Radix `Dialog.Portal`, not a descendant), which Radix's
-  // `DismissableLayer` otherwise reads as "focus left the popover" and
-  // dismisses it on the spot. Guarding on this flag rather than removing
-  // the guard once the dialog opens is deliberate: the dialog's Save/
-  // Cancel buttons live in that same portalled subtree, so every pointer-
-  // down inside it needs the identical treatment for as long as it's
-  // open, not just the opening instant.
+  // Whether `TaskTimeDialog` is open. Before issue #326's real fix (see
+  // `classifyOutsideInteraction` above the component, and its own comment)
+  // this flag doubled as the input to a state-based outside-dismiss guard;
+  // it no longer is one — the guard now classifies by the interaction's DOM
+  // target instead, and reads no React state at all. This flag now does
+  // only what its name says: decides whether `TaskTimeDialog` renders open.
   const [timeDialogOpen, setTimeDialogOpen] = useState(false);
   // Issue #292's `TaskCustomRepeatDialog` is the second dialog this popover
-  // opens, and it is portalled exactly the same way — so it needs the same
-  // guard, for the same reason, or opening it dismisses the scheduler out
-  // from under itself. Both flags are OR-ed into one predicate rather than
-  // given a guard each: the question `DismissableLayer` is really asking is
-  // "is one of my own dialogs holding focus right now", and answering it
-  // per-dialog is how the next one gets added without its guard.
+  // opens, portalled exactly the same way as `TaskTimeDialog` — same reason
+  // this is a plain render flag now too, not a guard input.
   const [customRepeatOpen, setCustomRepeatOpen] = useState(false);
-  function ignoreOutsideWhileDialogOpen(event: { preventDefault: () => void }) {
-    if (timeDialogOpen || customRepeatOpen) {
-      event.preventDefault();
-    }
-  }
   // "Type a date". Issue #292 moved "Custom…" off this input and onto a
   // real dialog (`TaskCustomRepeatDialog`), so this ref is no longer that
   // item's destination — it stays because `handleCustomRepeatSave` below
@@ -345,6 +434,20 @@ export function TaskSchedulePopover({
   // representation, no direct Task mutation from here.
   function commitRepeatPhrase(phrase: string, day: string) {
     onPickRecurrence(phrase, day);
+    setOpen(false);
+  }
+
+  // Issue #326: `TaskTimeDialog`'s own `onSave` used to be `onSetTime`
+  // passed straight through, so Save's "closes the scheduler too" outcome
+  // was riding the identical accidental route Cancel's bug also rode
+  // (`classifyOutsideInteraction`'s own comment above `TaskSchedulePopoverProps`)
+  // — it happened to look correct only because nothing was guarding it yet.
+  // Now that Cancel is fixed, Save needs its own explicit `setOpen(false)`
+  // to keep behaving the same way, the same pattern `commitRepeatPhrase`
+  // above already uses for the Repeat menu and the Custom repeat dialog's
+  // own successful Save.
+  function handleTimeSave(time: string | null) {
+    onSetTime(time);
     setOpen(false);
   }
 
@@ -1136,12 +1239,12 @@ export function TaskSchedulePopover({
           border: "1px solid var(--td-popover-border)",
           boxShadow: "var(--td-popover-shadow)",
         }}
-        // See `ignoreOutsideWhileDialogOpen`'s own comment above —
-        // both handlers get the guard since either one alone stopping the
-        // eventual dismiss is enough, and a pointer-down and a focus
-        // change don't always arrive in the same order.
-        onFocusOutside={ignoreOutsideWhileDialogOpen}
-        onPointerDownOutside={ignoreOutsideWhileDialogOpen}
+        // See `classifyOutsideInteraction`'s own comment above (issue
+        // #326) — all three handlers get it, not just whichever one a
+        // given interaction happens to fire.
+        onFocusOutside={classifyOutsideInteraction}
+        onPointerDownOutside={classifyOutsideInteraction}
+        onInteractOutside={classifyOutsideInteraction}
       >
         {scheduleFields}
       </PopoverContent>
@@ -1149,7 +1252,9 @@ export function TaskSchedulePopover({
         open={timeDialogOpen}
         onOpenChange={setTimeDialogOpen}
         time={dateTime}
-        onSave={onSetTime}
+        // `handleTimeSave`'s own comment above — deliberate, not the
+        // accidental route issue #326 fixed.
+        onSave={handleTimeSave}
         // SCHED-11's own follow-up — see task-time-dialog.tsx's own
         // header comment: fired on Escape only, alongside that dialog's
         // own default close, so this popover closes with it rather than
@@ -1164,6 +1269,16 @@ export function TaskSchedulePopover({
         // starting from a blank one — the identical reason this file's own
         // `typed` seeds from `dateString` (header comment).
         recurrence={activeRecurrence}
+        // `handleCustomRepeatSave` only ever closes the *scheduler* by
+        // calling `commitRepeatPhrase` (above), which carries its own
+        // `setOpen(false)`. Its other branch — a rule with no occurrence
+        // left — reaches neither `commitRepeatPhrase` nor any other close
+        // call, yet the scheduler still has to stay open there (this
+        // function's own comment). It does: that branch's Save button is,
+        // like Cancel, a target inside `custom-repeat-dialog`
+        // (`OWNED_PORTAL_SELECTOR`), so `classifyOutsideInteraction` treats
+        // its own accidental-dismiss race exactly like Cancel's — no
+        // branch-specific handling needed, or wanted.
         onSave={handleCustomRepeatSave}
         // Same SCHED-11 follow-up as the Time dialog above: Escape closes
         // this layer and the scheduler beneath it together.

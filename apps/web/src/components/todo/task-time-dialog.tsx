@@ -37,29 +37,53 @@
  * checkbox. Unchecking it and saving is what commits `null`.
  *
  * **Save commits through the identical `onSave` callback the inline
- * control's `onSetTime` always was** — `task-schedule-popover.tsx` passes
- * its own `onSetTime` straight through as this prop, so this dialog only
- * changes where that call is triggered from, never what it means for
- * `Task.date`'s time-of-day. Cancel (and Escape, and an outside click —
- * Radix's own ordinary `Dialog` behaviour, left alone) discard whatever
- * this dialog's own local draft became; the next open re-seeds from the
- * Task's real `time` prop rather than remembering an unconfirmed edit
- * (the identical reasoning task-schedule-popover.tsx's own header comment
- * already gives for its sibling `typed` state).
+ * control's `onSetTime` always was** — `task-schedule-popover.tsx` wraps
+ * its own `onSetTime` (`handleTimeSave`, issue #326 below) rather than
+ * passing it straight through, so this dialog still only ever changes
+ * *where* that call is triggered from, never what it means for
+ * `Task.date`'s time-of-day; the wrapping is the caller's own business of
+ * also closing the scheduler on Save, not a change to what gets stored.
+ * Cancel (and Escape, and an outside click — Radix's own ordinary `Dialog`
+ * behaviour, left alone) discard whatever this dialog's own local draft
+ * became; the next open re-seeds from the Task's real `time` prop rather
+ * than remembering an unconfirmed edit (the identical reasoning
+ * task-schedule-popover.tsx's own header comment already gives for its
+ * sibling `typed` state).
+ *
+ * **Save/Cancel/Escape/an outside click do not all leave the scheduler in
+ * the same state, though every one of them closes this dialog the same
+ * way (issue #326).** Cancel and an outside click return to the scheduler
+ * — `task-schedule-popover.tsx`'s own guard on `PopoverContent`
+ * (`classifyOutsideInteraction`) is what makes that hold live, not
+ * anything in this file. That guard classifies by *where an interaction's
+ * real DOM target lands* (inside this dialog's own `data-testid="time-
+ * dialog"` or not), never by whether this dialog's `open` state still
+ * reads `true` — an earlier version tried the state/ref route and lost a
+ * real dismiss-ordering race to it; that comment's own header explains why,
+ * in enough detail that nobody should reach for it again. Escape and Save
+ * both close the scheduler too, but neither does it by way of that guard
+ * failing to catch a stray dismiss: Escape's own `onEscape` call below is
+ * explicit, and so is the caller's `handleTimeSave` wrapper around `onSave`
+ * — see each one's own comment. This file itself stays exactly as ignorant
+ * of the distinction as its own "not know anything about its host" line
+ * below already says: every close path here still just calls
+ * `onOpenChange(false)`, identically.
  *
  * `modal={false}`, and no `Overlay`: the capture recorded no backdrop
  * element, and Todoist's own note is that this "stacks below/beside the
  * scheduler card rather than replacing it" — a modal `Dialog` would
  * aria-hide the scheduler popover behind it, which is the opposite of
  * that. The scheduler popover itself (`task-schedule-popover.tsx`) still
- * has to be told to ignore this dialog's own focus/pointer activity while
- * it's open — Radix's `DismissableLayer` otherwise reads the dialog's own
- * autofocus (moving focus to a portalled node the popover's `Content`
- * doesn't contain) as focus leaving the popover and closes it, the same
- * two-`FocusScope`-fight shape issue #255 already named for a Radix menu
+ * has to be told to ignore this dialog's own focus/pointer activity —
+ * Radix's `DismissableLayer` otherwise reads the dialog's own autofocus
+ * (moving focus to a portalled node the popover's `Content` doesn't
+ * contain) as focus leaving the popover and closes it, the same two-
+ * `FocusScope`-fight shape issue #255 already named for a Radix menu
  * opening a Radix popover. That guard lives on the caller's
  * `PopoverContent`, not here — this file only needs to exist as an
- * ordinary Radix `Dialog`, not know anything about its host.
+ * ordinary Radix `Dialog`, not know anything about its host — but it does
+ * need this dialog's own `data-testid="time-dialog"` (below) to stay put,
+ * since that's the hook the caller's guard classifies against.
  *
  * **SCHED-11's own follow-up (pass2-2026-09-11.md §7):** "One `Escape`
  * closes the Repeat/Time layer and the scheduler beneath it
@@ -88,9 +112,9 @@ export interface TaskTimeDialogProps {
   onOpenChange: (open: boolean) => void;
   /** `Task.date`'s time-of-day (`HH:MM`), or `null` when the Task is all-day. Re-seeds this dialog's local draft on every open — never read on later renders while already open, matching this file's own header comment. */
   time: string | null;
-  /** Fired only on Save, with the drafted value (or `null` once "Add a time" is unchecked) — the exact shape `task-schedule-popover.tsx`'s own `onSetTime` prop already expects, passed straight through by that caller. */
+  /** Fired only on Save, with the drafted value (or `null` once "Add a time" is unchecked) — the exact shape `task-schedule-popover.tsx`'s own `onSetTime` prop already expects. That caller wraps it (`handleTimeSave`, issue #326) rather than passing `onSetTime` straight through, so Save also closes the scheduler popover it opened from — deliberately, on the caller's side; this file only ever asks for the value. */
   onSave: (time: string | null) => void;
-  /** SCHED-11's own follow-up (this file's own header comment) — fired on `Escape` alongside this dialog's own default close, so the caller can close the scheduler popover it opened from too. Never fired by Save/Cancel/an outside click: those keep returning to the scheduler, as before. */
+  /** SCHED-11's own follow-up (this file's own header comment) — fired on `Escape` alongside this dialog's own default close, so the caller can close the scheduler popover it opened from too. Never fired by Save/Cancel/an outside click. Cancel and an outside click return to the scheduler, same as before this prop existed; Save closes it too, through `onSave` above rather than through this prop — see that prop's own comment (issue #326 is what made this distinction load-bearing: all three used to *look* alike only because nothing yet told them apart). */
   onEscape: () => void;
 }
 
