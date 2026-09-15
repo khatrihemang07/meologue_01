@@ -457,3 +457,50 @@ describe("Shell's column width override and hideAppBar (issue #254)", () => {
     );
   });
 });
+
+// Issue #304: `TodoCreateFab`'s own slot. Exercised here, against Shell
+// directly, the same way the Sync status indicator's ambient rendering is
+// (this file's own header comment) — a plain `<button>` stands in for the
+// real control since what's under test is Shell's own placement and
+// bottom-spacer wiring, not TodoCreateFab (todo-create-fab.test.tsx covers
+// that component itself).
+describe("Shell's floatingAction slot (issue #304)", () => {
+  it("renders nothing extra and adds no spacer when floatingAction is omitted", () => {
+    render(<Shell title="Todo">content</Shell>);
+
+    expect(screen.queryByRole("button", { name: "Float" })).not.toBeInTheDocument();
+    expect(
+      document.querySelector('[data-testid="floating-action-spacer"]'),
+    ).not.toBeInTheDocument();
+  });
+
+  it("renders floatingAction inside the scroll wrapper, alongside the scroll region rather than inside it", () => {
+    render(
+      <Shell title="Todo" floatingAction={<button type="button">Float</button>}>
+        content
+      </Shell>,
+    );
+
+    const floatButton = screen.getByRole("button", { name: "Float" });
+    expect(floatButton).toBeInTheDocument();
+    // Not inside the scrollable region — a floating control inside it would
+    // scroll away with the content it's supposed to hang over (shell.tsx's
+    // own header comment on the identical constraint for jump-to-newest).
+    expect(screen.getByTestId("shell-scroll-region")).not.toContainElement(floatButton);
+  });
+
+  it("reserves bottom clearance in the scroll column only when floatingAction is given", () => {
+    render(
+      <Shell title="Todo" floatingAction={<button type="button">Float</button>}>
+        content
+      </Shell>,
+    );
+
+    const spacer = document.querySelector('[data-testid="floating-action-spacer"]');
+    expect(spacer).toBeInTheDocument();
+    // Inside the scroll region, unlike floatingAction itself — the spacer's
+    // whole job is to scroll away with the content so the list's own last
+    // row clears floatingAction's footprint once scrolled fully into view.
+    expect(screen.getByTestId("shell-scroll-region")).toContainElement(spacer as HTMLElement);
+  });
+});

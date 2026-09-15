@@ -23,6 +23,7 @@ import { TaskQuickFind } from "@/components/todo/task-quick-find";
 import type { TaskDetailActions } from "@/components/todo/task-row";
 import { TaskSearchPage } from "@/components/todo/task-search-page";
 import { TodayView } from "@/components/todo/today-view";
+import { TodoCreateFab } from "@/components/todo/todo-create-fab";
 import { TodoKeyboardShortcutsOverlay } from "@/components/todo/todo-keyboard-shortcuts-overlay";
 import { TodoNav } from "@/components/todo/todo-nav";
 import { UpcomingView } from "@/components/todo/upcoming-view";
@@ -232,6 +233,11 @@ export interface TodoPageProps {
  * Renders through `Shell` the same way every other Destination does,
  * `composerSlot={<TodoNav />}` docking Todo's own internal navigation at
  * the pane's bottom edge, regardless of which view is open.
+ * `floatingAction={<TodoCreateFab />}` (issue #304) rides alongside it —
+ * both unconditional here, per-view scoping (narrow-only, "wide" hides
+ * both) lives in `TodoNav`/`TodoCreateFab` themselves, the same "Add task"
+ * door `todo-sidebar.tsx`'s own reaches from anywhere in Todo, not a
+ * per-view one.
  *
  * The Add form, the delete confirmation, and the schedule sheet are all
  * owned here, once, and shared by every view that needs them rather than
@@ -942,6 +948,7 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
       message={message}
       messageAction={messageAction}
       composerSlot={<TodoNav />}
+      floatingAction={<TodoCreateFab />}
       // Issue #254: Todo reads like Todoist's own page now — an 800px
       // column above the existing 900px wide-layout breakpoint (reused
       // rather than inventing a second one; see `use-wide-layout.ts`'s

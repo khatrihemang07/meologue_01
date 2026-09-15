@@ -204,6 +204,25 @@ interface ShellProps {
    */
   pinnedThread?: PinnedThreadConfig;
   /**
+   * Issue #304: a control that hangs over the scroll region's own bottom
+   * edge, the identical wrapper the jump-to-newest control above already
+   * anchors to — a sibling of `composerSlot` in the flex column, not an
+   * overlay drawn on top of it. That is what keeps a floating control from
+   * ever covering `composerSlot`'s own controls or reaching past its safe-
+   * area padding without this prop recomputing either: the two boxes never
+   * occupy the same space, so there is nothing to collide with. Undefined
+   * (every caller but Todo, todo-page.tsx's `TodoCreateFab`) renders
+   * neither this nor the bottom spacer below — byte-for-byte the layout
+   * before this prop existed, the same guarantee `columnWidthClassName`
+   * and `hideAppBar` each already make for their own callers.
+   *
+   * The scroll column also gets extra bottom padding whenever this is set
+   * (below, next to `{footer}`) — enough that a list scrolled all the way
+   * to its own end still clears the floating control's footprint, rather
+   * than its last row landing underneath it.
+   */
+  floatingAction?: ReactNode;
+  /**
    * Ticket 55: the magnifier that turns this app bar into a search field in
    * place, on both destinations that have a thread. Undefined (Settings —
    * see settings-page.tsx) renders the bar exactly as before, with no
@@ -272,6 +291,7 @@ export function Shell({
   search,
   columnWidthClassName,
   hideAppBar,
+  floatingAction,
 }: ShellProps) {
   // Issue #83: the escape hatch History registers its virtualizer's
   // `scrollToIndex` into (see HistoryScrollContext's own comment above).
@@ -594,6 +614,23 @@ export function Shell({
               )}
               {children}
               {footer}
+              {/* Issue #304: reserves room, inside the scrolling column
+                  itself, for `floatingAction`'s own footprint — 56px
+                  (size-14) plus its bottom-4 offset — so a list scrolled
+                  all the way to its own end still clears it rather than
+                  the last row landing underneath. Scrolls away with the
+                  rest of the column, unlike `floatingAction` itself, which
+                  is why this can't just be padding on the always-visible
+                  wrapper below. Absent whenever `floatingAction` is
+                  (every caller but Todo): no bottom padding this prop
+                  didn't already render before it existed. */}
+              {floatingAction && (
+                <div
+                  aria-hidden="true"
+                  data-testid="floating-action-spacer"
+                  className="h-24 shrink-0"
+                />
+              )}
             </div>
           </HistoryScrollContext.Provider>
         </div>
@@ -627,6 +664,8 @@ export function Shell({
             <ArrowDown aria-hidden="true" className="size-4" />
           </Button>
         )}
+
+        {floatingAction}
       </div>
 
       {composerSlot}
