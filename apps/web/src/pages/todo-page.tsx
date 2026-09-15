@@ -1,8 +1,9 @@
 import type { Filter, Project, Section, Task } from "@meologue/core";
 import { today, upcoming } from "@meologue/core";
 import { useQuery } from "@tanstack/react-query";
+import { Search } from "lucide-react";
 import { Suspense, useEffect, useMemo, useRef, useState } from "react";
-import { useLocation, useNavigate, useParams } from "react-router";
+import { Link, useLocation, useNavigate, useParams } from "react-router";
 import { toast } from "sonner";
 import { BackToChats } from "@/components/back-to-chats";
 import { inlineProse } from "@/components/inline-prose";
@@ -28,6 +29,7 @@ import { TodoNav } from "@/components/todo/todo-nav";
 import { UpcomingView } from "@/components/todo/upcoming-view";
 import { ConfirmDialog } from "@/components/ui/alert-dialog";
 import { useTodoKeymap } from "@/hooks/use-todo-keymap";
+import { useWideLayout } from "@/hooks/use-wide-layout";
 import { commentCountForTask, commentsForTask } from "@/lib/comment-counts";
 import { localDayKey } from "@/lib/local-day-key";
 import { sectionsQueryKey, tasksInProjectQueryKey } from "@/lib/query-keys";
@@ -282,6 +284,13 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
   }>();
   const location = useLocation();
   const navigate = useNavigate();
+  // Issue #307: gates the header Search door below — TodoSidebar (rendered
+  // by chat-shell-layout.tsx in place of the chat list, ADR 0076) already
+  // carries its own working `/todo/search` link at this same breakpoint
+  // (todo-sidebar.tsx), so rendering a second one here at ≥900px would be
+  // the identical duplicate-affordance shape todo-nav.tsx's own header
+  // comment already avoids for its `<nav>` landmark.
+  const wide = useWideLayout();
 
   // Which background view renders *behind* the Task detail modal/sheet —
   // this file's own header comment on `TodoBackgroundView`/`backgroundPath`
@@ -941,6 +950,37 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
       back={<BackToChats />}
       message={message}
       messageAction={messageAction}
+      // Issue #307: the minimal door — nothing on a narrow viewport linked
+      // to the real `/todo/search` route or page before this (the bottom
+      // bar's six destinations, todo-nav-destinations.ts, don't include it,
+      // and TodoSidebar only renders at the wide breakpoint `wide` names
+      // below). `undefined`, not `false`/`null`, when hidden: Shell's own
+      // `{action && ...}` check (shell.tsx) treats any of the three
+      // identically, and `undefined` is what every other page already
+      // passes for "no action" here.
+      //
+      // A real `<Link>` (below), not a `navigate()` call from a plain
+      // button — a real push navigation, the same shape `openFullSearch`
+      // already uses for Quick-find's "Show more results" — is what makes
+      // "reaching Search and going back returns the reader where they
+      // were" true: `use-back-button.ts`'s depth counter and
+      // `back-button.android.ts`'s `window.history.back()` both key off a
+      // real history entry existing, which only a push (not a `replace`)
+      // leaves behind.
+      action={
+        !wide && backgroundView.view !== "search" ? (
+          <Link
+            to="/todo/search"
+            aria-label="Search"
+            // size-12 (48 CSS px) — the acceptance criterion's own floor,
+            // one Tailwind step above every other app-bar icon control in
+            // this app (back-to-chats.tsx's own size-11/44px comment).
+            className="flex size-12 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+          >
+            <Search aria-hidden="true" className="size-5" />
+          </Link>
+        ) : undefined
+      }
       composerSlot={<TodoNav />}
       // Issue #254: Todo reads like Todoist's own page now — an 800px
       // column above the existing 900px wide-layout breakpoint (reused

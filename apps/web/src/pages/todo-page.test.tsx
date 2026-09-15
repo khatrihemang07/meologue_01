@@ -2,7 +2,7 @@ import type { Event, Task } from "@meologue/core";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { useState } from "react";
-import { Link, MemoryRouter, Outlet, Route, Routes } from "react-router";
+import { Link, MemoryRouter, Outlet, Route, Routes, useNavigate } from "react-router";
 import { toast } from "sonner";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { localDayKey } from "@/lib/local-day-key";
@@ -142,6 +142,21 @@ function task(overrides: Partial<Task> = {}): Task {
 // issue #171 is what first made TodoPage call `useQuery` directly (`
 // scopedTasksQuery`/`sectionsQuery`, todo-page.tsx), not only through
 // context-supplied functions the way it did before.
+// Issue #307. Stands in for a hardware/browser Back press — MemoryRouter
+// has no `window.history` of its own for a real Back gesture to act on, so
+// this drives the identical mechanism a real Back press triggers
+// (`navigate(-1)` popping the router's own in-memory stack), the same way
+// composer-page.test.tsx's own `GoBackProbe` and digest-reader-page.test.tsx's
+// own identical stand-in already simulate Back in this codebase.
+function GoBackProbe() {
+  const navigate = useNavigate();
+  return (
+    <button type="button" onClick={() => navigate(-1)}>
+      Simulate Back
+    </button>
+  );
+}
+
 function renderTodoPage(context: EntryStoreOutletContext, initialPath = "/todo/inbox") {
   const queryClient = new QueryClient();
   return render(
@@ -152,6 +167,7 @@ function renderTodoPage(context: EntryStoreOutletContext, initialPath = "/todo/i
             TodoPage itself has no reason to link to Composer, so this is the
             test's own way out, not a control this ticket adds to the page. */}
         <Link to="/composer">Leave Todo</Link>
+        <GoBackProbe />
         <Routes>
           <Route element={<Outlet context={context} />}>
             <Route path="/todo/inbox" element={<TodoPage />} />
@@ -166,6 +182,10 @@ function renderTodoPage(context: EntryStoreOutletContext, initialPath = "/todo/i
             <Route path="/todo/filters" element={<TodoPage view="filters" />} />
             <Route path="/todo/filters/new" element={<TodoPage view="filter" />} />
             <Route path="/todo/filters/:filterId" element={<TodoPage view="filter" />} />
+            {/* Issue #307: Search's own route, mirroring App.tsx's real
+                `/todo/search` — needed for the header search door's own
+                tests below. */}
+            <Route path="/todo/search" element={<TodoPage view="search" />} />
             {/* Issue #178's Task detail route — no `view` prop, mirroring
                 App.tsx's own identical route exactly (that file's own
                 comment explains why). */}
@@ -1539,5 +1559,111 @@ describe("TodoPage — in-column heading (issue #254)", () => {
 
     expect(screen.getByRole("link", { name: "Back to chats" })).toBeInTheDocument();
     expect(screen.getByTestId("sync-status-indicator")).toBeInTheDocument();
+  });
+});
+
+// Issue #307: before this, `/todo/search` was a real route with a real page
+// that nothing on a narrow viewport linked to — the bottom bar
+// (todo-nav.tsx's own TODO_NAV_DESTINATIONS) carries six destinations and
+// Search isn't one of them, and TodoSidebar (its ≥900px replacement) is the
+// only thing that ever did. This is the minimal door: a Search action in
+// Todo's own in-column heading (shell.tsx's `hideAppBar` row, issue #254),
+// reachable below the wide-layout breakpoint the same way the rest of
+// Todo's chrome already keys off it.
+//
+// Pinned explicitly here rather than left to apps/web/src/test/setup.ts's
+// own ambient stub (which already answers `false` for every query but
+// `(hover: hover)`, so every test elsewhere in this file already runs
+// "narrow" by coincidence) — a test whose own claim is about a breakpoint
+// has to set that breakpoint itself, not merely happen to run under
+// whatever the global default is today.
+function installNarrowMatchMedia() {
+  Object.defineProperty(window, "matchMedia", {
+    value: vi.fn((query: string) => ({
+      matches: false,
+      media: query,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+    })),
+    configurable: true,
+    writable: true,
+  });
+}
+
+function installWideMatchMedia() {
+  Object.defineProperty(window, "matchMedia", {
+    value: vi.fn((query: string) => ({
+      matches: true,
+      media: query,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+    })),
+    configurable: true,
+    writable: true,
+  });
+}
+
+function removeMatchMedia() {
+  Object.defineProperty(window, "matchMedia", {
+    value: undefined,
+    configurable: true,
+    writable: true,
+  });
+}
+
+describe("TodoPage — Search door (issue #307)", () => {
+  afterEach(removeMatchMedia);
+
+  it("below the 900px wide-layout breakpoint, offers a real link to /todo/search at least 48 CSS px on a side", () => {
+    installNarrowMatchMedia();
+    renderTodoPage(readyContext(), "/todo/inbox");
+
+    const link = screen.getByRole("link", { name: "Search" });
+    expect(link).toHaveAttribute("href", "/todo/search");
+    // `size-12` is Tailwind's 3rem/48px utility — the acceptance criterion's
+    // own floor, and the exact number `back-to-chats.tsx`'s own `size-11`
+    // (44px) comment already documents this app's app-bar icon controls by.
+    // jsdom lays nothing out, so this is a source-level check that the
+    // class is the one which resolves to 48px, not a live pixel measurement
+    // — the real-browser measurement is the parent's own device pass.
+    expect(link.className).toContain("size-12");
+  });
+
+  it("at the 900px wide-layout breakpoint, renders nothing — TodoSidebar's own Search link already reaches it there", () => {
+    installWideMatchMedia();
+    renderTodoPage(readyContext(), "/todo/inbox");
+
+    expect(screen.queryByRole("link", { name: "Search" })).not.toBeInTheDocument();
+  });
+
+  it("does not offer the door a second time while already standing on the Search page itself", () => {
+    installNarrowMatchMedia();
+    renderTodoPage(readyContext(), "/todo/search");
+
+    expect(screen.getByRole("heading", { name: "Search" })).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "Search" })).not.toBeInTheDocument();
+  });
+
+  // The acceptance criterion this proves: "reaching Search and going back
+  // returns the reader where they were." `GoBackProbe` (this file's own
+  // helper, mirroring composer-page.test.tsx's and
+  // digest-reader-page.test.tsx's identical stand-ins) drives `navigate(-1)`
+  // — the same mechanism a real hardware Back press resolves to
+  // (back-button.android.ts's own `window.history.back()`) once
+  // use-back-button.ts's depth counter says there's somewhere to go back
+  // to. That depends on the door being a real push navigation, not a
+  // `replace` — the identical shape `openFullSearch` (todo-page.tsx) already
+  // uses for Quick-find's "Show more results".
+  it("reaching Search from Today and going back returns to Today, not the root", () => {
+    installNarrowMatchMedia();
+    renderTodoPage(readyContext(), "/todo/today");
+    expect(screen.getByRole("heading", { name: "Today" })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("link", { name: "Search" }));
+    expect(screen.getByRole("heading", { name: "Search" })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Simulate Back" }));
+    expect(screen.getByRole("heading", { name: "Today" })).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Search" })).not.toBeInTheDocument();
   });
 });

@@ -456,4 +456,28 @@ describe("Shell's column width override and hideAppBar (issue #254)", () => {
       column?.textContent?.indexOf("content") ?? -1,
     );
   });
+
+  // Issue #307: before this, `action` was read only inside the `!hideAppBar`
+  // branch (the fixed app bar), so Todo — the one caller that sets
+  // `hideAppBar` — had no way to add a trailing header action at all; the
+  // prop existed but nothing that used `hideAppBar` could reach it. Todo's
+  // Search door (todo-page.tsx) is the first caller that needs one.
+  it("renders `action` inside the in-column heading row too, when hideAppBar is set", () => {
+    render(
+      <Shell
+        title="Inbox"
+        hideAppBar
+        action={
+          <button type="button" aria-label="Search">
+            Search
+          </button>
+        }
+      >
+        content
+      </Shell>,
+    );
+
+    const scrollRegion = screen.getByTestId("shell-scroll-region");
+    expect(scrollRegion).toContainElement(screen.getByRole("button", { name: "Search" }));
+  });
 });
