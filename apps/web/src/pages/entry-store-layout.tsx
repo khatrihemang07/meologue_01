@@ -18,7 +18,7 @@ import type {
 import { open } from "@meologue/core";
 import { queryOptions, useQuery } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Outlet, useOutletContext } from "react-router";
+import { Outlet, useLocation, useOutletContext } from "react-router";
 import type { MessageAction } from "@/components/shell";
 import { useComments } from "@/hooks/use-comments";
 import { useEvents } from "@/hooks/use-events";
@@ -31,6 +31,7 @@ import { runTasksBackfillOnce } from "@/lib/backfill-tasks";
 import { dayHasEntries } from "@/lib/day-has-entries";
 import { dayReferrers } from "@/lib/day-referrers";
 import { deferStore, type StoreMethodNames } from "@/lib/defer-store";
+import { resetEntriesPagingToNewest } from "@/lib/entries-pagination";
 import { deviceUtcOffsetMinutes } from "@/lib/entry-day";
 import {
   InsecureContextError,
@@ -1199,6 +1200,56 @@ export function EntryStoreLayout() {
       ),
     );
   }, [data]);
+
+  // A fresh visit to the Composer must cost what
+  // a reload already costs — one loaded page, almost all of it measured
+  // within a couple of frames — rather than re-rendering every page the
+  // reader paged back through earlier in this same session. A reload gets
+  // that for free because `useHistory`'s query starts cold; an in-app
+  // return does not, because THIS component (EntryStoreLayout) sits above
+  // `/composer`, `/reflect`, `/digest` and `/todo*` alike and never
+  // unmounts between them, so the query it owns keeps accumulating pages
+  // however many routes the reader visits in between. `useHistory` itself
+  // has no way to tell "the reader just came back to Composer" from
+  // "the reader is still on Composer and something else re-rendered this
+  // layout" — only the route transition does — so that check lives here,
+  // the one place both the routing and the query are in scope.
+  //
+  // Read and updated during render, not from a `useEffect`, and
+  // deliberately BEFORE the `useHistory` call below: `resetEntriesPagingToNewest`
+  // mutates the query cache synchronously, and `useInfiniteQuery` (inside
+  // `useHistory`) reads that same cache synchronously the moment it runs
+  // later in this same function body — so trimming first means this very
+  // render already reflects the trimmed data, with no second render and no
+  // one-frame flash of the untrimmed list before it corrects (the same
+  // "settle during render" reasoning `deferred.resolve`/`reject` above
+  // already rely on). `previousPathname.current === null` (this render is
+  // this component's very first) is excluded on purpose: a cold load of
+  // `/composer` already has at most one page cached, so there is nothing to
+  // trim, and treating "just mounted" as "just arrived" would be wrong
+  // anyway — nothing was left behind to correct for.
+  const location = useLocation();
+  const previousPathname = useRef<string | null>(null);
+  if (previousPathname.current !== location.pathname) {
+    // Deliberately NOT excluding this component's own first render. The
+    // root screen (`/`) is a sibling route rendered OUTSIDE this layout, so
+    // leaving the Composer by Back unmounts this component entirely and
+    // arriving at `/composer` again mounts a fresh one with
+    // `previousPathname` back at `null` — while the query cache, a module
+    // singleton, has kept every page the reader ever paged through. Reading
+    // a first render as "cold, so there is nothing to trim" is exactly
+    // wrong in that case, and it is the common one: Composer → `/` →
+    // Reflect → `/` → Composer is the ordinary way round this app. An
+    // actual cold page load needs no exclusion of its own, because
+    // `resetEntriesPagingToNewest` is already a no-op at zero or one
+    // cached page.
+    const arrivedAtComposer =
+      location.pathname === "/composer" && previousPathname.current !== "/composer";
+    previousPathname.current = location.pathname;
+    if (arrivedAtComposer) {
+      resetEntriesPagingToNewest();
+    }
+  }
 
   const { entries, pagination, sendEntry, editEntry, commitEntryEdit, removeEntry } = useHistory(
     store,

@@ -120,14 +120,16 @@ function ChatListColumn() {
  * deterministic (`back-to-chats.tsx`'s own "a real `<Link>`, not
  * `history.back()`" reasoning applies here for the identical reason).
  *
- * The link is the Destination's bare path, carrying no resume point of its
- * own (CONTEXT.md, "Resume point"): a Destination restores its own on
- * mount, so `/composer` already lands the reader on the day they were
- * reading (`composer-resume.ts`, read by `composer-page.tsx`). That is
- * deliberate rather than incidental — a resume point encoded into this
- * link would be a second copy of the same fact, stale the moment the
- * Destination's own memory moved on, and it would only work for readers
- * who arrived by this card rather than by the pane or a typed URL.
+ * The link is the Destination's bare path, and carries no position within
+ * that Destination. It once pointed at a companion feature that restored
+ * the day the Composer had been scrolled to; that feature was removed
+ * after it proved unreliable against the virtualized list in a real
+ * browser — landing on a fixed wrong day rather than the one being read —
+ * so a Destination now simply opens the way it always does. Should
+ * anything like it return, the position belongs to the Destination's own
+ * restore-on-mount rather than encoded here: a copy in this link would go
+ * stale the moment that memory moved on, and would only help readers who
+ * arrived by this card rather than by the pane or a typed URL.
  */
 function ContinueCard({ destination }: { destination: Destination }) {
   const { to, label, Icon, summary } = destination;
