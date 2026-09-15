@@ -349,7 +349,27 @@ function TaskReferenceItem({
   }
 
   return (
-    <li className="-ml-5 flex list-none items-baseline gap-1.5">
+    // Issue #242's decision, recorded here rather than only in the commit
+    // message: a Task's schedule chip is metadata ABOUT the Task, not part
+    // of its own words, so it must never sit inside the `<div>` that
+    // `index.css`'s completed-checklist-item rule decorates (the comment
+    // above that rule explains why that rule strikes every descendant of
+    // that `<div>` unconditionally — it has no way to carve out one
+    // descendant, so the only way to exempt the chip is to keep it out of
+    // that `<div>`'s subtree entirely). A `flex` row can't do that AND keep
+    // the chips visually under the label — a second flex child sits beside
+    // the first, not below it — so this is a two-row `grid` instead:
+    // column 1 is the checkbox (row 1 only), column 2 carries the label
+    // `<div>` in row 1 (still the exact `<div>` the structural selector
+    // reaches, still decorated, still catches bold/italic/a Reference
+    // chip/Search highlighting inside `content` exactly as before) and
+    // `TaskScheduleChips` in row 2 — its own root is a `<span>`, which the
+    // selector's `~ div` never matches regardless of position, so no
+    // `:not()` escape hatch is needed. History's `DayTasksRow` reaches the
+    // same outcome by keeping its own wrapper a `<span>` and opting the
+    // title in explicitly with `.completed-task-text`; this is the
+    // equivalent move for a shape that has no such wrapper to repurpose.
+    <li className="-ml-5 grid list-none grid-cols-[auto_1fr] items-baseline gap-x-1.5 gap-y-0.5">
       <input
         type="checkbox"
         checked={resolvedChecked}
@@ -364,9 +384,9 @@ function TaskReferenceItem({
         readOnly
         onClick={canOpen ? handleCheckboxClick : undefined}
         aria-label={resolvedLabel || (resolvedChecked ? "Checked" : "Unchecked")}
-        className="mt-[0.2em] shrink-0 accent-current"
+        className="col-start-1 row-start-1 mt-[0.2em] shrink-0 accent-current"
       />
-      <div className="min-w-0 flex-1">
+      <div className="col-start-2 row-start-1 min-w-0">
         {/*
           No `whitespace-pre-wrap` on either element below (ADR 0069's
           prefactor) — `EntryBody`'s own wrapper (below) and
@@ -388,15 +408,16 @@ function TaskReferenceItem({
         ) : (
           <p className="mt-0">{resolvedLabel}</p>
         )}
-        {live !== undefined && (
-          <TaskScheduleChips
-            task={live}
-            projects={projects}
-            hideDate={recurring && resolvedChecked}
-          />
-        )}
         {content}
       </div>
+      {live !== undefined && (
+        <TaskScheduleChips
+          task={live}
+          projects={projects}
+          hideDate={recurring && resolvedChecked}
+          className="col-start-2 row-start-2"
+        />
+      )}
     </li>
   );
 }

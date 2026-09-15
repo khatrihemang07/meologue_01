@@ -929,6 +929,43 @@ describe("EntryRow", () => {
 
         expect(screen.getByText("4 Sep")).toBeInTheDocument();
       });
+
+      // Issue #242: a completed Task's chips struck through here, unstruck
+      // in history.tsx's `DayTasksRow` below it — surviving under
+      // `grayAndStrike`/`strike` specifically because the default `gray`
+      // applies no strikethrough at all, so both surfaces agreed by
+      // accident. The decision this ticket records: the chip is metadata
+      // ABOUT the Task, not part of its own words, so it must sit OUTSIDE
+      // `index.css`'s structural rule (`li.list-none input:checked ~
+      // div`) rather than inside it. jsdom applies no real cascade (see
+      // `entry-prose.test.tsx`'s own comment on that), so this proves the
+      // DOM shape the selector actually keys off — the chip is not a
+      // descendant of `input:checked`'s own next-sibling `<div>` — rather
+      // than the resulting paint. Reverting the grid split in
+      // `entry-row.tsx` back to one wrapping `<div>` around label + chips
+      // makes `decoratedDiv.contains(chip)` true and fails this test.
+      it("keeps the schedule chip outside the div the completed-checklist-item rule decorates, even when the Task is checked", () => {
+        renderEntryRow(entry({ body: `- [x] ${formatTaskReference(taskId, "buy milk")}` }), {
+          completedTasks: [
+            taskFixture({
+              date: "2026-09-03",
+              completedAt: "2026-08-28T00:00:00.000Z",
+            }),
+          ],
+        });
+
+        const checkbox = screen.getByRole("checkbox");
+        expect(checkbox).toBeChecked();
+        const li = checkbox.closest("li");
+        expect(li).not.toBeNull();
+        // The exact shape the CSS selector matches: the `<div>` that is
+        // the checked `<input>`'s own next element sibling.
+        const decoratedDiv = checkbox.nextElementSibling;
+        expect(decoratedDiv?.tagName).toBe("DIV");
+        const chip = screen.getByText("3 Sep");
+        expect(decoratedDiv?.contains(chip)).toBe(false);
+        expect(li?.contains(chip)).toBe(true);
+      });
     });
 
     // Issue #181, criterion 4: clicking the words opens the Task over the
