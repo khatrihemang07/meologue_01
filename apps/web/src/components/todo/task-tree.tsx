@@ -63,7 +63,7 @@
 import { MAX_TASK_NESTING_DEPTH, type Task } from "@meologue/core";
 import { useQuery } from "@tanstack/react-query";
 import type { PointerEvent } from "react";
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { type TaskDetailActions, TaskRow } from "@/components/todo/task-row";
 import { useSwipeActions } from "@/hooks/use-swipe-actions";
@@ -196,6 +196,75 @@ export function TaskTree({
   // is a property of *this level*, not of which two Tasks are involved.
   const canNest = depth < MAX_TASK_NESTING_DEPTH;
 
+  // Issue #308, diagnosed and verified on the device, not from jsdom
+  // (which has no compositor and so cannot produce this at all): once
+  // armed, the row's own box still carries `touch-pan-y` (issue #303's
+  // own class, for swipe-to-schedule — the grip survives this because it
+  // separately carries `touch-none`, `task-row-content.tsx`'s own grip
+  // markup), so the browser is still entitled to claim the vertical axis
+  // for its own panning. Traced on-device event order: `pointerdown` →
+  // `contextmenu` → ONE `pointermove` → `pointercancel` →
+  // `lostpointercapture` — the compositor takes the axis and kills the
+  // pointer stream after the very first real move, before this level's
+  // own `handlePointerMove` ever sees enough of them to compute a verdict
+  // that reorders anything. `touch-action` is decided at the touch's own
+  // start and is immune to changing it mid-gesture, so the fix isn't a
+  // class — it's suppressing the browser's own default action on
+  // `touchmove` directly, and ONLY for the duration of an armed drag: a
+  // permanent listener would take vertical scrolling away from every
+  // reader dragging a finger down an un-armed row, a worse regression
+  // than the one this fixes.
+  //
+  // A ref, not state: this holds a listener FUNCTION, compared for
+  // identity against nothing a render needs to read, and is written from
+  // plain start/stop calls below, never from a render itself.
+  const touchMoveBlockerRef = useRef<((event: TouchEvent) => void) | null>(null);
+
+  /**
+   * Registered NATIVELY, with `addEventListener`, never through JSX's
+   * `onTouchMove` — React's own root listener for that event is
+   * `{ passive: true }` (React's own default for every touch/wheel
+   * listener, to keep the main thread free to scroll without waiting on
+   * a handler), and `preventDefault()` called from inside a passive
+   * listener is a silent no-op, not an error: the on-device trace above
+   * is what caught that, since nothing about it would ever surface as a
+   * thrown exception or a failing assertion. `{ passive: false }` here is
+   * what actually gives this listener the standing to cancel the
+   * browser's own pan.
+   *
+   * On `document`, not the row itself: `touchmove` is a legacy `Touch`
+   * event, not a `PointerEvent`, and nothing guarantees it follows
+   * `setPointerCapture`'s own retargeting the way a genuine pointer event
+   * does. `document` sees it regardless of which element the finger is
+   * physically over as the drag continues across other rows.
+   */
+  const blockTouchScroll = useCallback(() => {
+    const blocker = (event: TouchEvent) => {
+      event.preventDefault();
+    };
+    touchMoveBlockerRef.current = blocker;
+    document.addEventListener("touchmove", blocker, { passive: false });
+  }, []);
+
+  /** The inverse of `blockTouchScroll` — every exit from an armed drag (a commit, a cancel, or this component going away mid-drag) has to reach this, or a reader's very next scroll on an unrelated row would silently stop working. */
+  const unblockTouchScroll = useCallback(() => {
+    const blocker = touchMoveBlockerRef.current;
+    if (blocker === null) return;
+    document.removeEventListener("touchmove", blocker);
+    touchMoveBlockerRef.current = null;
+  }, []);
+
+  // The unmount case `handlePointerUp`/`handlePointerCancel` below can't
+  // cover themselves: a `TaskTree` going away mid-drag (an Escape-driven
+  // route change, a Task deleted out from under an in-flight drag) still
+  // has to give scrolling back to the rest of the page. `useCallback`
+  // (empty deps, same as `blockTouchScroll` above) is what keeps this
+  // effect from re-running every render: both functions only ever touch
+  // the ref above, never anything that changes between renders, so a
+  // stable identity costs nothing and is what a `[]` dependency array can
+  // honestly claim.
+  useEffect(() => unblockTouchScroll, [unblockTouchScroll]);
+
   // Issue #303: swiping a row left opens its own `TaskSchedulePopover` —
   // reusing `use-swipe-actions.ts`'s shared recogniser, the identical one
   // `history.tsx`'s own bubbles use, rather than growing a second one.
@@ -289,23 +358,52 @@ export function TaskTree({
     };
   }
 
+  // Issue #308: the one place both the grip's `pointerdown` and a
+  // long-press on the row's own body actually arm the shared `drag`
+  // state — extracted so the two entry points can't drift into arming it
+  // two different ways. `captureTarget` is deliberately a plain `Element`,
+  // not `event.currentTarget` read inside here: the grip hands this its
+  // own button, `task-row.tsx`'s long-press timer hands this the `<li>`
+  // it fired from (`onLongPressArm`'s own doc comment, TaskRowProps, on
+  // why that timer holds no live event by the time it fires at all).
+  function armDrag(taskId: string, pointerId: number, captureTarget: Element) {
+    if (drag !== null) return;
+    setDrag({ taskId, pointerId });
+    setOverTarget(null);
+    blockTouchScroll();
+    try {
+      captureTarget.setPointerCapture(pointerId);
+    } catch {
+      // jsdom implements no pointer capture at all — nothing to recover.
+    }
+  }
+
   function handlePointerDown(taskId: string) {
     return (event: PointerEvent<HTMLButtonElement>) => {
       if (drag !== null) return;
       // See todo-page.tsx's identical pre-#171 comment on this exact
       // `preventDefault` for why it exists (WKWebView text-selection).
       event.preventDefault();
-      setDrag({ taskId, pointerId: event.pointerId });
-      setOverTarget(null);
-      try {
-        event.currentTarget.setPointerCapture(event.pointerId);
-      } catch {
-        // jsdom implements no pointer capture at all — nothing to recover.
-      }
+      armDrag(taskId, event.pointerId, event.currentTarget);
     };
   }
 
-  function handlePointerMove(event: PointerEvent<HTMLButtonElement>) {
+  // Issue #308's second door onto `armDrag` above — reached from a
+  // long-press on the row's own body once `task-row.tsx`'s own timer
+  // survives the three-way race against scrolling and swipe-to-schedule,
+  // rather than from a `pointerdown` on the grip. No `event` to read
+  // `preventDefault` off here (see `onLongPressArm`'s own doc comment,
+  // TaskRowProps): a still hold that turns into a lift has nothing native
+  // left worth suppressing at the moment this fires — the platform's own
+  // long-press → contextmenu translation is what `task-row.tsx`'s own
+  // `onContextMenu` guards separately, not this.
+  function armLiftFromLongPress(taskId: string) {
+    return (pointerId: number, captureTarget: Element) => {
+      armDrag(taskId, pointerId, captureTarget);
+    };
+  }
+
+  function handlePointerMove(event: PointerEvent<HTMLElement>) {
     if (drag === null || event.pointerId !== drag.pointerId) return;
     const originalIndex = tasks.findIndex((task) => task.id === drag.taskId);
     const { ids, rects } = measureRows(drag.taskId);
@@ -326,7 +424,7 @@ export function TaskTree({
     }
   }
 
-  function handlePointerUp(event: PointerEvent<HTMLButtonElement>) {
+  function handlePointerUp(event: PointerEvent<HTMLElement>) {
     if (drag === null || event.pointerId !== drag.pointerId) return;
     const { taskId, pointerId } = drag;
     try {
@@ -345,17 +443,19 @@ export function TaskTree({
         void handleNestDrop(taskId, targetId);
       }
     }
+    unblockTouchScroll();
     setDrag(null);
     setOverTarget(null);
   }
 
-  function handlePointerCancel(event: PointerEvent<HTMLButtonElement>) {
+  function handlePointerCancel(event: PointerEvent<HTMLElement>) {
     if (drag === null || event.pointerId !== drag.pointerId) return;
     try {
       event.currentTarget.releasePointerCapture(drag.pointerId);
     } catch {
       // Already released, or capture never succeeded.
     }
+    unblockTouchScroll();
     setDrag(null);
     setOverTarget(null);
   }
@@ -574,6 +674,7 @@ export function TaskTree({
             isNestTarget={
               drag !== null && overTarget?.kind === "nest" && overTarget.id === row.task.id
             }
+            isDragging={drag !== null && drag.taskId === row.task.id}
             // The raw, task-taking callbacks — not bound to this row here —
             // so this row's own nested TaskTree (its sub-tasks, if any) can
             // forward them unchanged one level deeper, rather than every
@@ -589,6 +690,7 @@ export function TaskTree({
             onHandlePointerMove={handlePointerMove}
             onHandlePointerUp={handlePointerUp}
             onHandlePointerCancel={handlePointerCancel}
+            onLongPressArm={armLiftFromLongPress(row.task.id)}
             onMoveUp={() => handleMove(row.task.id, row.index, "up")}
             onMoveDown={() => handleMove(row.task.id, row.index, "down")}
             onIndent={() => handleIndent(row.task, row.index)}
@@ -623,6 +725,8 @@ interface TaskTreeRowProps {
   detailActions: TaskDetailActions;
   isDropTarget: boolean;
   isNestTarget: boolean;
+  /** See `TaskTree`'s own `isDragging` call-site comment and `TaskRow`'s identical prop doc (task-row.tsx) — forwarded straight through. */
+  isDragging: boolean;
   // The raw, task-taking callbacks — see this component's own call site in
   // TaskTree above for why these arrive unbound: this row binds each to
   // `task` for its own TaskRow, then forwards the very same function,
@@ -633,9 +737,11 @@ interface TaskTreeRowProps {
   onOpenSchedule: (task: Task) => void;
   onMoveToSection?: (taskId: string, sectionId: string | null) => void;
   onHandlePointerDown: (event: PointerEvent<HTMLButtonElement>) => void;
-  onHandlePointerMove: (event: PointerEvent<HTMLButtonElement>) => void;
-  onHandlePointerUp: (event: PointerEvent<HTMLButtonElement>) => void;
-  onHandlePointerCancel: (event: PointerEvent<HTMLButtonElement>) => void;
+  onHandlePointerMove: (event: PointerEvent<HTMLElement>) => void;
+  onHandlePointerUp: (event: PointerEvent<HTMLElement>) => void;
+  onHandlePointerCancel: (event: PointerEvent<HTMLElement>) => void;
+  /** See `TaskRow`'s own identical prop doc comment (task-row.tsx, TaskRowProps). */
+  onLongPressArm: (pointerId: number, captureTarget: Element) => void;
   onMoveUp: () => void;
   onMoveDown: () => void;
   onIndent: () => void;
@@ -664,6 +770,7 @@ function TaskTreeRow({
   detailActions,
   isDropTarget,
   isNestTarget,
+  isDragging,
   onComplete,
   onCompleteForever,
   onRequestDelete,
@@ -673,6 +780,7 @@ function TaskTreeRow({
   onHandlePointerMove,
   onHandlePointerUp,
   onHandlePointerCancel,
+  onLongPressArm,
   onMoveUp,
   onMoveDown,
   onIndent,
@@ -731,6 +839,7 @@ function TaskTreeRow({
       depth={depth}
       isDropTarget={isDropTarget}
       isNestTarget={isNestTarget}
+      isDragging={isDragging}
       onComplete={() => onComplete(task)}
       onCompleteForever={() => onCompleteForever(task)}
       onRequestDelete={() => onRequestDelete(task)}
@@ -741,6 +850,7 @@ function TaskTreeRow({
       onHandlePointerMove={onHandlePointerMove}
       onHandlePointerUp={onHandlePointerUp}
       onHandlePointerCancel={onHandlePointerCancel}
+      onLongPressArm={onLongPressArm}
       onMoveUp={onMoveUp}
       onMoveDown={onMoveDown}
       onIndent={onIndent}

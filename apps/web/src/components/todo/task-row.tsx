@@ -1,7 +1,9 @@
 import type { Label, LocalDayKey, Project, Task } from "@meologue/core";
 import type { PointerEvent, ReactNode } from "react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { TaskRowContent } from "@/components/todo/task-row-content";
+import { LONG_PRESS_MS } from "@/lib/swipe-recognizer";
+import { liftCandidateBailed } from "@/lib/task-lift-recognizer";
 import {
   OPEN_COMMAND_MENU_EVENT,
   OPEN_SCHEDULE_EVENT,
@@ -203,9 +205,56 @@ export interface TaskRowProps {
    * pass all seven.
    */
   onHandlePointerDown?: (event: PointerEvent<HTMLButtonElement>) => void;
-  onHandlePointerMove?: (event: PointerEvent<HTMLButtonElement>) => void;
-  onHandlePointerUp?: (event: PointerEvent<HTMLButtonElement>) => void;
-  onHandlePointerCancel?: (event: PointerEvent<HTMLButtonElement>) => void;
+  /**
+   * Widened from `HTMLButtonElement` (issue #308): the grip handle is no
+   * longer the only element that calls these. Once a long-press on the
+   * row's own body arms the lift (`onLongPressArm` below, and this file's
+   * own `<li>` `onPointerDown`/`onPointerMove` doc comments), pointer
+   * capture lands on the `<li>` itself, not on any button, and these same
+   * three callbacks — `task-tree.tsx`'s identical `handlePointerMove`/
+   * `handlePointerUp`/`handlePointerCancel` a grip-drag already used —
+   * have to keep working when `event.currentTarget` is that `<li>`
+   * instead. Nothing inside any of the three ever assumed a button
+   * specifically (`setPointerCapture`/`releasePointerCapture`/`pointerId`/
+   * `clientY` are all plain `Element`/`PointerEvent` members), so widening
+   * the type costs those functions nothing.
+   */
+  onHandlePointerMove?: (event: PointerEvent<HTMLElement>) => void;
+  onHandlePointerUp?: (event: PointerEvent<HTMLElement>) => void;
+  onHandlePointerCancel?: (event: PointerEvent<HTMLElement>) => void;
+  /**
+   * Arms the identical reorder drag `onHandlePointerDown` above arms from
+   * the grip — but from a long-press on the row's own body instead (issue
+   * #308), once this `<li>`'s own timer (LONG_PRESS_MS, mirroring
+   * `swipe-recognizer.ts`'s identical constant) survives the three-way
+   * race against a vertical scroll and the horizontal swipe-to-schedule
+   * without either winning first (`liftCandidateBailed`,
+   * `lib/task-lift-recognizer.ts`).
+   *
+   * Takes the pointer's own id and a capture target directly, not a
+   * `PointerEvent`: by the time the timer fires there is no live event
+   * left to hand one — `pointerdown`'s own event is long gone, and the
+   * capture target has to be this `<li>` (whichever element the timer was
+   * armed from), never a button, since there is no grip in play on this
+   * path. `undefined` — the same "no affordance for a gesture that can't
+   * happen here" rule every other drag prop on this row already follows —
+   * for a row with no drag handlers at all (Today): holding one of those
+   * rows keeps today's behaviour (native long-press opens the command
+   * menu), since there is no reorder for it to lift into.
+   */
+  onLongPressArm?: (pointerId: number, captureTarget: Element) => void;
+  /**
+   * Whether THIS row is the one currently being dragged — by the grip or
+   * by a long-press lift, either arms the identical `drag` state
+   * (`task-tree.tsx`), so this flag doesn't distinguish which one armed
+   * it. Draws the "picked up" elevation issue #308's own acceptance
+   * criterion requires ("the row visibly lifts while held") — a small
+   * upward offset and a shadow, not a removal from the list: driven live
+   * against Todoist Android 2026-09-15, the held row leaves its own SLOT
+   * (siblings close the gap) but stays rendered, floating on top of them,
+   * rather than disappearing and reappearing on release.
+   */
+  isDragging?: boolean;
   /**
    * Reorders this Task one slot earlier/later among its own siblings
    * (issue #171's keyboard acceptance criterion) — lib/task-reorder.ts's
@@ -339,6 +388,8 @@ export function TaskRow({
   onHandlePointerMove,
   onHandlePointerUp,
   onHandlePointerCancel,
+  onLongPressArm,
+  isDragging = false,
   onMoveUp,
   onMoveDown,
   onIndent,
@@ -412,6 +463,31 @@ export function TaskRow({
     return () => document.removeEventListener(OPEN_SCHEDULE_EVENT, onOpenSchedule);
   }, [task.id]);
 
+  // Issue #308's own long-press-to-lift candidate — a `setTimeout`, not
+  // sample arithmetic the way `swipe-recognizer.ts`'s identical
+  // `LONG_PRESS_MS` bail-out is: that one only ever needs to *abandon* on
+  // the next `pointermove` that happens to arrive past the deadline, which
+  // a still hold with no movement at all never produces. Arming a lift has
+  // to happen even then, so a real timer is what actually fires it — see
+  // `onLongPressArm`'s own doc comment (TaskRowProps) for why the pure
+  // vertical/horizontal-bail check still lives in `lib/task-lift-
+  // recognizer.ts` rather than here: geometry is decidable without a
+  // clock, arming isn't.
+  //
+  // A ref, not state: this is read and mutated from plain DOM event
+  // handlers below, never from a render, and a `setTimeout` id has no
+  // business being state a re-render would ever need to see.
+  const longPressTimeoutRef = useRef<number | null>(null);
+  const longPressStartRef = useRef<{ pointerId: number; x: number; y: number } | null>(null);
+
+  function clearLongPressTimer() {
+    if (longPressTimeoutRef.current !== null) {
+      window.clearTimeout(longPressTimeoutRef.current);
+      longPressTimeoutRef.current = null;
+    }
+    longPressStartRef.current = null;
+  }
+
   return (
     <li
       data-task-id={task.id}
@@ -444,9 +520,89 @@ export function TaskRow({
       // #192, since nothing this handler could bubble through belonged to
       // another row's own `<li>` at all.
       onContextMenu={(event) => {
+        // Issue #308, driven on the device 2026-09-15: Android's own
+        // long-press → contextmenu translation fires this as a
+        // `PointerEvent` with `pointerType: "touch"` (a real right-click
+        // reports `button: 2` on a plain `MouseEvent`, with no
+        // `pointerType` at all) — cheap enough to gate on directly,
+        // without waiting for this row's own timer below to decide
+        // anything. `onLongPressArm === undefined` (a row with no drag
+        // handlers — Today) keeps today's behaviour, opening the menu:
+        // there is no lift for a long-press to arm there, so stealing the
+        // menu from it would remove a touch reader's only door onto it.
+        // Cast, not narrowed by an `in` check on `MouseEvent` itself:
+        // React types `onContextMenu`'s event as a plain `MouseEvent`,
+        // which has no `pointerType` at all — the field only exists at
+        // runtime, on the actual `PointerEvent` instance Chrome/Android
+        // fires this as for a touch long-press (this file's own comment
+        // above carries the on-device evidence).
+        const pointerType = (event.nativeEvent as { pointerType?: string }).pointerType;
+        if (pointerType === "touch" && onLongPressArm !== undefined) {
+          event.preventDefault();
+          event.stopPropagation();
+          // Defence in depth, not this path's arming mechanism — see
+          // `onLongPressArm`'s own doc comment (TaskRowProps): the row's
+          // own timer below already arms the lift well before Android's
+          // slower native threshold gets here. This only has to make sure
+          // that when it DOES get here, the pointer stream that survives
+          // it (the established, on-device finding) never also pops the
+          // menu on top of an already-lifted row.
+          return;
+        }
         event.preventDefault();
         event.stopPropagation();
         setCommandMenuOpen(true);
+      }}
+      onPointerDown={(event) => {
+        // The row's own body, not the grip — `onHandlePointerDown` above
+        // already owns pointerdown-starts-a-drag for the handle; this is
+        // issue #308's second door onto the identical `drag` state,
+        // reached by *holding* rather than by landing on a small target.
+        // Touch only: a mouse/pen still reaches reorder through the grip,
+        // or the command menu through right-click — `pointerType` is
+        // asserted per-event here rather than through a media query
+        // (`lib/pointer.ts`'s own `(pointer: coarse)`/`(hover: none)`
+        // convention), because THIS decision is about which physical
+        // input made THIS gesture, not about what the device is capable
+        // of in general (a mouse plugged into a touchscreen must still
+        // reach the grip/right-click path even though the device itself
+        // reports a coarse pointer).
+        if (event.pointerType !== "touch" || onLongPressArm === undefined) return;
+        const { pointerId, clientX, clientY, currentTarget } = event;
+        longPressStartRef.current = { pointerId, x: clientX, y: clientY };
+        longPressTimeoutRef.current = window.setTimeout(() => {
+          longPressTimeoutRef.current = null;
+          // Re-checked at fire time, not assumed from the closure alone:
+          // `clearLongPressTimer` (pointerup/pointercancel/a bail below)
+          // sets this back to `null`, and a timer already queued by the
+          // event loop still runs even after being logically cancelled.
+          if (longPressStartRef.current?.pointerId === pointerId) {
+            onLongPressArm(pointerId, currentTarget);
+          }
+        }, LONG_PRESS_MS);
+      }}
+      onPointerMove={(event) => {
+        const start = longPressStartRef.current;
+        if (start !== null && event.pointerId === start.pointerId) {
+          if (liftCandidateBailed(event.clientX - start.x, event.clientY - start.y)) {
+            // Scroll or swipe-to-schedule just won the race this
+            // pointerdown started — hand it back rather than arming a
+            // lift underneath whichever one did. Not `preventDefault`ed:
+            // the browser's own vertical pan (`touch-pan-y` on
+            // `TaskRowContent`'s own root div) is exactly what should
+            // happen next, and this recogniser has nothing to add to it.
+            clearLongPressTimer();
+          }
+        }
+        onHandlePointerMove?.(event);
+      }}
+      onPointerUp={(event) => {
+        clearLongPressTimer();
+        onHandlePointerUp?.(event);
+      }}
+      onPointerCancel={(event) => {
+        clearLongPressTimer();
+        onHandlePointerCancel?.(event);
       }}
     >
       {/*
@@ -476,6 +632,7 @@ export function TaskRow({
         onOpenSchedule={onOpenSchedule}
         isDropTarget={isDropTarget}
         isNestTarget={isNestTarget}
+        isDragging={isDragging}
         depth={depth}
         onHandlePointerDown={onHandlePointerDown}
         onHandlePointerMove={onHandlePointerMove}

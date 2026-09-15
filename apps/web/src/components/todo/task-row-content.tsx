@@ -97,11 +97,14 @@ export interface TaskRowContentProps {
   onOpenSchedule: () => void;
   isDropTarget: boolean;
   isNestTarget: boolean;
+  /** See `TaskRow`'s own `isDragging` doc comment (TaskRowProps) — forwarded straight through, unchanged. */
+  isDragging?: boolean;
   depth: number;
   onHandlePointerDown?: (event: PointerEvent<HTMLButtonElement>) => void;
-  onHandlePointerMove?: (event: PointerEvent<HTMLButtonElement>) => void;
-  onHandlePointerUp?: (event: PointerEvent<HTMLButtonElement>) => void;
-  onHandlePointerCancel?: (event: PointerEvent<HTMLButtonElement>) => void;
+  /** Widened from `HTMLButtonElement` — see `TaskRow`'s own identical prop doc comment (TaskRowProps) for why. */
+  onHandlePointerMove?: (event: PointerEvent<HTMLElement>) => void;
+  onHandlePointerUp?: (event: PointerEvent<HTMLElement>) => void;
+  onHandlePointerCancel?: (event: PointerEvent<HTMLElement>) => void;
   onMoveUp?: () => void;
   onMoveDown?: () => void;
   onIndent?: () => void;
@@ -220,6 +223,7 @@ export function TaskRowContent({
   onOpenSchedule,
   isDropTarget,
   isNestTarget,
+  isDragging = false,
   depth,
   onHandlePointerDown,
   onHandlePointerMove,
@@ -453,6 +457,19 @@ export function TaskRowContent({
         // actions below still animate anything now.
         isDropTarget && "border-t-primary",
         isNestTarget && "bg-primary/10 ring-2 ring-primary ring-inset",
+        // Issue #308's own acceptance criterion: "the row visibly lifts
+        // while held." `-translate-y-1` (Tailwind's 4px step) matches the
+        // ~4 CSS px the reference itself was observed floating above its
+        // own resting position (this file's own `isDragging` doc comment,
+        // TaskRowProps, carries the on-device measurement); `shadow-lg`
+        // plus an opaque `bg-background` is what makes "drawn on top of
+        // its own neighbours" legible rather than merely offset, since
+        // this row keeps its `<li>`'s own slot in the DOM the whole time
+        // (ROW-14's own interleaving already renders every row without
+        // reordering the list live) and would otherwise just overlap the
+        // next row's own top border with no visual cue that it's the one
+        // being held.
+        isDragging && "relative z-10 -translate-y-1 bg-background shadow-lg",
       )}
       // ROW-01: 59px is the row's own baseline height for a single-line
       // title plus one metadata line; a title-only row (no date, deadline,
@@ -499,10 +516,38 @@ export function TaskRowContent({
           type="button"
           aria-label={`Reorder or reparent "${task.content}" — arrow keys to move, Alt+arrow keys to indent or outdent`}
           data-testid="task-drag-handle"
-          onPointerDown={onHandlePointerDown}
-          onPointerMove={onHandlePointerMove}
-          onPointerUp={onHandlePointerUp}
-          onPointerCancel={onHandlePointerCancel}
+          // `stopPropagation()` on all four (issue #308, new here — the
+          // grip needed none of this before): `task-row.tsx`'s own `<li>`
+          // now carries this identical trio of callbacks too, armed from
+          // a long-press on the row's own body rather than from this
+          // button. Pointer capture on THIS button still lets a grip-drag's
+          // own pointermove/up/cancel bubble up through that ancestor
+          // `<li>` regardless of which element captured the pointer — so
+          // without stopping it here, a single grip-drag gesture would
+          // invoke `task-tree.tsx`'s `handlePointerMove`/`handlePointerUp`
+          // TWICE per event (once via this button, once via the bubbled
+          // copy on the `<li>`), double-writing `reorderTask` on release.
+          // That state is idempotent against redundant `pointerId`
+          // mismatches but not against two genuine matches for the one
+          // event it's currently handling, so this has to stop the second
+          // copy from ever being dispatched, not rely on the handler
+          // shrugging it off.
+          onPointerDown={(event) => {
+            event.stopPropagation();
+            onHandlePointerDown?.(event);
+          }}
+          onPointerMove={(event) => {
+            event.stopPropagation();
+            onHandlePointerMove?.(event);
+          }}
+          onPointerUp={(event) => {
+            event.stopPropagation();
+            onHandlePointerUp?.(event);
+          }}
+          onPointerCancel={(event) => {
+            event.stopPropagation();
+            onHandlePointerCancel?.(event);
+          }}
           onKeyDown={(event) => {
             if (event.key === "ArrowUp" && !event.altKey) {
               event.preventDefault();
