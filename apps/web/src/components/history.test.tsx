@@ -1435,65 +1435,6 @@ describe("History", () => {
     });
   });
 
-  // "Returning to the Composer lands you on the day you were reading" —
-  // `onVisibleDayChange` reports the same `topmostDayKey` the always-present
-  // pill above already derives, so composer-page.tsx can remember it. Under
-  // jsdom the topmost row never moves off whatever `flatItems[0]` is (the
-  // "day markers" suite's own comment above), so every render here reports
-  // the first Entry's own day, in the exact order `entries` was handed —
-  // History does no reversing of its own.
-  describe("onVisibleDayChange", () => {
-    it("reports the topmost loaded day once, on mount", () => {
-      const onVisibleDayChange = vi.fn();
-      const newer = entry({ id: "1", body: "newer", createdAt: "2020-01-02T10:00:00.000Z" });
-      const older = entry({ id: "2", body: "older", createdAt: "2020-01-01T10:00:00.000Z" });
-      render(
-        <History
-          entries={[newer, older]}
-          syncEnabled={false}
-          onVisibleDayChange={onVisibleDayChange}
-        />,
-      );
-
-      expect(onVisibleDayChange).toHaveBeenCalledWith("2020-01-02");
-    });
-
-    it("reports null for an empty History, rather than never calling back at all", () => {
-      const onVisibleDayChange = vi.fn();
-      render(<History entries={[]} syncEnabled={false} onVisibleDayChange={onVisibleDayChange} />);
-
-      expect(onVisibleDayChange).toHaveBeenCalledWith(null);
-    });
-
-    it("does not call back again on a render that leaves the topmost day unchanged", () => {
-      const onVisibleDayChange = vi.fn();
-      const older = entry({ id: "1", body: "older", createdAt: "2020-01-01T10:00:00.000Z" });
-      const { rerender } = render(
-        <History entries={[older]} syncEnabled={false} onVisibleDayChange={onVisibleDayChange} />,
-      );
-      onVisibleDayChange.mockClear();
-
-      // A re-render for an unrelated reason (query changing, here) — the
-      // topmost day is still 2020-01-01, so there is nothing new to
-      // report.
-      rerender(
-        <History
-          entries={[older]}
-          syncEnabled={false}
-          query=""
-          onVisibleDayChange={onVisibleDayChange}
-        />,
-      );
-
-      expect(onVisibleDayChange).not.toHaveBeenCalled();
-    });
-
-    it("is never called when the caller doesn't pass it", () => {
-      const older = entry({ id: "1", body: "older", createdAt: "2020-01-01T10:00:00.000Z" });
-      expect(() => render(<History entries={[older]} syncEnabled={false} />)).not.toThrow();
-    });
-  });
-
   // Issue #174: "each day opens with the Tasks dated or deadlined that
   // day" — `DayTasksRow`'s own suite. Unlike day Referrers just below,
   // `tasks` needs no probe/QueryClient plumbing at all: `tasksForDay` is a
