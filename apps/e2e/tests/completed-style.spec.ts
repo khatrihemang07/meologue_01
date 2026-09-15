@@ -258,11 +258,22 @@ test("a completed Task's look — decoration and colour — agrees across every 
     await dayBlockWords.click();
     const dialog = page.getByRole("dialog");
     await expect(dialog).toBeVisible();
-    // The at-rest title is a button, not a textbox — #229 replaced the
-    // textarea with a button that swaps in a real editor only once
-    // activated. Reading the resting state is what this spec wants: a
-    // completed Task's title as a person sees it before touching it.
-    const titleField = dialog.getByRole("button", { name: body });
+    // The at-rest title, which is what this spec wants: a completed Task's
+    // title as a person sees it before touching it, not the editor that
+    // swaps in once it is activated.
+    //
+    // Located by `data-testid`, and that is forced rather than preferred.
+    // This read `getByRole("button", { name: body })` — true when #229
+    // replaced the textarea with a button, and **false since 5e826b3
+    // (2026-09-13)**, where parity item DET-02 matched Todoist's own
+    // `div.task_content` and made the resting title a plain `<div>` with no
+    // `role` and `tabIndex={-1}`. That commit did not touch this file, so
+    // the locator has been waiting for an element that cannot exist ever
+    // since — failing not as an assertion but by exhausting the whole
+    // test's 180s budget, which is why it reads as a hang rather than a
+    // break. There is no accessible name and no role to match by design
+    // now, so the testid is the only stable handle left.
+    const titleField = dialog.getByTestId("task-detail-title");
     const taskDetail = await renderedStyle(titleField);
     const taskDetailExpected = await resolvedVarColor(titleField, variant.colorVar);
     await page.keyboard.press("Escape");
