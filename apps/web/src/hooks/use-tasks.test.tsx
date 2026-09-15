@@ -8,7 +8,12 @@ import type {
   Task,
   TaskStore,
 } from "@meologue/core";
-import { firstOccurrence, nextOccurrenceAfterCompletion, tomorrowOf } from "@meologue/core";
+import {
+  firstOccurrence,
+  mustParseLocalDayKey,
+  nextOccurrenceAfterCompletion,
+  tomorrowOf,
+} from "@meologue/core";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { act, renderHook, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
@@ -851,7 +856,9 @@ describe("useTasks", () => {
       const { result } = await renderUseTasks(store);
       await waitFor(() => expect(result.current.tasks).toHaveLength(1));
 
-      act(() => result.current.setTaskDateString("a", "every day", "2026-01-05"));
+      act(() =>
+        result.current.setTaskDateString("a", "every day", mustParseLocalDayKey("2026-01-05")),
+      );
 
       await waitFor(() =>
         expect(store.setDateString).toHaveBeenCalledWith("a", "every day", expect.any(String)),
@@ -866,7 +873,7 @@ describe("useTasks", () => {
       const { result } = await renderUseTasks(store);
       await waitFor(() => expect(result.current.tasks).toHaveLength(1));
 
-      act(() => result.current.setTaskDateString("a", null, "2026-01-10"));
+      act(() => result.current.setTaskDateString("a", null, mustParseLocalDayKey("2026-01-10")));
 
       await waitFor(() => expect(result.current.tasks[0]?.dateString).toBeNull());
       expect(result.current.tasks[0]?.date).toBe("2026-01-05");

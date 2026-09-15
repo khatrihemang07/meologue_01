@@ -1,4 +1,4 @@
-import type { Label, Project, Task } from "@meologue/core";
+import type { Label, LocalDayKey, Project, Task } from "@meologue/core";
 import type { PointerEvent, ReactNode } from "react";
 import { useEffect, useState } from "react";
 import { TaskRowContent } from "@/components/todo/task-row-content";
@@ -48,7 +48,7 @@ export interface TaskDetailActions {
    * `lib/local-day-key.ts`'s `localDayKey`) is what `task-row-content.tsx`
    * threads through here.
    */
-  onSetDateString: (id: string, dateString: string | null, today: string) => void;
+  onSetDateString: (id: string, dateString: string | null, today: LocalDayKey) => void;
   /**
    * Day-keys carrying at least one active Task, mapped to how many —
    * threaded straight through to `TaskSchedulePopover`'s identical prop

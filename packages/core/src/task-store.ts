@@ -1,3 +1,4 @@
+import type { LocalDayKey } from "./local-day-key";
 import type { Task } from "./task-types";
 
 /**
@@ -301,8 +302,15 @@ export interface TaskStore {
    * identical single `today` parameter. So this setter's shape mirrors
    * `postpone`'s, not `advanceRecurring`'s, once the actual columns it
    * touches are read rather than assumed.
+   *
+   * **`today`'s type, not just its doc comment, now rules out the bug
+   * (issue #300).** `LocalDayKey` (./local-day-key.ts) is constructible
+   * only through `localDayKey()` (apps/web) or an explicit parse — never
+   * through `new Date().toISOString()`, which is a bare `string`. The
+   * three paragraphs above describe the bug this type makes uncompilable
+   * rather than merely documented.
    */
-  setDateString(id: string, dateString: string | null, today: string): Promise<void>;
+  setDateString(id: string, dateString: string | null, today: LocalDayKey): Promise<void>;
   /**
    * Sets `labelIds` and clears `seq` — mirrors the other #169-era setters
    * above for the same reason: a caller building its own patch object
@@ -440,8 +448,17 @@ export interface TaskStore {
    * tombstone or an unknown id — checked before either throw becomes
    * reachable, the same ordering setDeadline's own doc comment explains
    * for the identical reason. Clears `seq`.
+   *
+   * **`today` is `LocalDayKey` (./local-day-key.ts), issue #300** — the
+   * type-level version of the two paragraphs above: constructible only
+   * through `localDayKey()`/an explicit parse, so `completedAt` (a plain
+   * `string`, still an instant) can no longer reach this parameter by
+   * accident, the exact swap that compiled before this ticket despite the
+   * two arguments meaning different things. `completedAt` itself stays a
+   * plain `string` — see local-day-key.ts's own header comment for why the
+   * instant side is deliberately not branded too.
    */
-  advanceRecurring(id: string, completedAt: string, today: string): Promise<void>;
+  advanceRecurring(id: string, completedAt: string, today: LocalDayKey): Promise<void>;
   /**
    * Ends a recurring Task's series and files it as an ordinary completed
    * Task — Shift+Click on a recurring task's checkbox ("Complete and
@@ -481,8 +498,12 @@ export interface TaskStore {
    * time-of-day on the new day; an all-day `date` stays all-day. No-op
    * against a tombstone or a Task with no `date` at all — there is
    * nothing to postpone. Clears `seq`.
+   *
+   * **`today` is `LocalDayKey` (./local-day-key.ts), issue #300** — see
+   * `advanceRecurring`'s own doc comment above for what the type now rules
+   * out that the doc comment alone used to only ask nicely for.
    */
-  postpone(id: string, today: string): Promise<void>;
+  postpone(id: string, today: LocalDayKey): Promise<void>;
   /**
    * Tombstone, never a hard delete (ADR 0028's rule, applied to Tasks).
    * `seq IS NULL` means "no acknowledgement from the server yet," which

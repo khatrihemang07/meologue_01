@@ -14,8 +14,8 @@
  * worth testing directly against a plain object, not only through a
  * rendered row or detail view.
  */
-import type { QuickAddOptions, Task } from "@meologue/core";
-import { parseQuickAdd } from "@meologue/core";
+import type { LocalDayKey, QuickAddOptions, Task } from "@meologue/core";
+import { parseLocalDayKey, parseQuickAdd } from "@meologue/core";
 import { taskFieldsForRename } from "@/lib/quick-add-task";
 
 export interface TaskTitleCommitSetters {
@@ -30,8 +30,12 @@ export interface TaskTitleCommitSetters {
   // parameter this reaches to `today` for the same reason it fixed the
   // other two `setTaskDateString` call sites; this one needed no
   // behaviour change, only the rename, since it was never threading an
-  // instant through in the first place.
-  setTaskDateString: (id: string, dateString: string | null, today: string) => void;
+  // instant through in the first place. Issue #300: this setter's own
+  // `today` is `LocalDayKey`, matching `TaskStore.setDateString`; see
+  // `commitTaskTitle` below for how `options.now` (`QuickAddOptions`'s own
+  // plain `string`, deliberately not branded — `local-day-key.ts`'s own
+  // header comment explains why) bridges into it.
+  setTaskDateString: (id: string, dateString: string | null, today: LocalDayKey) => void;
   setTaskLabels: (id: string, labelIds: string[]) => void;
   resolveLabelIds: (names: string[]) => Promise<string[]>;
 }
@@ -91,8 +95,22 @@ export async function commitTaskTitle(
   // recurrence token exists AND when one fails to resolve — both correctly
   // mean "don't touch" here too, since a failed parse must not clear an
   // existing repeat rule.
+  //
+  // `options.now` is `QuickAddOptions`'s own plain `string` (deliberately
+  // not branded — see `packages/core/src/local-day-key.ts`'s own header
+  // comment for why), but every real caller already builds it from
+  // `localDayKey(new Date())`, so it is always well-formed here. This is
+  // the "explicit parse" boundary issue #300 names as `LocalDayKey`'s
+  // other legitimate producer, not an `as LocalDayKey` cast standing in
+  // for validation that never happened: `parseLocalDayKey` actually checks
+  // the shape, and the (never-expected-in-practice) `null` branch simply
+  // skips the write rather than forwarding a value the brand can't vouch
+  // for.
   if (fields.dateString !== null && fields.dateString !== task.dateString) {
-    setters.setTaskDateString(task.id, fields.dateString, options.now);
+    const today = parseLocalDayKey(options.now);
+    if (today !== null) {
+      setters.setTaskDateString(task.id, fields.dateString, today);
+    }
   }
 
   // Already the STORED priority (taskFieldsForRename's own doc comment) —

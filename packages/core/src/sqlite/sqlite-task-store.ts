@@ -1,6 +1,7 @@
 import { and, desc, eq, inArray, isNull, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/sqlite-proxy";
 import { withDefaultLabelIds } from "../label-fields";
+import type { LocalDayKey } from "../local-day-key";
 import { firstOccurrence, nextOccurrenceAfterCompletion, tomorrowOf } from "../recurrence";
 import {
   assertValidDate,
@@ -396,7 +397,7 @@ export class SqliteTaskStore implements TaskStore {
   // Reads the Task first, mirroring advanceRecurring/setParent above: the
   // tombstone no-op has to be checked before either throw below becomes
   // reachable.
-  async setDateString(id: string, dateString: string | null, today: string): Promise<void> {
+  async setDateString(id: string, dateString: string | null, today: LocalDayKey): Promise<void> {
     const current = await this.get(id);
     if (current === undefined) {
       return;
@@ -507,7 +508,7 @@ export class SqliteTaskStore implements TaskStore {
   // to be checked before either throw below becomes reachable, and
   // there's no `dateString` to re-parse for a row that isn't live in the
   // first place.
-  async advanceRecurring(id: string, completedAt: string, today: string): Promise<void> {
+  async advanceRecurring(id: string, completedAt: string, today: LocalDayKey): Promise<void> {
     const current = await this.get(id);
     if (current === undefined) {
       return;
@@ -570,7 +571,7 @@ export class SqliteTaskStore implements TaskStore {
   // setParent/advanceRecurring above, to know whether `date` carries a
   // time-of-day to preserve on the new day — postpone has no rule of its
   // own to re-parse, but it still needs the Task's *current* shape.
-  async postpone(id: string, today: string): Promise<void> {
+  async postpone(id: string, today: LocalDayKey): Promise<void> {
     const current = await this.get(id);
     if (current === undefined || current.date === null) {
       return;
