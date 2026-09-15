@@ -168,7 +168,12 @@ interface ShellProps {
    * arrow.
    */
   back?: ReactNode;
-  /** Trailing app-bar action — e.g. the History/Settings links on the Composer page. */
+  /**
+   * Trailing action — e.g. the History/Settings links on the Composer page.
+   * Renders at the trailing edge of the fixed app bar normally, or (issue
+   * #307) of the in-column heading row when `hideAppBar` is set — Todo's
+   * Search door (todo-page.tsx) is the first caller to use it there.
+   */
   action?: ReactNode;
   message?: string;
   /**
@@ -598,12 +603,22 @@ export function Shell({
                   renders while `hideAppBar` is set. Unlike the app bar
                   (`shrink-0`, never scrolls), this row scrolls away with
                   the rest of the column — see `hideAppBar`'s own doc
-                  comment for why that's accepted rather than absorbed. */}
+                  comment for why that's accepted rather than absorbed.
+
+                  Issue #307: `action` reads here too, `ml-auto`-pushed to
+                  the row's trailing edge exactly like the app-bar branch
+                  above does for its own `(search || action)` row. Before
+                  this, `action` was only ever read inside the `!hideAppBar`
+                  branch, so Todo — the one caller that sets `hideAppBar` —
+                  had no way to reach it at all; that's what left Todo's
+                  Search door (todo-page.tsx) with nowhere in the header to
+                  go. */}
               {hideAppBar && (
                 <div className="flex items-center gap-2">
                   {back}
                   <h1 className="font-heading font-bold text-[26px] leading-[35px]">{title}</h1>
                   <SyncStatusIndicator />
+                  {action && <div className="ml-auto flex items-center gap-1">{action}</div>}
                 </div>
               )}
               {message && <p className="text-sm text-destructive">{message}</p>}
