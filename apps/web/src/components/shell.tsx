@@ -613,8 +613,26 @@ export function Shell({
                   had no way to reach it at all; that's what left Todo's
                   Search door (todo-page.tsx) with nowhere in the header to
                   go. */}
+              {/* The top safe-area inset belongs here, not only on the app
+                  bar above. Android draws the WebView full-bleed — meologue's
+                  viewport is 426x949 CSS px on a 1200x2670 screen, the whole
+                  display — so the system status bar sits OVER this row and
+                  eats touches in its band before the page sees them. Measured
+                  on the device 2026-09-15: `env(safe-area-inset-top)` is 43
+                  CSS px there, and without this padding the row's children
+                  started at y=16, leaving the Search door (#307) 56% dead and
+                  `back` 57% dead. Both still DRAW, below the status-bar
+                  glyphs, which is why this survived #254 unnoticed: the
+                  controls look completely normal and simply ignore taps along
+                  their top edge. `!hideAppBar`'s <header> has carried this
+                  since #254; the in-column branch was the half that missed
+                  it, and Todo is its only caller.
+
+                  This does not make the row stop scrolling — that is a
+                  separate and deliberate property, documented on `hideAppBar`
+                  itself, matching Todoist's own behaviour. */}
               {hideAppBar && (
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-2 [padding-top:env(safe-area-inset-top)]">
                   {back}
                   <h1 className="font-heading font-bold text-[26px] leading-[35px]">{title}</h1>
                   <SyncStatusIndicator />

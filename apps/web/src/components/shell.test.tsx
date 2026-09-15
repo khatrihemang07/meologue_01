@@ -527,4 +527,46 @@ describe("Shell's floatingAction slot (issue #304)", () => {
     // row clears floatingAction's footprint once scrolled fully into view.
     expect(screen.getByTestId("shell-scroll-region")).toContainElement(spacer as HTMLElement);
   });
+
+  // Driven on the device, 2026-09-15, build index--OQ6kPrH.js, viewport
+  // 426x949 CSS at dpr 2.8125. `env(safe-area-inset-top)` reports **43 CSS
+  // px** there, and the in-column heading row rendered its children from
+  // y=16 — so the status bar's touch region covered the top 27px of the
+  // Search door (48px tall, 56% dead) and the top 25px of `back` (44px,
+  // 57% dead). Both are VISIBLE — they draw below the status-bar glyphs —
+  // and simply do not receive taps up there, which is the worst version of
+  // this bug: nothing looks wrong.
+  //
+  // Proven positional rather than flaky by alternating five taps on the
+  // same element: device y=112.5 navigated 0/3, y=168.8 navigated 2/2, and
+  // the deciding trial was a LATE centre tap that still failed — so the
+  // result tracks the coordinate, not the ordinal.
+  //
+  // The fixed app bar (`!hideAppBar`) has always carried this inset; the
+  // in-column heading never did, and Todo is its only caller.
+  it("pads the in-column heading row by the top safe-area inset, so its controls clear the status bar (hideAppBar, narrow shells)", () => {
+    render(
+      <Shell title="Todo" hideAppBar back={<button type="button" aria-label="Back" />}>
+        content
+      </Shell>,
+    );
+
+    const heading = screen.getByRole("heading", { name: "Todo" });
+    const row = heading.parentElement as HTMLElement;
+    expect(row.className).toContain("[padding-top:env(safe-area-inset-top)]");
+  });
+
+  it("does not pad the in-column heading row when hideAppBar is omitted, because the app bar owns the inset then", () => {
+    render(
+      <Shell title="Settings" back={<button type="button" aria-label="Back" />}>
+        content
+      </Shell>,
+    );
+
+    // The app bar is the element carrying the inset in this branch, and it
+    // is a <header> rather than the heading's parent — asserting on it here
+    // is what stops the fix above from being "add the class everywhere".
+    const bar = document.querySelector("header") as HTMLElement;
+    expect(bar.className).toContain("[padding-top:env(safe-area-inset-top)]");
+  });
 });
