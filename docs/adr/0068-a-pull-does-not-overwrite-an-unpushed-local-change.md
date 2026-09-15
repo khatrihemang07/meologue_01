@@ -228,5 +228,5 @@ to all four unchanged — each clears `seq` on a local edit, each is acknowledge
 is an argument, not evidence, and this ADR's own #218 scope note was written to resist exactly this
 step ("six speculative changes to Sync at once"). What separates Tasks is that the race was
 *observed in the field and then reproduced deterministically*, which none of the other four has
-been. Filed rather than assumed; see the issue tracker. `Event` remains genuinely exempt for the
+been. Filed rather than assumed, as issue #332. `Event` remains genuinely exempt for the
 reason given above — append-only, nothing can make one pending.
