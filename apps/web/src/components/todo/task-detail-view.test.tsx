@@ -1716,6 +1716,32 @@ describe("TaskDetailView", () => {
         expect(document.activeElement).toBe(field);
       });
 
+      // Issue #306: a Task row's comment badge now carries `?intent=reply`
+      // (ROW-08), and `todo-page.tsx` reads it into this prop — "land in
+      // the thread, ready to reply" means the composer arrives already
+      // expanded AND focused, not merely reachable one click away.
+      it("issue #306: openCommentComposer=true starts expanded, with focus already in the field — no click needed", () => {
+        renderView({ comments: [], openCommentComposer: true });
+
+        expect(
+          screen.queryByRole("button", { name: "Open comment editor" }),
+        ).not.toBeInTheDocument();
+        const field = screen.getByLabelText("Add a comment");
+        expect(field).toBeInTheDocument();
+        expect(document.activeElement).toBe(field);
+      });
+
+      // The explicit regression case the ticket names as most likely to
+      // slip: every OTHER way of reaching this view — no `openCommentComposer`
+      // prop at all, the default every existing caller still passes — must
+      // still land on the collapsed bar, exactly as CMT-11 above already
+      // covers, restated here so the two prop values sit side by side.
+      it("issue #306: openCommentComposer left unset (or false) stays collapsed at rest", () => {
+        renderView({ comments: [], openCommentComposer: false });
+        expect(screen.getByRole("button", { name: "Open comment editor" })).toBeInTheDocument();
+        expect(screen.queryByLabelText("Add a comment")).not.toBeInTheDocument();
+      });
+
       it("opens from the keyboard — the bar is a real button, so Enter activates it", () => {
         renderView({ comments: [] });
 
