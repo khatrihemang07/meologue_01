@@ -253,6 +253,8 @@ export interface TaskRowProps {
   children?: ReactNode;
   /** Threaded straight through to `TaskRowContent` — see that prop's own doc comment (task-row-content.tsx). Defaults to `false` there when omitted. */
   suppressDateBadge?: boolean;
+  /** Threaded straight through to `TaskRowContent` — issue #310, see that prop's own doc comment (task-row-content.tsx) for the full Section/filter reasoning. Defaults to `false` there when omitted. */
+  suppressProjectBadge?: boolean;
 }
 
 /**
@@ -337,6 +339,7 @@ export function TaskRow({
   onMoveToSection,
   children,
   suppressDateBadge,
+  suppressProjectBadge,
 }: TaskRowProps) {
   // The full command set's own open state (issue #178) — right-click
   // anywhere on the row, the `.` key while a Task row has focus (issue
@@ -480,6 +483,7 @@ export function TaskRow({
         scheduleOpen={scheduleOpen}
         onScheduleOpenChange={setScheduleOpen}
         suppressDateBadge={suppressDateBadge}
+        suppressProjectBadge={suppressProjectBadge}
       />
       {/*
         This row's own sub-tasks, if any — `TaskTreeRow` (task-tree.tsx)

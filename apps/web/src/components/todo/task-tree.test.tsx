@@ -509,4 +509,83 @@ describe("TaskTree", () => {
       expect(measured.map((el) => el.getAttribute("data-task-id"))).toEqual(["a"]);
     });
   });
+
+  // Issue #310 (ROW-10/AROW-14): a Project's own view already names the
+  // Project in its own heading, so a Task row inside it suppresses the
+  // repeated badge — Inbox (`projectId: null`) and every cross-project
+  // view (Today/Upcoming, which never route through `TaskTree` at all)
+  // keep it. `TaskTree`'s own `projectId` prop is the one signal this
+  // whole tree shares (`suppressProjectBadge`'s own doc comment,
+  // task-row-content.tsx, has the full reasoning for why a Section bucket
+  // needs no separate flag — it's still the same non-null `projectId`).
+  describe("Project badge — issue #310", () => {
+    const errands = {
+      id: "project-1",
+      deviceId: "device-a",
+      name: "Errands",
+      colour: "#ff8d85",
+      favourite: false,
+      archived: false,
+      parentId: null,
+      description: null,
+      orderKey: "V",
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+      seq: null,
+      syncedAt: null,
+      deletedAt: null,
+    };
+    const detailActionsWithErrands = {
+      projects: [errands],
+      labels: [],
+      onOpenDetail: vi.fn(),
+      onSetPriority: vi.fn(),
+      onSetDate: vi.fn(),
+      onSetDateString: vi.fn(),
+      datesWithTasks: new Map(),
+      onSetProject: vi.fn(),
+      onSetLabels: vi.fn(),
+      onCopyLink: vi.fn(),
+      onRename: vi.fn(),
+      commentCountFor: vi.fn(() => 0),
+    };
+
+    it("hides an active row's Project badge when this tree's own projectId is set — a Project's own view", () => {
+      renderTree({
+        tasks: [task({ id: "a", content: "call mum", projectId: "project-1" })],
+        projectId: "project-1",
+        detailActions: detailActionsWithErrands,
+      });
+
+      expect(screen.queryByText("Errands")).not.toBeInTheDocument();
+    });
+
+    it("keeps an active row's Project badge when this tree's own projectId is null — Inbox", () => {
+      renderTree({
+        tasks: [task({ id: "a", content: "call mum", projectId: "project-1" })],
+        projectId: null,
+        detailActions: detailActionsWithErrands,
+      });
+
+      expect(screen.getByText("Errands")).toBeInTheDocument();
+    });
+
+    it("hides a completed row's Project badge too — the same non-null projectId, the tree's other TaskRow call site", async () => {
+      const done = task({
+        id: "a",
+        content: "done",
+        projectId: "project-1",
+        completedAt: "2026-01-01T00:00:00.000Z",
+      });
+      renderTree({
+        tasks: [],
+        completedTasks: [done],
+        projectId: "project-1",
+        detailActions: detailActionsWithErrands,
+      });
+
+      await waitFor(() => expect(screen.getByText("done")).toBeInTheDocument());
+      expect(screen.queryByText("Errands")).not.toBeInTheDocument();
+    });
+  });
 });

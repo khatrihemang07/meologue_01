@@ -132,6 +132,41 @@ export interface TaskRowContentProps {
    * Overdue section) keeps the badge exactly as before.
    */
   suppressDateBadge?: boolean;
+  /**
+   * Issue #310 (ROW-10/AROW-14, parity-ledger.md + parity-ledger-android.md):
+   * Todoist shows a Task row's Project badge only in a **cross-project**
+   * view — Today, Upcoming, Search, a Filter — and suppresses it inside
+   * that Project's own view, where the page's own heading already names
+   * it and the badge repeats a fact the reader isn't asking for
+   * (`meologue-parity-docs/todoist/live-audit-dom/row-badges-2026-09-15.json`
+   * § ROW-10). Threaded down exactly like `suppressDateBadge` above:
+   * `task-tree.tsx` is the one place that knows whether the whole tree
+   * it's rendering belongs to one Project (its own `projectId` prop,
+   * non-null) or is Inbox (`null`) — same signal `handleOutdent` already
+   * reads there for an unrelated reason — and passes `projectId !== null`
+   * straight through. Today/Upcoming (`today-view.tsx`, `upcoming-view.tsx`)
+   * render `TaskRow` directly and never set this, so they default to
+   * `false` and keep the badge, unchanged.
+   *
+   * **A Section inside a Project inherits this, not by a second flag but
+   * because there isn't a second code path to give one.** `task-list.tsx`
+   * groups a Project's own Tasks into per-Section buckets, but every
+   * bucket — unsectioned or not — is still just another `TaskTree` call
+   * with the SAME `projectId`, this Project's own id, never `null`. A
+   * Section is "inside a Project" in exactly the sense Todoist's own
+   * distinction cares about (its own project/section identity, not a
+   * separate context), so the one `projectId !== null` check already
+   * covers it without this file — or any caller — needing to know
+   * Sections exist at all.
+   *
+   * A filter that happens to select a single Project was NOT driven live
+   * before this fix shipped (issue #310's own "worth deciding rather than
+   * assuming") — `filter-view.tsx` renders its own row markup, not
+   * `TaskRowContent`, so it is entirely unaffected by this prop either
+   * way; that omission is deliberate, not an oversight, until Todoist's
+   * own behaviour there is established.
+   */
+  suppressProjectBadge?: boolean;
 }
 
 /**
@@ -197,6 +232,7 @@ export function TaskRowContent({
   scheduleOpen,
   onScheduleOpenChange,
   suppressDateBadge = false,
+  suppressProjectBadge = false,
 }: TaskRowContentProps) {
   // Issue #225: inline row editing, which did not exist before this
   // ticket. Driven on the live app after the ticket's first pass shipped
@@ -333,7 +369,7 @@ export function TaskRowContent({
     task.deadline !== null ||
     isRecurring ||
     resolvedLabels.length > 0 ||
-    projectName !== null ||
+    (projectName !== null && !suppressProjectBadge) ||
     subtaskCount > 0 ||
     commentCount > 0;
   const draggable =
@@ -729,7 +765,14 @@ export function TaskRowContent({
             {resolvedLabels.map((label) => (
               <LabelBadge key={label.id} label={label} />
             ))}
-            {projectName !== null && <span className="truncate">{projectName}</span>}
+            {/* Issue #310 (ROW-10/AROW-14): this Project's own view already
+                says which Project it is in the page's own heading —
+                `suppressProjectBadge`'s own doc comment above carries the
+                full reasoning, including why a Section inherits this for
+                free rather than needing a second flag. */}
+            {projectName !== null && !suppressProjectBadge && (
+              <span className="truncate">{projectName}</span>
+            )}
             {/* `task.dateString` verbatim — "the string is the truth"
                 (task-types.ts's own doc comment) — stays alongside the ↻
                 DATE-04 now appends to `dateDisplay.text` itself; the two
