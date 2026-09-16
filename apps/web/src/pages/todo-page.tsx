@@ -374,6 +374,7 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
     setProjectFavourite,
     archiveProject,
     unarchiveProject,
+    setProjectParent,
     removeProject,
     listSections,
     addSection,
@@ -1077,6 +1078,8 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
             onSetDescription={(description) =>
               setProjectDescription(currentProject.id, description)
             }
+            projects={projects}
+            onSetParent={(parentId) => setProjectParent(currentProject.id, parentId)}
             onToggleFavourite={(favourite) => setProjectFavourite(currentProject.id, favourite)}
             onToggleArchived={(archived) =>
               archived ? archiveProject(currentProject.id) : unarchiveProject(currentProject.id)
@@ -1108,7 +1111,7 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
       {backgroundView.view === "projects" && (
         <ProjectsView
           projects={projects}
-          onAdd={(name, colour) => addProject(name, { colour })}
+          onAdd={(name, colour, parentId) => addProject(name, { colour, parentId })}
           onToggleFavourite={setProjectFavourite}
           onToggleArchived={(id, archived) =>
             archived ? archiveProject(id) : unarchiveProject(id)

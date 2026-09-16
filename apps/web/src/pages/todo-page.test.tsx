@@ -1463,6 +1463,82 @@ describe("TodoPage — Projects", () => {
       ),
     );
   });
+
+  // Issue #297 — `ProjectStore.setProjectParent` existed, was persisted,
+  // synced and rendered (`depthOf()`), but nothing in the UI ever reached
+  // it: `ProjectsView`'s own create form had no way to choose a parent,
+  // and `ProjectEditDialog` had no reparent field at all. These two prove
+  // this page's own wiring — the `onAdd`/`onSetParent` call sites this
+  // ticket added here — actually reaches the hook, not just that the
+  // controls render (project-edit-dialog.test.tsx/projects-view.test.tsx
+  // already cover the controls themselves in isolation).
+  it("creates a Project nested under the chosen parent", () => {
+    const addProject = vi.fn();
+    const parent = {
+      id: "p1",
+      deviceId: "device-a",
+      name: "Groceries",
+      colour: "#DC4C3E",
+      favourite: false,
+      archived: false,
+      parentId: null,
+      description: null,
+      orderKey: "A",
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+      seq: 1,
+      syncedAt: "2026-01-01T00:00:00.000Z",
+      deletedAt: null,
+    };
+    renderTodoPage(readyContext({ projects: [parent], addProject }), "/todo/projects");
+
+    fireEvent.change(screen.getByLabelText("New Project's name"), {
+      target: { value: "Sub-list" },
+    });
+    fireEvent.change(screen.getByLabelText("New Project's parent"), {
+      target: { value: "p1" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Add" }));
+
+    expect(addProject).toHaveBeenCalledWith(
+      "Sub-list",
+      expect.objectContaining({ parentId: "p1" }),
+    );
+  });
+
+  it("reparents an existing Project through the Edit dialog, calling through to setProjectParent", async () => {
+    const setProjectParent = vi.fn(async () => {});
+    const groceries = {
+      id: "p1",
+      deviceId: "device-a",
+      name: "Groceries",
+      colour: "#DC4C3E",
+      favourite: false,
+      archived: false,
+      parentId: null,
+      description: null,
+      orderKey: "A",
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+      seq: 1,
+      syncedAt: "2026-01-01T00:00:00.000Z",
+      deletedAt: null,
+    };
+    const work = { ...groceries, id: "p2", name: "Work" };
+    renderTodoPage(
+      readyContext({ projects: [groceries, work], setProjectParent }),
+      "/todo/projects/p1",
+    );
+
+    fireEvent.pointerDown(screen.getByRole("button", { name: "Project options menu" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Edit" }));
+    await waitFor(() => expect(screen.getByRole("dialog")).toBeInTheDocument());
+
+    fireEvent.change(screen.getByLabelText("Project parent"), { target: { value: "p2" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    await waitFor(() => expect(setProjectParent).toHaveBeenCalledWith("p1", "p2"));
+  });
 });
 
 // Issue #185, ADR 0058 — Filters wired into TodoPage exactly the way

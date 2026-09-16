@@ -22,7 +22,16 @@ import { cn } from "@/lib/utils";
 
 export interface ProjectsViewProps {
   projects: Project[];
-  onAdd: (name: string, colour: string) => void;
+  /**
+   * Issue #297 — `parentId` is `null` for "No parent" (top-level), or an
+   * existing Project's own id when the reader picked one from this form's
+   * new parent chooser. Every existing Project is offered here: unlike
+   * `ProjectEditDialog`'s own chooser, a *new* Project has no id yet, so
+   * there is no self/descendant option to exclude (`ProjectStore.
+   * setProjectParent`'s own guard has nothing to refuse on a Project that
+   * doesn't exist until this call returns).
+   */
+  onAdd: (name: string, colour: string, parentId: string | null) => void;
   onToggleFavourite: (id: string, favourite: boolean) => void;
   onToggleArchived: (id: string, archived: boolean) => void;
 }
@@ -62,13 +71,19 @@ export function ProjectsView({
 }: ProjectsViewProps) {
   const [name, setName] = useState("");
   const [colour, setColour] = useState(LABEL_COLOURS[0]?.hex ?? "#808080");
+  // Issue #297 — `""` means "No parent" (top-level), mirroring the create
+  // form's own `colour` state above: a native `<select>` value is always a
+  // string, so `null` (the real `parentId` this becomes on submit) has to
+  // be represented some other way while it lives in this form.
+  const [parentId, setParentId] = useState("");
   const byId = new Map(projects.map((project) => [project.id, project] as const));
 
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (name.trim() === "") return;
-    onAdd(name, colour);
+    onAdd(name, colour, parentId === "" ? null : parentId);
     setName("");
+    setParentId("");
   }
 
   return (
@@ -94,6 +109,25 @@ export function ProjectsView({
           onChange={(event) => setName(event.target.value)}
           className="flex-1"
         />
+        {/* Issue #297 — the create-time half of making `parentId` reachable:
+            `ProjectStore.setProjectParent` already existed for reparenting
+            an existing Project (below, and `ProjectEditDialog`), but there
+            was no way to choose a parent at creation either. "No parent"
+            first, mirroring `depthOf`'s own top-level reading (`parentId
+            === null`). */}
+        <select
+          aria-label="New Project's parent"
+          value={parentId}
+          onChange={(event) => setParentId(event.target.value)}
+          className="shrink-0 rounded-md border border-border bg-background px-1.5 text-xs"
+        >
+          <option value="">No parent</option>
+          {projects.map((option) => (
+            <option key={option.id} value={option.id}>
+              {option.name}
+            </option>
+          ))}
+        </select>
         <Button type="submit" disabled={name.trim() === ""}>
           Add
         </Button>

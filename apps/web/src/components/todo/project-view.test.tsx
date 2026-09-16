@@ -574,3 +574,29 @@ describe("ProjectView — completed Tasks interleave inline (ROW-14)", () => {
     expect(screen.getByText(/Nothing in this Project yet/)).toBeInTheDocument();
   });
 });
+
+describe("ProjectView — Parent project passthrough (issue #297)", () => {
+  it("hides the Edit dialog's Parent field until a caller wires projects and onSetParent", async () => {
+    renderProjectView({ project: project({ name: "Groceries" }) });
+
+    openProjectMenuAndClick("Edit");
+
+    await waitFor(() => expect(screen.getByRole("dialog")).toBeInTheDocument());
+    expect(screen.queryByLabelText("Project parent")).not.toBeInTheDocument();
+  });
+
+  it("forwards projects and onSetParent to the Edit dialog, making reparenting reachable from this screen", async () => {
+    const onSetParent = vi.fn(async () => {});
+    const current = project({ id: "p1", name: "Groceries", parentId: null });
+    const other = project({ id: "p2", name: "Work", parentId: null });
+    renderProjectView({ project: current, projects: [current, other], onSetParent });
+
+    openProjectMenuAndClick("Edit");
+    await waitFor(() => expect(screen.getByRole("dialog")).toBeInTheDocument());
+
+    fireEvent.change(screen.getByLabelText("Project parent"), { target: { value: "p2" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    await waitFor(() => expect(onSetParent).toHaveBeenCalledWith("p2"));
+  });
+});
