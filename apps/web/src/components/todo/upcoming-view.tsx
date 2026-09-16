@@ -22,11 +22,38 @@
  * could be dragged would imply an order this view has no mechanism to
  * persist (there is no `dayOrder`-equivalent field for "this Task's
  * position within its Upcoming day").
+ *
+ * **Overdue (issue #299).** Ahead of the day sections, an `Overdue`
+ * disclosure renders `today()`'s own `overdue` bucket — the identical
+ * Tasks TodayView's own Overdue section shows, called with the same
+ * `now` this component already derives, not a second "is this overdue"
+ * check written here. That is Todoist's own shape: an overdue Task shows
+ * in both Today and Upcoming, not Today only — the reverse of what this
+ * view used to do (task-views.ts's own header comment on `upcoming()`
+ * has the fuller history of the reversed rule). `<details>/<summary>`
+ * rather than a `<button aria-expanded aria-controls>` pair, the same
+ * native-disclosure call task-detail-view.tsx's Comments section already
+ * makes for equal behaviour.
+ *
+ * The `<summary>` itself — bare `Overdue`, the bulk `Reschedule` button,
+ * and the expand/collapse chevron — is `overdue-section-summary.tsx`, one
+ * implementation TodayView's own Overdue section renders too (that file's
+ * own header comment has the full reasoning, including the Todoist DOM
+ * capture the three-node order is read off). `className="group"` on the
+ * `<details>` below is what lets that shared summary's own chevron read
+ * this element's `open` state via Tailwind's `group-open` variant — the
+ * summary component itself doesn't render the `<details>` around it, so
+ * every caller has to supply the class. No `Postpone to tomorrow`: that
+ * was Today's own further divergence from Todoist and issue #337 removed
+ * it there too, so there's no longer anything to not-propagate. No drag
+ * handlers here, for the identical reason the day sections above have
+ * none.
  */
 import type { Task } from "@meologue/core";
-import { upcoming, upcomingDayHeading } from "@meologue/core";
+import { today, upcoming, upcomingDayHeading } from "@meologue/core";
 import { CalendarClock } from "lucide-react";
 import { useCallback } from "react";
+import { OverdueSectionSummary } from "@/components/todo/overdue-section-summary";
 import { type TaskDetailActions, TaskRow } from "@/components/todo/task-row";
 import { useSwipeActions } from "@/hooks/use-swipe-actions";
 import { localDayKey } from "@/lib/local-day-key";
@@ -43,6 +70,8 @@ export interface UpcomingViewProps {
   onCompleteForever: (id: string, content: string) => void;
   onRequestDelete: (id: string) => void;
   onOpenSchedule: (id: string) => void;
+  /** The Overdue section's own bulk Reschedule button calls this — see `overdue-reschedule-action.tsx`'s own doc comment on why `onSetDate` and never `onSetDeadline`. */
+  onSetDate: (id: string, date: string | null) => void;
 }
 
 export function UpcomingView({
@@ -52,6 +81,7 @@ export function UpcomingView({
   onCompleteForever,
   onRequestDelete,
   onOpenSchedule,
+  onSetDate,
 }: UpcomingViewProps) {
   // Issue #303: reuses `use-swipe-actions.ts`'s shared recogniser —
   // today-view.tsx's own identical wiring has the fuller reasoning, both
@@ -71,8 +101,12 @@ export function UpcomingView({
   // today-view.tsx's own comment requires, reused rather than re-derived.
   const now = localDayKey(new Date());
   const days = upcoming(tasks, now);
+  // Same `now` as `upcoming()` just above, passed to the identical
+  // `today()` TodayView calls — one derivation of "overdue," reused, not
+  // a second one written here that could drift from TodayView's.
+  const { overdue } = today(tasks, now);
 
-  if (days.length === 0) {
+  if (days.length === 0 && overdue.length === 0) {
     return (
       // Mirrors TodayView's own "All caught up" empty state shape (an
       // achievement/explanation pair, not a bare icon) — worded for what
@@ -90,6 +124,32 @@ export function UpcomingView({
 
   return (
     <div ref={swipeRowsRef} className="flex flex-col gap-4">
+      {overdue.length > 0 && (
+        // `open` by default: TodayView's own Overdue section is always
+        // visible, never collapsed, and this is the same Tasks shown a
+        // second time here — starting collapsed would hide the one thing
+        // this section exists to surface. `className="group"`:
+        // overdue-section-summary.tsx's own chevron reads this element's
+        // `open` state through it.
+        <details open className="group">
+          <OverdueSectionSummary overdue={overdue} onSetDate={onSetDate} />
+          <ul className="flex flex-col">
+            {overdue.map((task) => (
+              <TaskRow
+                key={task.id}
+                task={task}
+                detailActions={detailActions}
+                commentCount={detailActions.commentCountFor(task.id)}
+                onComplete={() => onComplete(task.id, task.content, task.dateString)}
+                onCompleteForever={() => onCompleteForever(task.id, task.content)}
+                onRequestDelete={() => onRequestDelete(task.id)}
+                onOpenSchedule={() => onOpenSchedule(task.id)}
+              />
+            ))}
+          </ul>
+        </details>
+      )}
+
       {days.map((day) => (
         <section key={day.dayKey}>
           <header className="px-3 py-2">

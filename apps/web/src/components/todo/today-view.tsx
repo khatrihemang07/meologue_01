@@ -9,16 +9,21 @@
  * grouping control reaches it, ever (see the section below for why that's
  * not an oversight). **Due today** carries the grouping control
  * (`group-today-tasks.ts`) and the bulk of what a reader interacts with,
- * since Overdue's own remedy is a single Reschedule action, not per-Task
- * fiddling.
+ * since Overdue's own remedy is Todoist's own single Reschedule action —
+ * read verbatim off Todoist's own reference screenshots/DOM captures
+ * (a40-32-upcoming.png, a03-todoist-today.png,
+ * todoist/android/android-dom/a03-todoist-today.json), which carry no
+ * second action — not per-Task fiddling. Issue #299/#337: this section
+ * used to carry a second, meologue-only "Postpone to tomorrow" button
+ * beside Reschedule, which made "a single Reschedule action" false of
+ * this file's own code; the button is gone, not just the claim.
  */
 import type { Task } from "@meologue/core";
 import { today } from "@meologue/core";
 import { CheckCircle2 } from "lucide-react";
 import { useCallback, useState } from "react";
-import { DatePickerSheet } from "@/components/date-picker-sheet";
+import { OverdueSectionSummary } from "@/components/todo/overdue-section-summary";
 import { type TaskDetailActions, TaskRow } from "@/components/todo/task-row";
-import { Button } from "@/components/ui/button";
 import { useSwipeActions } from "@/hooks/use-swipe-actions";
 import { groupTodayTasks, type TodayGrouping } from "@/lib/group-today-tasks";
 import { localDayKey } from "@/lib/local-day-key";
@@ -35,19 +40,8 @@ export interface TodayViewProps {
   onCompleteForever: (id: string, content: string) => void;
   onRequestDelete: (id: string) => void;
   onOpenSchedule: (id: string) => void;
-  /** Rescheduling only ever calls this — see the Overdue section's own comment on why Reschedule touches `date` and never `deadline`. */
+  /** Rescheduling only ever calls this — see overdue-reschedule-action.tsx's own comment on why Reschedule touches `date` and never `deadline`. */
   onSetDate: (id: string, date: string | null) => void;
-  /**
-   * Moves one overdue Task to tomorrow (TaskStore.postpone's own doc
-   * comment) — the Overdue section's own "Postpone to tomorrow" button
-   * below calls this once per overdue Task, mirroring the existing bulk
-   * Reschedule button's identical `for (const task of overdue)` shape.
-   * Works on any overdue Task, not only a recurring one (postpone's own
-   * mechanics have nothing recurrence-specific about them), but issue
-   * #170 is what asks for it to be reachable here at all: "postponing an
-   * overdue recurring task moves it to tomorrow."
-   */
-  onPostpone: (id: string) => void;
 }
 
 export function TodayView({
@@ -58,10 +52,8 @@ export function TodayView({
   onRequestDelete,
   onOpenSchedule,
   onSetDate,
-  onPostpone,
 }: TodayViewProps) {
   const [grouping, setGrouping] = useState<TodayGrouping>("none");
-  const [reschedulingOverdue, setReschedulingOverdue] = useState(false);
 
   // Issue #303: swiping a row left opens its own `TaskSchedulePopover` —
   // reusing `use-swipe-actions.ts`'s shared recogniser (task-tree.tsx's own
@@ -117,43 +109,16 @@ export function TodayView({
   return (
     <div ref={swipeRowsRef} className="flex flex-col gap-4">
       {overdue.length > 0 && (
-        <section>
-          <header className="flex items-center justify-between px-3 py-2">
-            <h2 className="font-medium text-sm">Overdue ({overdue.length})</h2>
-            <div className="flex gap-2">
-              {/*
-                A quick, one-tap nudge beside the arbitrary-date Reschedule
-                picker — "postponing an overdue recurring task moves it to
-                tomorrow" (issue #170) doesn't need a calendar opened for
-                a destination that's always the same day. Real
-                `TaskStore.postpone`, not `onSetDate(task.id, tomorrow)`
-                computed by hand here: that store method already knows how
-                to preserve a timed Task's own time-of-day across the move
-                (its own doc comment), which this component would
-                otherwise have to re-derive per Task.
-              */}
-              <Button
-                type="button"
-                size="sm"
-                variant="outline"
-                onClick={() => {
-                  for (const task of overdue) {
-                    onPostpone(task.id);
-                  }
-                }}
-              >
-                Postpone to tomorrow
-              </Button>
-              <Button
-                type="button"
-                size="sm"
-                variant="outline"
-                onClick={() => setReschedulingOverdue(true)}
-              >
-                Reschedule
-              </Button>
-            </div>
-          </header>
+        // `open`, `className="group"`: issue #337 gave this section
+        // Todoist's own expand/collapse chevron, which needs a real
+        // `<details>` to reflect — the identical structure and "open by
+        // default" reasoning UpcomingView's own Overdue section already
+        // uses (that file's own comment on why open-by-default is right).
+        // `<section>`, non-collapsible, was this file's original shape
+        // before #337; Todoist's own reference capture
+        // (a03-todoist-today.json) has a collapse control on Today too.
+        <details open className="group">
+          <OverdueSectionSummary overdue={overdue} onSetDate={onSetDate} />
           {/*
             Always chronological, even though `todo-page.tsx`'s Inbox
             supports manual drag-to-reorder — this ticket's own acceptance
@@ -181,7 +146,7 @@ export function TodayView({
               />
             ))}
           </ul>
-        </section>
+        </details>
       )}
 
       {dueToday.length > 0 && (
@@ -239,30 +204,6 @@ export function TodayView({
           ))}
         </section>
       )}
-
-      {/*
-        A single bulk Reschedule (Todoist's own Overdue affordance), not a
-        per-Task button — the section as a whole has one remedy, "move
-        these forward," and a picker per row would just be this same
-        action taken once per Task instead of once for the section.
-        Reschedules only ever `onSetDate`, never `onSetDeadline`: a
-        Deadline is the hard cutoff a Task must still be *done* by
-        (CONTEXT.md's Deadline entry) — moving it because a reader hasn't
-        gotten to the Task yet would quietly relax the one field that
-        isn't supposed to move for that reason. A Task overdue purely by a
-        passed Deadline, with no `date` at all, gets one from this action
-        the same as any other — that's what actually clears it from
-        Overdue.
-      */}
-      <DatePickerSheet
-        open={reschedulingOverdue}
-        onOpenChange={setReschedulingOverdue}
-        onConfirm={(day) => {
-          for (const task of overdue) {
-            onSetDate(task.id, day);
-          }
-        }}
-      />
     </div>
   );
 }

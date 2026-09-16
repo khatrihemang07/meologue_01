@@ -561,6 +561,23 @@
   --td-date-today: rgb(37, 184, 76);
   --td-date-tomorrow: rgb(255, 154, 20);
 
+  /*
+   * The Overdue section's own Reschedule action text (issue #299/#337),
+   * Todoist web, computed styles, dark theme: `rgb(226, 106, 96)`. NOT
+   * `--td-date-overdue` above (`rgb(255, 112, 102)`) — close enough to
+   * tempt reuse, measured separately, and not equal. Also not re-pointed
+   * to `--td-calendar-today` a few lines down, which happens to carry
+   * this identical value: that token names the scheduler calendar's own
+   * "today" cell, a different measured role that coincides in value by
+   * Todoist's own choice of one brand red for both, not by anything this
+   * app is asserting stays equal — a future re-measure of either is free
+   * to diverge from the other without this token silently moving too.
+   * **Dark theme only**, carried into light unchanged, the same call
+   * this whole block already makes for every other hue-bearing accent
+   * (see this scope's own header comment).
+   */
+  --td-overdue-reschedule: rgb(226, 106, 96);
+
   /* A recognised natural-language match (README's own "one fact that
      shapes the rebuild") — an inline-block span, not a text colour, hence
      radius and padding tokens alongside the background. */

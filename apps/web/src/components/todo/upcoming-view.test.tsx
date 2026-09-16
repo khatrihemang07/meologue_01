@@ -1,5 +1,5 @@
 import type { Task } from "@meologue/core";
-import { render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { swipeDown, swipeLeft } from "@/test/swipe";
 import { UpcomingView } from "./upcoming-view";
@@ -60,6 +60,7 @@ function renderUpcomingView(overrides: Partial<Parameters<typeof UpcomingView>[0
     onCompleteForever: vi.fn(),
     onRequestDelete: vi.fn(),
     onOpenSchedule: vi.fn(),
+    onSetDate: vi.fn(),
     ...overrides,
   };
   render(<UpcomingView {...props} />);
@@ -86,13 +87,210 @@ describe("UpcomingView", () => {
     expect(screen.getByText("Nothing scheduled")).toBeInTheDocument();
   });
 
-  it("excludes an overdue Task — that's Today's section, not Upcoming's", () => {
+  // Issue #299 reverses this: meologue used to keep an overdue Task in
+  // Today only, "never doubled into both views" (task-views.ts's own
+  // upcoming() header comment has the fuller history). Todoist doubles
+  // it — the same Task shows in Today's Overdue section AND here — so
+  // this assertion now inverts what it checked before #299: previously
+  // "excludes an overdue Task — that's Today's section, not Upcoming's,"
+  // asserting `queryByText("late task")).not.toBeInTheDocument()` and
+  // `getByText("Nothing scheduled")`.
+  it("shows an overdue Task in its own Overdue section — Todoist doubles it into Today and Upcoming, not Today only", () => {
     renderUpcomingView({
       tasks: [task({ id: "late", content: "late task", date: "2026-09-01" })],
     });
 
-    expect(screen.queryByText("late task")).not.toBeInTheDocument();
-    expect(screen.getByText("Nothing scheduled")).toBeInTheDocument();
+    expect(screen.getByText("late task")).toBeInTheDocument();
+    expect(screen.getByText("Overdue")).toBeInTheDocument();
+    expect(screen.queryByText("Nothing scheduled")).not.toBeInTheDocument();
+  });
+
+  // The owner's own read of Todoist's reference screenshots (a40-32-
+  // upcoming.png, a03-todoist-today.png): the header is bare "Overdue",
+  // no count — unlike this app's usual "Section (count)" convention
+  // (compare the day headings' own "10 Sep ‧ Today ‧ Thursday", which
+  // carries no count either, and TodayView's "Overdue (N)", which is
+  // *not* what this section copies). A first cut of this section read
+  // "Overdue (1)"/"Overdue (2)" — pinned here so a count can't creep
+  // back in.
+  it("pins the bare 'Overdue' header text — no digits, unlike TodayView's own 'Overdue (N)'", () => {
+    renderUpcomingView({
+      tasks: [
+        task({ id: "late-1", content: "late task one", date: "2026-09-01" }),
+        task({ id: "late-2", content: "late task two", date: "2026-08-20" }),
+      ],
+    });
+
+    expect(screen.getByText("Overdue")).toBeInTheDocument();
+    expect(screen.queryByText(/Overdue\s*\(\d+\)/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Overdue\s*\d/)).not.toBeInTheDocument();
+  });
+
+  it("renders every overdue Task under the one Overdue section, ahead of the day sections", () => {
+    renderUpcomingView({
+      tasks: [
+        task({ id: "late-1", content: "late task one", date: "2026-09-01" }),
+        task({ id: "late-2", content: "late task two", date: "2026-08-20" }),
+        task({ id: "today", content: "today task", date: "2026-09-10" }),
+      ],
+    });
+
+    expect(screen.getByText("late task one")).toBeInTheDocument();
+    expect(screen.getByText("late task two")).toBeInTheDocument();
+    expect(screen.getAllByText("Overdue")).toHaveLength(1);
+
+    // Ahead of the day sections: the Overdue heading's own text precedes
+    // the first day heading's in document order.
+    const overdueIndex = document.body.innerHTML.indexOf(">Overdue<");
+    const todayHeadingIndex = document.body.innerHTML.indexOf("10 Sep");
+    expect(overdueIndex).toBeGreaterThanOrEqual(0);
+    expect(todayHeadingIndex).toBeGreaterThan(overdueIndex);
+  });
+
+  it("reuses today()'s own overdue bucket — a Deadline-only overdue Task (no date at all) still appears here", () => {
+    renderUpcomingView({
+      tasks: [
+        task({
+          id: "deadline-only",
+          content: "deadline only task",
+          date: null,
+          deadline: "2026-09-01",
+        }),
+      ],
+    });
+
+    expect(screen.getByText("deadline only task")).toBeInTheDocument();
+    expect(screen.getByText("Overdue")).toBeInTheDocument();
+  });
+
+  // `closest("summary")`/`closest("details")` rather than
+  // `getByRole("button", { name })`: task-detail-view.test.tsx's own
+  // Comments disclosure test hits the identical limitation (its CMT-10
+  // describe block's own comment) — a `<details>` does take the
+  // accessible role, but testing-library does not compute an accessible
+  // name from its `<summary>` child, so a named role query can't find it
+  // here even though a real browser's own accessibility tree exposes the
+  // `<summary>` itself as role "button".
+  it("renders the Overdue heading inside a native <details> disclosure, not a plain <section>/<h2>", () => {
+    renderUpcomingView({
+      tasks: [task({ id: "late", content: "late task", date: "2026-09-01" })],
+    });
+
+    const heading = screen.getByText("Overdue");
+    const summary = heading.closest("summary");
+    expect(summary).not.toBeNull();
+    const disclosure = summary?.closest("details");
+    expect(disclosure).not.toBeNull();
+    expect(disclosure).toHaveAttribute("open");
+  });
+
+  // Asserts the CONTRAST, not just the absence. An absence-only version of
+  // this test passes against `main`, where UpcomingView never renders an
+  // Overdue section at all — it would be green whether or not this feature
+  // exists, which is no evidence about the gate it claims to check. Driving
+  // both states in one test makes the presence half fail on revert.
+  it("renders the Overdue section only when something is overdue", () => {
+    renderUpcomingView({
+      tasks: [task({ id: "late", content: "late task", date: "2026-09-01" })],
+    });
+    expect(screen.getByText("Overdue")).toBeInTheDocument();
+
+    cleanup();
+    renderUpcomingView({
+      tasks: [task({ id: "today", content: "today task", date: "2026-09-10" })],
+    });
+    expect(screen.queryByText("Overdue")).not.toBeInTheDocument();
+  });
+
+  // Issue #337: Todoist's own DOM capture has a third node on this
+  // header, an `ImageView` "Expand/collapse" — overdue-section-summary.tsx
+  // renders it as an `aria-hidden` chevron, not a second focusable
+  // control, shared verbatim with TodayView's own Overdue section
+  // (today-view.test.tsx's own identical test has the fuller reasoning).
+  it("shows an aria-hidden chevron in the Overdue summary, not a second focusable control", () => {
+    renderUpcomingView({
+      tasks: [task({ id: "late", content: "late task", date: "2026-09-01" })],
+    });
+
+    const heading = screen.getByText("Overdue");
+    const summary = heading.closest("summary");
+    expect(summary).not.toBeNull();
+    // biome-ignore lint/style/noNonNullAssertion: asserted non-null above
+    const chevron = summary!.querySelector("svg");
+    expect(chevron).not.toBeNull();
+    expect(chevron).toHaveAttribute("aria-hidden", "true");
+    expect(chevron?.hasAttribute("tabindex")).toBe(false);
+    expect(chevron?.closest("button")).toBeNull();
+    expect(summary?.textContent).toBe("OverdueReschedule");
+  });
+
+  // Todoist's own only action on this header (the owner's ratified
+  // correction, issue #299) — reuses overdue-reschedule-action.tsx, the
+  // identical implementation TodayView's own Reschedule button now calls
+  // (today-view.test.tsx's own "Reschedule" describe block has the
+  // fuller confirm-flow reasoning), not a second scheduler path written
+  // here.
+  describe("Reschedule (Todoist's only action on the Overdue header)", () => {
+    // Contrast, for the same reason the Overdue-section test above states:
+    // asserting only the absence is green against `main` too.
+    it("offers the Reschedule action only when something is overdue", () => {
+      renderUpcomingView({
+        tasks: [task({ id: "late", content: "late task", date: "2026-09-01" })],
+      });
+      expect(screen.getByRole("button", { name: "Reschedule" })).toBeInTheDocument();
+
+      cleanup();
+      renderUpcomingView({
+        tasks: [task({ id: "today", content: "today task", date: "2026-09-10" })],
+      });
+      expect(screen.queryByRole("button", { name: "Reschedule" })).not.toBeInTheDocument();
+    });
+
+    // Issue #337 — the identical token-pinning test today-view.test.tsx's
+    // own "Reschedule" describe block has, verifying the shared component
+    // reached this view too, not a second, divergent styling.
+    it("reads its text colour from the --td-overdue-reschedule token, not a literal colour", () => {
+      renderUpcomingView({
+        tasks: [task({ id: "late", content: "late task", date: "2026-09-01" })],
+      });
+
+      const button = screen.getByRole("button", { name: "Reschedule" });
+      expect(button.style.color).toBe("var(--td-overdue-reschedule)");
+    });
+
+    it("rescheduling sets the date of every overdue Task to the chosen day, and touches nothing else", () => {
+      const onSetDate = vi.fn();
+      renderUpcomingView({
+        tasks: [
+          task({ id: "a", content: "a", date: "2026-08-30" }),
+          task({ id: "b", content: "b", deadline: "2026-08-31" }),
+        ],
+        onSetDate,
+      });
+
+      fireEvent.click(screen.getByRole("button", { name: "Reschedule" }));
+      // The nested DatePickerSheet's own tap-then-confirm: pick a day, then
+      // confirm — Confirm stays disabled until a day is tapped.
+      fireEvent.click(screen.getByRole("button", { name: /September 20th, 2026/ }));
+      fireEvent.click(screen.getByRole("button", { name: /^Confirm/ }));
+
+      expect(onSetDate).toHaveBeenCalledTimes(2);
+      expect(onSetDate).toHaveBeenCalledWith("a", expect.any(String));
+      expect(onSetDate).toHaveBeenCalledWith("b", expect.any(String));
+    });
+
+    // NOT tested here: overdue-reschedule-action.tsx's own
+    // `event.stopPropagation()` guards against a real browser's native
+    // <summary> toggling its <details> on any bubbled click, Reschedule's
+    // own click included. Mutation-tested that guard by deleting the
+    // `stopPropagation()` call and re-running this file: nothing failed
+    // — jsdom does not reproduce that toggle-on-bubbled-click behaviour
+    // (fireEvent.click here never collapses the disclosure either way),
+    // so no test in this file can discriminate the guard's presence.
+    // The `stopPropagation()` call stays, for the real-browser behaviour
+    // its own comment documents, but is only verifiable by driving an
+    // actual browser — flagging for that pass rather than keeping a test
+    // that would pass with the guard deleted.
   });
 
   it("headings read exactly '10 Sep ‧ Today ‧ Thursday' and '11 Sep ‧ Tomorrow ‧ Friday'", () => {

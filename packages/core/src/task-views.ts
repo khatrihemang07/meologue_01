@@ -157,12 +157,23 @@ export interface UpcomingDay {
  * account), so this deliberately doesn't invent a rule for it beyond
  * "not part of this grouping."
  *
- * **Overdue stays in Today, not here.** A `date` before today's calendar
- * day is excluded outright (the `dayKey < todayKey` guard below) — the
- * exact complement of today()'s own `overdue` bucket, never doubled into
- * both views. A Task due exactly today is the one day both views share,
- * and it appears in both: today() calls it `dueToday`, Upcoming calls it
- * this list's first section.
+ * **This function's own day map still starts at today — the `dayKey <
+ * todayKey` guard below is unchanged.** What sits above it changed
+ * (issue #299): this module used to say Overdue "stays in Today, not
+ * here… never doubled into both views," and `UpcomingView` enforced that
+ * by never rendering `today()`'s `overdue` bucket at all. That rule was
+ * adopted without a cited reference, and it's the opposite of Todoist's
+ * own shape — Todoist shows an overdue Task in both Today and Upcoming.
+ * meologue now matches: `UpcomingView` renders a separate Overdue section
+ * (today()'s own `overdue` bucket, unmodified — no second derivation of
+ * "overdue" lives here) ahead of the day sections below, so an overdue
+ * Task appears in both views. This function itself didn't need to change
+ * to make that true — its day-keyed map was already, and remains, the
+ * complement of `overdue`; the doubling is `UpcomingView` additionally
+ * rendering `today()`'s bucket alongside what this function returns, not
+ * a change to what this function returns. A Task due exactly today is
+ * still the one day both views share on their own terms: today() calls
+ * it `dueToday`, Upcoming calls it this list's first section.
  *
  * Each day's Tasks are sorted with the identical compareForToday chain
  * today() already uses (this module's own header comment: grouping never
