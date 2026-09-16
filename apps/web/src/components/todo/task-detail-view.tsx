@@ -28,14 +28,25 @@
  * and duration — `Task.duration` is being removed in a concurrent ticket
  * (issue #179) and nothing here reads or renders it.
  *
- * **Activity** (issue #184, ADR 0056) sits below Comments, a `<details>`
- * disclosure, collapsed by default and open on request — a secondary,
- * occasional thing to check, not something worth the vertical space open
- * by default the way Comments are. `events` is already narrowed to this
- * one Task by the caller
- * (`listEventsByTask`, entry-store-layout.tsx), the identical "the
- * caller scopes it, this view only renders" split `comments` above
- * already takes.
+ * **Activity** (issue #184, ADR 0056; relocated by issue #288) is no
+ * longer a `<details>` disclosure sitting a few rows below Comments —
+ * live-audited fixtures found 8 of a Task's 10 Activity entries were
+ * comment events, so the same Comment a reader had just read in the
+ * thread above reappeared, quoted, in a second disclosure right below
+ * it. The owner's ratified fix is exact parity with Todoist: Activity
+ * moves behind a **`View activity`** item in the header's overflow menu
+ * (`TaskDetailOverflowMenu` below), in Todoist's own relative order
+ * (after "Copy link to task," before "Delete task"), opening
+ * `TaskActivityDialog` — the identical `ActivityFeed` content that used
+ * to render inline, unchanged in wording, on the identical `events`
+ * (still narrowed to this one Task by the caller — `listEventsByTask`,
+ * entry-store-layout.tsx — the identical "the caller scopes it, this
+ * view only renders" split `comments` above already takes). Comment
+ * events are still rendered there — Todoist's own per-task activity
+ * lists them too (CMT-06's "You commented {content} on {task}"), and
+ * removing them would trade a matched parity row for a divergent one
+ * while claiming to fix parity. What's actually fixed is the
+ * adjacency: the two can no longer both be on screen at once.
  *
  * **Deadline and Priority open the identical `TaskScheduleSheet` every
  * row's own More-actions "Deadline…" item already opens** (`onOpenSchedule`
@@ -63,6 +74,7 @@ import {
   ChevronLeft,
   ChevronRight,
   Copy,
+  History,
   Link2,
   MoreHorizontal,
   MoreVertical,
@@ -892,15 +904,20 @@ function TaskDetailOverflowMenu({
   open,
   onOpenChange,
   onCopyLink,
+  onOpenActivity,
   onCompleteForever,
   onRequestDelete,
+  triggerRef,
 }: {
   task: Task;
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onCopyLink: () => void;
+  onOpenActivity: () => void;
   onCompleteForever: () => void;
   onRequestDelete: () => void;
+  /** `TaskDetailBody`'s own `overflowTriggerRef` — where `TaskActivityDialog`'s own `onCloseAutoFocus` sends focus back to, since the `DropdownMenu.Item` that actually opened it is gone the moment this menu closes. */
+  triggerRef: React.RefObject<HTMLButtonElement | null>;
 }) {
   // A recurring Task never actually carries `completedAt` alongside a
   // non-null `dateString` (`TaskStore.completeForever`/`advanceRecurring`'s
@@ -915,6 +932,7 @@ function TaskDetailOverflowMenu({
     <DropdownMenu.Root open={open} onOpenChange={onOpenChange}>
       <DropdownMenu.Trigger asChild>
         <button
+          ref={triggerRef}
           type="button"
           aria-label="Task actions"
           className="flex size-8 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground aria-expanded:opacity-100"
@@ -937,6 +955,27 @@ function TaskDetailOverflowMenu({
             <Copy aria-hidden="true" className="size-3.5" />
             Copy link to task
           </DropdownMenu.Item>
+          {/* Issue #288: relocated off the detail screen body (this file's
+              own header comment has the full account of why) into
+              Todoist's own overflow position — after "Copy link to task,"
+              before "Delete task," true whether or not "Complete forever"
+              is present below, since Todoist's own menu has no equivalent
+              of that item to anchor against.
+
+              Unconditional, deliberately (#337's own active bug class is an
+              unexplained behaviour change, so this is recorded rather than
+              left implicit): the old inline disclosure it replaces only
+              rendered `renderableEvents.length > 0`, but Todoist's own
+              overflow menu carries "View activity" as a static item,
+              present whether or not a Task has any history yet — there is
+              no live capture of Todoist hiding it at zero Events. Selecting
+              it at zero Events opens `TaskActivityDialog` on
+              `ActivityFeed`'s own default `emptyMessage`, "Nothing here
+              yet." — a real, readable state, not a blank dialog. */}
+          <DropdownMenu.Item className={overflowItemClassName} onSelect={onOpenActivity}>
+            <History aria-hidden="true" className="size-3.5" />
+            View activity
+          </DropdownMenu.Item>
           {isRecurring && (
             <DropdownMenu.Item className={overflowItemClassName} onSelect={onCompleteForever}>
               <CheckCheck aria-hidden="true" className="size-3.5" />
@@ -956,6 +995,117 @@ function TaskDetailOverflowMenu({
         </DropdownMenu.Content>
       </DropdownMenu.Portal>
     </DropdownMenu.Root>
+  );
+}
+
+/**
+ * Issue #288's own surface — everything `ActivityFeed` used to render
+ * inline (this file's own header comment has the full account) now
+ * renders here instead, opened by the header's own "View activity"
+ * overflow item rather than a `<details>` a reader had to notice and
+ * expand a few rows below Comments.
+ *
+ * Built directly on Radix `Dialog` (`DialogPrimitive.Root`/`Content`,
+ * matching the outer `TaskDetailView`'s own instance below and
+ * `task-custom-repeat-dialog.tsx`'s identical choice) rather than
+ * `ConfirmDialog` (`alert-dialog.tsx`) — that component's whole shape is
+ * a fixed title/description/Cancel/destructive-action, with no slot for
+ * arbitrary content, so reusing it here would mean stretching a
+ * confirm-before-you-act modal to hold a scrolling feed it was never
+ * built to.
+ *
+ * **The count lives here, not on the menu item.** Todoist's own "View
+ * activity" item carries no count, nor does any other item in this
+ * menu (`TaskDetailOverflowMenu` above) — "Copy link to task," "Delete
+ * task" — so putting one on the menu item would be decoration Todoist
+ * itself doesn't show. `Activity (N)` — the exact wording the old inline
+ * `<summary>` used — survives as this dialog's own `DialogPrimitive.
+ * Title` instead, which Radix also uses as the Dialog's accessible name,
+ * so a reader who opens it still sees the same count they used to see
+ * collapsed, just one tap later rather than always on screen.
+ *
+ * **No avatar, deliberately (issue #288's own explicit carve-out).**
+ * Todoist renders a round user avatar beside each comment event; this
+ * app has exactly one user, so an avatar would identify nobody —
+ * `ActivityFeed` never grew one, and this dialog adds no chrome of its
+ * own that would need one either.
+ *
+ * **`onCloseAutoFocus` sends focus back to the `Task actions` trigger.**
+ * Live-measured: `Task actions` -> `View activity` -> Escape left
+ * `document.activeElement` on `BODY` with the detail dialog still open,
+ * before this override existed — the identical Radix default the
+ * discard `ConfirmDialog` above already works around (that dialog's own
+ * comment has the full mechanics: a dialog with no `Dialog.Trigger` in
+ * its ancestry gives Radix's own close-autofocus default nothing to
+ * return to). This dialog's own trigger — the `DropdownMenu.Item` a
+ * reader actually clicked — is unmounted the instant the overflow menu
+ * closes, before this dialog's own open animation even starts, so the
+ * one stable, still-mounted place focus can meaningfully return to is
+ * `triggerRef`: the header's own `Task actions` button, which is where
+ * the reader really was.
+ */
+function TaskActivityDialog({
+  open,
+  onOpenChange,
+  events,
+  task,
+  projects,
+  triggerRef,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  /** Already narrowed to renderable events by the caller (`TaskDetailBody`'s own `renderableEvents`) — this dialog trusts that count for its own Title rather than re-filtering, the identical "the caller scopes it, this view only renders" split the rest of this file already takes. */
+  events: Event[];
+  task: Task;
+  projects: Project[];
+  /** `TaskDetailBody`'s own `overflowTriggerRef` — see this component's own doc comment above for why it, not the menu item that opened this dialog, is `onCloseAutoFocus`'s target. */
+  triggerRef: React.RefObject<HTMLButtonElement | null>;
+}) {
+  return (
+    <DialogPrimitive.Root open={open} onOpenChange={onOpenChange}>
+      <DialogPrimitive.Portal>
+        <DialogPrimitive.Overlay className="fixed inset-0 z-50 bg-black/50 duration-150 data-open:animate-in data-open:fade-in-0 data-closed:animate-out data-closed:fade-out-0" />
+        <DialogPrimitive.Content
+          aria-describedby={undefined}
+          data-testid="task-activity-dialog"
+          className="fixed top-1/2 left-1/2 z-50 flex max-h-[80vh] w-[calc(100%-2rem)] max-w-md -translate-x-1/2 -translate-y-1/2 flex-col rounded-xl border border-border bg-popover p-4 text-popover-foreground shadow-lg outline-hidden duration-150 data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95"
+          onCloseAutoFocus={(event) => {
+            event.preventDefault();
+            triggerRef.current?.focus();
+          }}
+        >
+          <div className="mb-3 flex shrink-0 items-center justify-between gap-2">
+            <DialogPrimitive.Title className="text-sm font-medium text-foreground">
+              Activity ({events.length})
+            </DialogPrimitive.Title>
+            <DialogPrimitive.Close asChild>
+              <button
+                type="button"
+                aria-label="Close activity"
+                className="flex size-7 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground"
+              >
+                <X aria-hidden="true" className="size-4" />
+              </button>
+            </DialogPrimitive.Close>
+          </div>
+          <div className="min-h-0 flex-1 overflow-y-auto">
+            <ActivityFeed
+              events={events}
+              // CMT-06: no `currentTaskId` — carried over verbatim from
+              // the old inline disclosure (this file's own header
+              // comment). Flow 5 read Todoist's own per-task activity and
+              // it names the task in every line ("You completed {task}",
+              // "You deleted a comment from {task}"), even though every
+              // line is about that task, so suppressing the subject here
+              // was the divergence itself. `tasks` holds this task so its
+              // subject resolves.
+              tasks={[task]}
+              projects={projects}
+            />
+          </div>
+        </DialogPrimitive.Content>
+      </DialogPrimitive.Portal>
+    </DialogPrimitive.Root>
   );
 }
 
@@ -1159,6 +1309,32 @@ function TaskDetailBody({
   // machinery of its own just to match.
   const [overflowOpen, setOverflowOpen] = useState(false);
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
+  // Issue #288: "View activity," the overflow item that replaces the old
+  // inline Activity disclosure — one boolean, mirroring `deleteConfirmOpen`
+  // right above, since `TaskActivityDialog` below is the identical
+  // "owned here, opened by an overflow item" shape Delete's own confirm
+  // already is.
+  const [activityDialogOpen, setActivityDialogOpen] = useState(false);
+  // Live-measured regression (code review + a real re-drive, both on this
+  // ticket): `Task actions` -> `View activity` -> Escape left
+  // `document.activeElement` on `BODY` while the detail dialog was still
+  // open — a keyboard/screen-reader user dropped to the top of the
+  // document rather than back at the control they were just on. This is
+  // the identical Radix default `discardConfirmOpen`'s own
+  // `onCloseAutoFocus` below already works around (that dialog's own
+  // comment cites the live capture, `flow11-R3-DET-15-both.json`, for
+  // why): a dialog opened imperatively, with no `Dialog.Trigger` in its
+  // ancestry, has nothing for Radix's own close-autofocus default to
+  // return focus TO. `TaskActivityDialog` is exactly that shape — opened
+  // from a `DropdownMenu.Item` that's already unmounted (the menu itself
+  // closes first) by the time this dialog closes — so it needs the
+  // identical explicit target `contentRef`/`lastFocusedEditorRef` already
+  // give their own callers. The `Task actions` trigger button itself is
+  // that target here: threaded down the same way `contentRef` already is
+  // ("threaded down rather than duplicated" — `TaskDetailBody`'s own
+  // `contentRef` prop doc comment) rather than a second ref this file
+  // would have to keep in sync with it.
+  const overflowTriggerRef = useRef<HTMLButtonElement>(null);
   // CMT-03: deleting a Comment confirms first (ours used to delete with no
   // confirmation at all) — one dialog for the whole thread, named by which
   // Comment it's currently open for, mirroring `todo-page.tsx`'s own
@@ -1562,8 +1738,10 @@ function TaskDetailBody({
           open={overflowOpen}
           onOpenChange={setOverflowOpen}
           onCopyLink={onCopyLink}
+          onOpenActivity={() => setActivityDialogOpen(true)}
           onCompleteForever={onCompleteForever}
           onRequestDelete={() => setDeleteConfirmOpen(true)}
+          triggerRef={overflowTriggerRef}
         />
         {wide && (
           <DialogPrimitive.Close asChild>
@@ -1975,7 +2153,15 @@ function TaskDetailBody({
                     Task is reopened — so this keeps the native element for
                     the same reason NAV-04 and DET-03 are ratified
                     divergences: where meologue can be the more accessible
-                    side at equal behaviour, it is. Recorded, not silent. */}
+                    side at equal behaviour, it is. Recorded, not silent.
+
+                    meologue's own parenthesised counting convention
+                    ("Activity (N)") no longer sits a few rows below this
+                    one — issue #288 moved it behind the header's own
+                    "View activity" overflow item, `TaskActivityDialog`
+                    below — but it still has nothing here to diverge from:
+                    Todoist's detail modal has no Activity section of its
+                    own to have picked a convention for. */}
                 <summary className="cursor-pointer select-none text-muted-foreground text-xs">
                   Comments {comments.length}
                 </summary>
@@ -2098,30 +2284,17 @@ function TaskDetailBody({
               onConfirm={onDelete}
             />
 
-            {/* Activity (issue #184, ADR 0056) — collapsed by default, open
-              on request (this file's own header comment). Renders
-              nothing when there's nothing to show yet, rather than an
-              always-visible disclosure with nothing inside it. */}
-            {renderableEvents.length > 0 && (
-              <details className="rounded-lg border border-border">
-                <summary className="cursor-pointer select-none px-3 py-2 text-muted-foreground text-sm">
-                  Activity ({renderableEvents.length})
-                </summary>
-                <div className="border-t border-border">
-                  <ActivityFeed
-                    events={renderableEvents}
-                    // CMT-06: no `currentTaskId`. Flow 5 read Todoist's own
-                    // per-task activity and it names the task in every line
-                    // ("You completed {task}", "You deleted a comment from
-                    // {task}"), even though every line is about that task, so
-                    // suppressing the subject here was the divergence itself.
-                    // `tasks` holds this task so its subject resolves.
-                    tasks={[task]}
-                    projects={projects}
-                  />
-                </div>
-              </details>
-            )}
+            {/* Issue #288: the "View activity" overflow item's own surface
+              — this file's own header comment has the full account of why
+              it lives here now rather than as an inline disclosure. */}
+            <TaskActivityDialog
+              open={activityDialogOpen}
+              onOpenChange={setActivityDialogOpen}
+              events={renderableEvents}
+              task={task}
+              projects={projects}
+              triggerRef={overflowTriggerRef}
+            />
           </div>
 
           {/* Pinned beneath the scrolling region rather than inside it, as
