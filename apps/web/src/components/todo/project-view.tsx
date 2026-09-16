@@ -98,6 +98,29 @@ export interface ProjectViewProps {
   /** Issue #229 — reaches ProjectStore.setProjectColour, previously wired to no UI at all (the static colour dot had no control beside it). */
   onSetColour: (colour: string) => void;
   onSetDescription: (description: string | null) => void;
+  /**
+   * Issue #297 — every Project, forwarded straight through to
+   * `ProjectEditDialog`'s own `projects` prop so its Parent chooser has a
+   * pool to narrow down (that component's own doc comment).
+   *
+   * Optional, and the reason is the test harness rather than production:
+   * `todo-page.tsx` — the only production caller — passes the full list
+   * unconditionally, so at runtime this is always supplied. What optional
+   * buys is that `project-view.test.tsx` can render this component
+   * directly without assembling a Project pool for cases that have
+   * nothing to do with parenting. Omitted, it falls back to `[project]`
+   * alone: the chooser then offers only "No parent", which is honest for
+   * a caller that could not say what else exists.
+   */
+  projects?: Project[];
+  /**
+   * Issue #297 — reaches `ProjectStore.setProjectParent`, forwarded
+   * straight through to `ProjectEditDialog`. Optional, mirroring that
+   * component's own `onSetParent` doc comment: `undefined` hides the
+   * Parent field there entirely rather than rendering one with nothing
+   * behind it.
+   */
+  onSetParent?: (parentId: string | null) => Promise<void>;
   onToggleFavourite: (favourite: boolean) => void;
   onToggleArchived: (archived: boolean) => void;
   /**
@@ -154,6 +177,8 @@ export function ProjectView({
   onRename,
   onSetColour,
   onSetDescription,
+  projects,
+  onSetParent,
   onToggleFavourite,
   onToggleArchived,
   onDeleteProject,
@@ -337,9 +362,11 @@ export function ProjectView({
         open={editing}
         onOpenChange={setEditing}
         project={project}
+        projects={projects ?? [project]}
         onRename={onRename}
         onSetColour={onSetColour}
         onSetDescription={onSetDescription}
+        onSetParent={onSetParent}
       />
 
       <div className="flex flex-col gap-2">
