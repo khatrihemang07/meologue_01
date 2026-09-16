@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { describeTaskDay, formatDay, formatTaskDate } from "./format-task-date";
 
 // "Today" throughout this file is 10 Sep 2026, a Thursday — the same
-// reference point meologue-parity-docs/todoist/scheduler-and-priority.md's own
+// reference point meologue-reference/todoist/scheduler-and-priority.md's own
 // capture used ("today" = 10 Sep 2026 (Thursday)), so a reader can check
 // any expectation below directly against that corpus without doing the
 // day-of-week arithmetic themselves.

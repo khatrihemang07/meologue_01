@@ -130,10 +130,10 @@ const VIEW_HEADINGS: Record<Exclude<TodoBackgroundView["view"], "project" | "fil
 
 /**
  * CMT-05 (parity ledger) — how long a completion toast stays up, measured
- * live rather than trusted from `meologue-parity-docs/todoist/lifecycle.md`'s own
+ * live rather than trusted from `meologue-reference/todoist/lifecycle.md`'s own
  * once-coarse estimate. That doc's "6-8 seconds" came from 2-second polling
  * and doesn't reproduce; a 300ms re-poll (flow 5,
- * `meologue-parity-docs/todoist/live-audit-dom/flow5-CMT-05-todoist.json`) found
+ * `meologue-reference/todoist/live-audit-dom/flow5-CMT-05-todoist.json`) found
  * Todoist's own toast still present at 10,775ms and gone by 11,081ms.
  * meologue's matching toast (`flow5-CMT-05-meologue.json`) was gone between
  * 4,346ms and 4,651ms — sonner's own unconfigured default, not a value

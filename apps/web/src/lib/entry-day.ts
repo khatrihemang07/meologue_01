@@ -149,7 +149,7 @@ export function formatClockTime(createdAt: string): string | null {
  * convention until someone edits one of them.
  *
  * Todoist prints this as `Today 7:57 PM` (driven live 2026-09-14,
- * `meologue-parity-docs/todoist/live-audit-dom/detail-modal-todoist-2026-09-14.json`),
+ * `meologue-reference/todoist/live-audit-dom/detail-modal-todoist-2026-09-14.json`),
  * which is exactly this pairing. **Its format for a comment older than today
  * was NOT established** — all three probe comments in that session were
  * same-day — so the older-than-today branch here follows this app's own

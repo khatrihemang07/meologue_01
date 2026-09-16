@@ -1233,7 +1233,7 @@ export function parseEntryMarkdown(body: string): EntryBlockNode[] {
 
 /**
  * `entryParser`'s block removals reversed for exactly the three forms
- * CMT-08 (`meologue-parity-docs/todoist/parity-ledger.md`) found live Todoist
+ * CMT-08 (`meologue-reference/todoist/parity-ledger.md`) found live Todoist
  * rendering in a Task comment that this app didn't — a heading, a
  * blockquote, a fenced code block — plus `Autolink` (CMT-02's
  * linkification), added rather than merely un-removed, since neither

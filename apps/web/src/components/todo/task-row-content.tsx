@@ -144,7 +144,7 @@ export interface TaskRowContentProps {
    * view — Today, Upcoming, Search, a Filter — and suppresses it inside
    * that Project's own view, where the page's own heading already names
    * it and the badge repeats a fact the reader isn't asking for
-   * (`meologue-parity-docs/todoist/live-audit-dom/row-badges-2026-09-15.json`
+   * (`meologue-reference/todoist/live-audit-dom/row-badges-2026-09-15.json`
    * § ROW-10). Threaded down exactly like `suppressDateBadge` above:
    * `task-tree.tsx` is the one place that knows whether the whole tree
    * it's rendering belongs to one Project (its own `projectId` prop,
@@ -749,7 +749,7 @@ export function TaskRowContent({
             // KBD-03/04 (parity ledger): this button, not the `<li data-
             // task-id>` it lives inside, is what Todoist's own measured
             // target actually is — a `role="button"` element carrying the
-            // task title (`meologue-parity-docs/todoist/live-audit-dom/flow6-
+            // task title (`meologue-reference/todoist/live-audit-dom/flow6-
             // KBD-03-todoist.json`). `use-todo-keymap.ts`'s `focusAdjacentRow`
             // walks every `[data-row-nav-target]` in one live `querySelectorAll`
             // to build the row-to-row cycle straight from the DOM, so a

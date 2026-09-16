@@ -3,7 +3,7 @@
  * #291 which this ticket's own instructions say already landed — the bang
  * alone decides the anchor now, `../../../../packages/core/src/recurrence/
  * parser.ts`'s `resolveAnchor`). Captured live 2026-09-15
- * (`meologue-parity-docs/todoist/live-audit-dom/
+ * (`meologue-reference/todoist/live-audit-dom/
  * custom-repeat-dialog-todoist-2026-09-15.json`, with the four
  * `screenshots/custom-repeat-*-2026-09-15.png` beside it — that capture is
  * the one that opened the unit dropdown and the "On date" reveal, which

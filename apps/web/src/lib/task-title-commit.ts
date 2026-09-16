@@ -48,7 +48,7 @@ export interface TaskTitleCommitSetters {
  *
  * **That resolution itself is measured, the guard around it is not**, and
  * the two should not be confused by a later reader.
- * `meologue-parity-docs/todoist/rename-capture-2026-09-11.md` drove
+ * `meologue-reference/todoist/rename-capture-2026-09-11.md` drove
  * the real Todoist and found that BOTH its rename surfaces resolve a
  * recognised phrase, set the field, and strip the phrase from the stored
  * title — so resolving on rename at all is parity, not an invention, and

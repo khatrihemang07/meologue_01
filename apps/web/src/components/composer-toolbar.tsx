@@ -11,7 +11,7 @@
  *   **outdent · indent · soft break** | **bold · italic · strikethrough** |
  *   **Reference** | **undo · redo** — led by the three actions a phone's
  *   keyboard has no other way to reach at all (no Tab, no Shift+Enter; see
- *   `meologue-parity-docs/upnote-android-detail.md`), with inline `code` dropped
+ *   `meologue-reference/upnote-android-detail.md`), with inline `code` dropped
  *   (a backtick pair is still typeable, and it's the least-used mark on a
  *   phone).
  *
@@ -145,7 +145,7 @@ const POINTER_GROUPS: readonly (readonly ToolbarButtonSpec[])[] = [
  * The touch set (issue #213), led by the three actions with no keyboard
  * equivalent at all on a phone — no Tab, no Shift+Enter, and `KEYCODE_TAB`
  * itself blurs the field and closes the keyboard rather than moving focus
- * (verified on device, `meologue-parity-docs/upnote-android-detail.md`) — followed
+ * (verified on device, `meologue-reference/upnote-android-detail.md`) — followed
  * by the list types, the marks (`code` dropped — still typeable as a
  * backtick pair, and the least-used mark on a phone), Reference, and
  * undo/redo. `CornerDownLeft` is `softBreak`'s icon: it reads as "Enter"

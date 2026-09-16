@@ -128,7 +128,7 @@ export type TaskReferenceRenderer = (props: TaskReferenceProps, key: string) => 
  * Vertical rhythm shared by every top-level block this file renders —
  * `<p>`, `<ul>`, `<ol>` alike. Zero margin, on every block, not only the
  * first (ADR 0069) — UpNote's own block separator is a bare `<div>` with no
- * margin of its own (`meologue-parity-docs/upnote-editor-behaviour.md`, "The one
+ * margin of its own (`meologue-reference/upnote-editor-behaviour.md`, "The one
  * fact that explains the reported defect"), so the gap between two blocks
  * is exactly one line-height and nothing more: one Enter looks like one new
  * line, the same as it would have looked inside a single `pre-wrap` `<p>`
@@ -620,7 +620,7 @@ function renderListItem(
 
 /**
  * Which dialect `entryProse` reads `body` through (CMT-02/CMT-08,
- * `meologue-parity-docs/todoist/parity-ledger.md`). "entry" — the default, and
+ * `meologue-reference/todoist/parity-ledger.md`). "entry" — the default, and
  * every caller's behaviour before this mode existed — is `parseEntryMarkdown`:
  * ADR 0041's seven original prose surfaces, where a heading, a blockquote,
  * a fenced code block and a bare URL all stay exactly the literal

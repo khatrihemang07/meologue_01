@@ -14,7 +14,7 @@ import {
 } from "./todo-quick-add-recognition";
 
 // "today" = 10 Sep 2026 (Thursday) — matching
-// meologue-parity-docs/todoist/quick-add.md's own captured reference instant.
+// meologue-reference/todoist/quick-add.md's own captured reference instant.
 const NOW = mustParseLocalDayKey("2026-09-10");
 
 describe("remapWithdrawnSpans", () => {
@@ -180,10 +180,10 @@ describe("computeQuickAddMatches", () => {
   });
 });
 
-// QA-06 — strict DOM parity, decided 2026-09-12 (meologue-parity-docs/todoist/
+// QA-06 — strict DOM parity, decided 2026-09-12 (meologue-reference/todoist/
 // parity-ledger.md's QA-06 row): on withdrawal, meologue must REPLACE the
 // recognised span with a new node, exactly as Todoist's own tiebreak
-// (meologue-parity-docs/todoist/live-audit-dom/qa06-tiebreak-todoist.json)
+// (meologue-reference/todoist/live-audit-dom/qa06-tiebreak-todoist.json)
 // showed — not restyle the held one in place, which is what meologue did
 // before this fix (qa06-tiebreak-meologue.json).
 //

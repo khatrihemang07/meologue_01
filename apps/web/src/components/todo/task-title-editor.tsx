@@ -1,6 +1,6 @@
 /**
  * The shared Task title editor — issue #225. Todoist's own reference
- * (`meologue-parity-docs/todoist/quick-add.md`, `row-and-detail.md` §2,
+ * (`meologue-reference/todoist/quick-add.md`, `row-and-detail.md` §2,
  * `lifecycle.md`) establishes that a Task's title is edited by **one**
  * component in every place it appears: `[contenteditable=true]`,
  * `role="textbox"`, `aria-label="Task name"`, `class="tiptap ProseMirror"`

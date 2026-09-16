@@ -148,7 +148,7 @@ describe("useTodoKeymap", () => {
     expect(options.onShowShortcuts).toHaveBeenCalledTimes(1);
   });
 
-  // CMT-05 (parity ledger) — `meologue-parity-docs/todoist/keyboard.md:74`
+  // CMT-05 (parity ledger) — `meologue-reference/todoist/keyboard.md:74`
   // transcribes Todoist's own overlay row as "Z or ⌘Z | Undo", so both
   // keys fire the identical `onUndoComplete` door; this hook itself has
   // no notion of "what's pending" beyond calling that one callback
@@ -557,7 +557,7 @@ describe("useTodoKeymap", () => {
   });
 
   // KBD-03/KBD-04 (parity ledger) — measured live against Todoist
-  // (meologue-parity-docs/todoist/live-audit-dom/flow6-KBD-03-todoist.json,
+  // (meologue-reference/todoist/live-audit-dom/flow6-KBD-03-todoist.json,
   // flow6-KBD-04-todoist.json): both ArrowDown/ArrowUp and j/k move focus
   // row-to-row, wrapping at both ends and walking through the "Add task"
   // affordance and completed rows.

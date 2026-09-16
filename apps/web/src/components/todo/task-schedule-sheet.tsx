@@ -31,7 +31,7 @@
  * layers a dialog over its sheet the identical way). Deadline is
  * Pro-gated on the account this ticket's own reference corpus was
  * captured against, so neither its picker nor its row rendering is
- * observable (`meologue-parity-docs/todoist/parity-ledger.md` `SCHED-13`/
+ * observable (`meologue-reference/todoist/parity-ledger.md` `SCHED-13`/
  * `DATE-08`, both `blocked`) — nothing here should, or does, guess at
  * what that picker would look like.
  *

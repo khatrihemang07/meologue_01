@@ -4,11 +4,18 @@
 
 Accepted. **Amends [ADR 0077](0077-parity-is-proved-live-not-against-a-dated-capture.md)'s
 "committed into the corpus alongside the prose"** — the corpus is still committed, but into
-`meologue-parity-docs`, a sibling repository, not this one. 0077's rule is otherwise untouched: a
+`meologue-reference`, a sibling repository, not this one. 0077's rule is otherwise untouched: a
 measurement whose artifact is not committed is still not finished, and a row is still established by
 driving both applications in one session.
 
 Does not change the ledger, the status vocabulary, or what `matched` requires.
+
+**Renamed 2026-09-16.** That repo's directory was called `meologue-parity-docs` when this ADR was
+written; it is `meologue-reference` now, and the ~108 citations here were rewritten with it. The
+owner's ask was that `Code/` hold *one* reference folder rather than one per recorded application, so
+the name stops describing the first corpus in it. The decision below is otherwise untouched — same
+repo, same history, same sibling checkout, same repo-relative citations. Text in this repo's older
+commits and in unmerged branches still reads `meologue-parity-docs/…`; that is the same path.
 
 ## Context
 
@@ -27,7 +34,7 @@ The owner's decision was direct: the parity docs should not be in the product re
 
 ## Decision
 
-**The observed-reference corpus moves to `meologue-parity-docs`, a repo of its own, with its history.**
+**The observed-reference corpus moves to `meologue-reference`, a repo of its own, with its history.**
 
 Seven paths left, hoisted to that repo's root: `docs/reference/todoist/` (the whole Todoist corpus,
 including the ledger and every `*-dom`/`*-shots` directory), `docs/reference/screenshots/`, the four
@@ -42,7 +49,7 @@ a build artifact of this repo, generated from `apps/web/src/lib/parity/parity-fi
 
 **Citations are repo-relative and cross the boundary by name.** The ~98 comments that cited
 `docs/reference/todoist/parity-ledger.md` and its siblings now read
-`meologue-parity-docs/todoist/parity-ledger.md`. Nothing in this repo reads those paths at build or
+`meologue-reference/todoist/parity-ledger.md`. Nothing in this repo reads those paths at build or
 test time — they are for humans — so the rewrite changed no behaviour.
 
 This repo's history was **not** rewritten. The old blobs stay reachable in it. Purging them would
@@ -53,11 +60,11 @@ nobody is short of.
 
 **Evidence no longer travels with the code.** Someone who clones meologue and reads
 `task-row-content.tsx`'s citation of a flow-6 artifact cannot open it without also cloning
-`meologue-parity-docs`. That is the real cost of this decision and there is no version of it that
+`meologue-reference`. That is the real cost of this decision and there is no version of it that
 avoids the cost — the corpus is either in the clone or it is not.
 
 **ADR 0077's "in the repo" now means "in the corpus repo."** A driven measurement is finished when
-its artifact is committed to `meologue-parity-docs`, beside the prose that cites it. A flow that
+its artifact is committed to `meologue-reference`, beside the prose that cites it. A flow that
 lands code here while leaving its JSON on a session scratchpad is unfinished in exactly the way 0077
 describes, and the two-repo split makes that easier to do by accident, not harder. Whoever drives a
 flow commits both halves.

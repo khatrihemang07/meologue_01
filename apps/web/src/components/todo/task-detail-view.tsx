@@ -326,7 +326,7 @@ const AttributeRow = forwardRef<
  * two small buttons cost nothing to keep visible on hover.
  *
  * **CMT-03: explicit Cancel/Update, not save-on-blur.** Todoist's own
- * comment editor (`meologue-parity-docs/todoist/live-audit-dom/flow5-CMT-03-
+ * comment editor (`meologue-reference/todoist/live-audit-dom/flow5-CMT-03-
  * todoist.json`) opens with those two buttons and never commits just
  * because focus left the field — clicking away leaves the draft sitting
  * there, unresolved, and only Cancel or Update decides its fate. The
@@ -854,7 +854,7 @@ function CommentComposer({
 /**
  * "Added on 26 Aug 10:37 AM" (issue #302) — the wording and shape Todoist's
  * own overflow menu was measured carrying live
- * (`meologue-parity-docs/todoist/parity-ledger-android.md`'s ADET-02/
+ * (`meologue-reference/todoist/parity-ledger-android.md`'s ADET-02/
  * ADET-15 rows: day-then-month, no year, followed by a clock time).
  * `task.createdAt` is a real UTC instant (`task-types.ts`'s own doc
  * comment on the field), so this composes the identical two formatters
@@ -1239,7 +1239,7 @@ function TaskDetailBody({
   // parsed itself.
   //
   // The reference is no longer silent on this either, as an earlier
-  // version of this comment said: `meologue-parity-docs/todoist/rename-capture-
+  // version of this comment said: `meologue-reference/todoist/rename-capture-
   // 2026-09-11.md` drove both of Todoist's own rename surfaces directly
   // and found both resolve a recognised phrase, stripping it from the
   // stored title exactly as Quick Add does — the parity ledger's own

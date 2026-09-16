@@ -14,7 +14,7 @@ is what lets the pane repaint without the rest of the shell repainting with it.
 unrelated Composer-keyboard decision — every "ADR 0070" citation in `composer-commands.ts` and
 elsewhere means that one, not this one). This file moved rather than the other, since it has far
 fewer citations to correct; every citation of this ADR across the repo (`docs/adr/0069-…`,
-`meologue-parity-docs/todoist/parity-ledger.md`, `check-bundle-size.mjs`) was updated in the same change.
+`meologue-reference/todoist/parity-ledger.md`, `check-bundle-size.mjs`) was updated in the same change.
 **Also amended by issue #248**, which built the Back control *What this does take* below had only
 asserted — see that section for what changed and why.
 

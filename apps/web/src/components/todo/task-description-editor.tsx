@@ -1,6 +1,6 @@
 /**
  * The shared Task description editor — issue #229 (DET-11/DET-12).
- * Todoist's own reference (`meologue-parity-docs/todoist/lifecycle.md` §1) is a
+ * Todoist's own reference (`meologue-reference/todoist/lifecycle.md` §1) is a
  * `tiptap ProseMirror` editor with **no formatting toolbar anywhere** that
  * renders Markdown **live, as input rules** while typing: `**bold**`,
  * `` `code` ``, and a `- `/`* ` bullet marker. This file is the smallest
@@ -38,7 +38,7 @@
  *
  * **The bare-URL rewrite is not here, on purpose.** DET-13 (Todoist
  * fetches a bare URL's page title on save) is network-dependent and is
- * this app's own recorded divergence (`meologue-parity-docs/todoist/parity-ledger.md`,
+ * this app's own recorded divergence (`meologue-reference/todoist/parity-ledger.md`,
  * DET-13, `divergent`) — nothing in this file recognises or rewrites a
  * URL at all.
  */

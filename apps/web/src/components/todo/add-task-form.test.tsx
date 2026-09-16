@@ -133,7 +133,7 @@ describe("AddTaskForm", () => {
       expect.objectContaining({ content: "buy milk", date: null, priority: 1, labelNames: [] }),
     );
     // Issue #260 Defect 1, flow-12 S1 (2026-09-13 live drive,
-    // `meologue-parity-docs/todoist/live-audit-dom/flow12-S1-NAV-07-10-
+    // `meologue-reference/todoist/live-audit-dom/flow12-S1-NAV-07-10-
     // 12-both.json`): Todoist's own in-list composer, after a real Add,
     // "stayed mounted, EMPTY, and focused — does NOT collapse", unlike
     // the Quick Add *dialog* (QA-19, a different surface, which still

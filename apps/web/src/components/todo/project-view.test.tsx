@@ -250,7 +250,7 @@ describe("ProjectView — Edit project dialog (STR-02)", () => {
 });
 
 describe("ProjectView — delete (STR-01, unchanged wording)", () => {
-  // Verbatim (meologue-parity-docs/todoist/quick-add.md § "Destructive
+  // Verbatim (meologue-reference/todoist/quick-add.md § "Destructive
   // confirmation wording"): "Delete project? The <name> project and all
   // its tasks will be permanently deleted. This action cannot be undone."
   it("shows Todoist's own verbatim delete wording", async () => {
