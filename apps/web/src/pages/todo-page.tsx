@@ -8,12 +8,12 @@ import { toast } from "sonner";
 import { BackToChats } from "@/components/back-to-chats";
 import { inlineProse } from "@/components/inline-prose";
 import { Shell } from "@/components/shell";
-import { ActivityFeed } from "@/components/todo/activity-feed";
 import { AddTaskForm } from "@/components/todo/add-task-form";
 import { CompletionToastBody } from "@/components/todo/completion-toast";
 import { FilterView } from "@/components/todo/filter-view";
 import { FiltersView } from "@/components/todo/filters-view";
 import { LabelsView } from "@/components/todo/labels-view";
+import { LazyActivityFeed } from "@/components/todo/lazy-activity-feed";
 import { LazyTaskDetailView } from "@/components/todo/lazy-task-detail-view";
 import { LazyTaskScheduleSheet } from "@/components/todo/lazy-task-schedule-sheet";
 import { ProjectView } from "@/components/todo/project-view";
@@ -1175,19 +1175,34 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
           Todoist, which has none. */}
       {backgroundView.view === "activity" && (
         <div className="flex flex-col gap-2">
-          <ActivityFeed
-            events={activityEvents}
-            // Both active and completed — a `completed` Event's own Task
-            // lives in `completedTasks`, not `tasks`, and the feed needs
-            // to resolve either to name its subject live.
-            tasks={[...tasks, ...completedTasks]}
-            projects={projects}
-            emptyMessage={
-              activityProjectId !== null
-                ? "Nothing has happened in this Project yet."
-                : "Nothing has happened yet."
+          {/* This whole block already only renders once `view === "activity"`
+            — a reader has to navigate here specifically (Inbox/Today are the
+            default), so `<LazyActivityFeed>` was never created, let alone
+            mounted, before this branch is reached. `lazy-activity-feed.ts`'s
+            own header comment has the bundle reasoning: a static import here
+            shipped `activity-feed.tsx` (plus `format-event.ts`) to every
+            Todo visit, not just a visit to this view. */}
+          <Suspense
+            fallback={
+              <p className="px-3 py-6 text-center text-muted-foreground text-sm">
+                Loading activity…
+              </p>
             }
-          />
+          >
+            <LazyActivityFeed
+              events={activityEvents}
+              // Both active and completed — a `completed` Event's own Task
+              // lives in `completedTasks`, not `tasks`, and the feed needs
+              // to resolve either to name its subject live.
+              tasks={[...tasks, ...completedTasks]}
+              projects={projects}
+              emptyMessage={
+                activityProjectId !== null
+                  ? "Nothing has happened in this Project yet."
+                  : "Nothing has happened yet."
+              }
+            />
+          </Suspense>
         </div>
       )}
 

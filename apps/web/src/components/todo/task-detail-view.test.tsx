@@ -334,7 +334,7 @@ describe("TaskDetailView", () => {
   // the new route: open the overflow menu, select "View activity," and
   // assert the same count and the same lines inside the dialog it opens.
   // Nothing about what's being proven changed — only how it's reached.
-  it("names the task in its own Activity lines, and counts only lines it shows", () => {
+  it("names the task in its own Activity lines, and counts only lines it shows", async () => {
     const base = {
       deviceId: "device-a",
       objectType: "task",
@@ -366,9 +366,14 @@ describe("TaskDetailView", () => {
     expect(
       within(activityDialog).getByRole("heading", { name: "Activity (1)" }),
     ).toBeInTheDocument();
-    const lines = within(activityDialog)
-      .getAllByRole("listitem")
-      .map((item) => item.textContent ?? "");
+    // `Activity (N)` renders synchronously — `renderableEvents` is computed
+    // in this file, not read from `ActivityFeed` — but `ActivityFeed`
+    // itself is now `lazy()` (`lazy-activity-feed.ts`), so its own content
+    // (the `listitem` rows below) resolves after a tick behind the
+    // `<Suspense>` fallback. `findAllByRole`, not `getAllByRole`.
+    const lines = (await within(activityDialog).findAllByRole("listitem")).map(
+      (item) => item.textContent ?? "",
+    );
     expect(lines).toHaveLength(1);
     expect(lines[0]).toContain("You completed");
     expect(lines[0]).toContain("call mum");

@@ -89,7 +89,7 @@ import { useOutletContext } from "react-router";
 import { toast } from "sonner";
 import { entryProse } from "@/components/entry-prose";
 import { inlineProse } from "@/components/inline-prose";
-import { ActivityFeed } from "@/components/todo/activity-feed";
+import { LazyActivityFeed } from "@/components/todo/lazy-activity-feed";
 import { LazyTaskDescriptionEditor } from "@/components/todo/lazy-task-description-editor";
 import { LazyTaskTitleEditor } from "@/components/todo/lazy-task-title-editor";
 import { TaskSchedulePopover } from "@/components/todo/task-schedule-popover";
@@ -98,8 +98,8 @@ import { useAutoGrowTextarea } from "@/hooks/use-auto-grow-textarea";
 import { useTaskDateState } from "@/hooks/use-task-date-state";
 import { useWideLayout } from "@/hooks/use-wide-layout";
 import { deviceUtcOffsetMinutes, formatClockTime, formatCommentTimestamp } from "@/lib/entry-day";
-import { isRenderableEvent } from "@/lib/format-event";
 import { formatDay, formatTaskDate } from "@/lib/format-task-date";
+import { isRenderableEvent } from "@/lib/is-renderable-event";
 import { localDayKey } from "@/lib/local-day-key";
 import type { QuickAddAutocompleteOptions } from "@/lib/quick-add-autocomplete";
 import { useSettingsStore } from "@/lib/settings";
@@ -1089,19 +1089,34 @@ function TaskActivityDialog({
             </DialogPrimitive.Close>
           </div>
           <div className="min-h-0 flex-1 overflow-y-auto">
-            <ActivityFeed
-              events={events}
-              // CMT-06: no `currentTaskId` — carried over verbatim from
-              // the old inline disclosure (this file's own header
-              // comment). Flow 5 read Todoist's own per-task activity and
-              // it names the task in every line ("You completed {task}",
-              // "You deleted a comment from {task}"), even though every
-              // line is about that task, so suppressing the subject here
-              // was the divergence itself. `tasks` holds this task so its
-              // subject resolves.
-              tasks={[task]}
-              projects={projects}
-            />
+            {/* `open &&`, not just Radix `Dialog`'s own Presence-gated
+              unmounting of closed content — `lazy-activity-feed.ts`'s own
+              header comment on why this dialog doesn't lean on the
+              library alone to keep `LazyActivityFeed`'s `import()` from
+              firing before a reader ever chooses "View activity". */}
+            {open && (
+              <Suspense
+                fallback={
+                  <p className="px-3 py-6 text-center text-muted-foreground text-sm">
+                    Loading activity…
+                  </p>
+                }
+              >
+                <LazyActivityFeed
+                  events={events}
+                  // CMT-06: no `currentTaskId` — carried over verbatim from
+                  // the old inline disclosure (this file's own header
+                  // comment). Flow 5 read Todoist's own per-task activity and
+                  // it names the task in every line ("You completed {task}",
+                  // "You deleted a comment from {task}"), even though every
+                  // line is about that task, so suppressing the subject here
+                  // was the divergence itself. `tasks` holds this task so its
+                  // subject resolves.
+                  tasks={[task]}
+                  projects={projects}
+                />
+              </Suspense>
+            )}
           </div>
         </DialogPrimitive.Content>
       </DialogPrimitive.Portal>

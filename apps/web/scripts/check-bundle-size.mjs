@@ -255,9 +255,73 @@ const CHUNK_BUDGETS = {
   // nothing — the scheduler is reached by both surfaces regardless, so a
   // `lazy()` would move bytes between budgets rather than out of the
   // download.
+  //
+  // **Issue #288's bundle follow-up.** Issue #288 moved `ActivityFeed` off
+  // this view's own always-rendered body and behind a "View activity"
+  // overflow item, opening it in a new `TaskActivityDialog` instead — but
+  // left `ActivityFeed` a **static** import (`task-detail-view.tsx`'s own
+  // top-level `import`), so every reader still downloaded it regardless of
+  // whether they ever opened that dialog. Measured at 73,130 gzip against
+  // this entry's 73,000 ceiling — the build this ticket started from.
+  //
+  // Before reaching for `lazy()`, this entry's own history above already
+  // warns that a shared-chunk split can "move bytes between budgets rather
+  // than out of the download" — so that was checked, not assumed.
+  // `todo-page.tsx` below turned out to statically import the identical
+  // `ActivityFeed` too, unconditionally, inside its own `backgroundView.view
+  // === "activity"` branch (issue #184) — and since this route can only
+  // ever be reached after `todo-page.tsx` has already loaded (`todo-
+  // page.tsx` is what dynamically imports `LazyTaskDetailView` in the first
+  // place), a `lazy()` boundary on this file's own import ALONE would have
+  // saved nothing: `todo-page.tsx`'s own eager import already guaranteed
+  // `ActivityFeed`'s bytes were downloaded before a reader could ever open
+  // this dialog. Both call sites had to go lazy together, through one
+  // shared `LazyActivityFeed` wrapper (`lazy-activity-feed.ts`), for the
+  // boundary to remove anything real — verified against `todo-page.tsx`'s
+  // own entry below, which dropped too.
+  //
+  // That alone made this entry **worse** at first measurement — 73,598
+  // gzip, +468 over the 73,130 this ticket started from — because this
+  // file's own static `isRenderableEvent` import (for the `renderableEvents`
+  // count behind the dialog's own "Activity (N)" title, computed here, not
+  // inside `ActivityFeed`) lived in the same `format-event.ts` module as
+  // `describeEventLine`'s ~240-line per-event-type formatter, which only
+  // `ActivityFeed` needs. Rollup bundles a module as one atomic unit per
+  // chunk, so that one still-static named import kept dragging the rest of
+  // `format-event.ts` into this chunk regardless of `ActivityFeed` itself
+  // going lazy — `lib/is-renderable-event.ts`'s own header comment has the
+  // full account. Splitting that one predicate into its own dependency-free
+  // module (`lib/is-renderable-event.ts`) let `format-event.ts` leave this
+  // chunk entirely, landing at **71,474 gzip (own chunk + 15 shared)** —
+  // 1,656 bytes below the 73,130 this ticket started from, with `Activity
+  // (N)` still rendering synchronously (verified: `renderableEvents.length`
+  // is computed in this file, not read from the lazy-loaded feed).
   "src/components/todo/task-detail-view.tsx": {
     ceilingBytes: 73_000,
-    baselineBytes: 68_138,
+    baselineBytes: 71_474,
+  },
+  // Not a route — `ActivityFeed` (components/todo/activity-feed.tsx),
+  // lazy from both `task-detail-view.tsx`'s own `TaskActivityDialog`
+  // (issue #288) and `todo-page.tsx`'s own `backgroundView.view ===
+  // "activity"` branch (issue #184) — one shared wrapper,
+  // `lazy-activity-feed.ts`, the identical "one lazy chunk regardless of
+  // which caller opens it first" shape `lazy-task-title-editor.ts` and
+  // `lazy-destructive-confirm-dialog.ts` already use for their own
+  // multi-caller components. `task-detail-view.tsx`'s own entry above has
+  // the full account of why this split was necessary at both call sites
+  // for either budget to actually shrink, not just move.
+  //
+  // Carries more than `activity-feed.tsx`'s own component code:
+  // `format-event.ts`'s `describeEventLine`/`groupEventsByDay`/
+  // `eventTimestamp` (the per-event-type formatter this file's caller-side
+  // `isRenderableEvent` split, `lib/is-renderable-event.ts`, was pulled out
+  // to stop dragging into `task-detail-view.tsx` and `todo-page.tsx`
+  // instead) and `task-detail-route.ts`'s `taskDetailPath` (`SubjectChip`'s
+  // own link to the Task a line is about). Measured 9,624 gzip (own chunk
+  // + 4 shared) immediately after landing.
+  "src/components/todo/activity-feed.tsx": {
+    ceilingBytes: 12_500,
+    baselineBytes: 9_624,
   },
   // Not a route — `TaskScheduleSheet` (components/todo/task-schedule-
   // sheet.tsx), lazy from `todo-page.tsx` (issue #229 onward's own
@@ -506,7 +570,19 @@ const CHUNK_BUDGETS = {
   // section's header describes, because Todo is the route where growth needs
   // to stay deliberate: the previous ceiling left 915 bytes and that is what
   // made this failure visible at all.
-  "src/pages/todo-page.tsx": { ceilingBytes: 99_000, baselineBytes: 92_478 },
+  //
+  // **Issue #288's bundle follow-up.** This route's own `ActivityFeed`
+  // import (its own "the view across everything," issue #184's
+  // `backgroundView.view === "activity"` branch) went lazy alongside
+  // `task-detail-view.tsx`'s — that entry's own comment above has why
+  // both call sites had to move together. Measured at 97,824 gzip (own
+  // chunk + 19 shared) immediately before this ticket, already above the
+  // 92,478 last recorded here (drift from intervening Todo work this
+  // ticket did not audit); 96,130 gzip (own chunk + 22 shared)
+  // immediately after — a real 1,694-byte drop from `ActivityFeed` going
+  // lazy, recorded as the new baseline, not squared against the older,
+  // already-stale 92,478.
+  "src/pages/todo-page.tsx": { ceilingBytes: 99_000, baselineBytes: 96_130 },
 };
 
 /**

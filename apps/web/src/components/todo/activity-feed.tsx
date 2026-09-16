@@ -5,8 +5,8 @@ import {
   type EventSubject,
   eventTimestamp,
   groupEventsByDay,
-  isRenderableEvent,
 } from "@/lib/format-event";
+import { isRenderableEvent } from "@/lib/is-renderable-event";
 
 export interface ActivityFeedProps {
   /** Already whichever scope the caller resolved — everything, one Task's own history, or one Project's own (issue #184's three surfaces). Any order; this component sorts and groups it itself. */

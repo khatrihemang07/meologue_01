@@ -1,11 +1,7 @@
 import type { Event, Project, Task } from "@meologue/core";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  describeEventLine,
-  eventDayHeading,
-  groupEventsByDay,
-  isRenderableEvent,
-} from "./format-event";
+import { describeEventLine, eventDayHeading, groupEventsByDay } from "./format-event";
+import { isRenderableEvent } from "./is-renderable-event";
 import { taskDetailPath } from "./task-detail-route";
 
 function event(overrides: Partial<Event> = {}): Event {

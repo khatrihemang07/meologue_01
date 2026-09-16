@@ -36,26 +36,6 @@ import { taskDetailPath } from "@/lib/task-detail-route";
 const RECENT_THRESHOLD_MS = 24 * 60 * 60 * 1000;
 
 /**
- * Whether an Event belongs in a rendered feed at all — `false` for exactly
- * one shape: a comment's `"updated"` Event, the "Edited a comment" line
- * CMT-06 (re-driven live, flow 5) found Todoist never shows. use-comments.ts's
- * `editComment` no longer records this Event going forward (the fix at the
- * source), but an existing store or a restored backup can still carry ones
- * recorded before that change (backups defeat "migrated everywhere") —
- * this is how the feed tolerates that old shape without ever showing a
- * line Todoist itself would never have. `activity-feed.tsx` filters with
- * this before grouping (`groupEventsByDay`) and before calling
- * `describeEventLine`, so a day made up only of old edit Events shows no
- * empty heading, and any caller that needs an accurate count of what will
- * actually render (`task-detail-view.tsx`'s own "Activity (N)" badge)
- * should filter through this first too, rather than counting `events`
- * itself.
- */
-export function isRenderableEvent(event: Event): boolean {
-  return !(event.objectType === "comment" && event.eventType === "updated");
-}
-
-/**
  * The calendar-day heading an Event's row is grouped under — "Today",
  * "Yesterday", or an absolute day beyond that (`formatDay`'s own "Sep 3"
  * shape, reused from Task scheduling rather than a second date formatter
@@ -307,7 +287,9 @@ export function describeEventLine(
         // *old* store or restored backup still carries from before that
         // fix (backups defeat "migrated everywhere"). `activity-feed.tsx`
         // filters every such Event out of the feed entirely via
-        // `isRenderableEvent` below — Todoist has no equivalent line to
+        // `isRenderableEvent` (`lib/is-renderable-event.ts`, split out of
+        // this file for issue #288's bundle follow-up — that module's own
+        // header comment has why) — Todoist has no equivalent line to
         // show, so the closest parity is no row at all, not a visible
         // "Edited a comment" — which makes this switch case unreachable
         // through that one caller today. It is kept anyway so
