@@ -1247,29 +1247,108 @@ export function EntryStoreLayout() {
   // render already reflects the trimmed data, with no second render and no
   // one-frame flash of the untrimmed list before it corrects (the same
   // "settle during render" reasoning `deferred.resolve`/`reject` above
-  // already rely on). `previousPathname.current === null` (this render is
-  // this component's very first) is excluded on purpose: a cold load of
-  // `/composer` already has at most one page cached, so there is nothing to
-  // trim, and treating "just mounted" as "just arrived" would be wrong
-  // anyway — nothing was left behind to correct for.
+  // already rely on).
+  //
+  // `useState`, not `useRef` (issue #330): a ref mutated during render is a
+  // plain, unconditional write to a persistent object — it happens the
+  // instant this line runs, whether or not the render it's part of goes on
+  // to commit. React makes no promise that every render commits: one can be
+  // repeated (dev-mode double-invoke) or discarded outright (superseded by
+  // a later update before it ever reaches the screen). A ref mutated by a
+  // render that never commits still leaves that mutation behind, because
+  // nothing about "this render didn't count" un-writes a plain object
+  // field — so a render that transiently observes the wrong
+  // `location.pathname` (a real, reproduced race — see the issue) corrupts
+  // the remembered value for good, with no later render positioned to notice
+  // and no way to tell a load-bearing write from an accidental one.
+  // `useState`'s setter does not have this failure mode: a state update
+  // requested by a render is only realised if and when that specific render
+  // is the one that commits, precisely because React tracks it as part of
+  // that render's own outcome rather than as an immediate side effect on a
+  // shared object. Calling the setter with a new value during render is the
+  // React-documented pattern for exactly this "remember something from a
+  // previous render, compared against this one" shape (see `useState`'s own
+  // reference docs, "Storing information from previous renders").
+  //
+  // What it costs, stated rather than waved at, because the obvious guess
+  // is wrong: React does NOT restart at the `setPreviousPathname` call.
+  // The rest of this function runs to completion first and that result is
+  // thrown away, then the body is invoked a second time with the new state
+  // (React's own wording: "the rest of your component function will still
+  // execute (and the result will be thrown away)"). This file already knew
+  // that — see the `deferred.resolve`/`reject` comment above, which relies
+  // on exactly it. So every navigation between any two routes under this
+  // layout, not merely an arrival at `/composer`, now executes this body
+  // twice in production, where the ref version executed it once: a ref
+  // write schedules no re-render at all. Nothing below is harmed by it
+  // (the two side effects in range — the trim, and settling `deferred` —
+  // are both idempotent, deliberately and with their own comments saying
+  // so), and it is invisible to the reader because neither pass commits
+  // until the second, which is why the no-flash property below still
+  // holds. But it is a real doubling of a large component's render work,
+  // and it is the price of this fix rather than a free lunch.
+  //
+  // The trim still lands before `useHistory` reads the cache, same as it
+  // always did: it runs in the FIRST pass, mutating the query cache
+  // (an external side effect, not React state, so nothing rolls it back),
+  // and the second pass then skips this branch entirely because the state
+  // it is re-invoked with already equals `location.pathname`.
   const location = useLocation();
-  const previousPathname = useRef<string | null>(null);
-  if (previousPathname.current !== location.pathname) {
-    // Deliberately NOT excluding this component's own first render. The
-    // root screen (`/`) is a sibling route rendered OUTSIDE this layout, so
-    // leaving the Composer by Back unmounts this component entirely and
-    // arriving at `/composer` again mounts a fresh one with
-    // `previousPathname` back at `null` — while the query cache, a module
-    // singleton, has kept every page the reader ever paged through. Reading
-    // a first render as "cold, so there is nothing to trim" is exactly
-    // wrong in that case, and it is the common one: Composer → `/` →
-    // Reflect → `/` → Composer is the ordinary way round this app. An
-    // actual cold page load needs no exclusion of its own, because
-    // `resetEntriesPagingToNewest` is already a no-op at zero or one
-    // cached page.
-    const arrivedAtComposer =
-      location.pathname === "/composer" && previousPathname.current !== "/composer";
-    previousPathname.current = location.pathname;
+  // The state is a boolean, not the pathname, and that is load-bearing for
+  // the cost above rather than a tidiness preference. The pathname this
+  // used to store was only ever read to answer one question — "was the
+  // previous route
+  // `/composer`" — but storing the pathname made the state differ, and so
+  // forced the extra render pass, on EVERY route change under this layout.
+  // Storing the answer instead means Reflect → Digest → Todo navigations
+  // leave it untouched and cost nothing, and only a crossing into or out
+  // of the Composer pays for a second pass. Semantically identical,
+  // first-render case included: `null` is still distinct from both `true`
+  // and `false`, so a fresh mount at `/composer` still reads as an arrival
+  // (see below for why that is deliberate). The one residual is a fresh
+  // mount at a NON-Composer route, which spends one extra pass settling
+  // `null` → `false`; initialising to `isComposer` instead would remove
+  // even that, and would also destroy the cold-mount arrival this relies
+  // on, so it is not a trade worth making.
+  const isComposer = location.pathname === "/composer";
+  const [previousWasComposer, setPreviousWasComposer] = useState<boolean | null>(null);
+  if (previousWasComposer !== isComposer) {
+    // Deliberately NOT excluding this component's own first render (i.e.
+    // `previousWasComposer === null`). The root screen (`/`) is a sibling
+    // route rendered OUTSIDE this layout, so leaving the Composer by Back
+    // unmounts this component entirely and arriving at `/composer` again
+    // mounts a fresh one with `previousWasComposer` back at `null` — while the
+    // query cache, a module singleton, has kept every page the reader ever
+    // paged through. Treating a first render as "cold, so there is nothing
+    // to trim" would be wrong in that case, and it is the common one:
+    // Composer → `/` → Reflect → `/` → Composer is the ordinary way round
+    // this app. An actual cold page load needs no exclusion of its own,
+    // because `resetEntriesPagingToNewest` is already a no-op at zero or
+    // one cached page.
+    //
+    // That same no-op is load-bearing a second time, in a way the ref
+    // version did not need and which is easy to miss. Be precise about
+    // which restart this is, because the two look alike and only one
+    // doubles the call: the ORDINARY render-phase restart above does NOT
+    // re-enter this branch — it is re-invoked with the state already set,
+    // so the condition is false and the trim runs exactly once. The case
+    // that doubles it is a render React *discards* outright (superseded
+    // before it ever commits), where the state write goes with it.
+    // Moving to `useState` rolls that state back but cannot roll back the
+    // *call* below. Under the old ref, a discarded render had already
+    // written the ref, so React's retry found the values equal and
+    // skipped this branch; under state, the retry sees the pre-render value
+    // again, re-enters, and calls `resetEntriesPagingToNewest` a second
+    // time. That is harmless only because the first call left one page
+    // cached and the function early-returns at `pages.length <= 1`
+    // (`entries-pagination.ts`) — i.e. this call site depends on that
+    // function being idempotent, not merely cheap. If it ever grows a step
+    // that is not (refetching, a cursor reset, anything that writes
+    // unconditionally), this branch must gate the call instead. No test
+    // covers this: the double-call needs a genuinely discarded render,
+    // which jsdom cannot produce — see this change's PR for why.
+    const arrivedAtComposer = isComposer && previousWasComposer !== true;
+    setPreviousWasComposer(isComposer);
     if (arrivedAtComposer) {
       resetEntriesPagingToNewest();
     }
