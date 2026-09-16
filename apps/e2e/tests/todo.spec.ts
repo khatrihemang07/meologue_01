@@ -1,7 +1,25 @@
 import { randomUUID } from "node:crypto";
+import type { Page } from "@playwright/test";
 import { SERVER_A_DATABASE } from "../servers";
 import { expect, test } from "./fixtures";
 import { openDestination, waitForTaskOrder, waitForTaskParent } from "./helpers";
+
+// ANAV-01: the owner's ruling keeps BOTH todo-page.tsx's own narrow header
+// Search door AND Browse's own "Search" row (browse-view.tsx) on screen at
+// once below 900px while Browse is open — and, at this suite's own default
+// Desktop Chrome viewport (1280px, ≥ the 1200px sidebar breakpoint),
+// TodoSidebar's "Filters & Labels" row and Browse's own identically-worded
+// row can likewise both be on screen at once while `/todo/browse` is open.
+// A bare `page.getByRole("link", { name: "Filters" })` is a substring match
+// (Playwright's own default) against either row's accessible name and
+// throws in Playwright's strict mode the moment two elements match —
+// scoping to `TodoSidebar`'s own `aria-label="Todo"` landmark is what keeps
+// this resolving to the one row these specs actually mean, regardless of
+// whether a later spec (in this file or a new one) also happens to visit
+// Browse in the same session.
+function filtersNavLink(page: Page) {
+  return page.getByRole("navigation", { name: "Todo" }).getByRole("link", { name: "Filters" });
+}
 
 /**
  * Issue #168: Todo's Inbox, modelled on composer.spec.ts — add, complete
@@ -422,7 +440,7 @@ test("saving a Filter and opening it shows what it matches, and both survive a r
   // `content` doc comment).
   await expect(page.getByText(taskLabel)).toBeVisible();
 
-  await page.getByRole("link", { name: "Filters" }).click();
+  await filtersNavLink(page).click();
   await expect(page).toHaveURL("/todo/filters");
 
   await page.getByRole("link", { name: "New Filter" }).click();
@@ -457,7 +475,7 @@ test("saving a Filter and opening it shows what it matches, and both survive a r
   await expect(page.getByRole("textbox", { name: "Filter query" })).toHaveValue("today");
   await expect(page.getByText(taskLabel)).toBeVisible();
 
-  await page.getByRole("link", { name: "Filters" }).click();
+  await filtersNavLink(page).click();
   await expect(page.getByRole("link", { name: filterName })).toBeVisible();
 });
 
@@ -469,7 +487,7 @@ test("an unparseable Filter query shows the error plainly and never offers Save"
   page,
 }) => {
   await openDestination(page, "Todo");
-  await page.getByRole("link", { name: "Filters" }).click();
+  await filtersNavLink(page).click();
   await page.getByRole("link", { name: "New Filter" }).click();
 
   await page.getByRole("textbox", { name: "Filter name" }).fill(uniqueTaskContent("bad-filter"));

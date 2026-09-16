@@ -1,7 +1,7 @@
 /**
  * Positional recognition with two-step withdrawal — issue #226's own
  * second half, and the behaviour the whole programme exists to fix
- * (meologue-parity-docs/todoist/quick-add.md § "The one fact that decides the
+ * (meologue-reference/todoist/quick-add.md § "The one fact that decides the
  * implementation" and § "Recognition and withdrawal"). This is Todo's OWN
  * recognition module — a sibling of `quick-add-highlight.ts`, not a
  * replacement for it: that file stays untouched because it is shared with
@@ -35,7 +35,7 @@
  * edit, not only one whose interior characters changed — is dropped, so
  * recognition returns. The boundary-inclusive rule (a `<`/`>` comparison,
  * not `<=`/`>=`) is deliberate and pinned by
- * `meologue-parity-docs/todoist/quick-add-dom/retype-04-back-to-tod-after-x.json`:
+ * `meologue-reference/todoist/quick-add-dom/retype-04-back-to-tod-after-x.json`:
  * typing `x` right after a withdrawn `tod` (making `todx`, itself
  * unrecognised) and then backspacing that `x` away again lands back on
  * `tod` fully re-highlighted, not still-withdrawn, even though `tod`'s own
@@ -111,7 +111,7 @@ export function remapWithdrawnSpans(
 }
 
 /**
- * `data-match-id`'s value (meologue-parity-docs/todoist/quick-add.md § "The
+ * `data-match-id`'s value (meologue-reference/todoist/quick-add.md § "The
  * recognised-match span": "carries the resolved value, not the typed
  * text"). Only the date/time family was ever actually measured against
  * the live application; every other kind's rendering here is a direct,
@@ -188,7 +188,7 @@ export interface QuickAddRecognitionMatch extends QuickAddSpan {
  * withdrawnSpans })`.** Demoting a span the ordinary way removes it from
  * `result.tokens` entirely — right for the Composer's checklist highlight,
  * which has nothing left to render once a token is demoted, but wrong
- * here: meologue-parity-docs/todoist/quick-add.md's own measurement is that a
+ * here: meologue-reference/todoist/quick-add.md's own measurement is that a
  * withdrawn match is "one element in two visual states," the span STAYS
  * in the document, restyled — not removed and then, confusingly, not
  * re-created either. Reading matches off the natural parse and checking
@@ -240,7 +240,7 @@ export const quickAddRecognitionPluginKey = new PluginKey<readonly QuickAddSpan[
 /**
  * `Decoration.inline`'s own DOM attributes for one match. Highlighted and
  * withdrawn deliberately differ by more than a class: Todoist's own
- * captured DOM (meologue-parity-docs/todoist/quick-add-dom/tod-04-bksp1.json)
+ * captured DOM (meologue-reference/todoist/quick-add-dom/tod-04-bksp1.json)
  * drops `data-highlighted-match` AND the styling class outright once
  * withdrawn, leaving a bare, unstyled `<span>` — which is exactly what an
  * ordinary `<span>` with no class already renders as (`display: inline`,
@@ -272,7 +272,7 @@ export const quickAddRecognitionPluginKey = new PluginKey<readonly QuickAddSpan[
  * measured divergence: Todoist replaces the node on withdrawal (a
  * `childList` mutation swaps in a fresh `SPAN[data-testid=
  * natural-language-match]`), meologue restyled the same one (`attributes`
- * mutations only) — see meologue-parity-docs/todoist/parity-ledger.md's QA-06
+ * mutations only) — see meologue-reference/todoist/parity-ledger.md's QA-06
  * row and its tiebreak artifacts.
  *
  * Setting `nodeName` explicitly, to a STRING that differs between the two

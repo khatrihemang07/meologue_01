@@ -1,5 +1,5 @@
 /**
- * STR-02 (meologue-parity-docs/todoist/parity-ledger.md) — Todoist edits a
+ * STR-02 (meologue-reference/todoist/parity-ledger.md) — Todoist edits a
  * Project through a modal dialog, not inline
  * (`live-audit-dom/flow9-STR-02-both.json`): Project options menu -> Edit
  * opens a `role=dialog` carrying a Name field with an `8/120` counter,

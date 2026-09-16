@@ -53,36 +53,30 @@ describe("BackToChats", () => {
   // Composer, Reflection, Digest and Settings genuinely still show the chat
   // list pinned beside them at the wide breakpoint (ADR 0036) — unchanged
   // by issue #248.
-  it.each(["/composer", "/reflect", "/digest", "/settings"])(
-    "renders nothing at the wide breakpoint on %s",
-    (path) => {
-      installWideMatchMedia();
-
-      renderAt(path);
-
-      expect(screen.queryByRole("link", { name: "Back to chats" })).not.toBeInTheDocument();
-    },
-  );
-
-  // Issue #248 / ADR 0076: Todo's own pane shows TodoSidebar instead of the
-  // chat list at the wide breakpoint, and the sidebar carries no way out to
-  // the other four Destinations — so Back has to keep rendering there,
-  // unlike every other destination above.
-  it.each(["/todo", "/todo/inbox", "/todo/today", "/todo/projects/some-id", "/todo/activity"])(
-    "still renders at the wide breakpoint on Todo (%s)",
-    (path) => {
-      installWideMatchMedia();
-
-      renderAt(path);
-
-      expect(screen.getByRole("link", { name: "Back to chats" })).toHaveAttribute("href", "/");
-    },
-  );
-
-  it("does not treat a route merely starting with /todo as Todo", () => {
+  //
+  // Todo joins this list here — the owner overruled ADR 0076: the chat
+  // list pane is always on screen at the wide breakpoint now, `/todo/*`
+  // included (`TodoSidebar` mounts separately, as a second column inside
+  // Todo's own subtree, `todo-page.tsx`), so the premise issue #248's own
+  // carve-out existed for (the pane showed `TodoSidebar` instead, with no
+  // way out to the other four Destinations) is gone. This replaces this
+  // file's former "still renders at the wide breakpoint on Todo" — that
+  // assertion was ADR 0076's decision and is now backwards, not merely
+  // weakened.
+  it.each([
+    "/composer",
+    "/reflect",
+    "/digest",
+    "/settings",
+    "/todo",
+    "/todo/inbox",
+    "/todo/today",
+    "/todo/projects/some-id",
+    "/todo/activity",
+  ])("renders nothing at the wide breakpoint on %s", (path) => {
     installWideMatchMedia();
 
-    renderAt("/todoist");
+    renderAt(path);
 
     expect(screen.queryByRole("link", { name: "Back to chats" })).not.toBeInTheDocument();
   });

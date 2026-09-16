@@ -1,5 +1,5 @@
 /**
- * STR-04 (meologue-parity-docs/todoist/parity-ledger.md) — Todoist creates,
+ * STR-04 (meologue-reference/todoist/parity-ledger.md) — Todoist creates,
  * renames and recolours a Label through a modal dialog
  * (`live-audit-dom/flow9-STR-04-todoist.json`): `button[aria-label="Add
  * new label"]` opens a `role=dialog` named "Add label" holding a Name
@@ -37,7 +37,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 
-// Defect 32 (meologue-parity-docs/todoist/live-audit-2026-09-11.md): Todoist's
+// Defect 32 (meologue-reference/todoist/live-audit-2026-09-11.md): Todoist's
 // Add/Edit label dialogs cap the Name field at 60 characters and show a
 // live `n/60` counter.
 export const LABEL_NAME_MAX = 60;

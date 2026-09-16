@@ -291,7 +291,7 @@ function stripFiller(core: string): string {
  * weekly cadence inherently means "do it again from whenever you actually
  * did it." Issue #291 retired that theory — driven live against both
  * Todoist web and Android
- * (meologue-parity-docs/todoist/live-audit-dom/recurrence-reschedule-todoist-2026-09-14.json),
+ * (meologue-reference/todoist/live-audit-dom/recurrence-reschedule-todoist-2026-09-14.json),
  * a postponed daily or weekly Task there resumes from its postponed due
  * date plus one interval, not from the completion date, on both
  * platforms independently. A Task postponed six days out and then

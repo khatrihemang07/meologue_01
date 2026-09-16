@@ -50,7 +50,7 @@ const CASES: readonly Case[] = [
   // an early completion, i.e. a postponement — was the one scenario
   // where that diverged from due-anchoring). Todoist, driven live on both
   // web and Android
-  // (meologue-parity-docs/todoist/live-audit-dom/recurrence-reschedule-todoist-2026-09-14.json),
+  // (meologue-reference/todoist/live-audit-dom/recurrence-reschedule-todoist-2026-09-14.json),
   // resumes a postponed daily/weekly Task from its postponed due date
   // plus one interval instead, so `every day`/`every week` are now
   // due-anchored like every other bare frequency, and only `every!
@@ -132,7 +132,7 @@ const CASES: readonly Case[] = [
 
   // --- Issue #301, the two cases that settle it. Driven on Todoist web
   // 2026-09-15 and recorded in
-  // meologue-parity-docs/todoist/live-audit-dom/recurrence-overdue-weekly-2026-09-15.json.
+  // meologue-reference/todoist/live-audit-dom/recurrence-overdue-weekly-2026-09-15.json.
   //
   // These exist because every earlier overdue probe used `every day`,
   // where a one-day interval has no weekday phase and no interval parity

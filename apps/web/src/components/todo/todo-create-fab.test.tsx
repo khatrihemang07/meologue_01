@@ -1,5 +1,6 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { TODO_SIDEBAR_QUERY } from "@/hooks/use-wide-layout";
 import { OPEN_QUICK_ADD_EVENT } from "@/lib/todo-keymap";
 import { TodoCreateFab } from "./todo-create-fab";
 
@@ -9,11 +10,18 @@ import { TodoCreateFab } from "./todo-create-fab";
 // every query but `(hover: hover)` (that file's own doc comment), so the
 // narrow case needs no stub of its own. This is the one direction that
 // does.
-function installWideMatchMedia() {
+// Answers per query rather than `true` to everything. A blunt stub cannot
+// tell "hides because the sidebar is on screen" from "hides because the
+// shell went two-pane", and those stopped being the same width in ADR
+// 0083 — the sidebar moved to 1200px while the pane stayed at 900px. A
+// stub that says `true` to both queries passes whichever one this
+// component asks, so it would have gone on passing through exactly the
+// regression the band test below now covers.
+function installMatchMedia(widths: { pane: boolean; sidebar: boolean }) {
   Object.defineProperty(window, "matchMedia", {
-    value: vi.fn(() => ({
-      matches: true,
-      media: "",
+    value: vi.fn((query: string) => ({
+      matches: query === TODO_SIDEBAR_QUERY ? widths.sidebar : widths.pane,
+      media: query,
       addEventListener: vi.fn(),
       removeEventListener: vi.fn(),
     })),
@@ -47,14 +55,28 @@ describe("TodoCreateFab", () => {
   // The half the global stub cannot give by accident (this ticket's own
   // brief): every query answers narrow under it, so "it renders" can pass
   // for the wrong reason forever while "it doesn't render when wide" is
-  // never actually exercised. Pinning `matchMedia` to the wide answer here
-  // is what makes this assertion possible to fail.
-  it("does not render at the wide (min-width: 900px) breakpoint", () => {
-    installWideMatchMedia();
+  // never actually exercised.
+  it("does not render once TodoSidebar is on screen (min-width: 1200px)", () => {
+    installMatchMedia({ pane: true, sidebar: true });
 
     render(<TodoCreateFab />);
 
     expect(screen.queryByRole("button", { name: "Quick add" })).not.toBeInTheDocument();
+  });
+
+  // ADR 0083's new 900-1199px band, and the reason this file's stub had to
+  // learn to discriminate. The shell is two-pane here, but `TodoSidebar`
+  // is not mounted, so the "Add task" link whose presence is the ENTIRE
+  // justification for hiding this button does not exist. Hiding the FAB
+  // here left the inline AddTaskForm and the `Q` shortcut as the only ways
+  // to add a Task. This shipped and the suite stayed green, because the
+  // old stub answered `true` to both queries.
+  it("still renders in the 900-1199px band, where TodoSidebar is not mounted", () => {
+    installMatchMedia({ pane: true, sidebar: false });
+
+    render(<TodoCreateFab />);
+
+    expect(screen.getByRole("button", { name: "Quick add" })).toBeInTheDocument();
   });
 
   // Reuses the identical door todo-sidebar.tsx's own "Add task" button

@@ -30,7 +30,7 @@ describe("dates", () => {
     ["buy milk tod", "2026-09-02"],
     ["buy milk tomorrow", "2026-09-03"],
     ["buy milk tom", "2026-09-03"],
-    // `tmr` — meologue-parity-docs/todoist/quick-add.md's own recognised-vocabulary
+    // `tmr` — meologue-reference/todoist/quick-add.md's own recognised-vocabulary
     // table (issue #226), alongside `tom` above.
     ["buy milk tmr", "2026-09-03"],
     // Weekdays — bare resolves to the nearest occurrence on or after
@@ -158,7 +158,7 @@ describe("tokens", () => {
   });
 
   // Issue #226 reverses issue #170's choice of `%`: Todoist's own
-  // verified quick-add uses `@` for labels (meologue-parity-docs/todoist/
+  // verified quick-add uses `@` for labels (meologue-reference/todoist/
   // quick-add.md), and this parser now matches it. `%` is not kept as an
   // alias — see rules.ts's matchLabel doc comment for why.
   describe("@label — the sigil issue #226 restored", () => {

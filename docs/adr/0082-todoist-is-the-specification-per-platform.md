@@ -68,7 +68,7 @@ build follows Todoist Android; the desktop build keeps following Todoist web.**
 Four things follow, and all four are load-bearing:
 
 **The Android ledger is a separate file, not a column.**
-`meologue-parity-docs/todoist/parity-ledger-android.md` stands beside `parity-ledger.md` rather than
+`meologue-reference/todoist/parity-ledger-android.md` stands beside `parity-ledger.md` rather than
 adding a column to it. A shared status column could not be read unambiguously once the two
 references disagree — `matched` against which one? The separation is what makes the status vocabulary
 survive unchanged.

@@ -3,6 +3,7 @@ import { render, screen, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router";
 import { describe, expect, it, vi } from "vitest";
 import { ENTRY_STORE_QUERY_KEY } from "@/lib/query-keys";
+import { BrowseView } from "./browse-view";
 import { TodoNav } from "./todo-nav";
 import { TODO_NAV_DESTINATIONS } from "./todo-nav-destinations";
 import { TodoSidebar } from "./todo-sidebar";
@@ -63,6 +64,27 @@ async function renderSidebarHrefs() {
   return hrefs;
 }
 
+// ANAV-01: Browse (`browse-view.tsx`) is the bar's own fourth row's
+// destination, and the third leg the reachability test below now checks
+// alongside the bar and the sidebar — everything `TODO_BAR_DESTINATIONS`
+// (todo-nav-destinations.ts) no longer carries a row for has to still show
+// up here, or it is unreachable below the 1200px sidebar breakpoint.
+function renderBrowseHrefs() {
+  const { unmount } = render(
+    <MemoryRouter initialEntries={["/todo/browse"]}>
+      <BrowseView />
+    </MemoryRouter>,
+  );
+  const nav = screen.getByRole("navigation", { name: "Browse" });
+  const hrefs = new Set(
+    within(nav)
+      .getAllByRole("link")
+      .map((link) => link.getAttribute("href")),
+  );
+  unmount();
+  return hrefs;
+}
+
 /**
  * Defect 33's own class, and the deliverable the ticket that fixed it
  * asked for: not just `/todo/projects` reachable again, but a test that
@@ -76,25 +98,45 @@ async function renderSidebarHrefs() {
  * whichever one is on screen, so "reachable from one navigation" and
  * "reachable" stop meaning the same thing the moment they disagree.
  *
- * Both navigations now render from the one list, `TODO_NAV_DESTINATIONS`
- * (todo-nav-destinations.ts) — this test is what stops a future change
- * from re-introducing the old shape (a destination added to one
- * component's own rows and not the other's) rather than to the shared
- * list both read from. It asserts on `href`, not on label text: the two
- * navigations are still free to word a shared destination differently
- * (todo-sidebar.tsx already did, pre-dating this file, for "Filters &
- * Labels" against todo-nav.tsx's plain "Filters" — issue #229/NAV-06, and
- * now again for "Reporting" against "Activity" — parity ledger
- * NAV-01/NAV-11); what must never diverge is which routes exist at all.
+ * **ANAV-01 made "both navigations link every destination identically"
+ * false by construction** — that used to be this describe block's own
+ * first test, verbatim. `TodoNav`'s bar now deliberately carries only
+ * four of `TODO_NAV_DESTINATIONS`'s six (`todo-nav-destinations.ts`'s own
+ * header comment has the full reasoning), with Browse
+ * (`browse-view.tsx`) as the fourth row's own destination — a hub, not a
+ * `TODO_NAV_DESTINATIONS` entry itself, that re-links Filters, Activity
+ * and Projects one tap further in. Asserting the old invariant verbatim
+ * would now fail on a correct build, for no defect at all: exactly the
+ * "a convenient fixture is the one most likely to be degenerate" trap a
+ * stale assertion sets for whoever reads it next.
+ *
+ * **The invariant this file actually has to hold is reachability, not
+ * list equality**: every destination in `TODO_NAV_DESTINATIONS` still has
+ * to be one tap away from *something* always on screen below the sidebar
+ * breakpoint — the bar itself, or Browse, which the bar's own fourth row
+ * always reaches. `TodoSidebar` keeps its own, stricter invariant
+ * unchanged (every destination, directly, the way it always has) since
+ * ANAV-01 never touched that list at all.
  */
-describe("TodoNav and TodoSidebar's destination parity", () => {
-  it("links every shared destination's href from both navigations", async () => {
-    const navHrefs = renderNavHrefs();
+describe("Todo's destinations stay reachable below the 1200px sidebar breakpoint", () => {
+  it("TodoSidebar still links every destination directly, unchanged by the bar's own split", async () => {
     const sidebarHrefs = await renderSidebarHrefs();
 
     for (const destination of TODO_NAV_DESTINATIONS) {
-      expect(navHrefs, `TodoNav should link ${destination.to}`).toContain(destination.to);
       expect(sidebarHrefs, `TodoSidebar should link ${destination.to}`).toContain(destination.to);
+    }
+  });
+
+  it("links every destination from the bar, or from Browse behind the bar's fourth row", async () => {
+    const navHrefs = renderNavHrefs();
+    const browseHrefs = renderBrowseHrefs();
+
+    for (const destination of TODO_NAV_DESTINATIONS) {
+      const reachable = navHrefs.has(destination.to) || browseHrefs.has(destination.to);
+      expect(
+        reachable,
+        `${destination.to} should be reachable from TodoNav's bar or from Browse — it was in neither (bar: ${[...navHrefs].join(", ")}; Browse: ${[...browseHrefs].join(", ")})`,
+      ).toBe(true);
     }
   });
 
@@ -102,15 +144,29 @@ describe("TodoNav and TodoSidebar's destination parity", () => {
   // defect 33 and NAV-03's own instances of the class, named directly
   // rather than only covered indirectly by the loop above, so a reader
   // of this file's own history can see exactly which destinations this
-  // ticket confirmed reachable from both.
-  it.each(["/todo/projects", "/todo/upcoming", "/todo/activity"])(
-    "keeps %s reachable from both navigations",
-    async (to) => {
-      const navHrefs = renderNavHrefs();
-      const sidebarHrefs = await renderSidebarHrefs();
+  // ticket confirmed reachable. Upcoming stayed on the bar itself;
+  // Projects and Activity moved behind Browse — ANAV-01's own trade.
+  it("keeps /todo/upcoming reachable from the bar directly", () => {
+    const navHrefs = renderNavHrefs();
 
-      expect(navHrefs).toContain(to);
-      expect(sidebarHrefs).toContain(to);
-    },
-  );
+    expect(navHrefs).toContain("/todo/upcoming");
+  });
+
+  it.each(["/todo/projects", "/todo/activity"])("keeps %s reachable from Browse", (to) => {
+    const browseHrefs = renderBrowseHrefs();
+
+    expect(browseHrefs).toContain(to);
+  });
+
+  // ANAV-01's own regression (todo-page.tsx's own comment on the header
+  // Search door): Search had no reachable door at all below the 1200px
+  // sidebar breakpoint before this ticket, and is not a
+  // `TODO_NAV_DESTINATIONS` entry — Browse is the only door that reaches
+  // it below the sidebar breakpoint, so it gets its own direct assertion
+  // rather than only riding along in the loop above.
+  it("makes /todo/search reachable from Browse", () => {
+    const browseHrefs = renderBrowseHrefs();
+
+    expect(browseHrefs).toContain("/todo/search");
+  });
 });

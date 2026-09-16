@@ -19,7 +19,7 @@ reasoning a later reader needs to understand why the writer had to change at the
 [0072](0072-upnote-is-the-specification-per-input-modality.md)'s
 stance that UpNote's own observed behaviour, not a claim written once into an ADR's prose, is what
 "feels like UpNote" has to answer to — this ADR is the case that stance was written for:
-`meologue-parity-docs/upnote-editor-behaviour.md`'s byte-verified record of UpNote's own block model is
+`meologue-reference/upnote-editor-behaviour.md`'s byte-verified record of UpNote's own block model is
 the concrete fact 0066 did not have when it reasoned its way to a different design.
 [0073](0073-editor-parity-is-proved-by-a-generated-matrix.md)'s parity fixture
 (`apps/web/src/lib/parity/parity-fixture.ts`) now carries this ADR's own target rows for the
@@ -58,7 +58,7 @@ look like. What was wrong was the conclusion it drew from that collision — tha
 stop splitting the block.
 
 **UpNote's own mechanism for the identical problem was sitting in this repo the whole time, unread
-until this ticket.** `meologue-parity-docs/upnote-editor-behaviour.md`, produced by driving the shipped
+until this ticket.** `meologue-reference/upnote-editor-behaviour.md`, produced by driving the shipped
 application by hand and reading its stored HTML back byte for byte, records the actual answer under
 "The one fact that explains the reported defect": UpNote's block element is a bare `<div>`, whose
 default margin is zero. Its inter-block gap is therefore exactly one line-height — one Enter looks

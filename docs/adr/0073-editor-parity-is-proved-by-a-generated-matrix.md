@@ -28,7 +28,7 @@ document look nothing alike at the tree level. This repo's own `entry-schema.ts`
 a CHILD of the `list_item` it belongs to (`list_item: "paragraph block*"`); UpNote's own stored HTML
 nests it as a SIBLING of the `<li>` — `<ul><li>one</li><ul><li>two</li></ul></ul>`, invalid per the
 HTML spec, verified directly as what UpNote's shipped editor actually writes
-(`meologue-parity-docs/upnote-editor-behaviour.md`). Diffing either tree against the other directly would
+(`meologue-reference/upnote-editor-behaviour.md`). Diffing either tree against the other directly would
 report a nesting-shape mismatch on every single list in the fixture, whether or not the two documents
 mean the same thing to a reader — noise loud enough to bury the two real defects this ticket exists
 to surface.

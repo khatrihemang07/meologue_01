@@ -32,7 +32,7 @@
  * button. What actually governs this component is the flow-12 S1 live
  * drive (2026-09-13): Todoist's own in-list composer, after Add,
  * "stayed mounted, EMPTY, and focused — does NOT collapse"
- * (`meologue-parity-docs/todoist/live-audit-dom/flow12-S1-NAV-07-10-12-
+ * (`meologue-reference/todoist/live-audit-dom/flow12-S1-NAV-07-10-12-
  * both.json`). The two findings do not conflict — they describe two
  * different surfaces, each still true on its own. `keyboard.md`'s own
  * "Add task" section transcribes Enter as "Save new task and create

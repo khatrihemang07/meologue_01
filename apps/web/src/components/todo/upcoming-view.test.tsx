@@ -68,7 +68,7 @@ function renderUpcomingView(overrides: Partial<Parameters<typeof UpcomingView>[0
 }
 
 describe("UpcomingView", () => {
-  // Pinned to the reference capture's own "today" (meologue-parity-docs/todoist/
+  // Pinned to the reference capture's own "today" (meologue-reference/todoist/
   // README.md: 10 Sep 2026, a Thursday) so every heading this suite reads
   // matches DATE-05's own wording verbatim, mirroring TodayView's own
   // fixed-clock reasoning (today-view.test.tsx's header comment).

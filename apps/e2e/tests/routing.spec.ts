@@ -122,21 +122,18 @@ test("/ is not a dead end at the wide breakpoint", async ({ page }) => {
   );
 });
 
-// ADR 0080 / ADR 0076: Todo is the one Destination whose own pane never
-// shows the root screen at the wide breakpoint (0076's own "What this does
-// take"), so Back from Todo is the one Back that was landing on a genuine
-// dead end before this ADR — the defect ADR 0080 exists to fix, exercised
-// here end to end rather than only through chat-list-page.test.tsx's unit
-// coverage.
-test("Back from Todo, at the wide breakpoint, no longer lands on a dead end", async ({ page }) => {
-  await page.setViewportSize({ width: 1200, height: 900 });
-  await page.goto("/todo/inbox");
-
-  await page.getByRole("link", { name: "Back to chats" }).click();
-
-  await expect(page).toHaveURL("/");
-  await expect(page.getByText("Tasks due today")).toBeVisible();
-});
+// This spec used to hold "Back from Todo, at the wide breakpoint, no
+// longer lands on a dead end" here — ADR 0076's own carve-out made Todo
+// the one Destination whose Back kept rendering at the wide breakpoint at
+// all (its pane showed TodoSidebar, not the chat list, so Back was the
+// only way out), which made it also the one Destination whose Back could
+// land on the dead-end "/" ADR 0080 fixed, distinctly from the other four.
+// The owner overruled ADR 0076: the chat list pane is always on screen at
+// the wide breakpoint now, `/todo/*` included, so Todo's Back disappears
+// there too (`layout.spec.ts`'s own "Back does not render from Todo at the
+// wide breakpoint, same as every other destination" is this test's
+// replacement) and there is no longer a distinct "Back from Todo" flow to
+// land anywhere, dead end or not.
 
 // Issue #248: `/todo/activity` was linked only from `todo-nav.tsx` (which
 // hides itself at the wide breakpoint) and from inside a Project —

@@ -1,7 +1,7 @@
 /**
  * `TaskSchedulePopover`'s own suite (issue #227). `now` is pinned to
  * 2026-09-10 (a Thursday) throughout — the exact reference instant
- * `meologue-parity-docs/todoist/scheduler-and-priority.md` was captured against
+ * `meologue-reference/todoist/scheduler-and-priority.md` was captured against
  * ("today" = 10 Sep 2026, Thursday) — so every hint/preview asserted here
  * is checked against the ledger's own measured values, not values this
  * suite invented independently of the reference capture.

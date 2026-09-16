@@ -42,8 +42,8 @@ Issue #230 exists to replace that mechanism, not to fix Shift+Enter or Tab — l
 against the record this ticket creates.
 
 Making UpNote's own observed behaviour the record, rather than this repo's own prior belief about
-it, immediately surfaces cases where UpNote itself is not a target worth copying. `meologue-parity-docs/upnote-macos-detail.md`
-and `meologue-parity-docs/upnote-android-detail.md`'s own gap sweeps — driven against the shipped
+it, immediately surfaces cases where UpNote itself is not a target worth copying. `meologue-reference/upnote-macos-detail.md`
+and `meologue-reference/upnote-android-detail.md`'s own gap sweeps — driven against the shipped
 applications directly, not read from documentation — found three behaviours that destroy the user's
 own words, and two places where the two UpNote platforms disagree with each other. Both kinds of
 finding need a place to be decided on the record, which is what this ADR is.

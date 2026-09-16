@@ -10,7 +10,7 @@
  * (`use-todo-keymap.ts`) and every display string (`formatKeyHint` below)
  * derive from.
  *
- * **Scope — only what has a real door.** `meologue-parity-docs/todoist/keyboard.md`
+ * **Scope — only what has a real door.** `meologue-reference/todoist/keyboard.md`
  * transcribes 80 shortcuts from Todoist's own overlay, unverified by
  * driving (that file's own header comment). This table carries a fraction
  * of those 80 — only the ones with a target that already exists in this
@@ -276,7 +276,7 @@ export const TODO_KEY_BINDINGS: readonly TodoKeyBinding[] = [
     when: "always",
     keys: ["q"],
   },
-  // CMT-05 (parity ledger), measured live: `meologue-parity-docs/todoist/
+  // CMT-05 (parity ledger), measured live: `meologue-reference/todoist/
   // keyboard.md:74` transcribes the overlay's own General row as "Z or ⌘Z |
   // Undo" — bare `z` undoes there too, not just ⌘Z — so this follows the
   // table's existing "one binding, several keys" idiom (`quick-find`'s
@@ -414,7 +414,7 @@ export const TODO_KEY_BINDINGS: readonly TodoKeyBinding[] = [
     keys: ["mod+shift+c"],
   },
   // KBD-03/KBD-04 (parity ledger), measured live against Todoist
-  // (`meologue-parity-docs/todoist/live-audit-dom/flow6-KBD-03-todoist.json`,
+  // (`meologue-reference/todoist/live-audit-dom/flow6-KBD-03-todoist.json`,
   // `flow6-KBD-04-todoist.json`): both ArrowDown/ArrowUp AND j/k move
   // focus row-to-row, wrapping at both ends and walking through the
   // "Add task" affordance and completed rows, not just the incomplete

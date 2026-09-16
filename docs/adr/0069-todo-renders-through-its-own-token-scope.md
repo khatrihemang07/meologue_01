@@ -16,7 +16,7 @@ glossary entry admitted on a different ground than every other — *"Project" �
 note* — whose whole argument is that parity with Todoist is a source this build will be read
 against for years.
 
-An audit of the shipped Todo against the real application (`meologue-parity-docs/todoist/`) found the
+An audit of the shipped Todo against the real application (`meologue-reference/todoist/`) found the
 divergence was not a handful of details. Dates render in one grey where Todoist carries a tone;
 the row omits labels, project and a description indicator entirely; the type scale, the density and
 the palette are this app's own throughout. The instruction was to make Todo an exact clone,

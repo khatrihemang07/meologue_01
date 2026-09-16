@@ -206,25 +206,62 @@ test("the chat list pins beside the open destination only at the wide breakpoint
   await expect(page.getByRole("link", { name: "Back to chats" })).toHaveCount(0);
 });
 
-// Issue #248 / ADR 0076: Todo's own pane shows TodoSidebar instead of the
-// chat list at the wide breakpoint — unlike Composer above, that pane never
-// shows the root screen, and TodoSidebar carries no link back to it. So
-// Back has to keep rendering there even though it disappears for every
-// other Destination at this width, and it has to be a real link that works
-// with no history entry (a fresh page load, not a navigation).
-test("Back stays reachable from Todo at the wide breakpoint, unlike every other destination", async ({
+// The owner overruled ADR 0076 (issue #248's own carve-out is gone): the
+// chat list pane is always on screen at the wide breakpoint now, `/todo/*`
+// included, so Back has nowhere useful to go there either — it disappears
+// on Todo exactly the way it already does for Composer, Reflection, Digest
+// and Settings, rather than being the one exception that used to keep
+// rendering. This replaces this spec's own former "Back stays reachable
+// from Todo at the wide breakpoint" — that was ADR 0076's decision and is
+// now backwards, not merely out of date.
+test("Back does not render from Todo at the wide breakpoint, same as every other destination", async ({
   page,
 }) => {
   await page.setViewportSize({ width: 1200, height: 900 });
   await page.goto("/todo/inbox");
 
-  await expect(page.getByRole("navigation", { name: "Todo" })).toBeVisible();
-  const back = page.getByRole("link", { name: "Back to chats" });
-  await expect(back).toBeVisible();
-  await expect(back).toHaveAttribute("href", "/");
+  await expect(page.getByRole("navigation", { name: "Chats" })).toBeVisible();
+  await expect(page.getByRole("link", { name: "Back to chats" })).toHaveCount(0);
+});
 
-  await back.click();
-  await expect(page).toHaveURL("/");
+// The owner's amendment to ADR 0076's own target layout, the three bands:
+// below 900px nothing here changes (covered by the wide-breakpoint test
+// above and layout.spec.ts's own narrow-viewport assertions elsewhere); at
+// 900px the chat list pane and TodoNav's bottom bar both render, with no
+// TodoSidebar — the middle band this amendment adds, where there is room
+// for the chat list but not yet for a second column beside it; at 1200px
+// TodoSidebar takes over as that second column and TodoNav hides, the
+// identical hand-off ADR 0076 always described, just moved to a higher
+// breakpoint.
+test("the chat list pane and TodoSidebar layer in at two different breakpoints, not one", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 900, height: 900 });
+  await page.goto("/todo/inbox");
+
+  await expect(page.getByRole("navigation", { name: "Chats" })).toBeVisible();
+  await expect(page.getByRole("navigation", { name: "Todo" })).toBeVisible();
+  // TodoNav itself: a real link only it renders. Since ADR 0084 the bar is
+  // Inbox/Today/Upcoming/Browse, and Browse is the one destination
+  // TodoSidebar has no row for — it lists Browse's contents directly
+  // instead — so "Browse" is the unambiguous tell that the bar is the nav
+  // on screen here.
+  await expect(page.getByRole("link", { name: "Browse" })).toBeVisible();
+  // "Reporting" only ever comes from TodoSidebar — TodoNav labels the
+  // identical /todo/activity route "Activity" instead
+  // (todo-nav-destinations.ts's own header comment) — so its absence here
+  // is this test's proof that the sidebar hasn't mounted yet.
+  await expect(page.getByRole("link", { name: "Reporting" })).toHaveCount(0);
+
+  await page.setViewportSize({ width: 1200, height: 900 });
+
+  await expect(page.getByRole("navigation", { name: "Chats" })).toBeVisible();
+  await expect(page.getByRole("link", { name: "Reporting" })).toBeVisible();
+  // TodoNav hides the instant the sidebar takes over — both carry
+  // aria-label="Todo", and two identically-named nav landmarks on screen
+  // at once is the defect this hand-off exists to avoid
+  // (todo-nav.tsx's own header comment).
+  await expect(page.getByRole("navigation", { name: "Todo" })).toHaveCount(1);
 });
 
 // Issue #254 / ADR 0019's amendment: Todo's own content column caps at

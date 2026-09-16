@@ -57,7 +57,7 @@ import type { RecurrenceOutcome, RecurrenceReference } from "./rule";
  * cadence inherently means "do it again from whenever you actually did
  * it." Issue #291 retired that theory: driven live against both Todoist
  * web and Android
- * (meologue-parity-docs/todoist/live-audit-dom/recurrence-reschedule-todoist-2026-09-14.json),
+ * (meologue-reference/todoist/live-audit-dom/recurrence-reschedule-todoist-2026-09-14.json),
  * a daily Task there postponed forward and then completed resumes from
  * its postponed due date plus one interval, not from the completion
  * date — a Task postponed six days out and completed landed six days
@@ -90,7 +90,7 @@ import type { RecurrenceOutcome, RecurrenceReference } from "./rule";
  * **RESOLVED 2026-09-15 (issue #301): phase-keeping is what Todoist does,
  * and it is now driven rather than assumed.** Two probes on Todoist web,
  * recorded in
- * meologue-parity-docs/todoist/live-audit-dom/recurrence-overdue-weekly-2026-09-15.json
+ * meologue-reference/todoist/live-audit-dom/recurrence-overdue-weekly-2026-09-15.json
  * and promoted to ledger row `SCHED-15`:
  *
  *     every week,    due Mon 31 Aug, completed Tue 15 Sep -> Mon 21 Sep
