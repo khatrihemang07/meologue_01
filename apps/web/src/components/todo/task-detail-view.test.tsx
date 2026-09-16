@@ -325,6 +325,15 @@ describe("TaskDetailView", () => {
   // CMT-06: Todoist's own per-task activity names the task in every line
   // (flow 5), so this view no longer suppresses its subject; and an old
   // "Edited a comment" event is neither shown nor counted.
+  //
+  // Issue #288: this used to assert `screen.getByText("Activity (1)")`
+  // directly against the detail screen's own at-rest DOM — the inline
+  // `<details>` disclosure this ticket removes. That assertion is now
+  // wrong on its face (the text isn't there until "View activity" is
+  // opened), so this rewrites it to reach the identical substance through
+  // the new route: open the overflow menu, select "View activity," and
+  // assert the same count and the same lines inside the dialog it opens.
+  // Nothing about what's being proven changed — only how it's reached.
   it("names the task in its own Activity lines, and counts only lines it shows", () => {
     const base = {
       deviceId: "device-a",
@@ -350,8 +359,16 @@ describe("TaskDetailView", () => {
     ];
     renderView({ task: task({ content: "call mum" }), events });
 
-    expect(screen.getByText("Activity (1)")).toBeInTheDocument();
-    const lines = screen.getAllByRole("listitem").map((item) => item.textContent ?? "");
+    fireEvent.pointerDown(screen.getByRole("button", { name: "Task actions" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "View activity" }));
+
+    const activityDialog = screen.getByRole("dialog", { name: "Activity (1)" });
+    expect(
+      within(activityDialog).getByRole("heading", { name: "Activity (1)" }),
+    ).toBeInTheDocument();
+    const lines = within(activityDialog)
+      .getAllByRole("listitem")
+      .map((item) => item.textContent ?? "");
     expect(lines).toHaveLength(1);
     expect(lines[0]).toContain("You completed");
     expect(lines[0]).toContain("call mum");
@@ -2173,6 +2190,165 @@ describe("TaskDetailView", () => {
       openOverflow();
 
       expect(screen.getByText(/^Added on 26 Aug \d{1,2}:\d{2}\s?[AP]M$/)).toBeInTheDocument();
+    });
+  });
+
+  // Issue #288: the fixture that motivated this ticket — a Comment
+  // rendered once as a thread row under "Comments," and again, quoting
+  // the same text, inside a sibling "Activity" disclosure a few rows
+  // below. The ratified fix moves Activity behind the overflow menu's
+  // own "View activity" item rather than removing comment events from it
+  // (that's explicitly out of scope — CMT-06's `You commented {content}
+  // on {task}` stays matched parity, not divergent).
+  describe("Issue #288 — Activity moves behind View activity, not off the feed", () => {
+    function openOverflow() {
+      fireEvent.pointerDown(screen.getByRole("button", { name: "Task actions" }));
+    }
+
+    // Todoist's own menu order (this ticket's own brief): Copy link to
+    // task, then View activity, then Delete task.
+    it("offers View activity in the overflow menu, after Copy link to task and before Delete task", () => {
+      renderView();
+
+      openOverflow();
+
+      const names = screen.getAllByRole("menuitem").map((item) => item.textContent?.trim());
+      expect(names).toContain("View activity");
+      const copyIndex = names.indexOf("Copy link to task");
+      const activityIndex = names.indexOf("View activity");
+      const deleteIndex = names.indexOf("Delete task");
+      expect(activityIndex).toBeGreaterThan(copyIndex);
+      expect(deleteIndex).toBeGreaterThan(activityIndex);
+    });
+
+    // The relative order holds regardless of whether "Complete forever"
+    // (a meologue-only item Todoist's own menu has no equivalent of) is
+    // present too — View activity's position is anchored to Copy
+    // link/Delete, not to that item.
+    it("keeps View activity between Copy link and Delete even when Complete forever is present", () => {
+      renderView({ task: task({ dateString: "every day" }) });
+
+      openOverflow();
+
+      const names = screen.getAllByRole("menuitem").map((item) => item.textContent?.trim());
+      expect(names).toContain("Complete forever");
+      const copyIndex = names.indexOf("Copy link to task");
+      const activityIndex = names.indexOf("View activity");
+      const deleteIndex = names.indexOf("Delete task");
+      expect(activityIndex).toBeGreaterThan(copyIndex);
+      expect(deleteIndex).toBeGreaterThan(activityIndex);
+    });
+
+    // The defect this ticket fixes: at rest, on the detail screen, a
+    // Comment must appear exactly once — never a second time inside an
+    // always-adjacent Activity disclosure quoting the same text.
+    it("renders a Comment exactly once at rest — not a second time in an inline Activity disclosure", () => {
+      const commentText = "ZZ probe comment shown only once";
+      renderView({
+        task: task({ id: "1", content: "call mum" }),
+        comments: [comment({ id: "c1", taskId: "1", text: commentText })],
+        events: [
+          {
+            id: "e1",
+            deviceId: "device-a",
+            objectType: "comment",
+            eventType: "added",
+            objectId: "c1",
+            taskId: "1",
+            projectId: null,
+            occurredAt: "2026-09-10T09:00:00.000Z",
+            extra: { text: commentText },
+            syncedAt: "2026-09-10T09:00:00.000Z",
+            seq: 1,
+          },
+        ],
+      });
+
+      expect(screen.getAllByText(commentText)).toHaveLength(1);
+      // The old inline disclosure is gone outright, not merely collapsed
+      // — its own "Activity (N)" summary text is nowhere on the detail
+      // screen until "View activity" is opened.
+      expect(screen.queryByText(/^Activity \(/)).not.toBeInTheDocument();
+    });
+
+    // The other half: comment events are NOT dropped from the feed
+    // (issue #288's own explicit "do not do this" — removing them would
+    // move parity row CMT-06 from matched to divergent). They still show
+    // once a reader actually opens View activity.
+    it("still shows comment events once View activity is opened", () => {
+      const commentText = "ZZ probe comment shown only once";
+      renderView({
+        task: task({ id: "1", content: "call mum" }),
+        comments: [comment({ id: "c1", taskId: "1", text: commentText })],
+        events: [
+          {
+            id: "e1",
+            deviceId: "device-a",
+            objectType: "comment",
+            eventType: "added",
+            objectId: "c1",
+            taskId: "1",
+            projectId: null,
+            occurredAt: "2026-09-10T09:00:00.000Z",
+            extra: { text: commentText },
+            syncedAt: "2026-09-10T09:00:00.000Z",
+            seq: 1,
+          },
+        ],
+      });
+
+      openOverflow();
+      fireEvent.click(screen.getByRole("menuitem", { name: "View activity" }));
+
+      const activityDialog = screen.getByRole("dialog", { name: "Activity (1)" });
+      const activityLines = within(activityDialog)
+        .getAllByRole("listitem")
+        .map((item) => item.textContent ?? "");
+      expect(activityLines).toHaveLength(1);
+      expect(activityLines[0]).toContain("You commented");
+      expect(activityLines[0]).toContain(commentText);
+      // Now two: the thread row (still on screen underneath) and this
+      // one, inside the dialog that's open on top of it — both are
+      // legitimate, unlike the at-rest double-render this ticket fixes.
+      expect(screen.getAllByText(commentText)).toHaveLength(2);
+    });
+
+    // Live-measured regression (code review, confirmed in a real browser):
+    // Task actions -> View activity -> Escape left `document.activeElement`
+    // on `BODY` while the detail dialog was still open. `Task actions` ->
+    // `View activity` -> Escape must instead land back on `Task actions` —
+    // the control the reader was actually on, not the top of the document.
+    it("Escape inside View activity returns focus to the Task actions trigger, not document.body", async () => {
+      renderView();
+
+      openOverflow();
+      fireEvent.click(screen.getByRole("menuitem", { name: "View activity" }));
+      const activityDialog = screen.getByRole("dialog", { name: "Activity (0)" });
+      // The overflow `DropdownMenu` that opened this dialog has ALSO just
+      // unmounted, and its own `FocusScope` queues an identical deferred
+      // (`setTimeout(..., 0)`) restore back to its own trigger — the same
+      // `Task actions` button this test is about to check. Left pending,
+      // that stale, unrelated timer would fire during the wait below and
+      // land on the right element for the WRONG reason, masking a missing
+      // `onCloseAutoFocus` on `TaskActivityDialog` itself (confirmed by
+      // deliberately breaking it and watching this test stay green until
+      // this settle was added — see this ticket's own commit message). A
+      // real reader never presses Escape in the same tick the menu closed,
+      // so this settles that leftover timer first, matching real timing,
+      // before the dialog itself is ever dismissed.
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      fireEvent.keyDown(activityDialog, { key: "Escape" });
+
+      expect(screen.queryByRole("dialog", { name: "Activity (0)" })).not.toBeInTheDocument();
+      // Radix's own `FocusScope` defers the close-autofocus dispatch by one
+      // tick (`setTimeout(..., 0)` in its unmount cleanup) — the identical
+      // async gap this file's own `clickOutside` helper, and the "Escape
+      // inside the open confirmation" test above, already wait out for the
+      // identical reason: a real gap inside Radix, not a jsdom quirk.
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      expect(document.activeElement).toBe(screen.getByRole("button", { name: "Task actions" }));
     });
   });
 });
