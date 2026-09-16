@@ -130,6 +130,16 @@ export function nextEntriesPageParam(lastPage: Entry[]): EntriesPageParam | unde
  * what keeps this harmless to call on every ordinary render of whichever
  * route decides when a mount counts as "fresh" (see that call site's own
  * comment for the routing-level rule).
+ *
+ * That no-op is a contract, not an optimisation: `entry-store-layout.tsx`
+ * calls this from its render body, and a render React discards and retries
+ * calls it twice for one arrival (issue #330 — the state rollback undoes
+ * the bookkeeping but not this call). Repeating the call is safe only
+ * because the second one finds a single page and returns. Anything added
+ * here that writes unconditionally — a refetch, a cursor reset, an
+ * invalidation — breaks that caller, and no test will catch it: producing a
+ * genuinely discarded render is outside what jsdom can do. Gate the call
+ * site before adding such a step here.
  */
 export function resetEntriesPagingToNewest(): void {
   const current = queryClient.getQueryData<EntriesInfiniteData>(ENTRIES_QUERY_KEY);
