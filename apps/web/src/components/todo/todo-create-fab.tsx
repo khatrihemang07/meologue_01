@@ -1,6 +1,6 @@
 import { Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { useWideLayout } from "@/hooks/use-wide-layout";
+import { useTodoSidebarLayout } from "@/hooks/use-wide-layout";
 import { OPEN_QUICK_ADD_EVENT } from "@/lib/todo-keymap";
 
 /**
@@ -22,12 +22,19 @@ import { OPEN_QUICK_ADD_EVENT } from "@/lib/todo-keymap";
  * what satisfies "opens the existing composer, focused and ready to
  * type"; nothing here duplicates that.
  *
- * **Hides itself at the wide breakpoint**, the identical mechanism
- * `TodoNav` already uses (`useWideLayout()`, use-wide-layout.ts's
- * `WIDE_LAYOUT_QUERY`, 900px) — `TodoSidebar`'s own "Add task" link is
- * always on screen there, so a floating control duplicating it has no
- * purpose past that width, matching this ticket's own acceptance
- * criterion ("does not appear at the wide breakpoint").
+ * **Hides itself once `TodoSidebar` is on screen**, the identical
+ * mechanism `TodoNav` uses (`useTodoSidebarLayout()`, use-wide-layout.ts's
+ * `TODO_SIDEBAR_QUERY`, 1200px) — `TodoSidebar`'s own "Add task" link is
+ * on screen there, so a floating control duplicating it has no purpose.
+ *
+ * **This gate tracks the sidebar, not the shell's own wide breakpoint, and
+ * that distinction is load-bearing (ADR 0083).** It was `useWideLayout()`
+ * (900px) while the sidebar and the pane shared one breakpoint. 0083 moved
+ * the sidebar to 1200px without moving this, which hid the FAB across the
+ * whole 900-1199px band while the "Add task" link justifying the hiding
+ * was not yet rendered — leaving the inline `AddTaskForm` and the `Q`
+ * shortcut as the only ways in. The premise of this hiding is the
+ * sidebar's presence, so the query has to be the sidebar's.
  *
  * **Named "Quick add", not "Add task".** `todo-page.test.tsx` records
  * "exactly one Add task-named button in the tree" as a load-bearing
@@ -56,7 +63,7 @@ import { OPEN_QUICK_ADD_EVENT } from "@/lib/todo-keymap";
  * underneath this.
  */
 export function TodoCreateFab() {
-  const wide = useWideLayout();
+  const wide = useTodoSidebarLayout();
   if (wide) {
     return null;
   }

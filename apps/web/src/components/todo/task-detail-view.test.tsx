@@ -1891,6 +1891,31 @@ describe("TaskDetailView", () => {
         // collapsed bar (CMT-11), not the field itself.
         expect(screen.getByRole("button", { name: "Open comment editor" })).toBeInTheDocument();
       });
+
+      // jsdom lays nothing out, so this cannot assert the composer's actual
+      // on-screen position (the fix this test accompanies is a geometry
+      // fix, verified in a real browser instead — see the PR). What it DOES
+      // prove, honestly: the scroller carries the class that makes it size
+      // to its content rather than force-growing to fill the column
+      // (`sm:flex-initial`, not `sm:flex-1`), and the composer's trigger
+      // still comes after that scroller in DOM order, i.e. it remains the
+      // column's footer rather than moving inside the scrolling region.
+      it("className/DOM-order check only — the scroller no longer carries flex-1, and the composer stays its sibling footer", () => {
+        renderView({ comments: [comment({ id: "c1", text: "first" })] });
+
+        const scroller = screen.getByTestId("task-detail-edit-column");
+        expect(scroller.className).toContain("sm:flex-initial");
+        expect(scroller.className).not.toMatch(/(?:^|\s)sm:flex-1(?:\s|$)/);
+
+        const composerTrigger = screen.getByRole("button", { name: "Open comment editor" });
+        // DOCUMENT_POSITION_FOLLOWING: the composer's trigger sits after
+        // the scroller in document order, i.e. as a later sibling, not a
+        // descendant nested inside it.
+        expect(
+          scroller.compareDocumentPosition(composerTrigger) & Node.DOCUMENT_POSITION_FOLLOWING,
+        ).toBeTruthy();
+        expect(scroller.contains(composerTrigger)).toBe(false);
+      });
     });
 
     describe("CMT-09 — the Comment options menu", () => {

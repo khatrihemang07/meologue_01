@@ -9,6 +9,7 @@ import { BackToChats } from "@/components/back-to-chats";
 import { inlineProse } from "@/components/inline-prose";
 import { Shell } from "@/components/shell";
 import { AddTaskForm } from "@/components/todo/add-task-form";
+import { BrowseView } from "@/components/todo/browse-view";
 import { CompletionToastBody } from "@/components/todo/completion-toast";
 import { FilterView } from "@/components/todo/filter-view";
 import { FiltersView } from "@/components/todo/filters-view";
@@ -16,6 +17,7 @@ import { LabelsView } from "@/components/todo/labels-view";
 import { LazyActivityFeed } from "@/components/todo/lazy-activity-feed";
 import { LazyTaskDetailView } from "@/components/todo/lazy-task-detail-view";
 import { LazyTaskScheduleSheet } from "@/components/todo/lazy-task-schedule-sheet";
+import { LazyTodoSidebar } from "@/components/todo/lazy-todo-sidebar";
 import { ProjectView } from "@/components/todo/project-view";
 import { ProjectsView } from "@/components/todo/projects-view";
 import { QuickAddDialog } from "@/components/todo/quick-add-dialog";
@@ -30,7 +32,7 @@ import { TodoNav } from "@/components/todo/todo-nav";
 import { UpcomingView } from "@/components/todo/upcoming-view";
 import { ConfirmDialog } from "@/components/ui/alert-dialog";
 import { useTodoKeymap } from "@/hooks/use-todo-keymap";
-import { useWideLayout } from "@/hooks/use-wide-layout";
+import { useTodoSidebarLayout } from "@/hooks/use-wide-layout";
 import { commentCountForTask, commentsForTask } from "@/lib/comment-counts";
 import { localDayKey } from "@/lib/local-day-key";
 import { sectionsQueryKey, tasksInProjectQueryKey } from "@/lib/query-keys";
@@ -65,7 +67,8 @@ interface TodoBackgroundView {
     | "activity"
     | "filters"
     | "filter"
-    | "labels";
+    | "labels"
+    | "browse";
   projectId: string | null;
   /**
    * The Filter this Task was opened from a result of, for `view ===
@@ -126,6 +129,10 @@ const VIEW_HEADINGS: Record<Exclude<TodoBackgroundView["view"], "project" | "fil
   activity: "Activity",
   filters: "Filters & Labels",
   labels: "Labels",
+  // ANAV-01: Todoist's own name for this screen (measured live, v12278) —
+  // not "Menu" or "More", which is what a generic hub might otherwise be
+  // called.
+  browse: "Browse",
 };
 
 /**
@@ -207,7 +214,8 @@ export interface TodoPageProps {
     | "activity"
     | "filters"
     | "filter"
-    | "labels";
+    | "labels"
+    | "browse";
 }
 
 /**
@@ -290,13 +298,23 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
   }>();
   const location = useLocation();
   const navigate = useNavigate();
-  // Issue #307: gates the header Search door below — TodoSidebar (rendered
-  // by chat-shell-layout.tsx in place of the chat list, ADR 0076) already
-  // carries its own working `/todo/search` link at this same breakpoint
-  // (todo-sidebar.tsx), so rendering a second one here at ≥900px would be
-  // the identical duplicate-affordance shape todo-nav.tsx's own header
-  // comment already avoids for its `<nav>` landmark.
-  const wide = useWideLayout();
+  // The owner's amendment to ADR 0076 (ADR 0083): `TodoSidebar` mounts as a
+  // second column inside this page's own subtree, beside `Shell` below,
+  // only above 1200px — the shell's own chat-list pane keeps the 900px
+  // `wide` breakpoint, and the two are deliberately different numbers.
+  //
+  // This page now gates everything that depended on "is TodoSidebar on
+  // screen" on THIS query, not on the shell's. Issue #307's header Search
+  // door is the case: it hid at 900px because TodoSidebar carried its own
+  // `/todo/search` link from there, and rendering a second one would have
+  // been the duplicate-affordance shape `todo-nav.tsx` avoids for its
+  // `<nav>` landmark. Once the sidebar moved to 1200px, that premise was
+  // false for the whole 900-1199px band — the door hid while the link
+  // justifying the hiding was not rendered. `todo-create-fab.tsx` carried
+  // the identical false premise and was found the same day; both now track
+  // the sidebar rather than the pane, because the sidebar's presence is
+  // what the hiding was ever about.
+  const sidebarWide = useTodoSidebarLayout();
   // Issue #306: `?intent=reply` (a Task row's comment badge,
   // `taskDetailPath`'s own `commentIntent` option) read back out of the
   // current URL — `openCommentComposer` below is this page's one use of
@@ -961,7 +979,12 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
     return total;
   }
 
-  return (
+  // Built as a separate expression, rather than nesting `<Shell>` a level
+  // deeper inline below, so the sidebar column wrapping it (`return`, just
+  // below) costs one indentation level for the wrapper itself and none for
+  // everything `<Shell>` already renders — that subtree is untouched by
+  // this ticket and stays untouched on the page too.
+  const content = (
     <Shell
       title={todoHeading(backgroundView, currentProject, currentFilter)}
       back={<BackToChats />}
@@ -969,9 +992,21 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
       messageAction={messageAction}
       // Issue #307: the minimal door — nothing on a narrow viewport linked
       // to the real `/todo/search` route or page before this (the bottom
-      // bar's six destinations, todo-nav-destinations.ts, don't include it,
-      // and TodoSidebar only renders at the wide breakpoint `wide` names
-      // below). `undefined`, not `false`/`null`, when hidden: Shell's own
+      // bar's four destinations, todo-nav-destinations.ts, don't include it
+      // — Browse does, and Browse is a tab rather than a door in this row).
+      //
+      // **Gated on `sidebarWide` (1200px), not `wide` (900px), and the
+      // difference is the whole point.** This door used to hide at 900px
+      // because `TodoSidebar` reached Search from there. ADR 0083 moved the
+      // sidebar to 1200px and left this gate behind, which hid the door
+      // across the whole 900-1199px band while the sidebar justifying the
+      // hiding was not on screen — the identical false premise
+      // `todo-create-fab.tsx`'s own gate carried, found the same way, on the
+      // same day. ADR 0084 ratifies meologue keeping BOTH doors to Search
+      // (this one and Browse's row) where Todoist Android has only the hub
+      // row, so a band where only one of them exists is this decision being
+      // half-applied rather than a smaller version of it.
+      // `undefined`, not `false`/`null`, when hidden: Shell's own
       // `{action && ...}` check (shell.tsx) treats any of the three
       // identically, and `undefined` is what every other page already
       // passes for "no action" here.
@@ -985,7 +1020,7 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
       // real history entry existing, which only a push (not a `replace`)
       // leaves behind.
       action={
-        !wide && backgroundView.view !== "search" ? (
+        !sidebarWide && backgroundView.view !== "search" ? (
           <Link
             to="/todo/search"
             aria-label="Search"
@@ -1158,6 +1193,12 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
           />
         ))}
 
+      {/* ANAV-01: the bar's fourth row (`todo-nav.tsx`) opens this —
+          `browse-view.tsx`'s own header comment has the full reasoning for
+          which of real Todoist's eleven rows this rebuilds and which it
+          deliberately skips. */}
+      {backgroundView.view === "browse" && <BrowseView />}
+
       {backgroundView.view === "search" && (
         <TaskSearchPage
           tasks={tasks}
@@ -1226,7 +1267,12 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
         backgroundView.view !== "filters" &&
         backgroundView.view !== "filter" &&
         backgroundView.view !== "labels" &&
-        backgroundView.view !== "upcoming" && (
+        backgroundView.view !== "upcoming" &&
+        // ANAV-01: Browse is a hub of links, not a Task list — it has no
+        // "current view" for a captured Task to inherit, the identical
+        // reason every other non-list view above is already excluded (this
+        // block's own doc comment, further up).
+        backgroundView.view !== "browse" && (
           <AddTaskForm
             onAdd={handleAdd}
             disabled={disabled}
@@ -1421,5 +1467,34 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
           (`useTodoKeymap`'s `onShowShortcuts`). */}
       <TodoKeyboardShortcutsOverlay open={shortcutsOpen} onOpenChange={setShortcutsOpen} />
     </Shell>
+  );
+
+  return (
+    <div className="flex h-full min-w-0 flex-1 overflow-hidden">
+      {/*
+        The owner's amendment to ADR 0076: `TodoSidebar` is a second column
+        inside Todo's own subtree, beside `content` (`<Shell>`, above)
+        rather than in `chat-shell-layout.tsx`'s existing pane — that pane
+        is always `ChatListPane` now, `/todo/*` included
+        (chat-shell-layout.tsx's own header comment). `w-[260px]`, matching
+        `PaneDivider`'s own `MIN_LIST_WIDTH`, since the chat list pane
+        already carries the one draggable width mechanism this app has; a
+        second one for a column that only ever renders above 1200px, where
+        there is room to spare, would be the "second width mechanism" ADR
+        0076 itself argued against adding. No `PaneDivider` beside it for
+        the same reason — it is fixed, not resized. `Suspense
+        fallback={null}` mirrors every other lazy `/todo/*` chunk
+        (`lazy-todo-sidebar.ts`'s own header comment): it only ever matters
+        on the first `/todo/*` navigation past 1200px in a session.
+      */}
+      {sidebarWide && (
+        <div className="flex w-[260px] shrink-0 overflow-hidden">
+          <Suspense fallback={null}>
+            <LazyTodoSidebar />
+          </Suspense>
+        </div>
+      )}
+      {content}
+    </div>
   );
 }

@@ -1,4 +1,5 @@
-import { type CSSProperties, lazy, Suspense, useEffect } from "react";
+import type { CSSProperties } from "react";
+import { useEffect } from "react";
 import { Outlet, useLocation } from "react-router";
 import { destinationForPath } from "@/components/chat-list";
 import { ChatListPane } from "@/components/chat-list-pane";
@@ -8,20 +9,6 @@ import { useWideLayout } from "@/hooks/use-wide-layout";
 import { writeLastDestination } from "@/lib/last-destination";
 import { useSettingsStore } from "@/lib/settings";
 import { useTodoSurface } from "@/lib/todo-surface";
-
-// Lazy, exactly like `todo-page.tsx`/`settings-page.tsx` themselves
-// (App.tsx's own header comment on issue #150's cold-start boundary) —
-// this component renders unconditionally on every route, `/` included, so
-// a static import here would drag `entry-store-layout.tsx` (todo-sidebar.tsx's
-// own header comment explains why it needs that module) onto the one path
-// that boundary exists to keep clear, for a reader who may never open Todo
-// at all. `Suspense fallback={null}` below reuses App.tsx's own reasoning
-// for its outer boundary: every lazy chunk here ships in the same install
-// as the shell, so a frame or two of nothing beats a flash of chrome
-// nobody has time to read.
-const TodoSidebar = lazy(() =>
-  import("@/components/todo/todo-sidebar").then((m) => ({ default: m.TodoSidebar })),
-);
 
 /**
  * The window, and the two-level shape every page renders inside (ADR 0036).
@@ -78,11 +65,18 @@ const TodoSidebar = lazy(() =>
  * painted no chip there and the priority swatches all rendered grey. The
  * overlay now holds its own claim.
  *
- * Scoping the whole document is safe precisely because of what a `/todo/*`
- * route renders: the pane shows Todo's own sidebar and the Outlet shows Todo.
- * There is no non-Todo surface on screen to repaint by accident. The overlay's
- * claim is safe for the narrower reason that it is modal — while it is open it
- * *is* the surface the reader is looking at.
+ * Scoping the whole document was safe under ADR 0076 because of what a
+ * `/todo/*` route rendered: the pane showed Todo's own sidebar and the
+ * Outlet showed Todo, so there was no non-Todo surface on screen to repaint
+ * by accident. **That is no longer true.** The owner overruled ADR 0076: this
+ * pane is always `ChatListPane`, `/todo/*` included, so `ChatListPane` now
+ * renders inside the `data-surface="todo"` scope and repaints in Todoist's
+ * palette while Todo is open, alongside the app's own — an accepted visual
+ * consequence of the amendment, not one this file tries to undo; scoping the
+ * token write itself is `todo-surface.ts`'s concern, unchanged here. The
+ * overlay's own claim is still safe for the narrower reason it always was:
+ * it is modal, so while it is open it *is* the surface the reader is
+ * looking at.
  *
  * `useLocation` rather than reading `window.location` keeps this reacting to
  * every route change rather than only to a remount — this layout persists
@@ -138,23 +132,15 @@ export function ChatShellLayout() {
         <>
           <div className="flex w-[clamp(260px,var(--list-w),min(560px,calc(100vw-360px)))] shrink-0 overflow-hidden">
             {/*
-              The existing pane, reused rather than duplicated (issue
-              #223's own brief: no second pane, no second divider, no
-              second width mechanism) — `TodoSidebar` replaces
-              `ChatListPane`'s content precisely while `isTodo` is true,
-              the same boolean this file's own `data-surface` line already
-              computed for the identical route test. `Suspense
-              fallback={null}` only ever matters on the first `/todo/*`
-              navigation in a session; every navigation after that hits an
-              already-resolved module.
+              The owner overruled ADR 0076: this pane is always
+              `ChatListPane` now, `/todo/*` included, rather than swapping
+              in `TodoSidebar` while `isTodo` is true. `TodoSidebar` still
+              renders on `/todo/*`, but as a second column inside Todo's own
+              subtree above 1200px (`todo-page.tsx`'s own header comment)
+              rather than replacing the pane that already exists — entering
+              Todo no longer makes the rest of the app disappear.
             */}
-            {isTodo ? (
-              <Suspense fallback={null}>
-                <TodoSidebar />
-              </Suspense>
-            ) : (
-              <ChatListPane />
-            )}
+            <ChatListPane />
           </div>
           <PaneDivider />
         </>

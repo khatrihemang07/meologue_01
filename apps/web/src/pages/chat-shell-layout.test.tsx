@@ -1,9 +1,8 @@
-import { QueryClient, QueryClientProvider, queryOptions } from "@tanstack/react-query";
 import { render, screen } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { TodoNav } from "@/components/todo/todo-nav";
-import { ENTRY_STORE_QUERY_KEY } from "@/lib/query-keys";
+import { TODO_SIDEBAR_QUERY, WIDE_LAYOUT_QUERY } from "@/hooks/use-wide-layout";
 import { ChatShellLayout } from "./chat-shell-layout";
 
 /**
@@ -112,13 +111,13 @@ describe("below the wide breakpoint (no matchMedia stub — use-wide-layout.ts's
       </MemoryRouter>,
     );
 
-    // TodoNav itself: a real link only it renders (TodoSidebar's own
-    // "Projects" is a heading over a Project tree, never a link with this
-    // exact accessible name — todo-sidebar.tsx's own header comment).
-    expect(screen.getByRole("link", { name: "Projects" })).toHaveAttribute(
-      "href",
-      "/todo/projects",
-    );
+    // TodoNav itself: a real link only it renders. Since ADR 0084 the bar
+    // carries Inbox/Today/Upcoming/Browse, and Browse is the one
+    // destination TodoSidebar has no row for at all — the sidebar lists
+    // Browse's own contents (Search, Filters & Labels, Reporting,
+    // Projects) directly instead. So "Browse" is the unambiguous tell that
+    // the bar rendered and the sidebar did not.
+    expect(screen.getByRole("link", { name: "Browse" })).toHaveAttribute("href", "/todo/browse");
     // No sidebar-only content anywhere — proves the pane block
     // (`{wide && …}` in chat-shell-layout.tsx) didn't render at all,
     // rather than rendering and simply losing a race.
@@ -127,48 +126,15 @@ describe("below the wide breakpoint (no matchMedia stub — use-wide-layout.ts's
   });
 });
 
-const { openEntryStoreMock } = vi.hoisted(() => ({
-  openEntryStoreMock: vi.fn(),
-}));
-
-// TodoSidebar's own header comment: it reads the Entry store the same
-// sibling-of-the-Outlet way settings-page.tsx does, via
-// `entryStoreQueryOptions` directly — mocked here exactly as
-// todo-sidebar.test.tsx and settings-page.test.tsx both already do, so
-// mounting it (via ChatShellLayout's own lazy import) needs no real
-// SqliteDriver.
-vi.mock("@/pages/entry-store-layout", () => ({
-  entryStoreQueryOptions: queryOptions({
-    queryKey: ENTRY_STORE_QUERY_KEY,
-    queryFn: openEntryStoreMock,
-    staleTime: Number.POSITIVE_INFINITY,
-    gcTime: Number.POSITIVE_INFINITY,
-    retry: false,
-    retryOnMount: false,
-  }),
-}));
-
-function renderWideShell(initialPath: string) {
-  const queryClient = new QueryClient();
-  return render(
-    <QueryClientProvider client={queryClient}>
-      <MemoryRouter initialEntries={[initialPath]}>
-        <Routes>
-          <Route element={<ChatShellLayout />}>
-            <Route path="/todo/inbox" element={<div>Todo destination</div>} />
-            <Route path="/composer" element={<div>Composer destination</div>} />
-          </Route>
-        </Routes>
-      </MemoryRouter>
-    </QueryClientProvider>,
-  );
-}
-
 /**
- * The other half of issue #223's own brief: at the wide breakpoint, the
- * one existing pane shows `TodoSidebar` under `/todo/*` and `ChatListPane`
- * everywhere else — never both, never neither, never a second pane
- * alongside the first.
+ * The owner overruled ADR 0076 (issue #223's own brief for this pane no
+ * longer holds): at the wide breakpoint, the one existing pane is always
+ * `ChatListPane` now — `/todo/*` included, never swapped for `TodoSidebar`.
+ * `TodoSidebar` is `todo-page.tsx`'s own concern, mounted as a second
+ * column inside Todo's own subtree only above 1200px
+ * (`todo-page.test.tsx` covers that half); nothing about it is this file's
+ * to prove any more, since `chat-shell-layout.tsx` no longer imports it at
+ * all.
  */
 describe("at the wide breakpoint, the one pane's content", () => {
   afterEach(removeMatchMedia);
@@ -176,38 +142,74 @@ describe("at the wide breakpoint, the one pane's content", () => {
   it("is ChatListPane outside /todo/*", () => {
     installMatchMedia(true);
 
-    renderWideShell("/composer");
+    renderShell("/composer");
 
     expect(screen.getByRole("navigation", { name: "Chats" })).toBeInTheDocument();
   });
 
-  it("is TodoSidebar, not ChatListPane, under /todo/*", async () => {
+  // Replaces this describe block's own former "is TodoSidebar, not
+  // ChatListPane, under /todo/*" — that assertion was ADR 0076's decision,
+  // now overruled; this is its replacement, not a weakened version of it.
+  it("is ChatListPane under /todo/* too, not TodoSidebar", () => {
     installMatchMedia(true);
-    openEntryStoreMock.mockResolvedValue({
-      taskStore: { list: () => Promise.resolve([]) },
-      projectStore: { listProjects: () => Promise.resolve([]) },
-      filterStore: { list: () => Promise.resolve([]) },
-    });
 
-    renderWideShell("/todo/inbox");
+    renderShell("/todo/inbox");
 
-    // Real timers throughout this file (no `vi.useFakeTimers()`) —
-    // `React.lazy`'s own dynamic import resolving, `entryStoreQueryOptions`'s
-    // promise, and the three dependent Tasks/Projects/Filters queries it
-    // unlocks all settle over several real microtask/timer hops TanStack
-    // Query schedules internally; `findByRole` polls for exactly that,
-    // where fake timers would freeze it (todo-sidebar.test.tsx's own
-    // header comment records trying that first). A longer-than-default
-    // timeout: this is the one test in the suite actually paying for
-    // `React.lazy`'s own dynamic `import()`, which the default 1000ms
-    // sometimes outruns even though the resolution itself never fails.
-    const todoSidebarNav = await screen.findByRole(
-      "navigation",
-      { name: "Todo" },
-      { timeout: 5000 },
+    expect(screen.getByRole("navigation", { name: "Chats" })).toBeInTheDocument();
+  });
+});
+
+function installBandMatchMedia(wide: boolean, sidebarWide: boolean) {
+  Object.defineProperty(window, "matchMedia", {
+    value: vi.fn((query: string) => ({
+      matches:
+        (query === WIDE_LAYOUT_QUERY && wide) || (query === TODO_SIDEBAR_QUERY && sidebarWide),
+      media: query,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+    })),
+    configurable: true,
+    writable: true,
+  });
+}
+
+/**
+ * The band the owner's amendment to ADR 0076 creates: wide enough for the
+ * chat list pane (`WIDE_LAYOUT_QUERY`, 900px) but not yet wide enough for
+ * Todo's own sidebar (`TODO_SIDEBAR_QUERY`, 1200px, `todo-nav.tsx`'s own
+ * header comment on why `TodoNav`'s own breakpoint moved here with it).
+ * `TodoNav` is the real component, not a stand-in, mirroring the below-
+ * the-wide-breakpoint describe block's own reasoning above — the claim
+ * under test is specifically that it still covers this band now that its
+ * own hand-off point moved.
+ */
+describe("in the 900-1199px band (wide, not yet sidebar-wide)", () => {
+  afterEach(removeMatchMedia);
+
+  it("shows the chat list pane and TodoNav's bottom bar, with no TodoSidebar", () => {
+    installBandMatchMedia(true, false);
+
+    render(
+      <MemoryRouter initialEntries={["/todo/inbox"]}>
+        <Routes>
+          <Route element={<ChatShellLayout />}>
+            <Route path="/todo/inbox" element={<TodoNav />} />
+          </Route>
+        </Routes>
+      </MemoryRouter>,
     );
 
-    expect(todoSidebarNav).toBeInTheDocument();
-    expect(screen.queryByRole("navigation", { name: "Chats" })).not.toBeInTheDocument();
+    expect(screen.getByRole("navigation", { name: "Chats" })).toBeInTheDocument();
+    // TodoNav itself: a real link only it renders. Since ADR 0084 the bar
+    // carries Inbox/Today/Upcoming/Browse, and Browse is the one
+    // destination TodoSidebar has no row for at all — the sidebar lists
+    // Browse's own contents (Search, Filters & Labels, Reporting,
+    // Projects) directly instead. So "Browse" is the unambiguous tell that
+    // the bar rendered and the sidebar did not.
+    expect(screen.getByRole("link", { name: "Browse" })).toHaveAttribute("href", "/todo/browse");
+    // Exactly one "Todo" nav landmark, not two — the duplicate-landmark
+    // defect ADR 0076's own Decision section names (todo-nav.tsx's own
+    // header comment) is exactly what a second one here would be.
+    expect(screen.getAllByRole("navigation", { name: "Todo" })).toHaveLength(1);
   });
 });

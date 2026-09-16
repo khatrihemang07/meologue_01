@@ -1,11 +1,13 @@
 /**
  * Todo's own sidebar — issue #223's second half, the desktop-shaped
- * counterpart to `todo-nav.tsx`'s bottom tab bar. Rendered by
- * `chat-shell-layout.tsx` **in place of** `ChatListPane` in the existing
- * left pane, only while a `/todo/*` route is open, exactly the way that
- * file's own header comment already frames the split: one pane, one
- * width mechanism, whichever content the open route calls for.
+ * counterpart to `todo-nav.tsx`'s bottom tab bar. The owner overruled ADR
+ * 0076: this no longer replaces `ChatListPane` in `chat-shell-layout.tsx`'s
+ * existing pane. `todo-page.tsx` now mounts it directly, as a second column
+ * inside Todo's own subtree, only above 1200px (`useTodoSidebarLayout`,
+ * `use-wide-layout.ts`) — the chat list pane stays on screen beside it, at
+ * every width Todo itself renders through the pane at all.
  *
+
  * **Navigation only**, deliberately: every row here is a route and a
  * count, nothing more. Creating or renaming a Project belongs to issue
  * #229, not here — the Projects tree below reads `projects` and links
@@ -15,17 +17,22 @@
  * `ProjectsView` has one.
  *
  * **Why this reads the Entry store directly, the way `ChatListPane` never
- * does.** `chat-shell-layout.tsx` renders this pane as a sibling of its
- * own `<Outlet/>`, one level *above* where `EntryStoreLayout` provides
- * `useEntryStore()`'s context (App.tsx: `<Route element={<ChatShellLayout
- * />}><Route element={<EntryStoreLayout />}>…`) — so, unlike everything
- * `todo-page.tsx` renders, this component sits outside that Outlet and
- * cannot call `useEntryStore()` at all (`entry-store-layout.tsx`'s own
- * doc comment on that hook: "anything rendered outside EntryStoreLayout's
- * Outlet must not call this"). `settings-page.tsx` and `use-sync-loop.ts`
- * solved the identical problem for the identical structural reason
- * (Settings is a sibling route, also outside that Outlet) by subscribing
- * to `entryStoreQueryOptions` directly — the same TanStack Query cache
+ * does — kept unchanged by the move above, though no longer required by
+ * it.** This used to be a sibling of `EntryStoreLayout`'s own `<Outlet/>`,
+ * one level *above* where that layout provides `useEntryStore()`'s context
+ * (App.tsx: `<Route element={<ChatShellLayout />}><Route
+ * element={<EntryStoreLayout />}>…`), so it could not call
+ * `useEntryStore()` at all (`entry-store-layout.tsx`'s own doc comment on
+ * that hook: "anything rendered outside EntryStoreLayout's Outlet must not
+ * call this"). Mounted inside `todo-page.tsx` instead, it now sits *inside*
+ * that Outlet the same way every other Todo view does, and could reach
+ * `useEntryStore()` directly — this file is not rewired to, since nothing
+ * about how it reads Tasks/Projects/Filters needed to change for the
+ * mount to move, and doing so anyway would be exactly the refactor-beyond-
+ * the-brief this move was scoped not to include. `settings-page.tsx` and
+ * `use-sync-loop.ts` solved the original, still-real problem for Settings
+ * (a sibling route, still outside that Outlet) by subscribing to
+ * `entryStoreQueryOptions` directly — the same TanStack Query cache
  * `EntryStoreLayout` itself populates, keyed so every subscriber shares
  * one open rather than each triggering its own. This does the same, then
  * reads Tasks/Projects/Filters with the identical query keys
@@ -35,14 +42,13 @@
  * a full mutation surface (`addTask`, `renameProject`, …) this sidebar
  * has no use for and would only be discarding.
  *
- * **Lazy, like every other `/todo/*` chunk.** `chat-shell-layout.tsx`
- * renders unconditionally on every route in the app, `/` included — a
- * static import of this component there would pull `entry-store-layout.tsx`
- * (and everything it drags in) onto the same cold-start path issue #150's
- * lazy boundary exists to keep clear (App.tsx's own header comment), even
- * for a reader who never opens Todo. `React.lazy`, mirroring
- * `todo-page.tsx`'s/`settings-page.tsx`'s own dynamic `import()`, keeps
- * this chunk out of that path entirely.
+ * **Lazy, like every other `/todo/*` chunk.** `lazy-todo-sidebar.ts` wraps
+ * this in `React.lazy`, mirroring `todo-page.tsx`'s/`settings-page.tsx`'s
+ * own dynamic `import()` — a static import here would pull
+ * `entry-store-layout.tsx` (and everything it drags in) onto the cold-start
+ * path issue #150's lazy boundary exists to keep clear (App.tsx's own
+ * header comment), even for a reader who never opens Todo, or who opens it
+ * below 1200px where this component never mounts at all.
  *
  * Before the store resolves (a cold render, or a failed open — the
  * `message`/`disabled` state `todo-page.tsx`'s own Shell already

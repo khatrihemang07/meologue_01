@@ -674,6 +674,39 @@
      theme (THEME-01), so light keeps the colour it already had rather than
      inventing a value; the dark block carries the measurement. */
   --td-add-task-placeholder: var(--muted-foreground);
+
+  /*
+   * ANAV-01/ANAV-05 (parity ledger): the bottom bar's active-tab pill,
+   * read live against real Todoist Android (v12278) — an elliptical
+   * highlight sitting behind the icon glyph alone (proven geometrically:
+   * the icon and the pill share one centre, the label sits 13-23 device
+   * px below the pill's own lowest painted pixel, no overlap), painted a
+   * fixed dark maroon-red regardless of theme, with the icon and the
+   * label reading two DIFFERENT reds — `rgb(222,76,74)` and
+   * `rgb(240,127,117)` on the live device.
+   *
+   * Aliased to existing `--td-*` accents rather than the sampled numbers
+   * themselves: that reading is dark-theme Todoist only, and this app has
+   * its own palette in both themes (this scope's own header comment,
+   * "RE-POINT, DON'T RENAME" / rule 2). `--td-recognition-background` is
+   * already this exact shape — a fixed, theme-independent dark-red chip
+   * behind glyphs, not following `--foreground` — so the pill reuses it
+   * rather than inventing a second "fixed chip" colour. `--td-calendar-
+   * selected` is already this surface's "this one thing is selected" red,
+   * the closest existing match to the icon's own ink. The label needs a
+   * *different* red from the icon (the live pair is deliberately not the
+   * same tone) — `--td-priority-row-1` is the nearest already-declared
+   * red that isn't `--td-calendar-selected`, so the label borrows that
+   * one instead of a fresh literal. `--td-nav-inactive` re-points to the
+   * same `--muted-foreground` every other muted label on this surface
+   * already uses — the live reading has the inactive icon and label as
+   * the identical grey, which is exactly what one shared token gives for
+   * free.
+   */
+  --td-nav-active-pill: var(--td-recognition-background);
+  --td-nav-active-icon: var(--td-calendar-selected);
+  --td-nav-active-label: var(--td-priority-row-1);
+  --td-nav-inactive: var(--muted-foreground);
 }
 
 /*

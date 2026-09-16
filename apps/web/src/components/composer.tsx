@@ -554,16 +554,36 @@ export function Composer({
     if (decision.kind === "cancelUnchanged") {
       // ADR 0044: nothing to write, so this leaves edit mode exactly the
       // way Cancel does — the page's own `editingEntry` transition below
-      // is what actually restores the stashed draft.
+      // is what actually restores the stashed draft. No explicit
+      // `view.focus()` here: the button's own `onMouseDown` above already
+      // keeps this SAME view focused straight through the click, and the
+      // eventual `loadDocument` that restores the draft (the editingEntry
+      // effect, once the page clears the prop) runs against that still-
+      // focused view via `updateState`, which reuses `view.dom` rather
+      // than replacing it — there is no point between here and there where
+      // focus is actually at risk, unlike the new-Entry path below, which
+      // calls `loadDocument` itself, synchronously, before this render's
+      // click has finished.
       onCancelEdit?.();
       return;
     }
     if (decision.kind === "commit") {
+      // Same reasoning as `cancelUnchanged` just above — `onCommitEdit`
+      // hands off to the page's own `editingEntry` transition, which
+      // reseeds THIS view later without ever blurring it first.
       onCommitEdit?.(decision.id, decision.body, promotion);
       return;
     }
     onSend(decision.body, promotion);
     loadDocument(view, "");
+    // Belt over the `onMouseDown` brace above, matching
+    // `chooseItem`/`chooseSlashItem`/`insertAtCursor`'s own explicit
+    // `view.focus()` and this file's own L574-587 rule: `loadDocument`
+    // just built a brand new `EditorState`, and Android's touch event
+    // ordering is not the guarantee a desktop `mousedown` is, so this is
+    // the one path here that actually reloads the document rather than
+    // just handing off to a later effect.
+    view.focus();
     dirtyRef.current = false;
   }, [disabled, editingEntry, onCancelEdit, onCommitEdit, onSend, loadDocument]);
 
@@ -1028,6 +1048,15 @@ export function Composer({
           // already queries by. size-11 (44px) meets the platform
           // tap-target minimum the icon-lg token alone (36px) doesn't reach.
           className="size-11 shrink-0 self-end rounded-full"
+          // Same "steals no caret" trick as every toolbar button
+          // (composer-toolbar.tsx's own comment) — without this, Send was
+          // the one doc-mutating control in this file that didn't follow
+          // its own rule (L574-587 above): on Android, where Send is the
+          // ONLY way to submit (submit-chord.ts returns false there
+          // unconditionally), a tap blurred the field and closed the soft
+          // keyboard instead of leaving the Composer ready for the next
+          // Entry.
+          onMouseDown={(event) => event.preventDefault()}
           onClick={send}
           disabled={disabled || isEmpty}
         >

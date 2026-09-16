@@ -582,7 +582,13 @@ const CHUNK_BUDGETS = {
   // immediately after — a real 1,694-byte drop from `ActivityFeed` going
   // lazy, recorded as the new baseline, not squared against the older,
   // already-stale 92,478.
-  "src/pages/todo-page.tsx": { ceilingBytes: 99_000, baselineBytes: 96_130 },
+  // Re-measured 2026-09-17 after ADR 0084 added the Browse hub to this
+  // route: 96,130 -> 96,709 gzip (+579 bytes for `browse-view.tsx`). The
+  // ceiling is NOT raised — this route runs on ~3% headroom rather than the
+  // ~30% the rest of this table assumes, so the next Todo view to land here
+  // trips it, and the fix then is a lazy boundary (as HEAD's own
+  // task-detail-view commit did) rather than a bigger number.
+  "src/pages/todo-page.tsx": { ceilingBytes: 99_000, baselineBytes: 96_709 },
 };
 
 /**

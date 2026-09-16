@@ -1,13 +1,54 @@
 import type { Comment, Event, Task } from "@meologue/core";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { QueryClient, QueryClientProvider, queryOptions } from "@tanstack/react-query";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { useState } from "react";
 import { Link, MemoryRouter, Outlet, Route, Routes, useNavigate } from "react-router";
 import { toast } from "sonner";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { TODO_SIDEBAR_QUERY, WIDE_LAYOUT_QUERY } from "@/hooks/use-wide-layout";
 import { localDayKey } from "@/lib/local-day-key";
+import { ENTRY_STORE_QUERY_KEY } from "@/lib/query-keys";
 import type { EntryStoreOutletContext } from "@/pages/entry-store-layout";
 import { TodoPage } from "./todo-page";
+
+const { openEntryStoreMock } = vi.hoisted(() => ({
+  openEntryStoreMock: vi.fn(),
+}));
+
+// TodoSidebar's own header comment: it reads the Entry store directly via
+// `entryStoreQueryOptions`, the same TanStack Query cache
+// `EntryStoreLayout` itself populates, rather than through the
+// `EntryStoreOutletContext` `renderTodoPage` stubs below for `TodoPage`
+// itself — mocked here exactly as `todo-sidebar.test.tsx` and
+// `chat-shell-layout.test.tsx` (its own former copy of this mock, before
+// the owner's amendment to ADR 0076 moved the sidebar's mount point here)
+// already do, so mounting it via `TodoPage`'s own lazy import needs no
+// real SqliteDriver. A *partial* mock, unlike those two files' own full
+// replacement: `TodoPage` itself (unlike `TodoSidebar` or
+// `ChatShellLayout`) imports `useEntryStore` from this same module at its
+// own top level, so a full replacement here breaks every test in this
+// file, not just the sidebar-column ones — `importOriginal` keeps that
+// export (and everything else real) intact and only re-points
+// `entryStoreQueryOptions`. Harmless for every test that never triggers
+// `sidebarWide` (`installWideMatchMedia`/`installNarrowMatchMedia` below
+// are both query-aware and leave `TODO_SIDEBAR_QUERY` unanswered, so
+// `LazyTodoSidebar` never mounts under them at all) — this mock only ever
+// matters to the dedicated sidebar-column tests near the bottom of this
+// file.
+vi.mock("@/pages/entry-store-layout", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/pages/entry-store-layout")>();
+  return {
+    ...actual,
+    entryStoreQueryOptions: queryOptions({
+      queryKey: ENTRY_STORE_QUERY_KEY,
+      queryFn: openEntryStoreMock,
+      staleTime: Number.POSITIVE_INFINITY,
+      gcTime: Number.POSITIVE_INFINITY,
+      retry: false,
+      retryOnMount: false,
+    }),
+  };
+});
 
 // `toast` is callable (task-tree.tsx's reparent-refused toast, issue #171,
 // via `.error`) and, since CMT-04, also carries a `.custom` and a
@@ -204,6 +245,11 @@ function renderTodoPage(context: EntryStoreOutletContext, initialPath = "/todo/i
                 `/todo/search` — needed for the header search door's own
                 tests below. */}
             <Route path="/todo/search" element={<TodoPage view="search" />} />
+            {/* ANAV-01: Browse's own route, mirroring App.tsx's real
+                `/todo/browse` — needed for the Browse view's own tests
+                below, and for the Search-reachability regression test in
+                the 900-1199px band. */}
+            <Route path="/todo/browse" element={<TodoPage view="browse" />} />
             {/* Issue #178's Task detail route — no `view` prop, mirroring
                 App.tsx's own identical route exactly (that file's own
                 comment explains why). */}
@@ -1736,11 +1782,15 @@ describe("TodoPage — in-column heading (issue #254)", () => {
 // Issue #307: before this, `/todo/search` was a real route with a real page
 // that nothing on a narrow viewport linked to — the bottom bar
 // (todo-nav.tsx's own TODO_NAV_DESTINATIONS) carries six destinations and
-// Search isn't one of them, and TodoSidebar (its ≥900px replacement) is the
-// only thing that ever did. This is the minimal door: a Search action in
+// Search isn't one of them, and TodoSidebar was the only thing that ever
+// did, at the breakpoint it replaced the bar at when this door was built
+// (≥900px, at the time). This is the minimal door: a Search action in
 // Todo's own in-column heading (shell.tsx's `hideAppBar` row, issue #254),
 // reachable below the wide-layout breakpoint the same way the rest of
-// Todo's chrome already keys off it.
+// Todo's chrome already keys off it. The owner's later amendment to ADR
+// 0076 moved TodoSidebar's own breakpoint to 1200px without moving this
+// door's — the "TodoPage — sidebar column" describe block below has the
+// gap that leaves and why this describe block's own gate stays put.
 //
 // Pinned explicitly here rather than left to apps/web/src/test/setup.ts's
 // own ambient stub (which already answers `false` for every query but
@@ -1761,10 +1811,33 @@ function installNarrowMatchMedia() {
   });
 }
 
+// Query-aware, unlike a blunt "true for everything" stub: this page now
+// also reads `TODO_SIDEBAR_QUERY` (`sidebarWide`, for the sidebar column
+// below), a narrower, independent query from `WIDE_LAYOUT_QUERY` — a test
+// asserting the Search door's own 900px claim has to leave that second
+// query unanswered (false), or it would incidentally also mount
+// `LazyTodoSidebar` and start proving something this describe block was
+// never about.
 function installWideMatchMedia() {
   Object.defineProperty(window, "matchMedia", {
     value: vi.fn((query: string) => ({
-      matches: true,
+      matches: query === WIDE_LAYOUT_QUERY,
+      media: query,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+    })),
+    configurable: true,
+    writable: true,
+  });
+}
+
+// Both queries match: a 1200px+ window is, by construction, also a 900px+
+// one. Used only by the sidebar-column tests below, which are the one
+// place in this file that wants `LazyTodoSidebar` to actually mount.
+function installSidebarWideMatchMedia() {
+  Object.defineProperty(window, "matchMedia", {
+    value: vi.fn((query: string) => ({
+      matches: query === WIDE_LAYOUT_QUERY || query === TODO_SIDEBAR_QUERY,
       media: query,
       addEventListener: vi.fn(),
       removeEventListener: vi.fn(),
@@ -1800,11 +1873,61 @@ describe("TodoPage — Search door (issue #307)", () => {
     expect(link.className).toContain("size-12");
   });
 
-  it("at the 900px wide-layout breakpoint, renders nothing — TodoSidebar's own Search link already reaches it there", () => {
+  // The reason this door hides at 900px used to be that TodoSidebar's own
+  // Search link already reached it there. The owner's amendment to ADR
+  // 0076 moved TodoSidebar's own mount point to 1200px, so between 900 and
+  // 1199px that reason no longer holds — this assertion (the door stays
+  // hidden) is unchanged and still true. ANAV-01 is what closes the gap
+  // that left open, but not by repointing this gate: `todo-page.tsx`'s own
+  // comment on `wide` above the Search `action` prop has the reasoning,
+  // and "TodoPage — Browse (ANAV-01)" below is where the closed gap is
+  // actually proven, on `/todo/browse` rather than `/todo/inbox` — this
+  // test only proves the door itself, specifically, still doesn't grow a
+  // second copy of itself in the 900-1199px band.
+  // ADR 0083 + 0084. This door hid at 900px because `TodoSidebar` reached
+  // Search from there; the sidebar moved to 1200px and the gate did not
+  // follow, so across this whole band the door hid while the link
+  // justifying the hiding was not rendered. `installWideMatchMedia` is
+  // exactly that band — `wide` true, `sidebarWide` false — which is why it
+  // is the mock this test wants.
+  it("renders in the 900-1199px band, where TodoSidebar is not mounted to reach Search", () => {
     installWideMatchMedia();
     renderTodoPage(readyContext(), "/todo/inbox");
 
-    expect(screen.queryByRole("link", { name: "Search" })).not.toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Search" })).toHaveAttribute("href", "/todo/search");
+  });
+
+  // The other side of the same gate, and the half that was never covered:
+  // once `TodoSidebar` IS mounted it carries its own `/todo/search` link,
+  // so a second door here would be the duplicate affordance this gate has
+  // always existed to prevent.
+  it("renders nothing once TodoSidebar is mounted at 1200px", async () => {
+    installSidebarWideMatchMedia();
+    openEntryStoreMock.mockResolvedValue({
+      taskStore: { list: () => Promise.resolve([]) },
+      projectStore: { listProjects: () => Promise.resolve([]) },
+      filterStore: { list: () => Promise.resolve([]) },
+    });
+    renderTodoPage(readyContext(), "/todo/inbox");
+
+    // Must WAIT for `LazyTodoSidebar`'s dynamic import, exactly as the
+    // "sidebar column" block below does — its Suspense fallback is `null`,
+    // so a synchronous read here sees no sidebar, no Search link, and no
+    // "Todo" landmark at all, and an absence assertion would pass for that
+    // reason rather than the intended one.
+    await screen.findByRole("link", { name: "Reporting" }, { timeout: 5000 });
+
+    // Assert the COUNT, not absence. "The header door is gone" and
+    // "nothing links Search at all" are different outcomes and only one is
+    // correct; a bare `queryBy(...).not.toBeInTheDocument()` passes for
+    // both, which is precisely how the 900-1199px gap went unnoticed.
+    const doors = screen.getAllByRole("link", { name: "Search" });
+    expect(doors).toHaveLength(1);
+    expect(
+      within(screen.getByRole("navigation", { name: "Todo" })).getByRole("link", {
+        name: "Search",
+      }),
+    ).toBe(doors[0]);
   });
 
   it("does not offer the door a second time while already standing on the Search page itself", () => {
@@ -1836,5 +1959,145 @@ describe("TodoPage — Search door (issue #307)", () => {
     fireEvent.click(screen.getByRole("button", { name: "Simulate Back" }));
     expect(screen.getByRole("heading", { name: "Today" })).toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: "Search" })).not.toBeInTheDocument();
+  });
+});
+
+/**
+ * ANAV-01 (fork ADR 0082, resolved): `TodoNav`'s bottom bar shrank from
+ * six rows to Todoist Android's own four (Inbox, Today, Upcoming,
+ * Browse) — `browse-view.tsx`'s own header comment has the full brief.
+ * This describe block covers what the Search-door block above left open:
+ * the 900-1199px band where, before this ticket, nothing at all linked
+ * `/todo/search` (the header door hides at `wide`/900px, `TodoSidebar`
+ * doesn't mount until `sidebarWide`/1200px) — Browse's own row is the
+ * fix, and the owner's ruling that meologue keeps BOTH Search doors
+ * (constraint #5) means a reader who opens Browse below 900px sees two
+ * elements named "Search" at once, which the last test below proves and
+ * scopes rather than treats as a defect to hide.
+ */
+describe("TodoPage — Browse (ANAV-01)", () => {
+  afterEach(removeMatchMedia);
+
+  it("renders Browse's own hub, scoped to its own landmark, when the view is browse", () => {
+    installNarrowMatchMedia();
+    renderTodoPage(readyContext(), "/todo/browse");
+
+    expect(screen.getByRole("heading", { name: "Browse" })).toBeInTheDocument();
+    const browseNav = screen.getByRole("navigation", { name: "Browse" });
+    expect(within(browseNav).getByRole("link", { name: "Filters & Labels" })).toHaveAttribute(
+      "href",
+      "/todo/filters",
+    );
+    expect(within(browseNav).getByRole("link", { name: "Reporting" })).toHaveAttribute(
+      "href",
+      "/todo/activity",
+    );
+    expect(within(browseNav).getByRole("link", { name: "Projects" })).toHaveAttribute(
+      "href",
+      "/todo/projects",
+    );
+  });
+
+  // Browse is a hub of links, not a Task list — the identical reason
+  // Projects/Filters/Activity/Labels/Upcoming already get no inline
+  // composer (this page's own guard, just above the view switch).
+  it("offers no inline Add-task composer on Browse", () => {
+    installNarrowMatchMedia();
+    renderTodoPage(readyContext(), "/todo/browse");
+
+    expect(screen.queryByRole("button", { name: "Add task" })).not.toBeInTheDocument();
+  });
+
+  // The regression this closes: between 900 and 1199px, before ADR 0084,
+  // nothing linked `/todo/search` at all. BOTH doors are on screen here —
+  // Browse's own row and the header door, whose gate now tracks the
+  // sidebar rather than the pane — so a bare `getByRole` would throw on
+  // two matches. That ambiguity is the owner's "keep both doors" ruling
+  // working, not a defect: asserting the COUNT is what proves the band has
+  // two ways to Search rather than the one it shipped with.
+  it("closes the 900-1199px Search gap, with both doors on screen", () => {
+    installWideMatchMedia();
+    renderTodoPage(readyContext(), "/todo/browse");
+
+    const doors = screen.getAllByRole("link", { name: "Search" });
+    expect(doors).toHaveLength(2);
+    for (const door of doors) {
+      expect(door).toHaveAttribute("href", "/todo/search");
+    }
+  });
+
+  // Constraint #5 (the owner's ruling): meologue keeps BOTH the header
+  // Search door and Browse's own row, even though real Todoist Android
+  // has only the one. Below 900px, with Browse open, both are on screen
+  // at once — a bare `getByRole("link", { name: "Search" })` here throws
+  // on more than one match, so this proves the ambiguity is real AND that
+  // scoping each to its own landmark resolves it, rather than either
+  // ignoring the second match or deleting a door to make the collision go
+  // away.
+  it("keeps both Search doors on screen at once below 900px while Browse is open", () => {
+    installNarrowMatchMedia();
+    renderTodoPage(readyContext(), "/todo/browse");
+
+    const searchLinks = screen.getAllByRole("link", { name: "Search" });
+    expect(searchLinks).toHaveLength(2);
+
+    const browseNav = screen.getByRole("navigation", { name: "Browse" });
+    expect(within(browseNav).getByRole("link", { name: "Search" })).toHaveAttribute(
+      "href",
+      "/todo/search",
+    );
+
+    // The header door is the one Search link NOT inside Browse's own
+    // landmark.
+    const headerDoor = searchLinks.find((link) => !browseNav.contains(link));
+    expect(headerDoor).toHaveAttribute("href", "/todo/search");
+  });
+});
+
+/**
+ * The owner's amendment to ADR 0076: `TodoSidebar` is a second column
+ * inside this page's own subtree, gated on `sidebarWide` (1200px), not
+ * `wide` (900px). "Reporting" — `TodoSidebar`'s own wording for
+ * `/todo/activity` (`todo-nav-destinations.ts`'s own header comment: the
+ * two navigations are free to word a shared destination differently) — is
+ * this describe block's marker for "the sidebar, specifically, is on
+ * screen": `TodoNav` labels the identical route "Activity" and renders
+ * only when the sidebar does not (todo-nav.tsx's own duplicate-landmark
+ * reasoning), so the two never collide and "Reporting" can only ever come
+ * from `TodoSidebar`.
+ */
+describe("TodoPage — sidebar column (owner's amendment to ADR 0076)", () => {
+  afterEach(removeMatchMedia);
+
+  it("does not mount TodoSidebar below 1200px, even though the chat-list breakpoint (900px) already matches", () => {
+    installWideMatchMedia();
+    renderTodoPage(readyContext(), "/todo/inbox");
+
+    expect(screen.queryByRole("link", { name: "Reporting" })).not.toBeInTheDocument();
+  });
+
+  it("mounts TodoSidebar as a second column at 1200px", async () => {
+    installSidebarWideMatchMedia();
+    openEntryStoreMock.mockResolvedValue({
+      taskStore: { list: () => Promise.resolve([]) },
+      projectStore: { listProjects: () => Promise.resolve([]) },
+      filterStore: { list: () => Promise.resolve([]) },
+    });
+    renderTodoPage(readyContext(), "/todo/inbox");
+
+    // Real timers throughout this file (no `vi.useFakeTimers()`) —
+    // `React.lazy`'s own dynamic import resolving, `entryStoreQueryOptions`'s
+    // promise, and the three dependent Tasks/Projects/Filters queries it
+    // unlocks all settle over several real microtask/timer hops TanStack
+    // Query schedules internally; `findByRole` polls for exactly that. A
+    // longer-than-default timeout: this is the one test in this file
+    // actually paying for `React.lazy`'s own dynamic `import()`, which the
+    // default 1000ms sometimes outruns even though the resolution itself
+    // never fails (chat-shell-layout.test.tsx's own former copy of this
+    // test recorded the identical timing before the mount point moved
+    // here).
+    expect(
+      await screen.findByRole("link", { name: "Reporting" }, { timeout: 5000 }),
+    ).toHaveAttribute("href", "/todo/activity");
   });
 });

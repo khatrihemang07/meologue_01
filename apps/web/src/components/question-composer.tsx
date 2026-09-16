@@ -1,6 +1,6 @@
 import type { WireModelInfo } from "@meologue/core";
 import { ArrowUp } from "lucide-react";
-import { type KeyboardEvent, useEffect, useState } from "react";
+import { type KeyboardEvent, useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { useSettingsStore } from "@/lib/settings";
@@ -61,6 +61,14 @@ export function QuestionComposer({
   currentModel,
 }: QuestionComposerProps) {
   const [value, setValue] = useState("");
+  // composer.tsx's own L574-587 rule ("a Composer left unfocused after a
+  // tap is a real dead end on Android") applies identically here — Ask is
+  // this component's Send, and Reflect's build has the same
+  // Android-only-path-is-the-button shape (submit-chord.ts). A plain
+  // `<textarea>` needs a ref to refocus imperatively; composer.tsx's
+  // `EditorView` already exposes one.
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const refocusWhenUsableRef = useRef(false);
   // Issue #202: the Device-local default this picker starts a fresh
   // Conversation on (settings.ts's own `defaultReflectModel` doc comment).
   // Read here rather than threaded down as a prop: every other caller of
@@ -115,7 +123,46 @@ export function QuestionComposer({
     }
     onAsk(question, selectedModel === "" ? undefined : selectedModel);
     setValue("");
+    // See the Ask button's own `onMouseDown` comment below, and
+    // composer.tsx's L574-587 rule: the button already keeps focus from
+    // moving in the first place, but a mousedown-preventDefault is not a
+    // guarantee on Android's touch event ordering, so this is the same
+    // belt-over-brace `view.focus()` composer.tsx's own doc-mutating paths
+    // all carry.
+    textareaRef.current?.focus();
+    // ...and this focus does NOT survive on its own, which is the whole
+    // reason the line below exists. `onAsk` sets the page's `pending`, the
+    // page re-renders this component with `disabled` true, and **a
+    // disabled element cannot hold focus** — the browser drops it to the
+    // document the moment the attribute lands. Driving the macOS build
+    // caught it: after Ask, `AXFocusedUIElement` was the bare `AXWebArea`,
+    // not this field. It is invisible to the unit tests because their
+    // `onAsk` is a `vi.fn()` that never flips `disabled`, and invisible on
+    // the web build because Sync is off there, so the composer does not
+    // render at all.
+    //
+    // Deliberately NOT fixed by dropping `disabled` from the Textarea:
+    // that it disables while a Turn is in flight is tested behaviour
+    // (question-composer.test.tsx's own "disables the textarea and Ask
+    // button", reflection-page.test.tsx's `toBeDisabled`), not an
+    // accident, so the caret comes back when the field is usable again
+    // rather than never leaving.
+    refocusWhenUsableRef.current = true;
   };
+
+  // The second half of `ask`'s focus handling: re-focus once `disabled`
+  // goes false again, i.e. when the Turn has landed and this field can
+  // actually hold a caret. Guarded by the ref so this only ever follows an
+  // Ask the reader made — an unrelated `disabled` transition (opening a
+  // Session whose Turn was already in flight) must not steal focus into
+  // this field.
+  useEffect(() => {
+    if (disabled || !refocusWhenUsableRef.current) {
+      return;
+    }
+    refocusWhenUsableRef.current = false;
+    textareaRef.current?.focus();
+  }, [disabled]);
 
   // Issue #76: the Composer and the Question composer send/ask on the
   // identical chord — plain Enter now writes a newline everywhere, the
@@ -164,6 +211,7 @@ export function QuestionComposer({
       )}
       <div className="mx-auto flex w-[97%] items-end gap-2 px-4 py-2.5 md:w-[85%]">
         <Textarea
+          ref={textareaRef}
           placeholder="Ask a Question about your History"
           value={value}
           onChange={(event) => setValue(event.target.value)}
@@ -175,6 +223,12 @@ export function QuestionComposer({
           aria-label="Ask"
           size="icon-lg"
           className="size-11 shrink-0 self-end rounded-full"
+          // Same "steals no caret" trick as composer-toolbar.tsx's buttons
+          // and composer.tsx's own Send button (L574-587 there) — without
+          // this, a tap on Ask blurred the textarea and closed the soft
+          // keyboard on Android instead of leaving it ready for the next
+          // Question.
+          onMouseDown={(event) => event.preventDefault()}
           onClick={ask}
           disabled={disabled}
         >

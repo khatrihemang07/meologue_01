@@ -2,7 +2,16 @@
 
 ## Status
 
-Accepted. Amends [0049](0049-todo-is-the-first-destination-with-internal-navigation.md) at one
+**Superseded by [0083](0083-todo-renders-inside-the-shell-like-every-other-destination.md)**
+(2026-09-16). The pane swap this ADR decided is gone: the shell's pane always renders `ChatListPane`,
+and `TodoSidebar` moved inside Todo's own subtree at a 1200px breakpoint. The owner's verdict on using
+the built feature was that it made Todo read as a separate application rather than one of five
+Destinations. 0083 also removes the `back-to-chats.tsx` `/todo/*` carve-out that issue #248 added
+below, since the pane now shows the way out on every route. Everything under *What this does take*
+is therefore history, not current behaviour — read it for why the trade was made, not for what the
+code does.
+
+Originally accepted. Amends [0049](0049-todo-is-the-first-destination-with-internal-navigation.md) at one
 breakpoint, and **concedes that [0030](0030-the-shell-gets-a-root-screen.md)'s "every Destination is
 a full-bleed push" stops being true for Todo at desktop width** — see *What this does take* below.
 Builds on [0036](0036-the-shell-is-a-chat-list-and-a-thread-is-a-chat-thread.md), whose pane this

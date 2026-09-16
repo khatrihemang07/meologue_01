@@ -1,8 +1,9 @@
 import type { Entry } from "@meologue/core";
-import { render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
+import { createRef } from "react";
 import { describe, expect, it, vi } from "vitest";
 import { formatTaskReference } from "@/lib/inline-markdown";
-import { Composer } from "./composer";
+import { Composer, type ComposerHandle } from "./composer";
 
 /**
  * The one test this ticket's own diagnosis says would have caught issue
@@ -110,5 +111,64 @@ describe("Composer", () => {
     render(<Composer onSend={vi.fn()} editingEntry={entry({ body: "[[2026-08-28]]" })} />);
 
     expect(screen.getByPlaceholderText("What's on your mind?").textContent).toBe("[[2026-08-28]]");
+  });
+});
+
+// Android has no Cmd/Ctrl+Enter (submit-chord.ts returns false there
+// unconditionally), so Send is the ONLY way to submit an Entry on that
+// platform — a tap that blurs the field closes the soft keyboard too.
+// Every other doc-mutating control in composer.tsx already follows the
+// "steals no caret" rule (this file's own L574-587 comment); these tests
+// pin Send to the same rule.
+describe("Composer's Send button keeps focus on the editor", () => {
+  it("prevents the default mousedown action, exactly like every toolbar button", () => {
+    const ref = createRef<ComposerHandle>();
+    render(<Composer onSend={vi.fn()} ref={ref} />);
+    // A disabled `<button>` fires no mouse events at all (native behaviour,
+    // reproduced by jsdom) — Send starts `disabled={isEmpty}` on an empty
+    // document, so this needs the same real-transaction seeding the next
+    // test uses before the button's `onMouseDown` can be exercised.
+    act(() => {
+      ref.current?.insertAtCursor("hello");
+    });
+
+    // `fireEvent`'s return value is `element.dispatchEvent(event)`'s own
+    // result: `false` once something on the way called `preventDefault()`
+    // on this (cancelable) event, `true` otherwise — the same assertion
+    // shape question-composer.test.tsx's plain-Enter test already uses for
+    // "nothing called preventDefault", read the other way round here.
+    const dispatchResult = fireEvent.mouseDown(screen.getByRole("button", { name: "Send" }));
+
+    expect(dispatchResult).toBe(false);
+  });
+
+  it("refocuses the editor after sending a new Entry, even if focus had already moved elsewhere", () => {
+    const onSend = vi.fn();
+    const ref = createRef<ComposerHandle>();
+    render(<Composer onSend={onSend} ref={ref} />);
+    const field = screen.getByPlaceholderText("What's on your mind?");
+
+    // Seeds a non-empty, non-whitespace document through the SAME
+    // imperative path the "Refer" action uses (composer-page.tsx) — a real
+    // transaction, not a prop, so the Send button's own `disabled={isEmpty}`
+    // clears exactly the way a hand-typed Entry would.
+    act(() => {
+      ref.current?.insertAtCursor("hello");
+    });
+    // `insertAtCursor` ends with its own `view.focus()` (ComposerHandle's
+    // rule, matching the toolbar), so focus has to be moved away again here
+    // to set up a state Send's own refocus can be told apart from — without
+    // this, the editor would already be focused going into the click, and
+    // the assertion below would pass whether or not composer.tsx's `send()`
+    // does anything at all.
+    act(() => {
+      field.blur();
+    });
+    expect(document.activeElement).not.toBe(field);
+
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+
+    expect(onSend).toHaveBeenCalledWith("hello", expect.objectContaining({ active: null }));
+    expect(document.activeElement).toBe(field);
   });
 });

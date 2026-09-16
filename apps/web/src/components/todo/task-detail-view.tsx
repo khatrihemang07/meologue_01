@@ -1771,14 +1771,28 @@ function TaskDetailBody({
         )}
       </header>
 
-      {/* No longer the scroll container itself. Todoist scrolls its LEFT
-          COLUMN and pins the comment composer beneath it as a sibling
-          outside that region — driven live 2026-09-14
-          (`detail-modal-todoist-2026-09-14.json`, `comments.scrollBehavior`):
-          setting the container's `scrollTop` to 300 moved a posted comment
-          by exactly 300px while the composer's form stayed at y=522. Here,
-          one shared scroller over both columns meant the composer scrolled
-          away the moment a thread got long — precisely when it is wanted.
+      {/* No longer the scroll container itself. Todoist scrolls the comment
+          THREAD in its own bounded region and sizes the composer to total
+          content height, sitting outside that region as a sibling — read
+          live today (2026-09-16, viewport 1270x706): scrolling the
+          thread's own scroll container (`clientHeight` 374) moved the last
+          comment by exactly the scroll delta while "Add sub-task" and the
+          composer both stayed put. The composer's own top tracked total
+          content height instead — 264px with no comments, 387px with one,
+          512px once the thread overflowed — never pinned to the dialog's
+          fixed bottom edge (y=642 of a 64-642 modal).
+
+          That corrects the 2026-09-14 reading this comment used to cite,
+          which read the scrolled region as the WHOLE left column (title,
+          description, Add sub-task and the thread together) rather than
+          the thread alone — nobody had re-driven it since. meologue still
+          uses one shared scroller over the whole column instead of giving
+          the thread its own nested region — splitting that out is a
+          restructure, left for later — but the scroller below no longer
+          force-grows to the column's full height (`sm:flex-initial`
+          replacing `sm:flex-1`): it now sizes to its content and only
+          shrinks-and-scrolls once the column runs out of room, so a short
+          thread no longer shoves the composer to the floor.
 
           The split is `sm:` and up only. Below that breakpoint the two
           columns stack (`sm:flex-row`), and two independently scrolling
@@ -1840,7 +1854,7 @@ function TaskDetailBody({
                 contentRef.current?.focus();
               }
             }}
-            className="flex flex-col gap-3 sm:min-h-0 sm:flex-1 sm:overflow-y-auto"
+            className="flex flex-col gap-3 sm:min-h-0 sm:flex-initial sm:overflow-y-auto"
           >
             {/* The title (issue #225's display/edit split — `editingTitle`'s
               own doc comment above). Editable regardless of completion
@@ -2312,12 +2326,21 @@ function TaskDetailBody({
             />
           </div>
 
-          {/* Pinned beneath the scrolling region rather than inside it, as
-            Todoist's is — it stays put while the thread scrolls. It sits
-            below Activity in source order because it is the column's
-            footer, not a member of the Comments block; Todoist has no
-            Activity section here, so nothing in the record says where it
-            would fall relative to one. */}
+          {/* Sits beneath the scrolling region rather than inside it, as a
+            sibling — it stays put while the thread scrolls, matching
+            Todoist's measured behaviour (this file's own header comment
+            above the row container has today's 2026-09-16 readings).
+            Todoist's composer is not pinned to its modal's bottom edge
+            either, though: it follows total content height and only ends
+            up near the floor once a thread is long enough to fill the
+            space. The scroller above sizes to its content the same way
+            now (`sm:flex-initial`), so this composer sits directly under
+            short content instead of being shoved down to a fixed edge.
+
+            It sits below Activity in source order because it is the
+            column's footer, not a member of the Comments block; Todoist
+            has no Activity section here, so nothing in the record says
+            where it would fall relative to one. */}
           <CommentComposer onSubmit={onAddComment} initialExpanded={openCommentComposer} />
         </div>
 
