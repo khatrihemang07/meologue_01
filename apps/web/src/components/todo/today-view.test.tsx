@@ -68,7 +68,6 @@ function renderTodayView(overrides: Partial<Parameters<typeof TodayView>[0]> = {
     onRequestDelete: vi.fn(),
     onOpenSchedule: vi.fn(),
     onSetDate: vi.fn(),
-    onPostpone: vi.fn(),
     ...overrides,
   };
   render(<TodayView {...props} />);
@@ -112,10 +111,30 @@ describe("TodayView", () => {
       ],
     });
 
-    expect(screen.getByText("Overdue (1)")).toBeInTheDocument();
+    expect(screen.getByText("Overdue")).toBeInTheDocument();
     expect(screen.getByText("late task")).toBeInTheDocument();
     expect(screen.getByText("Due today (1)")).toBeInTheDocument();
     expect(screen.getByText("today task")).toBeInTheDocument();
+  });
+
+  // Issue #299/#337, the owner's own read of Todoist's reference
+  // screenshots and DOM capture (overdue-section-summary.tsx's own header
+  // comment has the citations): the Overdue heading is bare "Overdue," no
+  // count, unlike this file's own "Due today (N)" a few lines above,
+  // which keeps its count — Todoist doesn't extend the "no count"
+  // treatment to every heading, only this one. A first cut of this
+  // section read "Overdue (N)"; pinned here so a count can't creep back.
+  it("pins the bare 'Overdue' header text — no digits, unlike this file's own 'Due today (N)'", () => {
+    renderTodayView({
+      tasks: [
+        task({ id: "late-1", content: "late task one", date: "2026-08-30" }),
+        task({ id: "late-2", content: "late task two", date: "2026-08-20" }),
+      ],
+    });
+
+    expect(screen.getByText("Overdue")).toBeInTheDocument();
+    expect(screen.queryByText(/Overdue\s*\(\d+\)/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Overdue\s*\d/)).not.toBeInTheDocument();
   });
 
   // ROW-13 (parity-ledger.md), issue #250: every row in Due today is due
@@ -183,7 +202,7 @@ describe("TodayView", () => {
       tasks: [task({ id: "no-date", content: "no date task", deadline: "2026-09-01" })],
     });
 
-    expect(screen.getByText("Overdue (1)")).toBeInTheDocument();
+    expect(screen.getByText("Overdue")).toBeInTheDocument();
     expect(screen.getByText("no date task")).toBeInTheDocument();
   });
 
@@ -253,6 +272,20 @@ describe("TodayView", () => {
       expect(screen.queryByRole("button", { name: "Reschedule" })).not.toBeInTheDocument();
     });
 
+    // Issue #337, measured off Todoist web's own computed styles: pins the
+    // TOKEN (`--td-overdue-reschedule`, index.css's own comment has the
+    // measurement and why it isn't `--td-date-overdue` or
+    // `--td-calendar-today` despite one of those matching by coincidence),
+    // not the literal `rgb(226, 106, 96)` — a later re-measure that moves
+    // the token's own value should NOT fail this test; only a component
+    // that stops reading the token should.
+    it("reads its text colour from the --td-overdue-reschedule token, not a literal colour", () => {
+      renderTodayView({ tasks: [task({ id: "a", content: "a", date: "2026-08-30" })] });
+
+      const button = screen.getByRole("button", { name: "Reschedule" });
+      expect(button.style.color).toBe("var(--td-overdue-reschedule)");
+    });
+
     it("rescheduling sets the date of every overdue Task to the chosen day, and touches nothing else", () => {
       const onSetDate = vi.fn();
       renderTodayView({
@@ -275,35 +308,47 @@ describe("TodayView", () => {
     });
   });
 
-  describe("Postpone to tomorrow", () => {
-    it("offers the action only when something is overdue", () => {
-      renderTodayView({ tasks: [task({ id: "a", content: "a", date: "2026-09-02" })] });
-
-      expect(
-        screen.queryByRole("button", { name: "Postpone to tomorrow" }),
-      ).not.toBeInTheDocument();
+  // Issue #299/#337 removed "Postpone to tomorrow" entirely — it was
+  // meologue's own divergence from Todoist, which carries exactly one
+  // action on this header (Reschedule). This replaces the old
+  // `describe("Postpone to tomorrow", ...)` block, which asserted the
+  // button existed and worked (offered only when overdue; one tap called
+  // `onPostpone` once per overdue Task) — both of those are wrong now
+  // that the button is gone, so rewritten as a deliberate pin of its
+  // absence rather than silently deleted.
+  it("renders no 'Postpone to tomorrow' action, even when something is overdue — Todoist's header carries exactly one action", () => {
+    renderTodayView({
+      tasks: [task({ id: "a", content: "a", date: "2026-08-30" })],
     });
 
-    // Issue #170's own case: "postponing an overdue recurring task moves it
-    // to tomorrow" — but postpone's own mechanics have nothing recurrence-
-    // specific about them, so a non-recurring overdue Task is postponed
-    // exactly the same way, in the same one-tap action.
-    it("postpones every overdue Task, recurring or not, with one tap and no picker", () => {
-      const onPostpone = vi.fn();
-      renderTodayView({
-        tasks: [
-          task({ id: "a", content: "a", date: "2026-08-30", dateString: "every month" }),
-          task({ id: "b", content: "b", deadline: "2026-08-31" }),
-        ],
-        onPostpone,
-      });
+    expect(screen.queryByText("Postpone to tomorrow")).not.toBeInTheDocument();
+  });
 
-      fireEvent.click(screen.getByRole("button", { name: "Postpone to tomorrow" }));
-
-      expect(onPostpone).toHaveBeenCalledTimes(2);
-      expect(onPostpone).toHaveBeenCalledWith("a");
-      expect(onPostpone).toHaveBeenCalledWith("b");
+  // Issue #337: Todoist's own DOM capture has a third node on this
+  // header, an `ImageView` "Expand/collapse" — overdue-section-summary.tsx
+  // renders it as an `aria-hidden` chevron, not a second focusable
+  // control. `closest("summary")` rather than checking accessible name
+  // directly: this file's earlier note on jsdom not computing a
+  // `<summary>`'s accessible name from its children still applies, so
+  // this reads the DOM shape directly instead.
+  it("shows an aria-hidden chevron in the Overdue summary, not a second focusable control", () => {
+    renderTodayView({
+      tasks: [task({ id: "late", content: "late task", date: "2026-08-30" })],
     });
+
+    const heading = screen.getByText("Overdue");
+    const summary = heading.closest("summary");
+    expect(summary).not.toBeNull();
+    // biome-ignore lint/style/noNonNullAssertion: asserted non-null above
+    const chevron = summary!.querySelector("svg");
+    expect(chevron).not.toBeNull();
+    expect(chevron).toHaveAttribute("aria-hidden", "true");
+    expect(chevron?.hasAttribute("tabindex")).toBe(false);
+    expect(chevron?.closest("button")).toBeNull();
+    // No second name added: the summary's own DOM text is still just
+    // "Overdue" plus the Reschedule button's own text — an SVG icon
+    // contributes no textContent of its own.
+    expect(summary?.textContent).toBe("OverdueReschedule");
   });
 
   describe("grouping", () => {

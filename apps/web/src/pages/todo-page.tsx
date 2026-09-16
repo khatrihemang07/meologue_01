@@ -351,7 +351,6 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
     listTaskDescendants,
     advanceRecurringTask,
     completeForeverTask,
-    postponeTask,
     setTaskProject,
     setTaskParent,
     setTaskSection,
@@ -1020,7 +1019,6 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
           onRequestDelete={handleRequestDelete}
           onOpenSchedule={handleOpenSchedule}
           onSetDate={setTaskDate}
-          onPostpone={postponeTask}
         />
       )}
 
@@ -1032,6 +1030,7 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
           onCompleteForever={handleCompleteForever}
           onRequestDelete={handleRequestDelete}
           onOpenSchedule={handleOpenSchedule}
+          onSetDate={setTaskDate}
         />
       )}
 
