@@ -1,6 +1,30 @@
 import type { Comment } from "./comment-types";
 
 /**
+ * Issue #332: what Sync's acknowledgement arm hands the Comment store —
+ * the Comment-shaped sibling of AcknowledgedTask (./task-store.ts, issue
+ * #244) and AcknowledgedEntry (./store.ts, issue #216), whose own doc
+ * comments carry the full reasoning and are not repeated here.
+ *
+ * The short version, because it is the reason this type exists at all: an
+ * acknowledgement cannot be applied unconditionally, because the user can
+ * edit a row between the push going out and the response coming back —
+ * fixing a typo seconds after posting is the most ordinary edit there is
+ * — and applying it then reverts that edit *and* stamps a `seq`, so
+ * `pending()` (which is exactly `seq IS NULL`) stops seeing the row and
+ * nothing ever re-pushes it. Nor can it be guarded on `updatedAt` the way
+ * CommentStore.applyPulled is: ADR 0065 tolerates the Server holding an
+ * *older* `updatedAt`, so that guard would refuse the acknowledgement
+ * forever and the row would re-push on every tick.
+ */
+export interface AcknowledgedComment {
+  /** The Server's current row for this id, as ADR 0059 returns it — a full row, so a write the Server refused against a tombstone teaches this Device the tombstone. */
+  readonly confirmed: Comment;
+  /** The row this Device sent, exactly as `pending()` handed it over. Only its `updatedAt` is read. */
+  readonly asPushed: Comment;
+}
+
+/**
  * The Comment-shaped sibling of LabelStore (./label-store.ts) and
  * TaskStore (./task-store.ts) — mirrored section for section, exactly as
  * LabelStore's own header comment says it mirrors TaskStore, so a reader
@@ -53,10 +77,20 @@ export interface CommentStore {
   /** One Comment by id, or undefined if unknown or tombstoned. */
   get(id: string): Promise<Comment | undefined>;
   /**
-   * Sync's write path, and a new Comment's own: upsert wholesale, exactly
-   * as every other store's upsert() does — there is deliberately no
-   * `add()`, the same "one door, local creation and a future Sync round
-   * trip both use" rule LabelStore.upsert's own doc comment states.
+   * A new Comment's own write path: upsert wholesale, exactly as every
+   * other store's upsert() does — there is deliberately no `add()`, the
+   * same "one door, local creation and a future Sync round trip both
+   * use" rule LabelStore.upsert's own doc comment states.
+   *
+   * **No longer Sync's acknowledgement write path** (issue #332): that
+   * moved to applyAcknowledged below, for the identical reason
+   * EntryStore.upsert stopped being Entries' in issue #216 and
+   * TaskStore.upsert stopped being Tasks' in issue #244. Until then this
+   * method's own doc comment (by way of applyPulled's, below) asserted
+   * that the acknowledged arm "stays on upsert()" without giving any
+   * reason Comments were immune to the race #216 and #244 had already
+   * named for Entries and Tasks — and they were not. See
+   * applyAcknowledged for what that cost.
    */
   upsert(comments: Comment[]): Promise<void>;
   /**
@@ -65,10 +99,37 @@ export interface CommentStore {
    * EntryStore.applyPulled exactly (./store.ts's own doc comment carries
    * the full rule and every reason behind it): an incoming row is
    * applied unless the local row is pending (`seq IS NULL`) and strictly
-   * newer by `updatedAt`, and even then a tombstone still wins. `upsert`
-   * above stays wholesale and is what the acknowledged arm keeps using.
+   * newer by `updatedAt`, and even then a tombstone still wins. The
+   * acknowledged arm is applyAcknowledged below, not this method and not
+   * `upsert` — see AcknowledgedComment above for why an `updatedAt` guard
+   * cannot be reused there.
    */
   applyPulled(comments: Comment[]): Promise<void>;
+  /**
+   * Sync's **acknowledgement** write path (issue #332), mirroring
+   * TaskStore.applyAcknowledged's issue #244 fix exactly — see that
+   * method's own doc comment (./task-store.ts) for the full rule and the
+   * reasoning behind every clause.
+   *
+   * Applies each confirmation **only while the local row is still the
+   * one that was pushed**, compared on `updatedAt` against `asPushed`. A
+   * row edited since the push — a typo fixed seconds after posting, say
+   * — is left exactly as it is, and left pending, so the next Sync tick
+   * carries the newer edit instead of the acknowledgement quietly
+   * undoing it. A row that is no longer pending is confirmed
+   * unconditionally: it has nothing local left to lose, which is what
+   * keeps a redelivered acknowledgement idempotent.
+   *
+   * What it cost to not have this: a Comment posted, then edited while
+   * the post's own request was still in flight, had the post's
+   * acknowledgement applied wholesale over it — stamping a real `seq`
+   * over the `seq: null` the edit had just set, and reverting the text
+   * to what was posted before the edit. `pending()` then saw nothing, so
+   * the edit never re-pushed and was lost for good — the identical
+   * defect issue #244 found for Tasks and #216 found for Entries,
+   * reached a third time from a third root noun.
+   */
+  applyAcknowledged(rows: readonly AcknowledgedComment[]): Promise<void>;
   /**
    * Changes `text` and clears `seq` — mirrors LabelStore.rename's own doc
    * comment for why this is its own method rather than upsert() with a

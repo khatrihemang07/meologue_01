@@ -1,5 +1,5 @@
 import { assertValidCommentText } from "../comment-fields";
-import type { CommentStore } from "../comment-store";
+import type { AcknowledgedComment, CommentStore } from "../comment-store";
 import type { Comment } from "../comment-types";
 import { matchesSubstring } from "../task-search";
 import { isAtLeastAsNewAs } from "../updated-at";
@@ -65,6 +65,25 @@ export class InMemoryCommentStore implements CommentStore {
         entry.deletedAt !== null;
       if (apply) {
         this.comments.set(entry.id, entry);
+      }
+    }
+  }
+
+  /**
+   * Mirrors SqliteCommentStore.applyAcknowledged() (issue #332) — see
+   * CommentStore.applyAcknowledged's doc comment (../comment-store.ts)
+   * for the rule, and the real store for why the `updatedAt` equality
+   * here is raw rather than normalised (both sides are the same row, one
+   * of them a snapshot of itself). Mirrors
+   * InMemoryTaskStore.applyAcknowledged exactly.
+   */
+  async applyAcknowledged(rows: readonly AcknowledgedComment[]): Promise<void> {
+    for (const { confirmed, asPushed } of rows) {
+      const local = this.comments.get(confirmed.id);
+      const apply =
+        local === undefined || local.seq !== null || local.updatedAt === asPushed.updatedAt;
+      if (apply) {
+        this.comments.set(confirmed.id, confirmed);
       }
     }
   }

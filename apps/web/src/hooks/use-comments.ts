@@ -25,9 +25,24 @@ export interface UseCommentsResult {
  * Owns Todo's Comments for whichever view is mounted under
  * EntryStoreLayout (issue #180) — the Comment-shaped sibling of
  * use-labels.ts, following its exact shape (a query, a mutation per
- * write, no `requestSync` nudge — Comment Sync doesn't exist yet, issue
- * #182) for the identical reason that file's own header comment gives
- * for mirroring use-history.ts.
+ * write, no `requestSync` nudge) for the identical reason that file's own
+ * header comment gives for mirroring use-history.ts.
+ *
+ * **That parenthetical used to read "Comment Sync doesn't exist yet, issue
+ * #182", and it has been false since #182 landed** — `sync-engine.ts`
+ * pushes and pulls Comments today, on their own Cursor. Corrected here
+ * during issue #332, whose whole subject is a neighbouring comment that
+ * stated behaviour in the voice of a decision and then stopped being true.
+ *
+ * What survives the correction is the *behaviour*, not its old excuse: a
+ * Comment write still fires no `requestSync`, unlike use-tasks.ts's and
+ * use-history.ts's, so it waits for the ambient `SYNC_INTERVAL_MS` tick
+ * (5s, ../../../packages/core/src/protocol.ts) rather than pushing at
+ * once. Whether that is worth keeping is an open question and deliberately
+ * not settled here — #332 only establishes that it *widens* the window in
+ * which an edit can race its own creation's acknowledgement, which is why
+ * `CommentStore.applyAcknowledged` now guards that race rather than the
+ * nudge being added to dodge it.
  *
  * `taskStore` (issue #184) is read-only here — every Comment Event this
  * hook records needs its parent Task's own `projectId` for the

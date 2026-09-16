@@ -980,4 +980,271 @@ export function projectStoreContract(
       });
     });
   });
+
+  // Issue #332: Sync's acknowledgement write path, for both entity types
+  // this store holds. The Project-and-Section-shaped sibling of
+  // task-store-contract.ts's own "applyAcknowledged() (issue #244)" block,
+  // mirrored case for case.
+  //
+  // The defect it closes: a local write landing between the push going out
+  // and the response coming back is reverted by the acknowledgement AND
+  // stamped with a `seq`, so `pending*()` stops seeing it and nothing ever
+  // re-pushes it. It cannot reuse applyPulled*'s rule — ADR 0065 tolerates
+  // the Server holding an OLDER `updated_at`, so an ordering guard would
+  // refuse the acknowledgement forever and the row would re-push on every
+  // tick.
+  describe("applyAcknowledgedProjects() (issue #332)", () => {
+    it("confirms a Project unchanged since it was pushed, clearing pending", async () => {
+      const pushed = project({ id: "a", name: "Errands", seq: null });
+      await projectStore.upsertProjects([pushed]);
+
+      await projectStore.applyAcknowledgedProjects([
+        {
+          asPushed: pushed,
+          confirmed: project({
+            id: "a",
+            name: "Errands",
+            seq: 7,
+            syncedAt: "2026-01-02T00:00:00.000Z",
+          }),
+        },
+      ]);
+
+      expect(await projectStore.pendingProjects()).toEqual([]);
+      expect(await projectStore.getProject("a")).toMatchObject({ id: "a", seq: 7 });
+    });
+
+    // ADR 0065's tolerated divergence: an edit landing on identical content
+    // leaves the Server with an OLDER updatedAt than this Device. The
+    // acknowledgement must still land, or the row re-pushes forever.
+    it("confirms an unchanged Project even when the Server's updatedAt is older", async () => {
+      const pushed = project({
+        id: "a",
+        name: "same name",
+        updatedAt: "2026-02-01T00:00:00.000Z",
+        seq: null,
+      });
+      await projectStore.upsertProjects([pushed]);
+
+      await projectStore.applyAcknowledgedProjects([
+        {
+          asPushed: pushed,
+          confirmed: project({
+            id: "a",
+            name: "same name",
+            updatedAt: "2026-01-01T00:00:00.000Z",
+            seq: 7,
+            syncedAt: "2026-01-02T00:00:00.000Z",
+          }),
+        },
+      ]);
+
+      expect(await projectStore.pendingProjects()).toEqual([]);
+    });
+
+    // The defect itself, driven through the mutation the UI actually
+    // offers zero clicks from a freshly created Project (issue #332's own
+    // investigation: Favourite and Archive sit on the new row itself).
+    it("does not undo a rename made after the push went out", async () => {
+      const pushed = project({ id: "a", name: "Errands", seq: null });
+      await projectStore.upsertProjects([pushed]);
+      await projectStore.renameProject("a", "Errands and chores");
+
+      await projectStore.applyAcknowledgedProjects([
+        {
+          asPushed: pushed,
+          confirmed: project({ id: "a", name: "Errands", seq: 7 }),
+        },
+      ]);
+
+      expect(await projectStore.getProject("a")).toMatchObject({ name: "Errands and chores" });
+    });
+
+    it("leaves that rename pending, so the next Sync pushes it", async () => {
+      const pushed = project({ id: "a", name: "Errands", seq: null });
+      await projectStore.upsertProjects([pushed]);
+      await projectStore.renameProject("a", "Errands and chores");
+
+      await projectStore.applyAcknowledgedProjects([
+        {
+          asPushed: pushed,
+          confirmed: project({ id: "a", name: "Errands", seq: 7 }),
+        },
+      ]);
+
+      const pending = await projectStore.pendingProjects();
+      expect(pending.map((p) => p.id)).toEqual(["a"]);
+      expect(pending[0]).toMatchObject({ seq: null, name: "Errands and chores" });
+    });
+
+    it("does not undo a favourite toggled after the push went out", async () => {
+      const pushed = project({ id: "a", favourite: false, seq: null });
+      await projectStore.upsertProjects([pushed]);
+      await projectStore.setProjectFavourite("a", true);
+
+      await projectStore.applyAcknowledgedProjects([
+        {
+          asPushed: pushed,
+          confirmed: project({ id: "a", favourite: false, seq: 7 }),
+        },
+      ]);
+
+      expect(await projectStore.getProject("a")).toMatchObject({ favourite: true, seq: null });
+    });
+
+    // ADR 0059: full rows are acknowledged precisely so a write the Server
+    // REFUSED (because the row is tombstoned there) teaches this Device the
+    // tombstone. That has to keep working.
+    it("carries back a tombstone the Server refused the write against", async () => {
+      const pushed = project({ id: "a", name: "will be refused", seq: null });
+      await projectStore.upsertProjects([pushed]);
+
+      await projectStore.applyAcknowledgedProjects([
+        {
+          asPushed: pushed,
+          confirmed: project({
+            id: "a",
+            name: "",
+            seq: 9,
+            syncedAt: "2026-01-02T00:00:00.000Z",
+            deletedAt: "2026-01-02T00:00:00.000Z",
+          }),
+        },
+      ]);
+
+      expect(await projectStore.getProject("a")).toBeUndefined();
+    });
+
+    it("is a no-op on an empty batch", async () => {
+      await projectStore.upsertProjects([project({ id: "a", seq: 1 })]);
+      await projectStore.applyAcknowledgedProjects([]);
+      expect(await projectStore.getProject("a")).toMatchObject({ id: "a" });
+    });
+  });
+
+  // The Section half. Sections are the widest exposure of the four streams
+  // issue #332 covers — every local mutation a Section has (Edit, Move
+  // earlier, Move later, Archive, Delete) sits in the just-created row's
+  // own overflow menu, zero clicks and no navigation away.
+  describe("applyAcknowledgedSections() (issue #332)", () => {
+    it("confirms a Section unchanged since it was pushed, clearing pending", async () => {
+      const pushed = section({ id: "a", name: "Groceries", seq: null });
+      await projectStore.upsertSections([pushed]);
+
+      await projectStore.applyAcknowledgedSections([
+        {
+          asPushed: pushed,
+          confirmed: section({
+            id: "a",
+            name: "Groceries",
+            seq: 7,
+            syncedAt: "2026-01-02T00:00:00.000Z",
+          }),
+        },
+      ]);
+
+      expect(await projectStore.pendingSections()).toEqual([]);
+      expect(await projectStore.getSection("a")).toMatchObject({ id: "a", seq: 7 });
+    });
+
+    it("confirms an unchanged Section even when the Server's updatedAt is older", async () => {
+      const pushed = section({
+        id: "a",
+        name: "same name",
+        updatedAt: "2026-02-01T00:00:00.000Z",
+        seq: null,
+      });
+      await projectStore.upsertSections([pushed]);
+
+      await projectStore.applyAcknowledgedSections([
+        {
+          asPushed: pushed,
+          confirmed: section({
+            id: "a",
+            name: "same name",
+            updatedAt: "2026-01-01T00:00:00.000Z",
+            seq: 7,
+            syncedAt: "2026-01-02T00:00:00.000Z",
+          }),
+        },
+      ]);
+
+      expect(await projectStore.pendingSections()).toEqual([]);
+    });
+
+    it("does not undo a rename made after the push went out", async () => {
+      const pushed = section({ id: "a", name: "Groceries", seq: null });
+      await projectStore.upsertSections([pushed]);
+      await projectStore.renameSection("a", "Groceries and household");
+
+      await projectStore.applyAcknowledgedSections([
+        {
+          asPushed: pushed,
+          confirmed: section({ id: "a", name: "Groceries", seq: 7 }),
+        },
+      ]);
+
+      expect(await projectStore.getSection("a")).toMatchObject({
+        name: "Groceries and household",
+      });
+    });
+
+    it("leaves that rename pending, so the next Sync pushes it", async () => {
+      const pushed = section({ id: "a", name: "Groceries", seq: null });
+      await projectStore.upsertSections([pushed]);
+      await projectStore.renameSection("a", "Groceries and household");
+
+      await projectStore.applyAcknowledgedSections([
+        {
+          asPushed: pushed,
+          confirmed: section({ id: "a", name: "Groceries", seq: 7 }),
+        },
+      ]);
+
+      const pending = await projectStore.pendingSections();
+      expect(pending.map((x) => x.id)).toEqual(["a"]);
+      expect(pending[0]).toMatchObject({ seq: null, name: "Groceries and household" });
+    });
+
+    it("does not undo a reorder made after the push went out", async () => {
+      const pushed = section({ id: "a", orderKey: "V", seq: null });
+      await projectStore.upsertSections([pushed]);
+      await projectStore.reorderSection("a", "n");
+
+      await projectStore.applyAcknowledgedSections([
+        {
+          asPushed: pushed,
+          confirmed: section({ id: "a", orderKey: "V", seq: 7 }),
+        },
+      ]);
+
+      expect(await projectStore.getSection("a")).toMatchObject({ orderKey: "n", seq: null });
+    });
+
+    it("carries back a tombstone the Server refused the write against", async () => {
+      const pushed = section({ id: "a", name: "will be refused", seq: null });
+      await projectStore.upsertSections([pushed]);
+
+      await projectStore.applyAcknowledgedSections([
+        {
+          asPushed: pushed,
+          confirmed: section({
+            id: "a",
+            name: "",
+            seq: 9,
+            syncedAt: "2026-01-02T00:00:00.000Z",
+            deletedAt: "2026-01-02T00:00:00.000Z",
+          }),
+        },
+      ]);
+
+      expect(await projectStore.getSection("a")).toBeUndefined();
+    });
+
+    it("is a no-op on an empty batch", async () => {
+      await projectStore.upsertSections([section({ id: "a", seq: 1 })]);
+      await projectStore.applyAcknowledgedSections([]);
+      expect(await projectStore.getSection("a")).toMatchObject({ id: "a" });
+    });
+  });
 }

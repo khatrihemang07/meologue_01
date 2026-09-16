@@ -60,6 +60,36 @@ import type { Project, Section } from "./project-types";
  * validated creation door here that upsertSection's own trusted-bulk-merge
  * semantics could never give it.
  */
+/**
+ * Issue #332: what Sync's acknowledgement arm hands this store for a
+ * Project — the Project-shaped sibling of AcknowledgedEntry (./store.ts,
+ * issue #216) and AcknowledgedTask (./task-store.ts, issue #244), whose doc
+ * comments carry the full reasoning and are not repeated here.
+ *
+ * The short version: an acknowledgement cannot be applied unconditionally,
+ * because the user can edit a row between the push going out and the
+ * response coming back, and applying it then reverts that edit *and* stamps
+ * a `seq`, so `pending()` (exactly `seq IS NULL`) stops seeing the row and
+ * nothing ever re-pushes it. Nor can it be guarded on `updatedAt` the way
+ * applyPulledProjects is: ADR 0065 tolerates the Server holding an *older*
+ * `updatedAt`, so that guard would refuse the acknowledgement forever and
+ * the row would re-push on every tick.
+ */
+export interface AcknowledgedProject {
+  /** The Server's current row for this id, as ADR 0059 returns it — a full row, so a write the Server refused against a tombstone teaches this Device the tombstone. */
+  readonly confirmed: Project;
+  /** The row this Device sent, exactly as `pendingProjects()` handed it over. Only its `updatedAt` is read. */
+  readonly asPushed: Project;
+}
+
+/** Issue #332: the Section-shaped sibling of AcknowledgedProject above — same rule, same reasons. */
+export interface AcknowledgedSection {
+  /** The Server's current row for this id, as ADR 0059 returns it. */
+  readonly confirmed: Section;
+  /** The row this Device sent, exactly as `pendingSections()` handed it over. Only its `updatedAt` is read. */
+  readonly asPushed: Section;
+}
+
 export interface ProjectStore {
   /**
    * Every Project that isn't tombstoned, flat regardless of nesting,
@@ -87,10 +117,37 @@ export interface ProjectStore {
    * carries the full rule and every reason behind it): an incoming row
    * is applied unless the local row is pending (`seq IS NULL`) and
    * strictly newer by `updatedAt`, and even then a tombstone still wins.
-   * `upsertProjects` above stays wholesale and is what the acknowledged
-   * arm keeps using.
+   * The acknowledged arm is applyAcknowledgedProjects below (issue #332),
+   * not this method and not `upsertProjects` — see AcknowledgedProject
+   * above for why an `updatedAt` guard cannot simply be reused there.
    */
   applyPulledProjects(projects: Project[]): Promise<void>;
+  /**
+   * Sync's **acknowledgement** write path for Projects (issue #332),
+   * mirroring TaskStore.applyAcknowledged's issue #244 fix and
+   * EntryStore.applyAcknowledged's #216 one exactly — see
+   * EntryStore.applyAcknowledged's own doc comment (./store.ts) for the
+   * full rule and the reasoning behind every clause.
+   *
+   * Applies each confirmation **only while the local row is still the one
+   * that was pushed**, compared on `updatedAt` against `asPushed`. A
+   * Project renamed, recoloured, favourited, reordered or archived since
+   * the push is left exactly as it is, and left pending, so the next Sync
+   * tick carries that change instead of the acknowledgement quietly
+   * undoing it. A row no longer pending is confirmed unconditionally: it
+   * has nothing local left to lose, which keeps a redelivered
+   * acknowledgement idempotent.
+   *
+   * Until this existed, this method's neighbour above asserted that
+   * "`upsertProjects` above stays wholesale and is what the acknowledged
+   * arm keeps using" — a statement of current behaviour in the voice of a
+   * decision, giving no reason Projects were immune to the race #216 had
+   * already named. They were not: issue #332 reproduced the lost write
+   * deterministically by renaming a Project while the push carrying its
+   * creation was still in flight, and watching every subsequent round go
+   * out with an empty `projects` array.
+   */
+  applyAcknowledgedProjects(rows: readonly AcknowledgedProject[]): Promise<void>;
   /** Changes `name` and clears `seq`. Refuses (throws) an empty name — ./project-fields.ts's assertValidProjectName. No-op against a tombstone. */
   renameProject(id: string, name: string): Promise<void>;
   /** Changes `colour` and clears `seq`. Refuses (throws) a hex outside label-colors.ts's current palette — ./project-fields.ts's assertValidProjectColour. No-op against a tombstone. */
@@ -200,6 +257,23 @@ export interface ProjectStore {
    * trusted-bulk-merge path — a pull is exactly such a path).
    */
   applyPulledSections(sections: Section[]): Promise<void>;
+  /**
+   * Sync's **acknowledgement** write path for Sections (issue #332) —
+   * mirrors applyAcknowledgedProjects above, and carries no
+   * twenty-section cap for the identical reason applyPulledSections
+   * above carries none.
+   *
+   * Sections are the *widest* exposure of the four streams issue #332
+   * covers, which is why they get their own reproduction rather than
+   * riding on the Project one. A Section is created by an inline form at
+   * the bottom of its own Project's screen, and the row that appears
+   * carries Edit, Move earlier, Move later, Archive and Delete in its own
+   * overflow menu — every one of them a local mutation, every one of them
+   * **zero clicks and no navigation** from the Section that was just
+   * created. Renaming a Section immediately after adding it is not an
+   * exotic interleaving; it is the ordinary way a person fixes a typo.
+   */
+  applyAcknowledgedSections(rows: readonly AcknowledgedSection[]): Promise<void>;
   /** Changes `name` and clears `seq`. Refuses (throws) an empty name. No-op against a tombstone. */
   renameSection(id: string, name: string): Promise<void>;
   /** Changes `description` and clears `seq`. `null` clears it. No-op against a tombstone. */

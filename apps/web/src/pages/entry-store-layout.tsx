@@ -826,6 +826,10 @@ const LABEL_STORE_METHODS: StoreMethodNames<LabelStore> = {
   get: true,
   upsert: true,
   applyPulled: true,
+  // Issue #332 — the acknowledgement arm's own write path, alongside the
+  // pull's above, exactly as ENTRY_STORE_METHODS and TASK_STORE_METHODS
+  // carry both. Same compile-time checkpoint, same reason.
+  applyAcknowledged: true,
   rename: true,
   setColour: true,
   remove: true,
@@ -851,6 +855,8 @@ const PROJECT_STORE_METHODS: StoreMethodNames<ProjectStore> = {
   getProject: true,
   upsertProjects: true,
   applyPulledProjects: true,
+  // Issue #332 — see LABEL_STORE_METHODS' own comment above.
+  applyAcknowledgedProjects: true,
   renameProject: true,
   setProjectColour: true,
   setProjectDescription: true,
@@ -874,6 +880,10 @@ const PROJECT_STORE_METHODS: StoreMethodNames<ProjectStore> = {
   // compile-time checkpoint as every method here.
   upsertSections: true,
   applyPulledSections: true,
+  // Issue #332 — Sections get their own entry for the same reason they
+  // get their own store method: Section is folded into ProjectStore, not
+  // into Project's own write path.
+  applyAcknowledgedSections: true,
   renameSection: true,
   setSectionDescription: true,
   reorderSection: true,
@@ -903,6 +913,8 @@ const COMMENT_STORE_METHODS: StoreMethodNames<CommentStore> = {
   get: true,
   upsert: true,
   applyPulled: true,
+  // Issue #332 — see LABEL_STORE_METHODS' own comment above.
+  applyAcknowledged: true,
   edit: true,
   remove: true,
   pending: true,

@@ -1,7 +1,7 @@
 import { and, asc, eq, isNull, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/sqlite-proxy";
 import { assertValidCommentText } from "../comment-fields";
-import type { CommentStore } from "../comment-store";
+import type { AcknowledgedComment, CommentStore } from "../comment-store";
 import type { Comment } from "../comment-types";
 import { matchesSubstring } from "../task-search";
 import type { SqliteDriver } from "./driver";
@@ -122,6 +122,61 @@ export class SqliteCommentStore implements CommentStore {
         },
         setWhere: sql`${comments.seq} IS NOT NULL OR strftime('${sql.raw(MILLISECOND_PRECISION)}', excluded.updated_at) >= strftime('${sql.raw(MILLISECOND_PRECISION)}', ${comments.updatedAt}) OR excluded.deleted_at IS NOT NULL`,
       });
+  }
+
+  /**
+   * Issue #332 — see CommentStore.applyAcknowledged's own doc comment
+   * (../comment-store.ts) for the rule and what not having it cost, and
+   * AcknowledgedComment's for why the row as pushed has to travel
+   * alongside the confirmation. Mirrors SqliteTaskStore.applyAcknowledged
+   * (./sqlite-task-store.ts) statement for statement, applied to
+   * `comments` instead of `tasks` and with no defaulter to run —
+   * Comments have none, unlike Task/Project/Section/Label (upsert()'s own
+   * comment). That method's own comment carries the reasoning for each of
+   * the three choices repeated here:
+   *
+   * - One guarded statement **per row**, unlike applyPulled's single
+   *   batch upsert — forced rather than chosen, because each row's guard
+   *   compares against its own `asPushed.updatedAt` and a single
+   *   `setWhere` cannot carry a different value per row of a batch.
+   * - `comments.seq IS NOT NULL` first, so a row the Server has already
+   *   acknowledged is confirmed again unconditionally and a redelivered
+   *   acknowledgement stays idempotent.
+   * - Plain `=` on `updated_at`, where applyPulled needs `strftime`
+   *   normalisation. Equality, not ordering, between the *same row* and a
+   *   snapshot of itself taken when it was pushed — so both sides hold
+   *   whatever string wrote it, byte for byte, and this is not a
+   *   cross-writer comparison at all.
+   *
+   * No reindex step after the loop, unlike SqliteTaskStore's — there is
+   * no second FTS5 table to keep in step here (search()'s own doc
+   * comment: a live scan over list()), so a row search() sees is exactly
+   * whatever this loop left in `comments`, survivor or not, with no
+   * separate index that could still show the confirmation a guard refused.
+   */
+  async applyAcknowledged(rows: readonly AcknowledgedComment[]): Promise<void> {
+    if (rows.length === 0) {
+      return;
+    }
+    for (const { confirmed, asPushed } of rows) {
+      await this.db
+        .insert(comments)
+        .values(confirmed)
+        .onConflictDoUpdate({
+          target: comments.id,
+          set: {
+            deviceId: sql`excluded.device_id`,
+            taskId: sql`excluded.task_id`,
+            text: sql`excluded.text`,
+            createdAt: sql`excluded.created_at`,
+            updatedAt: sql`excluded.updated_at`,
+            seq: sql`excluded.seq`,
+            syncedAt: sql`excluded.synced_at`,
+            deletedAt: sql`excluded.deleted_at`,
+          },
+          setWhere: sql`${comments.seq} IS NOT NULL OR ${comments.updatedAt} = ${asPushed.updatedAt}`,
+        });
+    }
   }
 
   async edit(id: string, text: string): Promise<void> {

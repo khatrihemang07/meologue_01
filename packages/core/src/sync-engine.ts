@@ -1,6 +1,6 @@
-import type { CommentStore } from "./comment-store";
+import type { AcknowledgedComment, CommentStore } from "./comment-store";
 import type { EventStore } from "./event-store";
-import type { LabelStore } from "./label-store";
+import type { AcknowledgedLabel, LabelStore } from "./label-store";
 import {
   fromWireCommentOutput,
   fromWireEntryOutput,
@@ -17,7 +17,7 @@ import {
   toWireSectionInput,
   toWireTaskInput,
 } from "./mapping";
-import type { ProjectStore } from "./project-store";
+import type { AcknowledgedProject, AcknowledgedSection, ProjectStore } from "./project-store";
 import { PROTOCOL_VERSION, ROW_SHAPE_EPOCH, SYNC_BATCH_SIZE } from "./protocol";
 import type { AcknowledgedEntry, EntryStore } from "./store";
 import type { AcknowledgedTask, TaskStore } from "./task-store";
@@ -444,10 +444,13 @@ export async function sync(options: SyncEngineOptions): Promise<void> {
     // further from the code that runs.
     //
     // The repetition also has a property the abstraction would remove:
-    // **the two arms are visibly different per stream, and must be.** Entries
-    // and Tasks run `applyAcknowledged` and `applyPulled`; the other four run
-    // `upsert` and `applyPulled`. That asymmetry is load-bearing (ADR 0068's
-    // amendment for #216 says why) and a shared helper would have to
+    // **the two arms are visibly different per stream, and must be.** Every
+    // mutable stream now runs `applyAcknowledged*` and `applyPulled*`; only
+    // `Event` runs `upsert`, and only because it is append-only and nothing
+    // can ever make one pending (ADR 0068). That asymmetry is load-bearing
+    // (ADR 0068's amendments for #216, #244 and #332 say why) — the six
+    // blocks reached it one ticket at a time, and the one stream that does
+    // NOT get the guard is the whole reason a shared helper would have to
     // special-case it, hiding exactly the difference a reader most needs to
     // see. `applyIncomingTasks` was that helper for Tasks, serving both
     // arms, and #218 had to split it for precisely this reason.
@@ -457,9 +460,22 @@ export async function sync(options: SyncEngineOptions): Promise<void> {
     // clever one.
     if (response.acknowledged_projects.length > 0) {
       const syncedAt = now();
-      await projectStore.upsertProjects(
-        response.acknowledged_projects.map((project) => fromWireProjectOutput(project, syncedAt)),
-      );
+      // Issue #332: applyAcknowledged*, not the wholesale upsert*, and it
+      // needs the rows as *pushed* alongside the Server's confirmations.
+      // Matched by id rather than by position, for the reason the
+      // `acknowledged_entries` block above gives: nothing in ADR 0059
+      // promises the array comes back in the order it was sent, and an
+      // acknowledgement for an id this request did not push is dropped
+      // because there is no local state it could correctly confirm.
+      const pushedById = new Map(projectsToPush.map((row) => [row.id, row]));
+      const acknowledged: AcknowledgedProject[] = [];
+      for (const wire of response.acknowledged_projects) {
+        const asPushed = pushedById.get(wire.id);
+        if (asPushed !== undefined) {
+          acknowledged.push({ confirmed: fromWireProjectOutput(wire, syncedAt), asPushed });
+        }
+      }
+      await projectStore.applyAcknowledgedProjects(acknowledged);
     }
     if (response.projects.length > 0) {
       const syncedAt = now();
@@ -467,8 +483,8 @@ export async function sync(options: SyncEngineOptions): Promise<void> {
       // not upsertProjects() — this is the Cursor-read arm; see
       // ProjectStore.applyPulledProjects's own doc comment
       // (./project-store.ts) and EntryStore.applyPulled's (./store.ts) for
-      // the rule and why the acknowledged arm above stays on
-      // upsertProjects() deliberately.
+      // the rule, and AcknowledgedProject's (./project-store.ts) for why
+      // the acknowledged arm above needs a *different* guard, not this one.
       await projectStore.applyPulledProjects(
         response.projects.map((project) => fromWireProjectOutput(project, syncedAt)),
       );
@@ -485,9 +501,15 @@ export async function sync(options: SyncEngineOptions): Promise<void> {
     // own method rather than smuggled into upsertProjects above.
     if (response.acknowledged_sections.length > 0) {
       const syncedAt = now();
-      await projectStore.upsertSections(
-        response.acknowledged_sections.map((section) => fromWireSectionOutput(section, syncedAt)),
-      );
+      const pushedById = new Map(sectionsToPush.map((row) => [row.id, row]));
+      const acknowledged: AcknowledgedSection[] = [];
+      for (const wire of response.acknowledged_sections) {
+        const asPushed = pushedById.get(wire.id);
+        if (asPushed !== undefined) {
+          acknowledged.push({ confirmed: fromWireSectionOutput(wire, syncedAt), asPushed });
+        }
+      }
+      await projectStore.applyAcknowledgedSections(acknowledged);
     }
     if (response.sections.length > 0) {
       const syncedAt = now();
@@ -495,8 +517,8 @@ export async function sync(options: SyncEngineOptions): Promise<void> {
       // not upsertSections() — this is the Cursor-read arm; see
       // ProjectStore.applyPulledSections's own doc comment
       // (./project-store.ts) and EntryStore.applyPulled's (./store.ts) for
-      // the rule and why the acknowledged arm above stays on
-      // upsertSections() deliberately.
+      // the rule, and AcknowledgedSection's (./project-store.ts) for why
+      // the acknowledged arm above needs a *different* guard, not this one.
       await projectStore.applyPulledSections(
         response.sections.map((section) => fromWireSectionOutput(section, syncedAt)),
       );
@@ -507,17 +529,24 @@ export async function sync(options: SyncEngineOptions): Promise<void> {
 
     if (response.acknowledged_labels.length > 0) {
       const syncedAt = now();
-      await labelStore.upsert(
-        response.acknowledged_labels.map((label) => fromWireLabelOutput(label, syncedAt)),
-      );
+      const pushedById = new Map(labelsToPush.map((row) => [row.id, row]));
+      const acknowledged: AcknowledgedLabel[] = [];
+      for (const wire of response.acknowledged_labels) {
+        const asPushed = pushedById.get(wire.id);
+        if (asPushed !== undefined) {
+          acknowledged.push({ confirmed: fromWireLabelOutput(wire, syncedAt), asPushed });
+        }
+      }
+      await labelStore.applyAcknowledged(acknowledged);
     }
     if (response.labels.length > 0) {
       const syncedAt = now();
       // Issue #218 / ADR 0068 (extended to Labels): applyPulled(), not
       // upsert() — this is the Cursor-read arm; see LabelStore.applyPulled's
       // own doc comment (./label-store.ts) and EntryStore.applyPulled's
-      // (./store.ts) for the rule and why the acknowledged arm above stays
-      // on upsert() deliberately.
+      // (./store.ts) for the rule, and AcknowledgedLabel's
+      // (./label-store.ts) for why the acknowledged arm above needs a
+      // *different* guard, not this one.
       await labelStore.applyPulled(
         response.labels.map((label) => fromWireLabelOutput(label, syncedAt)),
       );
@@ -528,17 +557,24 @@ export async function sync(options: SyncEngineOptions): Promise<void> {
 
     if (response.acknowledged_comments.length > 0) {
       const syncedAt = now();
-      await commentStore.upsert(
-        response.acknowledged_comments.map((comment) => fromWireCommentOutput(comment, syncedAt)),
-      );
+      const pushedById = new Map(commentsToPush.map((row) => [row.id, row]));
+      const acknowledged: AcknowledgedComment[] = [];
+      for (const wire of response.acknowledged_comments) {
+        const asPushed = pushedById.get(wire.id);
+        if (asPushed !== undefined) {
+          acknowledged.push({ confirmed: fromWireCommentOutput(wire, syncedAt), asPushed });
+        }
+      }
+      await commentStore.applyAcknowledged(acknowledged);
     }
     if (response.comments.length > 0) {
       const syncedAt = now();
       // Issue #218 / ADR 0068 (extended to Comments): applyPulled(), not
       // upsert() — this is the Cursor-read arm; see
       // CommentStore.applyPulled's own doc comment (./comment-store.ts) and
-      // EntryStore.applyPulled's (./store.ts) for the rule and why the
-      // acknowledged arm above stays on upsert() deliberately.
+      // EntryStore.applyPulled's (./store.ts) for the rule, and
+      // AcknowledgedComment's for why the acknowledged arm above needs a
+      // *different* guard, not this one.
       await commentStore.applyPulled(
         response.comments.map((comment) => fromWireCommentOutput(comment, syncedAt)),
       );

@@ -230,3 +230,62 @@ step ("six speculative changes to Sync at once"). What separates Tasks is that t
 *observed in the field and then reproduced deterministically*, which none of the other four has
 been. Filed rather than assumed, as issue #332. `Event` remains genuinely exempt for the
 reason given above — append-only, nothing can make one pending.
+
+## Amendment (issue #332): every mutable stream now, and this time the claim was driven
+
+The amendment above closed the acknowledgement race for Tasks and, in its closing paragraph,
+explicitly declined to extend it to the four remaining mutable streams — "the argument generalises,
+the evidence does not." That was the right call at the time and it is now discharged, by producing
+the evidence rather than by deciding the argument was good enough.
+
+**Projects, Sections, Labels and Comments were each reproduced, individually.** Not as a table
+driven by one shared test: one test per stream, each creating a row, editing that same row while
+the request carrying its creation was still in flight, and asserting on the *next* round's push.
+On the un-fixed code every one of them came back:
+
+```
+AssertionError: expected [] to deeply equal [ ObjectContaining{…} ]
+```
+
+An empty push on the round after the race — the same signature #244 recorded from the field, which
+is the lost write itself rather than the merely-reverted row. `ProjectStore.applyAcknowledgedProjects`
+/ `applyAcknowledgedSections`, `LabelStore.applyAcknowledged` and `CommentStore.applyAcknowledged`
+now mirror the Entry and Task pair exactly.
+
+**`Event` is still the one genuine exemption**, for the reason this ADR has given since #218: it is
+append-only, has no `deletedAt`, and no edit path could ever make one pending. It keeps `upsert`.
+That is now the *only* stream that does, which makes the asymmetry easy to state and easy to check.
+
+### Why the reachability half was gathered separately, and what it showed
+
+A deterministic reproduction of an unreachable state proves nothing, so each stream's UI was read
+for the specific question "can a person create one of these and modify it moments later":
+
+- **Sections are the widest exposure of the four.** A Section is created by an inline form at the
+  bottom of its own Project's screen, and the row that appears carries Edit, Move earlier, Move
+  later, Archive and Delete in its own overflow menu — every one a local mutation, zero clicks and
+  no navigation from the row just created.
+- **Comments are next.** The composer does not collapse after posting, and the posted row exposes
+  Edit and Delete immediately. Fixing a typo seconds after posting is the ordinary case, not an
+  exotic interleaving.
+- **Projects** expose Favourite and Archive on the new row itself; rename/colour/description are one
+  navigation step away. `setProjectParent` and `reorderProject` are *verified unreachable* — no UI
+  caller exists — which narrows those two mutations without narrowing the stream.
+- **Labels** go Add → row appears → Edit, on one screen.
+
+### The finding that explains the silence, and is not an excuse
+
+**Only Tasks and History nudge `requestSync` after a local write.** `use-projects.ts`,
+`use-labels.ts` and `use-comments.ts` invalidate the query cache and nothing more, so their writes
+wait for the ambient `SYNC_INTERVAL_MS` tick (5s, `protocol.ts`).
+
+This is why #244 surfaced from the field as a reproducible 1-in-6-10 and these four never did. The
+in-flight window is identical; what differs is how much of the time a user spends inside it. A Task
+pushes immediately, so an edit moments later lands during the round trip often. A Project sits
+pending for up to five seconds first, so the same edit usually lands *before* the push rather than
+during it — rarer, not impossible, and permanent when it happens.
+
+Recorded because the absence of field reports was the strongest available argument for leaving these
+four alone, and it turns out to be an argument about *push scheduling*, not about the race. Whether
+these streams should nudge `requestSync` is a separate, still-open question; it is deliberately not
+settled here, and the guard does not depend on the answer either way.
