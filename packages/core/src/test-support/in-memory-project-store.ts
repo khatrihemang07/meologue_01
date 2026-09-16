@@ -7,7 +7,7 @@ import {
   withDefaultProjectFields,
   withDefaultSectionFields,
 } from "../project-fields";
-import type { ProjectStore } from "../project-store";
+import type { AcknowledgedProject, AcknowledgedSection, ProjectStore } from "../project-store";
 import type { Project, Section } from "../project-types";
 import type { TaskStore } from "../task-store";
 import { isAtLeastAsNewAs } from "../updated-at";
@@ -80,6 +80,25 @@ export class InMemoryProjectStore implements ProjectStore {
         entry.deletedAt !== null;
       if (apply) {
         this.projects.set(entry.id, entry);
+      }
+    }
+  }
+
+  /**
+   * Mirrors SqliteProjectStore.applyAcknowledgedProjects() (issue #332) —
+   * see ProjectStore.applyAcknowledgedProjects's doc comment
+   * (../project-store.ts) for the rule, and the real store for why the
+   * `updatedAt` equality here is raw rather than normalised (both sides
+   * are the same row, one of them a snapshot of itself).
+   */
+  async applyAcknowledgedProjects(rows: readonly AcknowledgedProject[]): Promise<void> {
+    for (const { confirmed, asPushed } of rows) {
+      const normalized = withDefaultProjectFields(confirmed);
+      const local = this.projects.get(normalized.id);
+      const apply =
+        local === undefined || local.seq !== null || local.updatedAt === asPushed.updatedAt;
+      if (apply) {
+        this.projects.set(normalized.id, normalized);
       }
     }
   }
@@ -255,6 +274,22 @@ export class InMemoryProjectStore implements ProjectStore {
         entry.deletedAt !== null;
       if (apply) {
         this.sections.set(entry.id, entry);
+      }
+    }
+  }
+
+  /**
+   * Mirrors SqliteProjectStore.applyAcknowledgedSections() (issue #332) —
+   * the Section-shaped sibling of applyAcknowledgedProjects above.
+   */
+  async applyAcknowledgedSections(rows: readonly AcknowledgedSection[]): Promise<void> {
+    for (const { confirmed, asPushed } of rows) {
+      const normalized = withDefaultSectionFields(confirmed);
+      const local = this.sections.get(normalized.id);
+      const apply =
+        local === undefined || local.seq !== null || local.updatedAt === asPushed.updatedAt;
+      if (apply) {
+        this.sections.set(normalized.id, normalized);
       }
     }
   }

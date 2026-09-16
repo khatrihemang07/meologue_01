@@ -3,7 +3,7 @@ import {
   assertValidLabelName,
   withDefaultLabelColour,
 } from "../label-fields";
-import type { LabelStore } from "../label-store";
+import type { AcknowledgedLabel, LabelStore } from "../label-store";
 import type { Label } from "../label-types";
 import { isAtLeastAsNewAs } from "../updated-at";
 
@@ -67,6 +67,26 @@ export class InMemoryLabelStore implements LabelStore {
         entry.deletedAt !== null;
       if (apply) {
         this.labels.set(entry.id, entry);
+      }
+    }
+  }
+
+  /**
+   * Mirrors SqliteLabelStore.applyAcknowledged() (issue #332) — see
+   * LabelStore.applyAcknowledged's doc comment (../label-store.ts) for the
+   * rule, and InMemoryTaskStore.applyAcknowledged's own comment (./in-
+   * memory-task-store.ts) for why the `updatedAt` equality here is raw
+   * rather than normalised (both sides are the same row, one of them a
+   * snapshot of itself).
+   */
+  async applyAcknowledged(rows: readonly AcknowledgedLabel[]): Promise<void> {
+    for (const { confirmed, asPushed } of rows) {
+      const normalized = withDefaultLabelColour(confirmed);
+      const local = this.labels.get(normalized.id);
+      const apply =
+        local === undefined || local.seq !== null || local.updatedAt === asPushed.updatedAt;
+      if (apply) {
+        this.labels.set(normalized.id, normalized);
       }
     }
   }

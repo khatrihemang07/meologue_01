@@ -5,7 +5,7 @@ import {
   assertValidLabelName,
   withDefaultLabelColour,
 } from "../label-fields";
-import type { LabelStore } from "../label-store";
+import type { AcknowledgedLabel, LabelStore } from "../label-store";
 import type { Label } from "../label-types";
 import type { SqliteDriver } from "./driver";
 import { kv, labels } from "./schema";
@@ -123,6 +123,62 @@ export class SqliteLabelStore implements LabelStore {
         },
         setWhere: sql`${labels.seq} IS NOT NULL OR strftime('${sql.raw(MILLISECOND_PRECISION)}', excluded.updated_at) >= strftime('${sql.raw(MILLISECOND_PRECISION)}', ${labels.updatedAt}) OR excluded.deleted_at IS NOT NULL`,
       });
+  }
+
+  /**
+   * Issue #332 — see LabelStore.applyAcknowledged's own doc comment
+   * (../label-store.ts) for the rule and what not having it cost, and
+   * AcknowledgedLabel's for why the row as pushed has to travel alongside
+   * the confirmation. Mirrors SqliteTaskStore.applyAcknowledged
+   * (../sqlite/sqlite-task-store.ts) statement for statement, applied to
+   * `labels` instead of `tasks`; that method's own comment carries the
+   * reasoning for each of the choices repeated here:
+   *
+   * - One guarded statement **per row**, unlike applyPulled's single batch
+   *   upsert — forced rather than chosen, because each row's guard compares
+   *   against its own `asPushed.updatedAt` and a single `setWhere` cannot
+   *   carry a different value per row of a batch. The guard still sits
+   *   inside the statement, so there is no `await` between deciding and
+   *   writing — which matters here for exactly the reason this method
+   *   exists: it is about a write that interleaves with a Sync round trip.
+   * - `labels.seq IS NOT NULL` first, so a row the Server has already
+   *   acknowledged is confirmed again unconditionally and a redelivered
+   *   acknowledgement stays idempotent.
+   * - Plain `=` on `updated_at`, where applyPulled needs `strftime`
+   *   normalisation. Equality, not ordering, between the *same row* and a
+   *   snapshot of itself taken when it was pushed — so both sides hold
+   *   whatever string wrote it, byte for byte, and this is not a
+   *   cross-writer comparison at all.
+   *
+   * No search index to re-derive here — Labels have none, unlike
+   * SqliteTaskStore.applyAcknowledged's re-read/reindex step.
+   */
+  async applyAcknowledged(rows: readonly AcknowledgedLabel[]): Promise<void> {
+    if (rows.length === 0) {
+      return;
+    }
+    for (const { confirmed, asPushed } of rows) {
+      // withDefaultLabelColour — see upsert()'s own comment for why each
+      // defaulter runs before the write.
+      const normalized = withDefaultLabelColour(confirmed);
+      await this.db
+        .insert(labels)
+        .values(normalized)
+        .onConflictDoUpdate({
+          target: labels.id,
+          set: {
+            deviceId: sql`excluded.device_id`,
+            name: sql`excluded.name`,
+            colour: sql`excluded.colour`,
+            createdAt: sql`excluded.created_at`,
+            updatedAt: sql`excluded.updated_at`,
+            seq: sql`excluded.seq`,
+            syncedAt: sql`excluded.synced_at`,
+            deletedAt: sql`excluded.deleted_at`,
+          },
+          setWhere: sql`${labels.seq} IS NOT NULL OR ${labels.updatedAt} = ${asPushed.updatedAt}`,
+        });
+    }
   }
 
   async rename(id: string, name: string): Promise<void> {

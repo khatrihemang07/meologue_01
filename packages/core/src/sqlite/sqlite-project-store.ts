@@ -8,7 +8,7 @@ import {
   withDefaultProjectFields,
   withDefaultSectionFields,
 } from "../project-fields";
-import type { ProjectStore } from "../project-store";
+import type { AcknowledgedProject, AcknowledgedSection, ProjectStore } from "../project-store";
 import type { Project, Section } from "../project-types";
 import type { TaskStore } from "../task-store";
 import type { SqliteDriver } from "./driver";
@@ -137,6 +137,62 @@ export class SqliteProjectStore implements ProjectStore {
         },
         setWhere: sql`${projects.seq} IS NOT NULL OR strftime('${sql.raw(MILLISECOND_PRECISION)}', excluded.updated_at) >= strftime('${sql.raw(MILLISECOND_PRECISION)}', ${projects.updatedAt}) OR excluded.deleted_at IS NOT NULL`,
       });
+  }
+
+  /**
+   * Issue #332 — see ProjectStore.applyAcknowledgedProjects's own doc
+   * comment (../project-store.ts) for the rule and what not having it
+   * cost, and AcknowledgedProject's for why the row as pushed has to
+   * travel alongside the confirmation. Mirrors
+   * SqliteTaskStore.applyAcknowledged (./sqlite-task-store.ts) and
+   * SqliteEntryStore's (./sqlite-entry-store.ts) statement for statement,
+   * applied to `projects`; those carry the reasoning for each choice
+   * repeated here:
+   *
+   * - One guarded statement **per row**, unlike applyPulledProjects'
+   *   single batch upsert — forced rather than chosen, because each row's
+   *   guard compares against its own `asPushed.updatedAt` and one
+   *   `setWhere` cannot carry a different value per row of a batch.
+   * - `projects.seq IS NOT NULL` first, so a row the Server has already
+   *   acknowledged is confirmed again unconditionally and a redelivered
+   *   acknowledgement stays idempotent.
+   * - Plain `=` on `updated_at` where applyPulledProjects needs
+   *   `strftime` normalisation: this compares the *same row* against a
+   *   snapshot of itself taken when it was pushed, so both sides hold
+   *   whatever string wrote it, byte for byte. It is not a cross-writer
+   *   comparison at all, which is the only reason it can skip that.
+   *
+   * No search index to maintain — Projects have none, the same note
+   * applyPulledProjects above carries.
+   */
+  async applyAcknowledgedProjects(rows: readonly AcknowledgedProject[]): Promise<void> {
+    if (rows.length === 0) {
+      return;
+    }
+    for (const { confirmed, asPushed } of rows) {
+      await this.db
+        .insert(projects)
+        .values(withDefaultProjectFields(confirmed))
+        .onConflictDoUpdate({
+          target: projects.id,
+          set: {
+            deviceId: sql`excluded.device_id`,
+            name: sql`excluded.name`,
+            colour: sql`excluded.colour`,
+            favourite: sql`excluded.favourite`,
+            archived: sql`excluded.archived`,
+            parentId: sql`excluded.parent_id`,
+            description: sql`excluded.description`,
+            orderKey: sql`excluded.order_key`,
+            createdAt: sql`excluded.created_at`,
+            updatedAt: sql`excluded.updated_at`,
+            seq: sql`excluded.seq`,
+            syncedAt: sql`excluded.synced_at`,
+            deletedAt: sql`excluded.deleted_at`,
+          },
+          setWhere: sql`${projects.seq} IS NOT NULL OR ${projects.updatedAt} = ${asPushed.updatedAt}`,
+        });
+    }
   }
 
   async renameProject(id: string, name: string): Promise<void> {
@@ -380,6 +436,47 @@ export class SqliteProjectStore implements ProjectStore {
         },
         setWhere: sql`${sections.seq} IS NOT NULL OR strftime('${sql.raw(MILLISECOND_PRECISION)}', excluded.updated_at) >= strftime('${sql.raw(MILLISECOND_PRECISION)}', ${sections.updatedAt}) OR excluded.deleted_at IS NOT NULL`,
       });
+  }
+
+  /**
+   * Issue #332 — the Section-shaped sibling of applyAcknowledgedProjects
+   * above, which carries the reasoning for every choice repeated here.
+   * See ProjectStore.applyAcknowledgedSections's own doc comment
+   * (../project-store.ts) for why Sections are the widest of the four
+   * streams this ticket covers: every local mutation a Section has sits
+   * in the just-created row's own overflow menu, zero clicks away.
+   *
+   * Carries no twenty-section cap, the same as applyPulledSections and
+   * upsertSections above — addSection's own doc comment explains why that
+   * check cannot live in a trusted write path, and an acknowledgement is
+   * exactly such a path: the rows coming back are this Device's own.
+   */
+  async applyAcknowledgedSections(rows: readonly AcknowledgedSection[]): Promise<void> {
+    if (rows.length === 0) {
+      return;
+    }
+    for (const { confirmed, asPushed } of rows) {
+      await this.db
+        .insert(sections)
+        .values(withDefaultSectionFields(confirmed))
+        .onConflictDoUpdate({
+          target: sections.id,
+          set: {
+            deviceId: sql`excluded.device_id`,
+            projectId: sql`excluded.project_id`,
+            name: sql`excluded.name`,
+            description: sql`excluded.description`,
+            orderKey: sql`excluded.order_key`,
+            archived: sql`excluded.archived`,
+            createdAt: sql`excluded.created_at`,
+            updatedAt: sql`excluded.updated_at`,
+            seq: sql`excluded.seq`,
+            syncedAt: sql`excluded.synced_at`,
+            deletedAt: sql`excluded.deleted_at`,
+          },
+          setWhere: sql`${sections.seq} IS NOT NULL OR ${sections.updatedAt} = ${asPushed.updatedAt}`,
+        });
+    }
   }
 
   async renameSection(id: string, name: string): Promise<void> {

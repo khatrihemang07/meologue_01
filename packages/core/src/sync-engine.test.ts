@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { PROTOCOL_VERSION, ROW_SHAPE_EPOCH, SYNC_BATCH_SIZE } from "./protocol";
 import { sync } from "./sync-engine";
+import { comment } from "./test-support/comment-fixture";
 import { entry } from "./test-support/entry-fixture";
 import { event } from "./test-support/event-fixture";
 import { InMemoryCommentStore } from "./test-support/in-memory-comment-store";
@@ -9,6 +10,8 @@ import { InMemoryEventStore } from "./test-support/in-memory-event-store";
 import { InMemoryLabelStore } from "./test-support/in-memory-label-store";
 import { InMemoryProjectStore } from "./test-support/in-memory-project-store";
 import { InMemoryTaskStore } from "./test-support/in-memory-task-store";
+import { label } from "./test-support/label-fixture";
+import { project, section } from "./test-support/project-fixture";
 import { task } from "./test-support/task-fixture";
 import type {
   WireEntryOutput,
@@ -1150,6 +1153,192 @@ describe("sync engine", () => {
       });
       await sync({ ...stores, transport: secondTransport, deviceId: DEVICE_ID });
       expect(await stores.taskStore.getCursor()).toBe(99);
+    });
+  });
+  // Issue #332: the same reproduction #244 established for Tasks, run once
+  // per remaining mutable stream. Each is deliberately its OWN test rather
+  // than a loop over a table of four, because the point of this ticket is
+  // that "the argument generalises" is exactly the sentence that left Tasks
+  // three releases behind — so each stream is driven and read back on its
+  // own terms, not asserted collectively.
+  //
+  // The shape, identical every time and identical to #244's: the row is
+  // created and pushed; the user edits that same row while the request is
+  // still in flight; the acknowledgement that comes back is for the row as
+  // PUSHED. On the un-fixed code the wholesale `upsert*` stamps a real
+  // `seq` over the `seq: null` the edit just set, `pending()` stops seeing
+  // it, and **the next round's push is empty** — which is the assertion
+  // that matters. A row merely reverted in the store would still re-push;
+  // a row that stops looking pending never does, and that is the lost
+  // write.
+  describe("an acknowledgement must not undo an edit made while the push was in flight (issue #332)", () => {
+    it("Projects: a rename during the round trip survives, and still pushes next round", async () => {
+      const stores = newStores();
+      await stores.projectStore.upsertProjects([project({ id: "p1", name: "Errands", seq: null })]);
+
+      const racing = vi.fn(async (request) => {
+        expect(request.projects).toEqual([expect.objectContaining({ name: "Errands" })]);
+        await stores.projectStore.renameProject("p1", "Errands and chores");
+        return {
+          ...emptyResponse,
+          acknowledged_projects: [
+            {
+              id: "p1",
+              device_id: DEVICE_ID,
+              name: "Errands",
+              colour: "#808080",
+              favourite: false,
+              archived: false,
+              parent_id: null,
+              description: null,
+              order_key: "V",
+              created_at: "2026-01-01T00:00:00.000Z",
+              updated_at: "2026-01-01T00:00:00.000Z",
+              seq: 4,
+              deleted_at: null,
+            },
+          ],
+        } satisfies WireSyncResponse;
+      });
+      await sync({ ...stores, transport: racing, deviceId: DEVICE_ID });
+
+      expect(await stores.projectStore.getProject("p1")).toMatchObject({
+        name: "Errands and chores",
+        seq: null,
+      });
+
+      let pushedNext: WireSyncRequest["projects"] = [];
+      const next = vi.fn(async (request) => {
+        pushedNext = request.projects;
+        return emptyResponse;
+      });
+      await sync({ ...stores, transport: next, deviceId: DEVICE_ID });
+      expect(pushedNext).toEqual([
+        expect.objectContaining({ id: "p1", name: "Errands and chores" }),
+      ]);
+    });
+
+    it("Sections: a rename during the round trip survives, and still pushes next round", async () => {
+      const stores = newStores();
+      await stores.projectStore.upsertSections([
+        section({ id: "s1", name: "Groceries", seq: null }),
+      ]);
+
+      const racing = vi.fn(async (request) => {
+        expect(request.sections).toEqual([expect.objectContaining({ name: "Groceries" })]);
+        await stores.projectStore.renameSection("s1", "Groceries and household");
+        return {
+          ...emptyResponse,
+          acknowledged_sections: [
+            {
+              id: "s1",
+              device_id: DEVICE_ID,
+              project_id: "project-1",
+              name: "Groceries",
+              description: null,
+              order_key: "V",
+              archived: false,
+              created_at: "2026-01-01T00:00:00.000Z",
+              updated_at: "2026-01-01T00:00:00.000Z",
+              seq: 4,
+              deleted_at: null,
+            },
+          ],
+        } satisfies WireSyncResponse;
+      });
+      await sync({ ...stores, transport: racing, deviceId: DEVICE_ID });
+
+      expect(await stores.projectStore.getSection("s1")).toMatchObject({
+        name: "Groceries and household",
+        seq: null,
+      });
+
+      let pushedNext: WireSyncRequest["sections"] = [];
+      const next = vi.fn(async (request) => {
+        pushedNext = request.sections;
+        return emptyResponse;
+      });
+      await sync({ ...stores, transport: next, deviceId: DEVICE_ID });
+      expect(pushedNext).toEqual([
+        expect.objectContaining({ id: "s1", name: "Groceries and household" }),
+      ]);
+    });
+
+    it("Labels: a rename during the round trip survives, and still pushes next round", async () => {
+      const stores = newStores();
+      await stores.labelStore.upsert([label({ id: "l1", name: "errand", seq: null })]);
+
+      const racing = vi.fn(async (request) => {
+        expect(request.labels).toEqual([expect.objectContaining({ name: "errand" })]);
+        await stores.labelStore.rename("l1", "errands");
+        return {
+          ...emptyResponse,
+          acknowledged_labels: [
+            {
+              id: "l1",
+              device_id: DEVICE_ID,
+              name: "errand",
+              colour: "#808080",
+              created_at: "2026-01-01T00:00:00.000Z",
+              updated_at: "2026-01-01T00:00:00.000Z",
+              seq: 4,
+              deleted_at: null,
+            },
+          ],
+        } satisfies WireSyncResponse;
+      });
+      await sync({ ...stores, transport: racing, deviceId: DEVICE_ID });
+
+      expect(await stores.labelStore.get("l1")).toMatchObject({ name: "errands", seq: null });
+
+      let pushedNext: WireSyncRequest["labels"] = [];
+      const next = vi.fn(async (request) => {
+        pushedNext = request.labels;
+        return emptyResponse;
+      });
+      await sync({ ...stores, transport: next, deviceId: DEVICE_ID });
+      expect(pushedNext).toEqual([expect.objectContaining({ id: "l1", name: "errands" })]);
+    });
+
+    it("Comments: an edit during the round trip survives, and still pushes next round", async () => {
+      const stores = newStores();
+      await stores.commentStore.upsert([comment({ id: "c1", text: "sounds good", seq: null })]);
+
+      const racing = vi.fn(async (request) => {
+        expect(request.comments).toEqual([expect.objectContaining({ text: "sounds good" })]);
+        await stores.commentStore.edit("c1", "sounds good to me");
+        return {
+          ...emptyResponse,
+          acknowledged_comments: [
+            {
+              id: "c1",
+              device_id: DEVICE_ID,
+              task_id: "task-1",
+              text: "sounds good",
+              created_at: "2026-01-01T00:00:00.000Z",
+              updated_at: "2026-01-01T00:00:00.000Z",
+              seq: 4,
+              deleted_at: null,
+            },
+          ],
+        } satisfies WireSyncResponse;
+      });
+      await sync({ ...stores, transport: racing, deviceId: DEVICE_ID });
+
+      expect(await stores.commentStore.get("c1")).toMatchObject({
+        text: "sounds good to me",
+        seq: null,
+      });
+
+      let pushedNext: WireSyncRequest["comments"] = [];
+      const next = vi.fn(async (request) => {
+        pushedNext = request.comments;
+        return emptyResponse;
+      });
+      await sync({ ...stores, transport: next, deviceId: DEVICE_ID });
+      expect(pushedNext).toEqual([
+        expect.objectContaining({ id: "c1", text: "sounds good to me" }),
+      ]);
     });
   });
 });

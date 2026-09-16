@@ -71,6 +71,7 @@ function createFakeCommentStore(seed: Comment[] = []): CommentStore {
       comments = [...comments, ...incoming];
     }),
     applyPulled: vi.fn(async () => {}),
+    applyAcknowledged: vi.fn(async () => {}),
     edit: vi.fn(async (id: string, text: string) => {
       comments = comments.map((c) => (c.id === id ? { ...c, text, seq: null } : c));
     }),

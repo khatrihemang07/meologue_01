@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { LABEL_COLOURS } from "../label-colors";
+import { DEFAULT_LABEL_COLOUR, LABEL_COLOURS } from "../label-colors";
 import type { LabelStore } from "../label-store";
 import { label } from "./label-fixture";
 
@@ -316,6 +316,169 @@ export function labelStoreContract(createStore: () => LabelStore | Promise<Label
       await store.applyPulled([]);
 
       expect(await store.get("a")).toMatchObject({ id: "a" });
+    });
+  });
+
+  // Issue #332: Sync's acknowledgement write path, the Label-shaped
+  // sibling of task-store-contract.ts's own "applyAcknowledged() (issue
+  // #244)" block and mirrored case for case against it. The defect it
+  // closes: create a Label (pushed, `seq: null`), rename it while that
+  // push is still in flight, and the acknowledgement for the pushed shape
+  // lands wholesale over the rename — stamping a real `seq` over the
+  // `seq: null` the rename just set. `pending()` is exactly `seq IS
+  // NULL`, so the next round's push is `[]` and the rename is gone
+  // forever. It cannot reuse applyPulled's rule: ADR 0065 tolerates the
+  // Server holding an OLDER `updated_at`, so an ordering guard would
+  // refuse the acknowledgement forever and the row would re-push every
+  // tick. See LabelStore.applyAcknowledged's own doc comment (../label-
+  // store.ts).
+  describe("applyAcknowledged() (issue #332)", () => {
+    it("confirms a Label that has not changed since it was pushed, clearing pending", async () => {
+      const pushed = label({ id: "a", name: "errand", seq: null });
+      await store.upsert([pushed]);
+
+      await store.applyAcknowledged([
+        {
+          asPushed: pushed,
+          confirmed: label({
+            id: "a",
+            name: "errand",
+            seq: 7,
+            syncedAt: "2026-01-02T00:00:00.000Z",
+          }),
+        },
+      ]);
+
+      expect(await store.pending()).toEqual([]);
+      expect(await store.get("a")).toMatchObject({ id: "a", seq: 7 });
+    });
+
+    // ADR 0065's tolerated divergence, exactly as the Task contract pins
+    // it: an edit landing on identical content leaves the Server with an
+    // OLDER updatedAt than this Device. The acknowledgement must still
+    // land, or the Label never clears pending and re-pushes forever.
+    it("confirms an unchanged Label even when the Server's updatedAt is older than this Device's", async () => {
+      const pushed = label({
+        id: "a",
+        name: "same name",
+        updatedAt: "2026-02-01T00:00:00.000Z",
+        seq: null,
+      });
+      await store.upsert([pushed]);
+
+      await store.applyAcknowledged([
+        {
+          asPushed: pushed,
+          confirmed: label({
+            id: "a",
+            name: "same name",
+            updatedAt: "2026-01-01T00:00:00.000Z",
+            seq: 7,
+            syncedAt: "2026-01-02T00:00:00.000Z",
+          }),
+        },
+      ]);
+
+      expect(await store.pending()).toEqual([]);
+    });
+
+    // Not only renames — any local mutation in that window; setColour and
+    // remove are the other two, exercised separately below. `rename`
+    // stands for every setter, since they all route through the one
+    // `updateIfLive`/`applyIfLive` door that stamps `updatedAt`/`seq`.
+    it("does not undo a rename made after the push went out", async () => {
+      const pushed = label({ id: "a", name: "errand", seq: null });
+      await store.upsert([pushed]);
+      await store.rename("a", "renamed while the push was in flight");
+
+      await store.applyAcknowledged([
+        {
+          asPushed: pushed,
+          confirmed: label({ id: "a", name: "errand", seq: 7 }),
+        },
+      ]);
+
+      expect(await store.get("a")).toMatchObject({
+        name: "renamed while the push was in flight",
+        seq: null,
+      });
+    });
+
+    // The half that is the actual lost write: surviving in the store is
+    // not enough — `pending()` is exactly `seq IS NULL`, and a wholesale
+    // acknowledgement would have stamped a real `seq` over it, so the
+    // rename would never re-push.
+    it("leaves that rename pending, so the next Sync pushes it", async () => {
+      const pushed = label({ id: "a", name: "errand", seq: null });
+      await store.upsert([pushed]);
+      await store.rename("a", "renamed while the push was in flight");
+
+      await store.applyAcknowledged([
+        {
+          asPushed: pushed,
+          confirmed: label({ id: "a", name: "errand", seq: 7 }),
+        },
+      ]);
+
+      const pending = await store.pending();
+      expect(pending.map((l) => l.id)).toEqual(["a"]);
+      expect(pending[0]).toMatchObject({
+        seq: null,
+        name: "renamed while the push was in flight",
+      });
+    });
+
+    // setColour stands for a second, independent setter reaching the
+    // identical door — pinning that the guard isn't accidentally keyed to
+    // `name` alone.
+    it("does not undo a setColour made after the push went out", async () => {
+      const pushed = label({ id: "a", name: "errand", colour: DEFAULT_LABEL_COLOUR, seq: null });
+      await store.upsert([pushed]);
+      const target = LABEL_COLOURS.find((c) => c.name === "blue");
+      if (target === undefined) {
+        throw new Error("LABEL_COLOURS is missing 'blue' — fixture assumption broken");
+      }
+      await store.setColour("a", target.hex);
+
+      await store.applyAcknowledged([
+        {
+          asPushed: pushed,
+          confirmed: label({ id: "a", name: "errand", colour: DEFAULT_LABEL_COLOUR, seq: 7 }),
+        },
+      ]);
+
+      expect(await store.get("a")).toMatchObject({ colour: target.hex, seq: null });
+    });
+
+    // ADR 0059: full rows are acknowledged precisely so a write the Server
+    // REFUSED (because the row is tombstoned there) teaches this Device
+    // the tombstone. That has to keep working for Labels too — mirrors
+    // `remove()`'s own tombstone shape (blanked `name`).
+    it("carries back a tombstone the Server refused the write against", async () => {
+      const pushed = label({ id: "a", name: "an edit the Server will refuse", seq: null });
+      await store.upsert([pushed]);
+
+      await store.applyAcknowledged([
+        {
+          asPushed: pushed,
+          confirmed: label({
+            id: "a",
+            name: "",
+            seq: 9,
+            syncedAt: "2026-01-02T00:00:00.000Z",
+            deletedAt: "2026-01-02T00:00:00.000Z",
+          }),
+        },
+      ]);
+
+      expect(await store.list()).toEqual([]);
+      expect(await store.get("a")).toBeUndefined();
+    });
+
+    it("is a no-op on an empty batch", async () => {
+      await store.upsert([label({ id: "a", seq: 1 })]);
+      await store.applyAcknowledged([]);
+      expect((await store.list()).map((l) => l.id)).toEqual(["a"]);
     });
   });
 
