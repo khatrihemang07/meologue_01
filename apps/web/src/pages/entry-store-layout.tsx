@@ -760,6 +760,11 @@ const TASK_STORE_METHODS: StoreMethodNames<TaskStore> = {
   get: true,
   upsert: true,
   applyPulled: true,
+  // Issue #244 — the acknowledgement arm's own write path, alongside the
+  // pull's above, exactly as ENTRY_STORE_METHODS carries both. Same
+  // compile-time checkpoint, same reason: `sync()` reaches this through
+  // the deferred store on the session's very first tick.
+  applyAcknowledged: true,
   complete: true,
   uncomplete: true,
   rename: true,
