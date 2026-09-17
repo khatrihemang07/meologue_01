@@ -103,14 +103,59 @@
  * this wrapper still supplies the gone-at-close fallback that hand-
  * written `onCloseAutoFocus` callbacks in this codebase never did.
  *
- * Never `document.body`. If neither `restoreFocusTo` nor the captured
- * element is still connected and focusable, this focuses `#root` (`
- * index.html`'s own React mount point, always present) instead — kept
- * inside the app's live region rather than the document frame. Not a
- * fully semantic target (it's not "the Inbox link" or any other reader-
- * meaningful place), but a strictly better default than `body`, and
- * `main.tsx` never sets `tabIndex` on it — hasAttribute is checked first
- * so this only ever touches that once per session.
+ * **Revision, after live-browser verification of the first version of this
+ * file found a real regression.** That version, lacking any good target,
+ * forced focus onto `#root` (`index.html`'s mount point, made focusable
+ * with `tabIndex=-1`) rather than leaving it on `document.body`. For
+ * `TaskTimeDialog`'s own Escape path this *broke* a surface the issue's
+ * own investigation had found correct: Escape closes both the Time
+ * dialog and the scheduler popover underneath it (issue #326's own
+ * simultaneous-close mechanism), so the previously-focused element this
+ * wrapper captured (something inside the popover) is disconnected by the
+ * time this dispatch runs — but the popover's own `FocusScope`, tearing
+ * down moments later with a real `PopoverTrigger` (`BUTTON "Date"`, this
+ * app's one legitimate `*.Trigger` usage — `task-schedule-popover.tsx`),
+ * was *already* going to restore focus there correctly, exactly as it
+ * does on `main`. `#root` is a real, focusable DOM node — calling
+ * `.focus()` on it is an active, observable act that lands *after* the
+ * popover's own restore and overwrites it. `document.body` has no
+ * `tabIndex`; calling `.focus()` on it (which is what a captured-but-
+ * meaningless "previously focused" value used to fall through to, see
+ * below) is normally a no-op that changes nothing — which is why the
+ * sibling `TaskCustomRepeatDialog` Escape path, sharing the identical
+ * wrapper and the identical simultaneous-close mechanism, never
+ * regressed: what it had captured at open time was already
+ * `document.body` (its own opener is a two-step `DropdownMenu`
+ * hand-off — issues #255/#292's own pattern — whose own
+ * `onCloseAutoFocus` deliberately focuses nothing before this dialog
+ * mounts), and restoring to `document.body` never competed with the
+ * popover's later restore the way actually-focusing `#root` did.
+ *
+ * So: **this wrapper does not force a target it doesn't have a real one
+ * for.** No `restoreFocusTo`, and no captured element that is both still
+ * connected AND is not `document.body` (`isConnectedFocusable` rejects
+ * `body` outright, wherever a value is read from, rather than only
+ * skipping it case-by-case at the restore site — `document.body` is
+ * always `.isConnected` and always has a `.focus` method, so without
+ * this exclusion it reads as a perfectly "good" target, which is exactly
+ * how the `TaskCustomRepeatDialog` Cancel/outside-click paths ended up
+ * faithfully restoring to `body` instead of standing aside: they had
+ * genuinely captured "nothing was focused," and nothing before this
+ * revision treated that capture as equivalent to no capture at all).
+ * With no good target: this calls neither `preventDefault()` nor
+ * `.focus()` at all, deferring entirely to whatever Radix's own dead
+ * default and any surrounding `FocusScope` (a still-open Popover, or one
+ * closing at the same moment with its own real restore) would have done
+ * with this wrapper out of the way. That is *not* the same as "restores
+ * to `document.body`" even on a surface with nothing better available
+ * (the Shortcuts overlay, Label edit, Project edit): this wrapper made
+ * no choice there at all, and the value the page ends up showing is
+ * whatever the rest of the page's own focus story already determines —
+ * unfixed, in those three cases, matching `main`'s own long-standing
+ * `BODY` result, but never *regressed* by an active claim this wrapper
+ * had no business making. A real fix for those three needs a
+ * `restoreFocusTo` naming a stable anchor, the same way `TaskActivityDialog`
+ * below does — left to a follow-up rather than guessed at here.
  */
 import { Dialog as DialogPrimitive } from "radix-ui";
 import * as React from "react";
@@ -141,21 +186,31 @@ export interface DialogContentProps extends NativeDialogContentProps {
   restoreFocusTo?: React.RefObject<HTMLElement | null>;
 }
 
+// `document.body` is excluded on purpose, not just an incidental filter:
+// it is always `.isConnected` and always has a `.focus` method, so
+// without this it reads as a perfectly "good" target — which is exactly
+// how a dialog that captured "nothing was focused" (this file's header
+// comment: `TaskCustomRepeatDialog`'s two-step `DropdownMenu` hand-off)
+// ended up faithfully restoring focus to `body` instead of standing
+// aside. Treating it as capturing nothing is what makes standing aside
+// possible at all.
+//
+// Mutation-tested (`dialog.test.tsx`) by removing the `!== document.body`
+// clause: the mutant survived. Investigated, not shrugged off: calling
+// `document.body.focus()` is a browser (and jsdom) no-op — body has no
+// `tabIndex`, so `.focus()` on it never actually changes
+// `document.activeElement` — meaning "wrongly treat body as good, call
+// `.focus()` on it, achieve nothing" and "correctly reject body, stand
+// aside, achieve nothing" are observationally identical outcomes. Kept
+// anyway: `event.preventDefault()` is only called in the "good target"
+// branch, so this clause is what keeps this wrapper from claiming
+// (falsely) to have handled a close it did nothing useful with.
 function isConnectedFocusable(element: HTMLElement | null): element is HTMLElement {
-  return Boolean(element?.isConnected) && typeof element?.focus === "function";
-}
-
-// Never `document.body` (this file's header comment) — `#root` is
-// `index.html`'s own React mount point (`main.tsx`'s `getElementById
-// ("root")`), always present for the app's whole lifetime, so this never
-// has to further fall back to nothing.
-function focusAppRoot() {
-  const root = document.getElementById("root");
-  if (!(root instanceof HTMLElement)) return;
-  if (!root.hasAttribute("tabindex")) {
-    root.setAttribute("tabindex", "-1");
-  }
-  root.focus({ preventScroll: true });
+  return (
+    Boolean(element?.isConnected) &&
+    typeof element?.focus === "function" &&
+    element !== document.body
+  );
 }
 
 export const DialogContent = React.forwardRef<HTMLDivElement, DialogContentProps>(
@@ -195,21 +250,29 @@ export const DialogContent = React.forwardRef<HTMLDivElement, DialogContentProps
         // uncalled to fall through to the restore below.
         onCloseAutoFocus?.(event);
         if (event.defaultPrevented) return;
-        event.preventDefault();
 
         const explicitTarget = restoreFocusTo?.current ?? null;
         if (isConnectedFocusable(explicitTarget)) {
+          event.preventDefault();
           explicitTarget.focus({ preventScroll: true });
           return;
         }
 
         const capturedTarget = previouslyFocusedRef.current;
         if (isConnectedFocusable(capturedTarget)) {
+          event.preventDefault();
           capturedTarget.focus({ preventScroll: true });
           return;
         }
 
-        focusAppRoot();
+        // No good target: stand aside entirely (this file's header
+        // comment has the full story of why forcing one — the previous
+        // version of this file forced `#root` — is worse than doing
+        // nothing). Neither `preventDefault()` nor `.focus()` is called;
+        // Radix's own dead default and any surrounding `FocusScope` (a
+        // Popover that stays open, or one closing at the same moment
+        // with a real trigger of its own) get to do whatever they would
+        // have done with this wrapper out of the way.
       },
       [onCloseAutoFocus, restoreFocusTo],
     );
