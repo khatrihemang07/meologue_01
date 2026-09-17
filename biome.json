@@ -18,9 +18,44 @@
   "linter": {
     "enabled": true,
     "rules": {
-      "preset": "recommended"
+      "preset": "recommended",
+      "style": {
+        "noRestrictedImports": {
+          "level": "error",
+          "options": {
+            "paths": {
+              "radix-ui": {
+                "importNames": ["Dialog"],
+                "message": "Import Dialog building blocks from '@/components/ui/dialog' instead. Its DialogContent captures and restores focus on close (issue #342); Dialog.Content straight from radix-ui does not."
+              }
+            }
+          }
+        }
+      }
     }
   },
+  "overrides": [
+    {
+      "includes": ["apps/web/src/components/ui/dialog.tsx"],
+      "linter": {
+        "rules": {
+          "style": {
+            "noRestrictedImports": "off"
+          }
+        }
+      }
+    },
+    {
+      "includes": ["apps/web/src/components/ui/sheet.tsx"],
+      "linter": {
+        "rules": {
+          "style": {
+            "noRestrictedImports": "off"
+          }
+        }
+      }
+    }
+  ],
   "javascript": {
     "formatter": {
       "quoteStyle": "double"

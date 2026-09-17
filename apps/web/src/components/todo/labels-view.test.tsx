@@ -203,6 +203,31 @@ describe("LabelsView — Edit label dialog (STR-04)", () => {
     expect(onSetColour).not.toHaveBeenCalled();
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
   });
+
+  // Issue #342 — this dialog's real opener is the row's own "Edit"
+  // `DropdownMenu.Item`, gone the instant its menu closes, before
+  // `LabelDialog` even mounts — the generic capture has nothing
+  // connected to restore to at close, which is why `labels-view.tsx`
+  // wires an explicit `restoreFocusTo` at this row's own "…" trigger.
+  it("Cancel restores focus to the row's own options menu trigger, not document.body", async () => {
+    renderLabelsView({ labels: [label({ name: "Work" })] });
+
+    openRowMenuAndClick(0, "Edit");
+    await waitFor(() => expect(screen.getByRole("dialog")).toBeInTheDocument());
+    // Drains the DropdownMenu's own deferred close-focus dispatch before
+    // this test's own assertion — its target is the identical trigger
+    // button this test checks, so without draining here a genuinely
+    // broken `restoreFocusTo` could still read as passing by coincidence
+    // (`dialog.test.tsx`'s own header comment; this issue's own #339
+    // history).
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "Label options menu" }));
+    expect(document.activeElement).not.toBe(document.body);
+  });
 });
 
 describe("LabelsView — delete (STR-03, unchanged wording)", () => {

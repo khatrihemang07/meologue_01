@@ -9,8 +9,39 @@
  * `meologue-reference/todoist/keyboard.md`: only bindings with a real target in
  * this app are in the table at all (that module's own header comment lists
  * what's missing and why).
+ *
+ * **Issue #342 — no `restoreFocusTo`, by design, not by oversight.**
+ * `?` is bound on a single `document`-level `keydown` listener
+ * (`use-todo-keymap.ts`), reachable from anywhere in Todo regardless of
+ * what, if anything, currently has focus — unlike the Label/Project edit
+ * dialogs or `TaskCustomRepeatDialog` (all three now carry an explicit
+ * `restoreFocusTo`), there is no one opener element this overlay is ever
+ * "the child of." `DialogContent`'s own generic capture already handles
+ * the common case correctly on its own: whatever had focus when `?` was
+ * pressed (a task row, a button, a link) is captured synchronously in the
+ * same keydown handler that opens this overlay, and is still connected
+ * and restorable once this overlay closes, since nothing about opening it
+ * unmounts anything. The gap this file cannot close is the one live-
+ * measured case where NOTHING had focus at all — a mouse-only reader who
+ * has clicked nothing focusable pressing `?` — where the honest capture
+ * really is `document.body`, and `ui/dialog.tsx`'s own `isConnectedFocusable`
+ * correctly treats that as "nothing to restore," standing aside rather
+ * than inventing a target. A `restoreFocusTo` naming some fixed landmark
+ * (the sidebar, a heading) would not fix this: it would silently
+ * misdescribe "you were somewhere specific" for a reader who very much
+ * wasn't, papering over the ambiguity instead of resolving it. Left open,
+ * on purpose — a future `?`-triggered focus anchor (e.g. a persistent
+ * "last-focused task row" tracked at the page level, independent of this
+ * overlay) is a real option, but it is a page-level focus-tracking
+ * feature, not a fix that belongs inside this one dialog.
  */
-import { Dialog as DialogPrimitive } from "radix-ui";
+import {
+  Dialog,
+  DialogContent,
+  DialogOverlay,
+  DialogPortal,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { formatKeyHint, groupedBindingsBySection } from "@/lib/todo-keymap";
 
 export interface TodoKeyboardShortcutsOverlayProps {
@@ -25,13 +56,14 @@ export function TodoKeyboardShortcutsOverlay({
   const sections = groupedBindingsBySection();
 
   return (
-    <DialogPrimitive.Root open={open} onOpenChange={onOpenChange}>
-      <DialogPrimitive.Portal>
-        <DialogPrimitive.Overlay className="fixed inset-0 z-50 bg-black/50 duration-150 data-open:animate-in data-open:fade-in-0 data-closed:animate-out data-closed:fade-out-0" />
-        <DialogPrimitive.Content className="fixed top-1/2 left-1/2 z-50 max-h-[80vh] w-[calc(100%-2rem)] max-w-md -translate-x-1/2 -translate-y-1/2 overflow-y-auto rounded-xl border border-border bg-popover p-4 text-popover-foreground shadow-lg outline-hidden duration-150 data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0">
-          <DialogPrimitive.Title className="mb-3 font-semibold text-base">
-            Keyboard Shortcuts
-          </DialogPrimitive.Title>
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogPortal>
+        <DialogOverlay className="fixed inset-0 z-50 bg-black/50 duration-150 data-open:animate-in data-open:fade-in-0 data-closed:animate-out data-closed:fade-out-0" />
+        <DialogContent
+          open={open}
+          className="fixed top-1/2 left-1/2 z-50 max-h-[80vh] w-[calc(100%-2rem)] max-w-md -translate-x-1/2 -translate-y-1/2 overflow-y-auto rounded-xl border border-border bg-popover p-4 text-popover-foreground shadow-lg outline-hidden duration-150 data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0"
+        >
+          <DialogTitle className="mb-3 font-semibold text-base">Keyboard Shortcuts</DialogTitle>
           <div className="flex flex-col gap-4">
             {sections.map(({ section, rows }) => (
               <div key={section}>
@@ -54,8 +86,8 @@ export function TodoKeyboardShortcutsOverlay({
               </div>
             ))}
           </div>
-        </DialogPrimitive.Content>
-      </DialogPrimitive.Portal>
-    </DialogPrimitive.Root>
+        </DialogContent>
+      </DialogPortal>
+    </Dialog>
   );
 }

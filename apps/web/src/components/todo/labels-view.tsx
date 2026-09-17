@@ -32,7 +32,7 @@
 import type { Label } from "@meologue/core";
 import { MoreHorizontal } from "lucide-react";
 import { DropdownMenu } from "radix-ui";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { LabelDialog } from "@/components/todo/label-dialog";
 import { ConfirmDialog } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
@@ -58,6 +58,15 @@ export function LabelsView({ labels, onAdd, onRename, onSetColour, onRemove }: L
   // Section delete (that component's own doc comment on why the target
   // is captured, not just a boolean).
   const [confirmingDelete, setConfirmingDelete] = useState<Label | null>(null);
+  // Issue #342 — `LabelDialog`'s own `restoreFocusTo`, for the Edit path
+  // only. Each row's own "…" trigger is kept here, keyed by Label id
+  // (rows re-render/reorder independently, so a single ref would go
+  // stale the moment any other row's own DropdownMenu mounted a new
+  // button) — set once, right when "Edit" is chosen, into
+  // `editRestoreFocusRef` below: the one row whose dialog is actually
+  // about to open.
+  const optionsTriggerRefs = useRef(new Map<string, HTMLButtonElement>());
+  const editRestoreFocusRef = useRef<HTMLButtonElement | null>(null);
 
   return (
     <div className="flex flex-col gap-4 p-3">
@@ -87,6 +96,10 @@ export function LabelsView({ labels, onAdd, onRename, onSetColour, onRemove }: L
               <DropdownMenu.Root>
                 <DropdownMenu.Trigger asChild>
                   <button
+                    ref={(el) => {
+                      if (el) optionsTriggerRefs.current.set(label.id, el);
+                      else optionsTriggerRefs.current.delete(label.id);
+                    }}
                     type="button"
                     aria-label="Label options menu"
                     className="flex size-8 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground"
@@ -101,7 +114,11 @@ export function LabelsView({ labels, onAdd, onRename, onSetColour, onRemove }: L
                   >
                     <DropdownMenu.Item
                       className={menuItemClassName}
-                      onSelect={() => setDialogTarget(label)}
+                      onSelect={() => {
+                        editRestoreFocusRef.current =
+                          optionsTriggerRefs.current.get(label.id) ?? null;
+                        setDialogTarget(label);
+                      }}
                     >
                       Edit
                     </DropdownMenu.Item>
@@ -129,6 +146,13 @@ export function LabelsView({ labels, onAdd, onRename, onSetColour, onRemove }: L
         onAdd={onAdd}
         onRename={onRename}
         onSetColour={onSetColour}
+        // Only for Edit — the Add path's own opener ("Add label" above)
+        // stays mounted, so it needs no explicit anchor (this file's own
+        // `editRestoreFocusRef` doc comment, and `LabelDialogProps.
+        // restoreFocusTo`'s own doc comment). Guarding on `dialogTarget`
+        // rather than always passing the ref is what keeps a stale value
+        // from a PREVIOUS Edit from leaking into a fresh Add.
+        restoreFocusTo={dialogTarget ? editRestoreFocusRef : undefined}
       />
 
       {/* Verbatim (quick-add.md § "Destructive confirmation wording"):

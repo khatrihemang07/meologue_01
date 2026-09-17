@@ -42,9 +42,16 @@
  */
 import type { Project, Task } from "@meologue/core";
 import { matchesSubstring } from "@meologue/core";
-import { Dialog as DialogPrimitive } from "radix-ui";
 import type * as React from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogOverlay,
+  DialogPortal,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { highlightSubstring } from "@/lib/task-search-match";
 import { cn } from "@/lib/utils";
 
@@ -157,20 +164,21 @@ export function TaskQuickFind({
   }
 
   return (
-    <DialogPrimitive.Root open={open} onOpenChange={onOpenChange}>
-      <DialogPrimitive.Portal>
-        <DialogPrimitive.Overlay className="fixed inset-0 z-50 bg-black/50 duration-150 data-open:animate-in data-open:fade-in-0 data-closed:animate-out data-closed:fade-out-0" />
-        <DialogPrimitive.Content
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogPortal>
+        <DialogOverlay className="fixed inset-0 z-50 bg-black/50 duration-150 data-open:animate-in data-open:fade-in-0 data-closed:animate-out data-closed:fade-out-0" />
+        <DialogContent
+          open={open}
           onOpenAutoFocus={(event) => {
             event.preventDefault();
             inputRef.current?.focus();
           }}
           className="fixed top-24 left-1/2 z-50 w-[calc(100%-2rem)] max-w-md -translate-x-1/2 rounded-xl border border-border bg-popover text-popover-foreground shadow-lg outline-hidden duration-150 data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0"
         >
-          <DialogPrimitive.Title className="sr-only">Quick-find</DialogPrimitive.Title>
-          <DialogPrimitive.Description className="sr-only">
+          <DialogTitle className="sr-only">Quick-find</DialogTitle>
+          <DialogDescription className="sr-only">
             Search Task titles and Project names
-          </DialogPrimitive.Description>
+          </DialogDescription>
           <input
             ref={inputRef}
             type="text"
@@ -235,9 +243,9 @@ export function TaskQuickFind({
               Show more results — searches Descriptions and Comments too
             </button>
           )}
-        </DialogPrimitive.Content>
-      </DialogPrimitive.Portal>
-    </DialogPrimitive.Root>
+        </DialogContent>
+      </DialogPortal>
+    </Dialog>
   );
 }
 

@@ -1,7 +1,15 @@
-import { Dialog as DialogPrimitive } from "radix-ui";
 import type { ReactNode } from "react";
 import { useRef } from "react";
 import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogClose,
+  DialogContent,
+  DialogDescription,
+  DialogOverlay,
+  DialogPortal,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 
@@ -83,7 +91,7 @@ export function DestructiveConfirmDialog({
   const canConfirm = confirmText === confirmWord && !busy;
 
   return (
-    <DialogPrimitive.Root
+    <Dialog
       open={open}
       onOpenChange={(nextOpen) => {
         if (!nextOpen && busy) {
@@ -92,13 +100,14 @@ export function DestructiveConfirmDialog({
         onOpenChange(nextOpen);
       }}
     >
-      <DialogPrimitive.Portal>
-        <DialogPrimitive.Overlay
+      <DialogPortal>
+        <DialogOverlay
           className={cn(
             "fixed inset-0 z-50 bg-black/50 duration-150 data-open:animate-in data-open:fade-in-0 data-closed:animate-out data-closed:fade-out-0",
           )}
         />
-        <DialogPrimitive.Content
+        <DialogContent
+          open={open}
           role="alertdialog"
           onOpenAutoFocus={(event) => {
             event.preventDefault();
@@ -108,12 +117,10 @@ export function DestructiveConfirmDialog({
             "fixed top-1/2 left-1/2 z-50 w-[calc(100%-2rem)] max-w-sm -translate-x-1/2 -translate-y-1/2 rounded-xl border border-border bg-popover p-4 text-popover-foreground shadow-lg outline-hidden duration-150 data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95",
           )}
         >
-          <DialogPrimitive.Title className="font-medium text-foreground text-sm">
-            {title}
-          </DialogPrimitive.Title>
-          <DialogPrimitive.Description className="mt-1.5 text-muted-foreground text-sm">
+          <DialogTitle className="font-medium text-foreground text-sm">{title}</DialogTitle>
+          <DialogDescription className="mt-1.5 text-muted-foreground text-sm">
             {description}
-          </DialogPrimitive.Description>
+          </DialogDescription>
 
           {extra && <div className="mt-3">{extra}</div>}
 
@@ -138,11 +145,11 @@ export function DestructiveConfirmDialog({
           )}
 
           <div className="mt-4 flex justify-end gap-2">
-            <DialogPrimitive.Close asChild>
+            <DialogClose asChild>
               <Button ref={cancelRef} type="button" variant="outline" size="sm" disabled={busy}>
                 Cancel
               </Button>
-            </DialogPrimitive.Close>
+            </DialogClose>
             <Button
               type="button"
               variant="destructive"
@@ -153,8 +160,8 @@ export function DestructiveConfirmDialog({
               Restore
             </Button>
           </div>
-        </DialogPrimitive.Content>
-      </DialogPrimitive.Portal>
-    </DialogPrimitive.Root>
+        </DialogContent>
+      </DialogPortal>
+    </Dialog>
   );
 }

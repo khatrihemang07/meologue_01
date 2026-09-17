@@ -46,10 +46,18 @@
  * caller to assemble once those three strings and `onConfirm` are
  * supplied.
  */
-import { Dialog as DialogPrimitive } from "radix-ui";
 import type * as React from "react";
 import { useRef } from "react";
 import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogClose,
+  DialogContent,
+  DialogDescription,
+  DialogOverlay,
+  DialogPortal,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
 
 export interface ConfirmDialogProps {
@@ -74,17 +82,16 @@ export interface ConfirmDialogProps {
    */
   onConfirm: () => void;
   /**
-   * An optional passthrough to `Dialog.Content`'s own `onCloseAutoFocus`
-   * (task-detail-view.tsx's DET-15 focus-restore fix). Radix's default,
-   * with no caller here, is to return focus to whatever triggered the
-   * open — which is nothing, for a dialog `TaskDetailBody` opens
-   * programmatically rather than from a click, so that default leaves
-   * focus stranded on `document.body`. A caller that knows where focus
-   * should land instead (the field the reader was typing in before this
-   * confirmation interrupted them) calls `event.preventDefault()` here
-   * and focuses it directly. Every existing caller (this file's own two —
-   * entry-actions.tsx, sessions-page.tsx) omits this prop and keeps
-   * Radix's default behaviour unchanged.
+   * An optional passthrough to `DialogContent`'s own `onCloseAutoFocus`
+   * (`@/components/ui/dialog`, issue #342's focus-restore wrapper;
+   * task-detail-view.tsx's DET-15 discard-confirm is why this prop
+   * exists at all). Omitting it — every caller but that one — gets that
+   * wrapper's own generic default: restore focus to whatever was focused
+   * right before this dialog opened. DET-15's own confirm is opened
+   * programmatically, with no such "before" that means anything, so it
+   * supplies its own handler here (`event.preventDefault()`, then focus
+   * the field the reader was actually typing in) instead of taking that
+   * default.
    */
   onCloseAutoFocus?: (event: Event) => void;
 }
@@ -109,15 +116,16 @@ export function ConfirmDialog({
   const cancelRef = useRef<HTMLButtonElement>(null);
 
   return (
-    <DialogPrimitive.Root open={open} onOpenChange={onOpenChange}>
-      <DialogPrimitive.Portal>
-        <DialogPrimitive.Overlay
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogPortal>
+        <DialogOverlay
           data-slot="alert-dialog-overlay"
           className={cn(
             "fixed inset-0 z-50 bg-black/50 duration-150 data-open:animate-in data-open:fade-in-0 data-closed:animate-out data-closed:fade-out-0",
           )}
         />
-        <DialogPrimitive.Content
+        <DialogContent
+          open={open}
           data-slot="alert-dialog-content"
           // Not `role="dialog"` (Radix's own Content default): this is
           // specifically an interruption over a destructive choice, and
@@ -138,36 +146,36 @@ export function ConfirmDialog({
             "fixed top-1/2 left-1/2 z-50 w-[calc(100%-2rem)] max-w-sm -translate-x-1/2 -translate-y-1/2 rounded-xl border border-border bg-popover p-4 text-popover-foreground shadow-lg outline-hidden duration-150 data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95",
           )}
         >
-          <DialogPrimitive.Title
+          <DialogTitle
             data-slot="alert-dialog-title"
             className="text-sm font-medium text-foreground"
           >
             {title}
-          </DialogPrimitive.Title>
-          <DialogPrimitive.Description
+          </DialogTitle>
+          <DialogDescription
             data-slot="alert-dialog-description"
             className="mt-1.5 text-sm text-muted-foreground"
           >
             {description}
-          </DialogPrimitive.Description>
+          </DialogDescription>
           <div className="mt-4 flex justify-end gap-2">
-            <DialogPrimitive.Close asChild>
+            <DialogClose asChild>
               <Button ref={cancelRef} type="button" variant="outline" size="sm">
                 Cancel
               </Button>
-            </DialogPrimitive.Close>
+            </DialogClose>
             {/* `destructive`, the one Button variant reserved for exactly this
                 (see button.tsx and sessions-page.tsx's own precedent) — so the
                 two actions read as unmistakably different weights, not just
                 different words. */}
-            <DialogPrimitive.Close asChild>
+            <DialogClose asChild>
               <Button type="button" variant="destructive" size="sm" onClick={onConfirm}>
                 {confirmLabel}
               </Button>
-            </DialogPrimitive.Close>
+            </DialogClose>
           </div>
-        </DialogPrimitive.Content>
-      </DialogPrimitive.Portal>
-    </DialogPrimitive.Root>
+        </DialogContent>
+      </DialogPortal>
+    </Dialog>
   );
 }

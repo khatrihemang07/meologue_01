@@ -21,9 +21,9 @@
  * this call for the inline shape; it still holds for the modal shape).
  * Recorded as unmeasured-and-inapplicable, not skipped by oversight.
  *
- * Built directly on the Radix `Dialog` primitive `alert-dialog.tsx`
- * already uses (`Dialog as DialogPrimitive` from `"radix-ui"`), not on
- * that file's own `ConfirmDialog`: `ConfirmDialog` hardcodes
+ * Built on the shared `ui/dialog.tsx` (`@/components/ui/dialog`, issue
+ * #342's own focus-restore wrapper around the Radix `Dialog` primitive),
+ * not on `alert-dialog.tsx`'s own `ConfirmDialog`: `ConfirmDialog` hardcodes
  * `role="alertdialog"` and a Cancel/destructive-action pair for exactly
  * one shape (a confirm-before-you-act interruption) that this dialog is
  * not — Add/Edit label is an ordinary form, so it keeps Radix's own
@@ -31,9 +31,18 @@
  */
 import type { Label } from "@meologue/core";
 import { LABEL_COLOURS } from "@meologue/core";
-import { Dialog as DialogPrimitive } from "radix-ui";
+import type * as React from "react";
 import { type FormEvent, useState } from "react";
 import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogClose,
+  DialogContent,
+  DialogDescription,
+  DialogOverlay,
+  DialogPortal,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 
@@ -50,6 +59,18 @@ export interface LabelDialogProps {
   onAdd: (name: string, colour: string) => void;
   onRename: (id: string, name: string) => void;
   onSetColour: (id: string, colour: string) => void;
+  /**
+   * Issue #342 — `DialogContent`'s own `restoreFocusTo`. Only meaningful
+   * for the Edit path: that opener is a per-row `DropdownMenu.Item`
+   * ("Edit," `labels-view.tsx`'s own header comment) which unmounts the
+   * instant its menu closes, before this dialog's `FocusScope` would
+   * otherwise capture anything meaningful — the identical shape
+   * `task-detail-view.tsx`'s `TaskActivityDialog` already documents. The
+   * Add path (`label === null`) needs nothing here: its own opener, the
+   * "Add label" button, stays mounted the whole time, so the generic
+   * capture already restores to it correctly.
+   */
+  restoreFocusTo?: React.RefObject<HTMLElement | null>;
 }
 
 export function LabelDialog({
@@ -59,6 +80,7 @@ export function LabelDialog({
   onAdd,
   onRename,
   onSetColour,
+  restoreFocusTo,
 }: LabelDialogProps) {
   const [name, setName] = useState(label?.name ?? "");
   const [colour, setColour] = useState(label?.colour ?? LABEL_COLOURS[0]?.hex ?? "#808080");
@@ -77,24 +99,26 @@ export function LabelDialog({
   }
 
   return (
-    <DialogPrimitive.Root open={open} onOpenChange={onOpenChange}>
-      <DialogPrimitive.Portal>
-        <DialogPrimitive.Overlay
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogPortal>
+        <DialogOverlay
           className={cn(
             "fixed inset-0 z-50 bg-black/50 duration-150 data-open:animate-in data-open:fade-in-0 data-closed:animate-out data-closed:fade-out-0",
           )}
         />
-        <DialogPrimitive.Content
+        <DialogContent
+          open={open}
+          restoreFocusTo={restoreFocusTo}
           className={cn(
             "fixed top-1/2 left-1/2 z-50 w-[calc(100%-2rem)] max-w-sm -translate-x-1/2 -translate-y-1/2 rounded-xl border border-border bg-popover p-4 text-popover-foreground shadow-lg outline-hidden duration-150 data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95",
           )}
         >
-          <DialogPrimitive.Title className="text-sm font-medium text-foreground">
+          <DialogTitle className="text-sm font-medium text-foreground">
             {label ? "Edit label" : "Add label"}
-          </DialogPrimitive.Title>
-          <DialogPrimitive.Description className="sr-only">
+          </DialogTitle>
+          <DialogDescription className="sr-only">
             Set the label's name and colour.
-          </DialogPrimitive.Description>
+          </DialogDescription>
           <form onSubmit={handleSubmit} className="mt-3 flex flex-col gap-3">
             <div className="flex flex-col gap-1">
               <div className="flex items-center justify-between">
@@ -128,18 +152,18 @@ export function LabelDialog({
               </select>
             </div>
             <div className="mt-2 flex justify-end gap-2">
-              <DialogPrimitive.Close asChild>
+              <DialogClose asChild>
                 <Button type="button" variant="outline" size="sm">
                   Cancel
                 </Button>
-              </DialogPrimitive.Close>
+              </DialogClose>
               <Button type="submit" size="sm" disabled={name.trim() === ""}>
                 {label ? "Save" : "Add"}
               </Button>
             </div>
           </form>
-        </DialogPrimitive.Content>
-      </DialogPrimitive.Portal>
-    </DialogPrimitive.Root>
+        </DialogContent>
+      </DialogPortal>
+    </Dialog>
   );
 }
