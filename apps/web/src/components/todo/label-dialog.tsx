@@ -31,6 +31,7 @@
  */
 import type { Label } from "@meologue/core";
 import { LABEL_COLOURS } from "@meologue/core";
+import type * as React from "react";
 import { type FormEvent, useState } from "react";
 import { Button } from "@/components/ui/button";
 import {
@@ -58,6 +59,18 @@ export interface LabelDialogProps {
   onAdd: (name: string, colour: string) => void;
   onRename: (id: string, name: string) => void;
   onSetColour: (id: string, colour: string) => void;
+  /**
+   * Issue #342 — `DialogContent`'s own `restoreFocusTo`. Only meaningful
+   * for the Edit path: that opener is a per-row `DropdownMenu.Item`
+   * ("Edit," `labels-view.tsx`'s own header comment) which unmounts the
+   * instant its menu closes, before this dialog's `FocusScope` would
+   * otherwise capture anything meaningful — the identical shape
+   * `task-detail-view.tsx`'s `TaskActivityDialog` already documents. The
+   * Add path (`label === null`) needs nothing here: its own opener, the
+   * "Add label" button, stays mounted the whole time, so the generic
+   * capture already restores to it correctly.
+   */
+  restoreFocusTo?: React.RefObject<HTMLElement | null>;
 }
 
 export function LabelDialog({
@@ -67,6 +80,7 @@ export function LabelDialog({
   onAdd,
   onRename,
   onSetColour,
+  restoreFocusTo,
 }: LabelDialogProps) {
   const [name, setName] = useState(label?.name ?? "");
   const [colour, setColour] = useState(label?.colour ?? LABEL_COLOURS[0]?.hex ?? "#808080");
@@ -94,6 +108,7 @@ export function LabelDialog({
         />
         <DialogContent
           open={open}
+          restoreFocusTo={restoreFocusTo}
           className={cn(
             "fixed top-1/2 left-1/2 z-50 w-[calc(100%-2rem)] max-w-sm -translate-x-1/2 -translate-y-1/2 rounded-xl border border-border bg-popover p-4 text-popover-foreground shadow-lg outline-hidden duration-150 data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95",
           )}

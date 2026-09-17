@@ -247,6 +247,32 @@ describe("ProjectView — Edit project dialog (STR-02)", () => {
 
     await waitFor(() => expect(screen.getByLabelText("Project name")).toHaveValue("Groceries"));
   });
+
+  // Issue #342 — this dialog's real opener is the "Edit" `DropdownMenu.
+  // Item`, gone the instant its menu closes, before `ProjectEditDialog`
+  // even mounts — the generic capture has nothing connected to restore to
+  // at close, which is why `project-view.tsx` wires an explicit
+  // `restoreFocusTo` at the "Project options menu" trigger.
+  it("Cancel restores focus to the Project options menu trigger, not document.body", async () => {
+    renderProjectView({ project: project({ name: "Groceries" }) });
+
+    openProjectMenuAndClick("Edit");
+    await waitFor(() => expect(screen.getByRole("dialog")).toBeInTheDocument());
+    // Drains the DropdownMenu's own deferred close-focus dispatch first
+    // (`labels-view.test.tsx`'s own identical guard, `dialog.test.tsx`'s
+    // header comment on why: this test's own target and the menu's own
+    // default target are the identical button, so draining here is what
+    // keeps the later assertion honest rather than coincidentally true).
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(document.activeElement).toBe(
+      screen.getByRole("button", { name: "Project options menu" }),
+    );
+    expect(document.activeElement).not.toBe(document.body);
+  });
 });
 
 describe("ProjectView — delete (STR-01, unchanged wording)", () => {

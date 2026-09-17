@@ -1101,6 +1101,37 @@ describe("TaskSchedulePopover", () => {
       expect(screen.getByTestId("scheduler-view")).toBeInTheDocument();
     });
 
+    // Issue #342 — this dialog's real opener ("Custom…") is unmounted by
+    // the two-step hand-off before this dialog ever mounts, and that
+    // hand-off deliberately focuses nothing (`openCustomRepeatAfterRepeat
+    // CloseRef`'s own comment) — so the generic capture would have
+    // nothing but `document.body` to restore to. `task-schedule-
+    // popover.tsx` wires an explicit `restoreFocusTo` at the Repeat
+    // trigger instead.
+    it("Cancel restores focus to the Repeat trigger, not document.body (issue #342)", async () => {
+      renderPopover();
+      open();
+      const menu = openRepeatMenu();
+      fireEvent.click(within(menu).getByRole("menuitem", { name: "Custom…" }));
+      await vi.waitFor(() => {
+        expect(screen.getByRole("dialog", { name: "Custom repeat" })).toBeInTheDocument();
+      });
+      // Drains the Repeat menu's own deferred close-focus dispatch first
+      // — its target is the identical Repeat trigger button this test
+      // checks, so draining here (rather than asserting immediately) is
+      // what keeps the later assertion honest rather than coincidentally
+      // true (`dialog.test.tsx`'s own header comment; this issue's own
+      // #339 history).
+      await new Promise((resolve) => setTimeout(resolve, 20));
+
+      const dialog = screen.getByRole("dialog", { name: "Custom repeat" });
+      fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+      await new Promise((resolve) => setTimeout(resolve, 20));
+
+      expect(document.activeElement).toBe(screen.getByRole("button", { name: "Repeat" }));
+      expect(document.activeElement).not.toBe(document.body);
+    });
+
     it("hides the Repeat entry point once a typed Recurrence is already resolving to a preview", () => {
       renderPopover({ dateString: "every friday" });
       open();

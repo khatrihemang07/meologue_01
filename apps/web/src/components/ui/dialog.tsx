@@ -147,15 +147,43 @@
  * default and any surrounding `FocusScope` (a still-open Popover, or one
  * closing at the same moment with its own real restore) would have done
  * with this wrapper out of the way. That is *not* the same as "restores
- * to `document.body`" even on a surface with nothing better available
- * (the Shortcuts overlay, Label edit, Project edit): this wrapper made
- * no choice there at all, and the value the page ends up showing is
- * whatever the rest of the page's own focus story already determines —
- * unfixed, in those three cases, matching `main`'s own long-standing
- * `BODY` result, but never *regressed* by an active claim this wrapper
- * had no business making. A real fix for those three needs a
- * `restoreFocusTo` naming a stable anchor, the same way `TaskActivityDialog`
- * below does — left to a follow-up rather than guessed at here.
+ * to `document.body`" even on a surface with nothing better available:
+ * this wrapper made no choice there at all, and the value the page ends
+ * up showing is whatever the rest of the page's own focus story already
+ * determines. Label edit, Project edit and `TaskCustomRepeatDialog`'s
+ * Cancel/outside-click all had exactly this shape (an opener that
+ * unmounts, or a hand-off that focuses nothing, before this wrapper's own
+ * generic capture ever gets something real to hold onto) — each now
+ * supplies `restoreFocusTo` at its own call site instead. The one
+ * surface still left on `document.body` on purpose,
+ * `todo-keyboard-shortcuts-overlay.tsx`, is opened by a global keypress
+ * with no single opener to name at all — that file's own header comment
+ * has the reasoning for leaving it, not guessing at one.
+ *
+ * **A `restoreFocusTo` a new dialog forgets to supply fails silently —
+ * this is a real, accepted limitation, not an oversight.** Nothing here
+ * — no type, no lint rule, no runtime check — can tell "this dialog's
+ * opener is stable, the generic capture is enough" apart from "this
+ * dialog's opener unmounts before close and needs an explicit anchor";
+ * that is a fact about each call site's own surrounding markup, which
+ * `DialogContent` cannot see. A dialog built this way, forgetting the
+ * ref, compiles clean, lints clean, and its tests pass unless one
+ * specifically asserts the restored element — the exact "a per-site
+ * obligation gets forgotten" failure mode #342 itself was filed over
+ * (`task-detail-view.tsx:2184`'s own documented history of it). The
+ * observable result in that case is this wrapper standing aside with
+ * nothing connected to restore to, landing whoever's watching on
+ * whatever the page's own focus story leaves — typically
+ * `document.body`. A `useLayoutEffect`-based dev-only warning ("focus
+ * landed on body after this dialog closed — did you mean to pass
+ * restoreFocusTo?") was considered and rejected: it would depend on
+ * racing an unrelated sibling `FocusScope`'s own deferred restore (a
+ * Popover closing at the same moment, `TaskTimeDialog`'s own Escape
+ * path) with no ordering guarantee between two independently-scheduled
+ * `setTimeout(0)` callbacks, and would fire a false positive on the
+ * Shortcuts overlay's own deliberately-accepted case every time. A
+ * heuristic that cries wolf on a documented, correct surface is worse
+ * than no heuristic at all.
  */
 import { Dialog as DialogPrimitive } from "radix-ui";
 import * as React from "react";

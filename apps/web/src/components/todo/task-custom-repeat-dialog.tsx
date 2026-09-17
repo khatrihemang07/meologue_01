@@ -113,6 +113,7 @@ import type { MonthDay, RecurrenceFrequency } from "@meologue/core";
 import { parseRecurrence } from "@meologue/core";
 import { format } from "date-fns";
 import { CalendarDays } from "lucide-react";
+import type * as React from "react";
 import { type FormEvent, useEffect, useId, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Calendar } from "@/components/ui/calendar";
@@ -340,6 +341,18 @@ export interface TaskCustomRepeatDialogProps {
    * (tests) that don't need to pin it.
    */
   now?: Date;
+  /**
+   * Issue #342 — `DialogContent`'s own `restoreFocusTo`. This dialog's
+   * real opener is the Repeat menu's "Custom…" item (`task-schedule-
+   * popover.tsx`'s own two-step `openCustomRepeatAfterRepeatCloseRef`
+   * hand-off, issues #255/#292), which is gone by the time this dialog's
+   * `FocusScope` would otherwise capture it — leaving `document.body`
+   * captured instead (see `ui/dialog.tsx`'s own header comment for why
+   * that reads as "nothing to restore to," not a usable target). The
+   * caller names the Repeat trigger itself here, the one still-mounted
+   * place a keyboard user actually was.
+   */
+  restoreFocusTo?: React.RefObject<HTMLElement | null>;
 }
 
 export function TaskCustomRepeatDialog({
@@ -349,6 +362,7 @@ export function TaskCustomRepeatDialog({
   recurrence,
   onSave,
   now = new Date(),
+  restoreFocusTo,
 }: TaskCustomRepeatDialogProps) {
   const [draft, setDraft] = useState<Draft>(() => deriveDraft(recurrence, now));
   const [endDateText, setEndDateText] = useState(() => formatDayKeyForInput(draft.endDateKey));
@@ -440,6 +454,7 @@ export function TaskCustomRepeatDialog({
       <DialogPortal>
         <DialogContent
           open={open}
+          restoreFocusTo={restoreFocusTo}
           data-testid="custom-repeat-dialog"
           // See this file's own header comment (task-time-dialog.tsx's
           // identical SCHED-11 follow-up) — not preventDefault()-ed, so

@@ -392,6 +392,14 @@ export function TaskSchedulePopover({
   // signal, same reason it can't be done in `onSelect` — see that item's
   // own comment below.
   const openCustomRepeatAfterRepeatCloseRef = useRef(false);
+  // Issue #342 — `TaskCustomRepeatDialog`'s own `restoreFocusTo`. Its real
+  // opener, the Repeat menu's "Custom…" item, is unmounted by the time
+  // this dialog would otherwise capture a previously-focused element
+  // (`openCustomRepeatAfterRepeatCloseRef`'s own comment: the hand-off
+  // deliberately focuses nothing before this dialog mounts), so this
+  // names the one still-mounted, stable anchor instead: the Repeat
+  // trigger button below.
+  const repeatTriggerRef = useRef<HTMLButtonElement>(null);
 
   // Re-seed on every open, mirroring DatePickerSheet's own identical
   // reasoning (date-picker-sheet.tsx's header comment): a dismiss never
@@ -985,6 +993,7 @@ export function TaskSchedulePopover({
             <DropdownMenu.Root>
               <DropdownMenu.Trigger asChild>
                 <Button
+                  ref={repeatTriggerRef}
                   type="button"
                   variant="ghost"
                   // Issue #293: once a rule is set the trigger carries the
@@ -1207,6 +1216,7 @@ export function TaskSchedulePopover({
           onSave={handleCustomRepeatSave}
           onEscape={() => setOpen(false)}
           now={now}
+          restoreFocusTo={repeatTriggerRef}
         />
       </>
     );
@@ -1284,6 +1294,7 @@ export function TaskSchedulePopover({
         // this layer and the scheduler beneath it together.
         onEscape={() => setOpen(false)}
         now={now}
+        restoreFocusTo={repeatTriggerRef}
       />
     </Popover>
   );

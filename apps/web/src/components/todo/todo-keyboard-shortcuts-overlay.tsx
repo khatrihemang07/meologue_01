@@ -9,6 +9,31 @@
  * `meologue-reference/todoist/keyboard.md`: only bindings with a real target in
  * this app are in the table at all (that module's own header comment lists
  * what's missing and why).
+ *
+ * **Issue #342 — no `restoreFocusTo`, by design, not by oversight.**
+ * `?` is bound on a single `document`-level `keydown` listener
+ * (`use-todo-keymap.ts`), reachable from anywhere in Todo regardless of
+ * what, if anything, currently has focus — unlike the Label/Project edit
+ * dialogs or `TaskCustomRepeatDialog` (all three now carry an explicit
+ * `restoreFocusTo`), there is no one opener element this overlay is ever
+ * "the child of." `DialogContent`'s own generic capture already handles
+ * the common case correctly on its own: whatever had focus when `?` was
+ * pressed (a task row, a button, a link) is captured synchronously in the
+ * same keydown handler that opens this overlay, and is still connected
+ * and restorable once this overlay closes, since nothing about opening it
+ * unmounts anything. The gap this file cannot close is the one live-
+ * measured case where NOTHING had focus at all — a mouse-only reader who
+ * has clicked nothing focusable pressing `?` — where the honest capture
+ * really is `document.body`, and `ui/dialog.tsx`'s own `isConnectedFocusable`
+ * correctly treats that as "nothing to restore," standing aside rather
+ * than inventing a target. A `restoreFocusTo` naming some fixed landmark
+ * (the sidebar, a heading) would not fix this: it would silently
+ * misdescribe "you were somewhere specific" for a reader who very much
+ * wasn't, papering over the ambiguity instead of resolving it. Left open,
+ * on purpose — a future `?`-triggered focus anchor (e.g. a persistent
+ * "last-focused task row" tracked at the page level, independent of this
+ * overlay) is a real option, but it is a page-level focus-tracking
+ * feature, not a fix that belongs inside this one dialog.
  */
 import {
   Dialog,

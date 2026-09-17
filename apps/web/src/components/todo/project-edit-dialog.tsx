@@ -45,6 +45,7 @@
  */
 import type { Project } from "@meologue/core";
 import { LABEL_COLOURS } from "@meologue/core";
+import type * as React from "react";
 import { type FormEvent, useState } from "react";
 import { Button } from "@/components/ui/button";
 import {
@@ -86,6 +87,17 @@ export interface ProjectEditDialogProps {
    * question the caller answers rather than one this dialog assumes.
    */
   onSetParent?: (parentId: string | null) => Promise<void>;
+  /**
+   * Issue #342 — `DialogContent`'s own `restoreFocusTo`. This dialog's
+   * real opener is a `DropdownMenu.Item` ("Edit," in the Project options
+   * menu — `project-view.tsx`'s own header comment on that menu) which
+   * unmounts the instant the menu closes, before this dialog's `FocusScope`
+   * would otherwise capture anything meaningful — the identical shape
+   * `task-detail-view.tsx`'s `TaskActivityDialog` already documents. The
+   * caller names the stable "Project options menu" trigger button here
+   * instead, the one still-mounted place a keyboard user actually was.
+   */
+  restoreFocusTo?: React.RefObject<HTMLElement | null>;
 }
 
 /**
@@ -128,6 +140,7 @@ export function ProjectEditDialog({
   onSetColour,
   onSetDescription,
   onSetParent,
+  restoreFocusTo,
 }: ProjectEditDialogProps) {
   const [name, setName] = useState(project.name);
   const [colour, setColour] = useState(project.colour);
@@ -183,6 +196,7 @@ export function ProjectEditDialog({
         />
         <DialogContent
           open={open}
+          restoreFocusTo={restoreFocusTo}
           className={cn(
             "fixed top-1/2 left-1/2 z-50 w-[calc(100%-2rem)] max-w-sm -translate-x-1/2 -translate-y-1/2 rounded-xl border border-border bg-popover p-4 text-popover-foreground shadow-lg outline-hidden duration-150 data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95",
           )}

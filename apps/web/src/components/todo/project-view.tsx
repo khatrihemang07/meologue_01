@@ -222,6 +222,11 @@ export function ProjectView({
   // (labels-view.tsx): this screen is always about exactly one Project
   // (`project` above), so there is no "which one" to also capture.
   const [editing, setEditing] = useState(false);
+  // Issue #342 — `ProjectEditDialog`'s own `restoreFocusTo`: the "Project
+  // options menu" trigger below, the one still-mounted place a keyboard
+  // user actually was once its `DropdownMenu.Item` ("Edit") unmounts with
+  // the menu, before `ProjectEditDialog` even opens.
+  const projectOptionsTriggerRef = useRef<HTMLButtonElement>(null);
   // STR-07 (this file's own header comment) — which Section's row is
   // showing its inline rename field, or `null` for none. Mirrors
   // `editing` above for the identical reason: Todoist's own "Edit
@@ -318,6 +323,7 @@ export function ProjectView({
           <DropdownMenu.Root>
             <DropdownMenu.Trigger asChild>
               <button
+                ref={projectOptionsTriggerRef}
                 type="button"
                 aria-label="Project options menu"
                 className="flex size-8 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground"
@@ -367,6 +373,7 @@ export function ProjectView({
         onSetColour={onSetColour}
         onSetDescription={onSetDescription}
         onSetParent={onSetParent}
+        restoreFocusTo={projectOptionsTriggerRef}
       />
 
       <div className="flex flex-col gap-2">
