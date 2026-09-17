@@ -9,6 +9,7 @@ import {
   today,
   upcoming,
   upcomingDayHeading,
+  upcomingWeekStrip,
 } from "./task-views";
 import { entry } from "./test-support/entry-fixture";
 import { event } from "./test-support/event-fixture";
@@ -18,6 +19,12 @@ import { task } from "./test-support/task-fixture";
 // Task.date's own encoding (see task-views.ts's doc comment on why only
 // its first ten characters, the calendar day, are ever read).
 const NOW = "2026-09-02T08:00";
+
+// A second fixed "now" for upcomingWeekStrip()'s own tests below — Thu 10
+// Sep 2026, the identical "today" upcomingDayHeading()'s own CAPTURED_TODAY
+// further down uses, so both blocks agree on which weekday "today" falls on
+// without restating the reasoning twice.
+const NOW_THURSDAY = "2026-09-10T08:00";
 
 describe("today()'s union — due today, overdue, or deadline today-or-past", () => {
   it("includes a Task due today, an overdue Task, one with a deadline today, and one with a deadline in the past and no date at all — and excludes a Task with neither field and one whose date/deadline are both in the future", () => {
@@ -522,6 +529,116 @@ describe("upcoming() — issue #223's Upcoming view", () => {
     const undated = task({ id: "undated", date: null });
 
     expect(upcoming([overdue, undated], NOW)).toEqual([]);
+  });
+});
+
+describe("upcomingWeekStrip() — issue #343's Monday-start week, four different 'todays'", () => {
+  // Every case below asserts the full seven dayKeys, in order, so a day
+  // dropped or duplicated at either end of the week fails immediately —
+  // not just "the count is 7."
+  it("a Monday 'today': the week starts on that Monday", () => {
+    const days = upcomingWeekStrip([], "2026-09-14T09:00"); // Mon 14 Sep 2026
+
+    expect(days.map((d) => d.dayKey)).toEqual([
+      "2026-09-14",
+      "2026-09-15",
+      "2026-09-16",
+      "2026-09-17",
+      "2026-09-18",
+      "2026-09-19",
+      "2026-09-20",
+    ]);
+  });
+
+  it("a Sunday 'today': the week is the six days BEFORE it plus itself, not the week starting from it", () => {
+    const days = upcomingWeekStrip([], "2026-09-13T09:00"); // Sun 13 Sep 2026
+
+    expect(days.map((d) => d.dayKey)).toEqual([
+      "2026-09-07",
+      "2026-09-08",
+      "2026-09-09",
+      "2026-09-10",
+      "2026-09-11",
+      "2026-09-12",
+      "2026-09-13",
+    ]);
+  });
+
+  it("a midweek 'today' (Thursday): today sits at index 3, not at either end", () => {
+    const days = upcomingWeekStrip([], NOW_THURSDAY); // Thu 10 Sep 2026
+
+    expect(days.map((d) => d.dayKey)).toEqual([
+      "2026-09-07",
+      "2026-09-08",
+      "2026-09-09",
+      "2026-09-10",
+      "2026-09-11",
+      "2026-09-12",
+      "2026-09-13",
+    ]);
+  });
+
+  // The month-boundary case a naive string-slice implementation (e.g.
+  // manually decrementing "DD" without rolling the month) breaks on —
+  // Date.UTC's own normalisation is what this function relies on instead
+  // (addDaysToDayKey's own comment).
+  it("a 'today' whose week spans two months (Thursday 29 Jan 2026, week runs 26 Jan – 1 Feb)", () => {
+    const days = upcomingWeekStrip([], "2026-01-29T09:00");
+
+    expect(days.map((d) => d.dayKey)).toEqual([
+      "2026-01-26",
+      "2026-01-27",
+      "2026-01-28",
+      "2026-01-29",
+      "2026-01-30",
+      "2026-01-31",
+      "2026-02-01",
+    ]);
+  });
+
+  it("marks a day's dot only for a dated Task landing on it — a Task on a different day in the week leaves it false", () => {
+    const onWed = task({ id: "wed", date: "2026-09-09" });
+
+    const days = upcomingWeekStrip([onWed], NOW_THURSDAY);
+
+    expect(days.map((d) => d.hasDatedTask)).toEqual([
+      false, // Mon 07
+      false, // Tue 08
+      true, // Wed 09
+      false, // Thu 10 (today)
+      false, // Fri 11
+      false, // Sat 12
+      false, // Sun 13
+    ]);
+  });
+
+  // The override this issue's own tracking comment settles: the dot is
+  // `date` only, never `deadline` — identical to upcoming()'s own day
+  // sections just above, so the strip's dot never promises a section the
+  // list beneath it doesn't render. A Deadline-only Task on this same day
+  // must NOT light the dot.
+  it("does NOT light the dot for a Deadline-only Task — date only, matching upcoming()'s own day sections", () => {
+    const deadlineOnly = task({ id: "deadline-only", date: null, deadline: "2026-09-09" });
+
+    const days = upcomingWeekStrip([deadlineOnly], NOW_THURSDAY);
+
+    expect(days.every((d) => d.hasDatedTask === false)).toBe(true);
+  });
+
+  it("still lights the dot for a dated Task earlier in the week than today (Monday, when today is Thursday)", () => {
+    const onMonday = task({ id: "mon", date: "2026-09-07" });
+
+    const days = upcomingWeekStrip([onMonday], NOW_THURSDAY);
+
+    expect(days[0]).toEqual({ dayKey: "2026-09-07", hasDatedTask: true });
+  });
+
+  it("ignores a dated Task outside this week entirely", () => {
+    const nextWeek = task({ id: "next-week", date: "2026-09-21" });
+
+    const days = upcomingWeekStrip([nextWeek], NOW_THURSDAY);
+
+    expect(days.every((d) => d.hasDatedTask === false)).toBe(true);
   });
 });
 

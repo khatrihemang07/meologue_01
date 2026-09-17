@@ -48,13 +48,38 @@
  * it there too, so there's no longer anything to not-propagate. No drag
  * handlers here, for the identical reason the day sections above have
  * none.
+ *
+ * **The week strip (issue #343).** `UpcomingWeekStrip` renders above
+ * everything else here, built from the identical `tasks`/`now` this
+ * component already has — see that file's own header comment for what it
+ * decides on its own (the week's range, each day's dot) versus what it
+ * hands back up (which dayKey was tapped). This component owns the two
+ * things a standalone, stateless strip cannot: which day is currently
+ * *selected* (`selectedDayKey`, independent of `today`, per the live
+ * device measurement's Decision 2), and scrolling the tapped day into
+ * view.
+ *
+ * **Every week day is addressable, even one `upcoming()` never
+ * mentions.** `upcoming()` only returns a day something is dated on
+ * (task-views.ts's own header comment) — a day with nothing planned has
+ * no `<section>` at all, so there is nothing for a tap on it to scroll
+ * to. `renderUnits` below merges `upcoming()`'s own day sections with a
+ * zero-content anchor `<div>` for every OTHER day inside the strip's
+ * week, in chronological order, so `handleSelectDay` always finds
+ * *something* at the right position to call `scrollIntoView` on — a day
+ * outside this week that also carries nothing stays exactly as absent as
+ * it always was; only the strip's own seven days get this treatment.
+ * `data-upcoming-day-anchor` carries the dayKey on both the real
+ * `<section>` and the placeholder alike, so a caller (or a test) never
+ * has to know which of the two a given day turned out to be.
  */
 import type { Task } from "@meologue/core";
-import { today, upcoming, upcomingDayHeading } from "@meologue/core";
+import { today, upcoming, upcomingDayHeading, upcomingWeekStrip } from "@meologue/core";
 import { CalendarClock } from "lucide-react";
-import { useCallback } from "react";
+import { useCallback, useRef, useState } from "react";
 import { OverdueSectionSummary } from "@/components/todo/overdue-section-summary";
 import { type TaskDetailActions, TaskRow } from "@/components/todo/task-row";
+import { UpcomingWeekStrip } from "@/components/todo/upcoming-week-strip";
 import { useSwipeActions } from "@/hooks/use-swipe-actions";
 import { localDayKey } from "@/lib/local-day-key";
 import { OPEN_SCHEDULE_EVENT } from "@/lib/todo-keymap";
@@ -106,71 +131,163 @@ export function UpcomingView({
   // a second one written here that could drift from TodayView's.
   const { overdue } = today(tasks, now);
 
-  if (days.length === 0 && overdue.length === 0) {
-    return (
-      // Mirrors TodayView's own "All caught up" empty state shape (an
-      // achievement/explanation pair, not a bare icon) — worded for what
-      // is actually true here: nothing has a Date today or later, not
-      // that every dated Task is done.
-      <div className="flex flex-col items-center gap-2 px-3 py-12 text-center">
-        <CalendarClock aria-hidden="true" className="size-8 text-muted-foreground" />
-        <p className="font-medium text-sm">Nothing scheduled</p>
-        <p className="max-w-xs text-muted-foreground text-sm">
-          No Task carries a Date today or later. Give one a Date from Inbox or Today to see it here.
-        </p>
-      </div>
-    );
+  const todayKey = now.slice(0, 10);
+  // Initialised once, to today — the same default the strip's own "jump
+  // back to today" affordance treats as the resting state (that file's
+  // own header comment). Deliberately a plain `useState` initial value,
+  // not re-derived on every render: this component's own `now` is
+  // recomputed each render (the comment just above explains why that's
+  // fine for `today()`/`upcoming()`, which are pure functions of it), but
+  // re-running that same recomputation into `selectedDayKey`'s initial
+  // value would only matter if a session stayed open across a real
+  // midnight, which nothing else in this view accounts for either.
+  const [selectedDayKey, setSelectedDayKey] = useState(todayKey);
+
+  // Every day this component renders SOME node for, keyed by dayKey —
+  // both `<section>`s from `days` below and the empty-day anchors
+  // `renderUnits` inserts for the rest of the strip's week — so
+  // `handleSelectDay` has one map to look a target up in regardless of
+  // which of the two a given day turned out to be.
+  const dayAnchors = useRef(new Map<string, HTMLElement | null>());
+  function registerDayAnchor(dayKey: string) {
+    return (el: HTMLElement | null) => {
+      dayAnchors.current.set(dayKey, el);
+    };
   }
+
+  // `?.scrollIntoView?.(...)`, not a bare call: jsdom implements neither
+  // the property nor the method (task-custom-repeat-dialog.tsx's own
+  // header comment names this exact trap for a different API), so a
+  // plain call here would throw in every test that exercises it. A real
+  // browser has both, and that is the only place the actual scroll motion
+  // is verified — see upcoming-view.test.tsx's own describe block on this
+  // handler for what a jsdom run can and cannot prove about it.
+  function handleSelectDay(dayKey: string) {
+    setSelectedDayKey(dayKey);
+    dayAnchors.current.get(dayKey)?.scrollIntoView?.({ block: "start" });
+  }
+
+  // The strip's own week (issue #343) — recomputed here, separately from
+  // `UpcomingWeekStrip`'s identical internal call, only to know which of
+  // its seven days `upcoming()` already covers with a real `<section>`;
+  // this component never reads `hasDatedTask` itself, since the strip is
+  // the one place that flag is rendered.
+  const weekDayKeys = new Set(upcomingWeekStrip(tasks, now).map((d) => d.dayKey));
+  const sectionDayKeys = new Set(days.map((d) => d.dayKey));
+  type RenderUnit = { dayKey: string; day?: (typeof days)[number] };
+  const unitsByDayKey = new Map<string, RenderUnit>();
+  for (const day of days) {
+    unitsByDayKey.set(day.dayKey, { dayKey: day.dayKey, day });
+  }
+  for (const dayKey of weekDayKeys) {
+    if (!sectionDayKeys.has(dayKey)) {
+      unitsByDayKey.set(dayKey, { dayKey });
+    }
+  }
+  const renderUnits = [...unitsByDayKey.values()].sort((a, b) =>
+    a.dayKey < b.dayKey ? -1 : a.dayKey > b.dayKey ? 1 : 0,
+  );
 
   return (
     <div ref={swipeRowsRef} className="flex flex-col gap-4">
-      {overdue.length > 0 && (
-        // `open` by default: TodayView's own Overdue section is always
-        // visible, never collapsed, and this is the same Tasks shown a
-        // second time here — starting collapsed would hide the one thing
-        // this section exists to surface. `className="group"`:
-        // overdue-section-summary.tsx's own chevron reads this element's
-        // `open` state through it.
-        <details open className="group">
-          <OverdueSectionSummary overdue={overdue} onSetDate={onSetDate} />
-          <ul className="flex flex-col">
-            {overdue.map((task) => (
-              <TaskRow
-                key={task.id}
-                task={task}
-                detailActions={detailActions}
-                commentCount={detailActions.commentCountFor(task.id)}
-                onComplete={() => onComplete(task.id, task.content, task.dateString)}
-                onCompleteForever={() => onCompleteForever(task.id, task.content)}
-                onRequestDelete={() => onRequestDelete(task.id)}
-                onOpenSchedule={() => onOpenSchedule(task.id)}
-              />
-            ))}
-          </ul>
-        </details>
-      )}
+      <UpcomingWeekStrip
+        tasks={tasks}
+        now={now}
+        selectedDayKey={selectedDayKey}
+        onSelectDay={handleSelectDay}
+      />
 
-      {days.map((day) => (
-        <section key={day.dayKey}>
-          <header className="px-3 py-2">
-            <h2 className="font-medium text-sm">{upcomingDayHeading(day.dayKey, now)}</h2>
-          </header>
-          <ul className="flex flex-col">
-            {day.tasks.map((task) => (
-              <TaskRow
-                key={task.id}
-                task={task}
-                detailActions={detailActions}
-                commentCount={detailActions.commentCountFor(task.id)}
-                onComplete={() => onComplete(task.id, task.content, task.dateString)}
-                onCompleteForever={() => onCompleteForever(task.id, task.content)}
-                onRequestDelete={() => onRequestDelete(task.id)}
-                onOpenSchedule={() => onOpenSchedule(task.id)}
+      {days.length === 0 && overdue.length === 0 ? (
+        // Mirrors TodayView's own "All caught up" empty state shape (an
+        // achievement/explanation pair, not a bare icon) — worded for what
+        // is actually true here: nothing has a Date today or later, not
+        // that every dated Task is done. The strip above still renders
+        // and stays fully tappable even here — every one of its seven
+        // days gets an anchor below, unconditionally, so a tap when
+        // nothing is scheduled at all still has somewhere defined to
+        // scroll to rather than silently doing nothing.
+        <div className="flex flex-col items-center gap-2 px-3 py-12 text-center">
+          <CalendarClock aria-hidden="true" className="size-8 text-muted-foreground" />
+          <p className="font-medium text-sm">Nothing scheduled</p>
+          <p className="max-w-xs text-muted-foreground text-sm">
+            No Task carries a Date today or later. Give one a Date from Inbox or Today to see it
+            here.
+          </p>
+          {[...weekDayKeys].map((dayKey) => (
+            <div
+              key={dayKey}
+              ref={registerDayAnchor(dayKey)}
+              aria-hidden="true"
+              data-upcoming-day-anchor={dayKey}
+            />
+          ))}
+        </div>
+      ) : (
+        <>
+          {overdue.length > 0 && (
+            // `open` by default: TodayView's own Overdue section is always
+            // visible, never collapsed, and this is the same Tasks shown a
+            // second time here — starting collapsed would hide the one thing
+            // this section exists to surface. `className="group"`:
+            // overdue-section-summary.tsx's own chevron reads this element's
+            // `open` state through it.
+            <details open className="group">
+              <OverdueSectionSummary overdue={overdue} onSetDate={onSetDate} />
+              <ul className="flex flex-col">
+                {overdue.map((task) => (
+                  <TaskRow
+                    key={task.id}
+                    task={task}
+                    detailActions={detailActions}
+                    commentCount={detailActions.commentCountFor(task.id)}
+                    onComplete={() => onComplete(task.id, task.content, task.dateString)}
+                    onCompleteForever={() => onCompleteForever(task.id, task.content)}
+                    onRequestDelete={() => onRequestDelete(task.id)}
+                    onOpenSchedule={() => onOpenSchedule(task.id)}
+                  />
+                ))}
+              </ul>
+            </details>
+          )}
+
+          {renderUnits.map((unit) =>
+            unit.day === undefined ? (
+              <div
+                key={unit.dayKey}
+                ref={registerDayAnchor(unit.dayKey)}
+                aria-hidden="true"
+                data-upcoming-day-anchor={unit.dayKey}
               />
-            ))}
-          </ul>
-        </section>
-      ))}
+            ) : (
+              <section
+                key={unit.dayKey}
+                ref={registerDayAnchor(unit.dayKey)}
+                data-upcoming-day-anchor={unit.dayKey}
+              >
+                <header className="px-3 py-2">
+                  <h2 className="font-medium text-sm">
+                    {upcomingDayHeading(unit.day.dayKey, now)}
+                  </h2>
+                </header>
+                <ul className="flex flex-col">
+                  {unit.day.tasks.map((task) => (
+                    <TaskRow
+                      key={task.id}
+                      task={task}
+                      detailActions={detailActions}
+                      commentCount={detailActions.commentCountFor(task.id)}
+                      onComplete={() => onComplete(task.id, task.content, task.dateString)}
+                      onCompleteForever={() => onCompleteForever(task.id, task.content)}
+                      onRequestDelete={() => onRequestDelete(task.id)}
+                      onOpenSchedule={() => onOpenSchedule(task.id)}
+                    />
+                  ))}
+                </ul>
+              </section>
+            ),
+          )}
+        </>
+      )}
     </div>
   );
 }

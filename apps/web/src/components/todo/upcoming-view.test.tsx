@@ -354,4 +354,140 @@ describe("UpcomingView", () => {
       expect(screen.queryByTestId("scheduler-view")).not.toBeInTheDocument();
     });
   });
+
+  // Issue #343: the week strip itself. jsdom implements neither the
+  // `scrollIntoView` property nor method at all (task-custom-repeat-
+  // dialog.tsx's own header comment names this exact class of trap for a
+  // sibling API) — a real call would throw here, which is why
+  // upcoming-view.tsx's own `handleSelectDay` reads it with `?.`. That
+  // same absence is also why this suite cannot observe an actual scroll:
+  // it stubs the method, then asserts WHICH element it was called on
+  // (`mock.contexts`, the call's own `this`) — proof the right dayKey was
+  // targeted, not proof anything moved on screen. The real scroll motion
+  // is unverified outside a browser; see this file's own report to the
+  // issue for that flag restated in full.
+  describe("the week strip (issue #343)", () => {
+    let scrollIntoView: ReturnType<typeof vi.fn>;
+
+    beforeEach(() => {
+      scrollIntoView = vi.fn();
+      // jsdom's own HTMLElement has no scrollIntoView property to type
+      // against at all (this block's own header comment) — there is no
+      // narrower type than `any` to reach for here.
+      // biome-ignore lint/suspicious/noExplicitAny: see comment above.
+      (HTMLElement.prototype as any).scrollIntoView = scrollIntoView;
+    });
+
+    afterEach(() => {
+      // Removing the stub restores jsdom's own "not implemented" state so
+      // no other test file inherits it. Cast to `Partial<HTMLElement>`
+      // (rather than `undefined`, which would leave
+      // `"scrollIntoView" in HTMLElement.prototype` true, unlike jsdom's
+      // own real absence) so `delete` type-checks without a second `any`.
+      delete (HTMLElement.prototype as Partial<HTMLElement>).scrollIntoView;
+    });
+
+    it("renders all seven days of the strip above the day sections, Thursday (today) at index 3", () => {
+      renderUpcomingView({
+        tasks: [task({ id: "today", content: "today task", date: "2026-09-10" })],
+      });
+
+      const dayButtons = screen
+        .getAllByRole("button")
+        .filter((b) => b.hasAttribute("data-day-key"));
+      expect(dayButtons.map((b) => b.getAttribute("data-day-key"))).toEqual([
+        "2026-09-07",
+        "2026-09-08",
+        "2026-09-09",
+        "2026-09-10",
+        "2026-09-11",
+        "2026-09-12",
+        "2026-09-13",
+      ]);
+    });
+
+    it("tapping a day WITH a section scrolls exactly that section into view", () => {
+      renderUpcomingView({
+        tasks: [
+          task({ id: "today", content: "today task", date: "2026-09-10" }),
+          task({ id: "later", content: "later task", date: "2026-09-12" }),
+        ],
+      });
+
+      fireEvent.click(screen.getByRole("button", { name: /Saturday 12/ }));
+
+      const target = document.querySelector('[data-upcoming-day-anchor="2026-09-12"]');
+      expect(target).not.toBeNull();
+      expect(scrollIntoView).toHaveBeenCalledTimes(1);
+      expect(scrollIntoView.mock.contexts[0]).toBe(target);
+    });
+
+    // The trap this issue's own tracking comment names: `upcoming()` never
+    // returns a day with nothing dated on it, so there is no `<section>`
+    // for a tap on Monday (this fixture's set has nothing dated Monday)
+    // to scroll to unless upcoming-view.tsx renders an anchor for it
+    // separately — proving that seam exists, not merely that upcoming()
+    // itself is unaffected (the sidebar/todo-page proof below covers that
+    // half).
+    it("tapping an EMPTY day (no section at all) still scrolls to a real, addressable node", () => {
+      renderUpcomingView({
+        tasks: [task({ id: "today", content: "today task", date: "2026-09-10" })],
+      });
+
+      fireEvent.click(screen.getByRole("button", { name: /Monday 7/ }));
+
+      const target = document.querySelector('[data-upcoming-day-anchor="2026-09-07"]');
+      expect(target).not.toBeNull();
+      expect(scrollIntoView).toHaveBeenCalledTimes(1);
+      expect(scrollIntoView.mock.contexts[0]).toBe(target);
+    });
+
+    it("every one of the strip's seven days stays addressable even in the 'Nothing scheduled' empty state", () => {
+      renderUpcomingView({ tasks: [] });
+      expect(screen.getByText("Nothing scheduled")).toBeInTheDocument();
+
+      fireEvent.click(screen.getByRole("button", { name: /Friday 11/ }));
+
+      const target = document.querySelector('[data-upcoming-day-anchor="2026-09-11"]');
+      expect(target).not.toBeNull();
+      expect(scrollIntoView).toHaveBeenCalledTimes(1);
+      expect(scrollIntoView.mock.contexts[0]).toBe(target);
+    });
+
+    it("selecting a day updates the strip's own selected circle — the fill moves off today", () => {
+      renderUpcomingView({
+        tasks: [task({ id: "today", content: "today task", date: "2026-09-10" })],
+      });
+
+      fireEvent.click(screen.getByRole("button", { name: /Saturday 12/ }));
+
+      const saturday = screen.getByRole("button", { name: /Saturday 12/ });
+      const circle = saturday.querySelector(
+        '[aria-hidden="true"].rounded-full.font-medium',
+      ) as HTMLElement;
+      expect(circle.style.backgroundColor).toBe("var(--td-calendar-selected)");
+
+      // Today's own circle is no longer filled now that Saturday is selected.
+      const today = screen.getByRole("button", { name: /Thursday 10, today/ });
+      const todayCircle = today.querySelector(
+        '[aria-hidden="true"].rounded-full.font-medium',
+      ) as HTMLElement;
+      expect(todayCircle.style.backgroundColor).toBe("");
+      expect(todayCircle.style.color).toBe("var(--td-calendar-today)");
+    });
+
+    it("jumping back to today re-selects it and scrolls to today's own section", () => {
+      renderUpcomingView({
+        tasks: [task({ id: "today", content: "today task", date: "2026-09-10" })],
+      });
+
+      fireEvent.click(screen.getByRole("button", { name: /Saturday 12/ }));
+      scrollIntoView.mockClear();
+      fireEvent.click(screen.getByRole("button", { name: "Jump to today" }));
+
+      const target = document.querySelector('[data-upcoming-day-anchor="2026-09-10"]');
+      expect(scrollIntoView).toHaveBeenCalledTimes(1);
+      expect(scrollIntoView.mock.contexts[0]).toBe(target);
+    });
+  });
 });

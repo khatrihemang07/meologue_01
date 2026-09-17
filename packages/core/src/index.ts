@@ -126,7 +126,7 @@ export { matchesSubstring, matchesWholeWord, normalize } from "./task-search";
 export type { TaskSearchOptions, TaskStore } from "./task-store";
 export type { Task } from "./task-types";
 export { storedPriorityOf, uiPriorityOf } from "./task-types";
-export type { TodayView, UpcomingDay } from "./task-views";
+export type { TodayView, UpcomingDay, UpcomingWeekStripDay } from "./task-views";
 export {
   compareForToday,
   completedRecurringOccurrencesForDay,
@@ -135,6 +135,7 @@ export {
   today,
   upcoming,
   upcomingDayHeading,
+  upcomingWeekStrip,
 } from "./task-views";
 export type { Entry } from "./types";
 export { isAtLeastAsNewAs, isStrictlyNewerThan } from "./updated-at";
