@@ -206,6 +206,95 @@ export function upcoming(tasks: Task[], now: string): UpcomingDay[] {
     .map(([dayKey, dayTasks]) => ({ dayKey, tasks: [...dayTasks].sort(compareForToday) }));
 }
 
+/** One day of the Upcoming week strip (issue #343) — `dayKey` is a bare `YYYY-MM-DD`; `hasDatedTask` is this function's own has-anything flag, see `upcomingWeekStrip()`'s own doc comment for exactly what it does and doesn't count. */
+export interface UpcomingWeekStripDay {
+  dayKey: string;
+  hasDatedTask: boolean;
+}
+
+/**
+ * The Upcoming week strip's own range and per-day dot flag (issue #343) —
+ * a Monday-start calendar week *containing* `now`, not a rolling 7 days
+ * from `now`. Settled by a live, read-only measurement of Todoist Android
+ * across three different "todays" that all read the identical range
+ * (issue #343's own tracking comment): a rolling window would have moved
+ * with the day, and it didn't. meologue already hardcodes Monday as the
+ * first day of the week for its own date picker
+ * (`task-schedule-popover.tsx`'s `weekStartsOn={1}`), so the strip needs
+ * no new week-start setting to agree with it.
+ *
+ * **A function of its own, deliberately never folded into `upcoming()`
+ * above.** `upcoming()` has three existing callers
+ * (`TodoPage`/`TodoSidebar`/`UpcomingView`) that all depend on its
+ * `dayKey < todayKey` guard to mean "never a day before today" — the
+ * Upcoming badge count and `TodoPage`'s own prev/next task list would
+ * both silently grow to include this week's already-past days if that
+ * guard were loosened to satisfy the strip instead. The strip's own range
+ * routinely needs exactly those earlier-this-week days (a Thursday "now"
+ * still has to show Monday through Wednesday, unselected but present) —
+ * an irreconcilable difference in what the two guards mean, not a detail
+ * to compromise on. Keeping this a separate function costs one extra
+ * pass over `tasks`; the alternative costs three call sites a regression
+ * this module can't detect for them.
+ *
+ * **The dot: `date` only, same as `upcoming()`'s own day sections, never
+ * `deadline`.** `upcoming()`'s own doc comment above already makes this
+ * call for the day-section list — a Deadline is a cutoff, not a day a
+ * Task is scheduled on, and DATE-08 in the parity ledger leaves Deadline's
+ * own row rendering unmeasured rather than inventing a rule for it. This
+ * function's dot is the strip's promise about that same day list, one
+ * layer up — a dot with no section beneath it (or a bare day with a dot)
+ * would contradict the sections `UpcomingView` renders directly below the
+ * strip, so `hasDatedTask` reads the identical field `upcoming()` reads
+ * and nothing else. Whether a Deadline should ever surface here is left
+ * open on purpose, not decided by omission.
+ */
+export function upcomingWeekStrip(tasks: Task[], now: string): UpcomingWeekStripDay[] {
+  const todayKey = now.slice(0, 10);
+  const mondayKey = startOfWeekKey(todayKey);
+
+  const datedDays = new Set<string>();
+  for (const t of tasks) {
+    if (t.date !== null) {
+      datedDays.add(t.date.slice(0, 10));
+    }
+  }
+
+  const days: UpcomingWeekStripDay[] = [];
+  for (let i = 0; i < 7; i++) {
+    const dayKey = addDaysToDayKey(mondayKey, i);
+    days.push({ dayKey, hasDatedTask: datedDays.has(dayKey) });
+  }
+  return days;
+}
+
+// `dayKey` +/- `delta` calendar days, anchored at UTC exactly like this
+// module's own `daysBetween` above — `Date.UTC`'s own month/year rollover
+// (passing a day-of-month outside 1-31 normalises the month instead of
+// throwing) is what makes this correct across a month boundary for free,
+// with no explicit "does this cross into next month" branch to get wrong.
+function addDaysToDayKey(dayKey: string, delta: number): string {
+  const [y, m, d] = dayKey.split("-").map(Number);
+  const utc = Date.UTC(y ?? 0, (m ?? 1) - 1, (d ?? 1) + delta);
+  const date = new Date(utc);
+  const year = date.getUTCFullYear();
+  const month = String(date.getUTCMonth() + 1).padStart(2, "0");
+  const day = String(date.getUTCDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+// The Monday on or before `dayKey`, in the identical week — `getUTCDay()`
+// returns 0 (Sunday) through 6 (Saturday); `(dow + 6) % 7` is the distance
+// back to Monday (Monday itself -> 0, Sunday -> 6), matching
+// `weekStartsOn={1}` (task-schedule-popover.tsx:773) so the strip's own
+// week boundary agrees with the one week-start meologue already has.
+function startOfWeekKey(dayKey: string): string {
+  const [y, m, d] = dayKey.split("-").map(Number);
+  const dow = new Date(Date.UTC(y ?? 0, (m ?? 1) - 1, d ?? 1)).getUTCDay();
+  const offsetFromMonday = (dow + 6) % 7;
+  return addDaysToDayKey(dayKey, -offsetFromMonday);
+}
+
 const WEEKDAY_NAMES = [
   "Sunday",
   "Monday",
