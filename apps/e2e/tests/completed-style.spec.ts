@@ -64,10 +64,65 @@ import { entryRow, sendEntry, uniqueEntryBody, waitForTaskCompleted } from "./he
  * lists active Tasks only, and a completed row is not reachable there
  * through the UI (this ticket's own scope note).
  *
- * The strongest assertion available is cross-surface agreement — for each
- * of the four styles, every surface's computed `text-decoration-line` and
- * `color` must equal both each other and the expected pair. That is
- * issue #237's own acceptance criterion, asserted rather than argued.
+ * THE RULING (issue #333). Cross-surface agreement is still the strongest
+ * assertion available, but it no longer holds across all five surfaces —
+ * it splits along the same line `index.css`'s `[data-surface="todo"]`
+ * block draws, and that split is a ratified product decision, not a defect:
+ *
+ *   - STILL OBEYS `data-completed-style` (matches the loop's own
+ *     `variant.decorationLine`/`colorVar`): the Entry bubble / History
+ *     reference (`entry-row.tsx`) and the Day-tasks summary widget
+ *     (`history.tsx`'s `DayTasksRow`). Both render on `/composer`
+ *     (History reuses the identical component), and neither ever sits
+ *     inside `[data-surface="todo"]` — that scope is claimed only by a
+ *     `/todo/*` route or an open Task detail overlay (see below), and
+ *     these two are neither.
+ *   - ALWAYS STRIKES, in Todoist's own grey, regardless of which of the
+ *     four Settings options is active: the Task detail dialog title
+ *     (`task-detail-view.tsx`), Todo's own Inbox list
+ *     (`task-row-content.tsx`), and the Task search page
+ *     (`task-search-page.tsx`). Issue #250 / ROW-15 re-pointed
+ *     `--checked-list-text-decoration`/`-color` inside
+ *     `[data-surface="todo"]` unconditionally — not behind any
+ *     `[data-completed-style="…"]` selector — because
+ *     `pass2-2026-09-11.md` §1 measured Todoist always striking a
+ *     completed title through, in its own grey
+ *     (`rgb(128, 128, 128)`, distinct from Todo's own
+ *     `--muted-foreground`), regardless of any app preference.
+ *
+ *     The Task detail dialog belongs in this group even though this test
+ *     opens it from `/composer`, not a `/todo/*` route: the dialog is a
+ *     Radix portal into `document.body`, outside the route tree, so
+ *     `composer-page.tsx` claims the Todo token scope itself for as long
+ *     as the overlay is open (`useTodoSurface(openTask !== null)`,
+ *     `lib/todo-surface.ts` — a ref count, because the route and the
+ *     overlay are two independent claimants on the same
+ *     `documentElement` attribute). `chat-shell-layout.tsx`'s own header
+ *     comment documents the same overlay-outlives-the-route problem for
+ *     `--td-*` tokens; this is the same mechanism keeping
+ *     `--checked-list-text-decoration` resolved correctly instead.
+ *
+ * `filter-view.tsx` is the fourth always-strikes consumer of
+ * `.completed-task-text` inside `[data-surface="todo"]` — it would belong
+ * in the second group too, but this spec still cannot reach a completed
+ * row there through the UI (the scope note above).
+ *
+ * `index.css`'s own comment on the `[data-surface="todo"]` block names
+ * the always-strikes files as `completed-tasks.tsx`, `task-detail-view.tsx`,
+ * `filter-view.tsx`, `task-search-page.tsx` — checked against the actual
+ * source rather than copied, because a comment in this repo has a track
+ * record of asserting decisions it never made. **`completed-tasks.tsx`
+ * does not exist.** ROW-14 (parity-ledger.md) folded Todo's separate
+ * "Completed (n)" disclosure into `task-row-content.tsx`'s own `TaskRow`/
+ * `TaskRowContent` — the same component an active Task renders through —
+ * which is what this file's own comment two paragraphs up already
+ * documents correctly; `index.css`'s file list was already one refactor
+ * out of date the day ROW-15 landed. A second, independent copy of the
+ * same stale name sits lower in `index.css`, on the `.completed-task-text`
+ * rule's own comment, which also lists `history.tsx`'s `DayTasksRow`
+ * alongside the four always-strikes files as if it were one of them — it
+ * is not; `DayTasksRow` sits outside `[data-surface="todo"]` and is one of
+ * the two surfaces that still obeys the setting, above.
  */
 
 const COMPLETED_STYLE_VARIANTS: {
@@ -129,10 +184,18 @@ async function renderedStyle(locator: Locator): Promise<RenderedStyle> {
  * "every surface paints what ITS OWN scope says the token is" — each one
  * obeying the reader's setting inside the palette it lives in.
  *
- * The cross-surface claim has not been given up; it moved to
- * `text-decoration-line`, which no palette scopes, and which is where the
- * original defect actually lived: a surface hardcoding `line-through`
- * fails under `gray` and `none` no matter whose grey it uses.
+ * The cross-surface claim moved to `text-decoration-line` — **and that
+ * claim has since split too (issue #333)**. It was true when this comment
+ * was first written that no palette scoped `text-decoration-line`, which
+ * is where the original defect actually lived: a surface hardcoding
+ * `line-through` fails under `gray` and `none` no matter whose grey it
+ * uses. Issue #250 / ROW-15 then gave `[data-surface="todo"]` its own,
+ * unconditional override of both `--checked-list-text-decoration` and
+ * `--checked-list-text-color` — a deliberate, ratified exception, not a
+ * regression of this claim — so `resolvedVarColor` below is now only the
+ * right tool for the two surfaces this file's header comment says still
+ * obey the setting. `resolvedTodoStrikeColor`, further down, is its
+ * counterpart for the three that don't.
  */
 async function resolvedVarColor(
   scope: Locator,
@@ -146,6 +209,31 @@ async function resolvedVarColor(
     probe.remove();
     return value;
   }, cssVar);
+}
+
+/**
+ * The Todo-scope counterpart to `resolvedVarColor` above, for the three
+ * surfaces issue #333's ruling says always strike: rather than resolving
+ * `--muted-foreground`/`--foreground` (the Settings-driven pair those
+ * surfaces have been carved out of), this resolves the exact expression
+ * `index.css`'s `.completed-task-text` rule itself paints with —
+ * `var(--checked-list-text-color, var(--foreground))` — through the SAME
+ * `[data-surface="todo"]` override `resolvedVarColor`'s own probe would
+ * never see, since it only ever asks for one bare custom property. Doing
+ * it this way, rather than asserting the literal `rgb(128, 128, 128)`
+ * `index.css`'s own comment measures, means this spec still doesn't
+ * hardcode a colour (this file's header comment on why) even for the
+ * variant-independent half of the ruling.
+ */
+async function resolvedTodoStrikeColor(scope: Locator): Promise<string> {
+  return scope.evaluate((el) => {
+    const probe = document.createElement("span");
+    probe.style.color = "var(--checked-list-text-color, var(--foreground))";
+    el.appendChild(probe);
+    const value = window.getComputedStyle(probe).color;
+    probe.remove();
+    return value;
+  });
 }
 
 test("a completed Task's look — decoration and colour — agrees across every surface that renders one, for all four completed-style choices (#237)", async ({
@@ -244,6 +332,21 @@ test("a completed Task's look — decoration and colour — agrees across every 
     const referenceExpected = await resolvedVarColor(referenceDiv, variant.colorVar);
 
     // 2. The day-tasks summary widget — history.tsx's DayTasksRow.
+    //
+    // `getByRole("button", { name: body })`, the same shape issue #333's
+    // OWN locator repair (above, `task-detail-title`) had to move away
+    // from once DET-02 removed the button entirely. Confirmed
+    // deliberately rather than assumed to still be valid here:
+    // `history.tsx`'s `DayTasksRow` (~L695) renders the completed Task's
+    // words as a real `<button type="button" onClick={...}>{task.content}</button>`
+    // — DET-02 only ever touched `task-detail-view.tsx`'s title, not this
+    // component, so there is still a role and an accessible name to match.
+    // Playwright's own name matching is substring-based (a plain
+    // `getByRole` here, without `exact`, would also match any OTHER button
+    // whose name merely contains `body`), but the `.locator("li", {
+    // hasText: body })` immediately above already narrows to the one `<li>`
+    // holding this exact Task, and that `<li>` contains exactly one
+    // button — so the substring match cannot resolve onto a sibling row.
     const dayBlockWords = page
       .getByTestId("day-tasks-row")
       .locator("li", { hasText: body })
@@ -254,7 +357,11 @@ test("a completed Task's look — decoration and colour — agrees across every 
 
     // 3. task-detail-view.tsx's own title — opened from the Day block's
     // words, the same door composer.spec.ts's "opens a Task from the Day
-    // block" test already proves.
+    // block" test already proves. Per this file's header-comment ruling,
+    // this surface always strikes (issue #333): opening it from
+    // `/composer` still lands inside `[data-surface="todo"]`, because the
+    // overlay claims that scope itself for as long as it is open
+    // (`lib/todo-surface.ts`), independent of the route underneath it.
     await dayBlockWords.click();
     const dialog = page.getByRole("dialog");
     await expect(dialog).toBeVisible();
@@ -272,10 +379,12 @@ test("a completed Task's look — decoration and colour — agrees across every 
     // since — failing not as an assertion but by exhausting the whole
     // test's 180s budget, which is why it reads as a hang rather than a
     // break. There is no accessible name and no role to match by design
-    // now, so the testid is the only stable handle left.
+    // now, so the testid is the only stable handle left. Confirmed present:
+    // `task-detail-view.tsx` (~L1971) sets `data-testid="task-detail-title"`
+    // on the same element that gets `completed-task-text`.
     const titleField = dialog.getByTestId("task-detail-title");
     const taskDetail = await renderedStyle(titleField);
-    const taskDetailExpected = await resolvedVarColor(titleField, variant.colorVar);
+    const taskDetailExpected = await resolvedTodoStrikeColor(titleField);
     await page.keyboard.press("Escape");
     await expect(dialog).toHaveCount(0);
 
@@ -284,50 +393,51 @@ test("a completed Task's look — decoration and colour — agrees across every 
     // ROW-14 (parity-ledger.md, the user's 2026-09-13 decision to match
     // Todoist) rather than behind a separate "Completed (n)" disclosure,
     // so the row is already on screen with no click needed to reveal it.
+    // Always strikes (issue #333's ruling, above): `/todo/inbox` is a
+    // `/todo/*` route, always inside `[data-surface="todo"]`.
     await page.goto("/todo/inbox");
     const inboxCompletedRow = page.locator(".completed-task-text");
     await expect(inboxCompletedRow).toBeVisible();
     const disclosure = await renderedStyle(inboxCompletedRow);
-    const disclosureExpected = await resolvedVarColor(inboxCompletedRow, variant.colorVar);
+    const disclosureExpected = await resolvedTodoStrikeColor(inboxCompletedRow);
 
     // 5. task-search-page.tsx, "Show completed" on — reached directly by
     // URL (its own `?q=`/`completed=1` params) rather than driving the
-    // toggle by hand.
+    // toggle by hand. Always strikes for the same reason as Inbox above:
+    // `/todo/search` is a `/todo/*` route.
     await page.goto(`/todo/search?q=${encodeURIComponent(label)}&completed=1`);
     const searchResult = page.locator(".completed-task-text");
     await expect(searchResult).toBeVisible();
     const search = await renderedStyle(searchResult);
-    const searchExpected = await resolvedVarColor(searchResult, variant.colorVar);
+    const searchExpected = await resolvedTodoStrikeColor(searchResult);
 
     // Each surface's expected colour was resolved while its own page was
     // still loaded — a Locator does not outlive the navigation that found
     // it, and resolving them all here instead would only ever measure the
     // last page.
-    const surfaces: [string, RenderedStyle, string][] = [
+    //
+    // Split into two groups rather than one flat list — issue #333's
+    // ruling (this file's header comment) is that these two groups no
+    // longer make the same claim, and folding them back into one loop
+    // would either weaken the Todo group's assertion (checking it only
+    // against the setting, the stale claim #333 was filed to retire) or
+    // wrongly tighten the setting group's (checking it against a strike
+    // it was never meant to always show).
+    const settingObeyingSurfaces: [string, RenderedStyle, string][] = [
       ["Entry bubble / History (reference)", reference, referenceExpected],
       ["Day-tasks summary widget", dayBlock, dayBlockExpected],
+    ];
+    const alwaysStrikeSurfaces: [string, RenderedStyle, string][] = [
       ["Task detail dialog title", taskDetail, taskDetailExpected],
       ["Todo Inbox list (inline)", disclosure, disclosureExpected],
       ["Task search page", search, searchExpected],
     ];
 
-    for (const [name, style, expectedColor] of surfaces) {
-      // Decoration is the cross-surface claim, and the one the original
-      // defect broke: no palette scopes `text-decoration-line`, so every
-      // surface must agree with every other AND with the setting.
-      //
-      // **This claim is now stale for the Todo-scope surfaces, and is
-      // tracked as #333 rather than quietly narrowed here.** Issue #250 /
-      // ROW-15 re-pointed `--checked-list-text-decoration` inside
-      // `[data-surface="todo"]` to `line-through` *unconditionally*,
-      // overriding all four Settings options, because Todoist was measured
-      // always striking a completed title through whatever the preference
-      // (`index.css`'s own comment names the affected files, including
-      // `task-detail-view.tsx`). So the three Todo surfaces below now fail
-      // here under `gray` and `none` — correctly. Deciding which surfaces
-      // this loop should still hold to the setting is a parity ruling, not
-      // a test edit, which is why #244's branch fixed only this spec's
-      // *locator* and left this line alone.
+    for (const [name, style, expectedColor] of settingObeyingSurfaces) {
+      // These two surfaces sit outside `[data-surface="todo"]`
+      // (issue #333's ruling, this file's header comment) and still make
+      // #237's original claim: every one of THEM agrees with every other
+      // AND with the Settings choice.
       expect(style.decoration, `${name} text-decoration-line, ${variant.id}`).toBe(
         variant.decorationLine,
       );
@@ -335,6 +445,27 @@ test("a completed Task's look — decoration and colour — agrees across every 
       // the token to — see `resolvedVarColor` above for why Todo's
       // deliberately differs from History's.
       expect(style.color, `${name} color, ${variant.id}`).toBe(expectedColor);
+    }
+
+    for (const [name, style, expectedColor] of alwaysStrikeSurfaces) {
+      // Issue #250 / ROW-15: `[data-surface="todo"]` re-points
+      // `--checked-list-text-decoration` to `line-through`
+      // unconditionally, so these three surfaces agree with each other and
+      // with Todoist's own always-struck title, NOT with `variant` — that
+      // is issue #333's ruling, not a weakening of #237's, since the claim
+      // being asserted is still "every surface in this group agrees, every
+      // time," just no longer against the Settings-driven pair.
+      expect(
+        style.decoration,
+        `${name} text-decoration-line, ${variant.id} (Todo always strikes — #250/ROW-15)`,
+      ).toBe("line-through");
+      // Colour is Todoist's own grey (`resolvedTodoStrikeColor`, above),
+      // not `variant.colorVar` — that pair belongs to the Settings-driven
+      // group only.
+      expect(
+        style.color,
+        `${name} color, ${variant.id} (Todo's own grey, not the Settings token — #250/ROW-15)`,
+      ).toBe(expectedColor);
     }
   }
 });
