@@ -82,7 +82,7 @@ import {
   Trash2,
   X,
 } from "lucide-react";
-import { Dialog as DialogPrimitive, DropdownMenu } from "radix-ui";
+import { DropdownMenu } from "radix-ui";
 import type * as React from "react";
 import { forwardRef, Suspense, useEffect, useRef, useState } from "react";
 import { useOutletContext } from "react-router";
@@ -94,6 +94,14 @@ import { LazyTaskDescriptionEditor } from "@/components/todo/lazy-task-descripti
 import { LazyTaskTitleEditor } from "@/components/todo/lazy-task-title-editor";
 import { TaskSchedulePopover } from "@/components/todo/task-schedule-popover";
 import { ConfirmDialog } from "@/components/ui/alert-dialog";
+import {
+  Dialog,
+  DialogClose,
+  DialogContent,
+  DialogOverlay,
+  DialogPortal,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { useAutoGrowTextarea } from "@/hooks/use-auto-grow-textarea";
 import { useTaskDateState } from "@/hooks/use-task-date-state";
 import { useWideLayout } from "@/hooks/use-wide-layout";
@@ -1005,8 +1013,10 @@ function TaskDetailOverflowMenu({
  * overflow item rather than a `<details>` a reader had to notice and
  * expand a few rows below Comments.
  *
- * Built directly on Radix `Dialog` (`DialogPrimitive.Root`/`Content`,
- * matching the outer `TaskDetailView`'s own instance below and
+ * Built on the shared `ui/dialog.tsx` (`@/components/ui/dialog`, issue
+ * #342's own focus-restore wrapper around the Radix `Dialog` primitive:
+ * `Dialog`/`DialogContent` below), matching the outer `TaskDetailView`'s
+ * own instance below and
  * `task-custom-repeat-dialog.tsx`'s identical choice) rather than
  * `ConfirmDialog` (`alert-dialog.tsx`) — that component's whole shape is
  * a fixed title/description/Cancel/destructive-action, with no slot for
@@ -1019,8 +1029,8 @@ function TaskDetailOverflowMenu({
  * menu (`TaskDetailOverflowMenu` above) — "Copy link to task," "Delete
  * task" — so putting one on the menu item would be decoration Todoist
  * itself doesn't show. `Activity (N)` — the exact wording the old inline
- * `<summary>` used — survives as this dialog's own `DialogPrimitive.
- * Title` instead, which Radix also uses as the Dialog's accessible name,
+ * `<summary>` used — survives as this dialog's own `DialogTitle`
+ * instead, which Radix also uses as the Dialog's accessible name,
  * so a reader who opens it still sees the same count they used to see
  * collapsed, just one tap later rather than always on screen.
  *
@@ -1062,23 +1072,31 @@ function TaskActivityDialog({
   triggerRef: React.RefObject<HTMLButtonElement | null>;
 }) {
   return (
-    <DialogPrimitive.Root open={open} onOpenChange={onOpenChange}>
-      <DialogPrimitive.Portal>
-        <DialogPrimitive.Overlay className="fixed inset-0 z-50 bg-black/50 duration-150 data-open:animate-in data-open:fade-in-0 data-closed:animate-out data-closed:fade-out-0" />
-        <DialogPrimitive.Content
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogPortal>
+        <DialogOverlay className="fixed inset-0 z-50 bg-black/50 duration-150 data-open:animate-in data-open:fade-in-0 data-closed:animate-out data-closed:fade-out-0" />
+        <DialogContent
+          open={open}
           aria-describedby={undefined}
           data-testid="task-activity-dialog"
           className="fixed top-1/2 left-1/2 z-50 flex max-h-[80vh] w-[calc(100%-2rem)] max-w-md -translate-x-1/2 -translate-y-1/2 flex-col rounded-xl border border-border bg-popover p-4 text-popover-foreground shadow-lg outline-hidden duration-150 data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95"
-          onCloseAutoFocus={(event) => {
-            event.preventDefault();
-            triggerRef.current?.focus();
-          }}
+          // `restoreFocusTo`, not the wrapper's own generic captured-
+          // previously-focused-element default — this component's own
+          // header comment above (`triggerRef`'s doc comment) is why: the
+          // real previously-focused element (the `DropdownMenu.Item` a
+          // reader clicked) is gone the instant the overflow menu closes,
+          // before this dialog's open animation even starts, so the
+          // generic capture would be capturing the wrong, about-to-vanish
+          // thing. `DialogContent` still supplies the gone-at-close
+          // fallback this hand-written handler never had, if `triggerRef`
+          // itself somehow isn't there by the time this dialog closes.
+          restoreFocusTo={triggerRef}
         >
           <div className="mb-3 flex shrink-0 items-center justify-between gap-2">
-            <DialogPrimitive.Title className="text-sm font-medium text-foreground">
+            <DialogTitle className="text-sm font-medium text-foreground">
               Activity ({events.length})
-            </DialogPrimitive.Title>
-            <DialogPrimitive.Close asChild>
+            </DialogTitle>
+            <DialogClose asChild>
               <button
                 type="button"
                 aria-label="Close activity"
@@ -1086,7 +1104,7 @@ function TaskActivityDialog({
               >
                 <X aria-hidden="true" className="size-4" />
               </button>
-            </DialogPrimitive.Close>
+            </DialogClose>
           </div>
           <div className="min-h-0 flex-1 overflow-y-auto">
             {/* `open &&`, not just Radix `Dialog`'s own Presence-gated
@@ -1118,9 +1136,9 @@ function TaskActivityDialog({
               </Suspense>
             )}
           </div>
-        </DialogPrimitive.Content>
-      </DialogPrimitive.Portal>
-    </DialogPrimitive.Root>
+        </DialogContent>
+      </DialogPortal>
+    </Dialog>
   );
 }
 
@@ -1759,7 +1777,7 @@ function TaskDetailBody({
           triggerRef={overflowTriggerRef}
         />
         {wide && (
-          <DialogPrimitive.Close asChild>
+          <DialogClose asChild>
             <button
               type="button"
               aria-label="Close"
@@ -1767,7 +1785,7 @@ function TaskDetailBody({
             >
               <X aria-hidden="true" className="size-4" />
             </button>
-          </DialogPrimitive.Close>
+          </DialogClose>
         )}
       </header>
 
@@ -1880,7 +1898,7 @@ function TaskDetailBody({
                 }
                 className="mt-1.5 size-4 shrink-0 accent-current"
               />
-              <DialogPrimitive.Title asChild>
+              <DialogTitle asChild>
                 {editing ? (
                   // `<Suspense>` is what keeps ProseMirror out of Todo's own
                   // eager chunk (`lazy-task-title-editor.ts`'s own header
@@ -1988,7 +2006,7 @@ function TaskDetailBody({
                     {inlineProse(task.content)}
                   </div>
                 )}
-              </DialogPrimitive.Title>
+              </DialogTitle>
             </div>
             <span id={titleHintId} className="sr-only">
               Activate to edit the task name
@@ -2576,10 +2594,11 @@ export function TaskDetailView(props: TaskDetailViewProps) {
   }
 
   return (
-    <DialogPrimitive.Root open={true} onOpenChange={handleOpenChange}>
-      <DialogPrimitive.Portal>
-        <DialogPrimitive.Overlay className="fixed inset-0 z-50 bg-black/50 duration-150 data-open:animate-in data-open:fade-in-0 data-closed:animate-out data-closed:fade-out-0" />
-        <DialogPrimitive.Content
+    <Dialog open={true} onOpenChange={handleOpenChange}>
+      <DialogPortal>
+        <DialogOverlay className="fixed inset-0 z-50 bg-black/50 duration-150 data-open:animate-in data-open:fade-in-0 data-closed:animate-out data-closed:fade-out-0" />
+        <DialogContent
+          open={true}
           aria-describedby={undefined}
           // DET-05: Todoist's own measured `data-testid` (keyboard.md
           // §1) — `history.tsx`/`task-schedule-popover.tsx`/etc. already
@@ -2715,8 +2734,8 @@ export function TaskDetailView(props: TaskDetailViewProps) {
             contentRef={contentRef}
             dismissGuardRef={dismissGuardRef}
           />
-        </DialogPrimitive.Content>
-      </DialogPrimitive.Portal>
-    </DialogPrimitive.Root>
+        </DialogContent>
+      </DialogPortal>
+    </Dialog>
   );
 }

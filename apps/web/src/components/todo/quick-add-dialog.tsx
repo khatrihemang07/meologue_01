@@ -132,11 +132,18 @@
  */
 import { parseQuickAdd, uiPriorityOf } from "@meologue/core";
 import { X } from "lucide-react";
-import { Dialog as DialogPrimitive } from "radix-ui";
 import { Suspense, useEffect, useRef, useState } from "react";
 import { LazyTaskTitleEditor } from "@/components/todo/lazy-task-title-editor";
 import { ConfirmDialog } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogClose,
+  DialogContent,
+  DialogOverlay,
+  DialogPortal,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import type { AutocompleteEntry } from "@/lib/quick-add-autocomplete";
 import { type QuickAddTaskFields, taskFieldsForRename } from "@/lib/quick-add-task";
 import { priorityPickerColour } from "@/lib/task-priority-colors";
@@ -375,7 +382,7 @@ export function QuickAddDialog({
   }
 
   return (
-    <DialogPrimitive.Root
+    <Dialog
       open={open}
       onOpenChange={(next) => {
         // Issue #265 — Radix only ever calls this with `false` (opening is
@@ -384,7 +391,7 @@ export function QuickAddDialog({
         // autocomplete popup isn't open (`onEscapeKeyDown` below only
         // intercepts the popup-open case), an outside click (no
         // `onPointerDownOutside` override here — there is nothing else for
-        // it to do), and the X button (`DialogPrimitive.Close` calls this
+        // it to do), and the X button (`DialogClose` calls this
         // same `onOpenChange` under Radix's own hood). Routing all three
         // through `requestDismiss` is what makes them agree with the
         // editor's own Escape `onCancel` and the footer's Cancel button
@@ -397,13 +404,14 @@ export function QuickAddDialog({
         requestDismiss();
       }}
     >
-      <DialogPrimitive.Portal>
-        <DialogPrimitive.Overlay
+      <DialogPortal>
+        <DialogOverlay
           className={cn(
             "fixed inset-0 z-50 bg-black/50 duration-150 data-open:animate-in data-open:fade-in-0 data-closed:animate-out data-closed:fade-out-0",
           )}
         />
-        <DialogPrimitive.Content
+        <DialogContent
+          open={open}
           ref={contentRef}
           aria-label="Quick Add"
           data-testid="quick-add"
@@ -421,7 +429,7 @@ export function QuickAddDialog({
             }
           }}
         >
-          <DialogPrimitive.Title className="sr-only">Quick Add</DialogPrimitive.Title>
+          <DialogTitle className="sr-only">Quick Add</DialogTitle>
           <div className={EDITOR_ROW_CLASSES}>
             <div className="min-w-0 flex-1">
               <Suspense fallback={<div className="h-8" />}>
@@ -456,11 +464,11 @@ export function QuickAddDialog({
                 stays a plain dismiss affordance rather than a stub or a
                 disabled placeholder for one. Known open item, not papered
                 over (this file's own header comment). */}
-            <DialogPrimitive.Close asChild>
+            <DialogClose asChild>
               <Button type="button" variant="ghost" size="icon-xs" aria-label="Close">
                 <X aria-hidden="true" className="size-3.5" />
               </Button>
-            </DialogPrimitive.Close>
+            </DialogClose>
           </div>
 
           {/* PRI-04: the flag icon alone carries the priority's colour —
@@ -577,8 +585,8 @@ export function QuickAddDialog({
                 ?.focus({ preventScroll: true });
             }}
           />
-        </DialogPrimitive.Content>
-      </DialogPrimitive.Portal>
-    </DialogPrimitive.Root>
+        </DialogContent>
+      </DialogPortal>
+    </Dialog>
   );
 }

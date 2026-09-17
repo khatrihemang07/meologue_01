@@ -103,7 +103,7 @@
  * a `minHeight` that would let the tree grow) is what keeps that true
  * regardless of which "Ends" branch is showing. That fixed height is still
  * the whole story at the captured 480px width; once the width itself can
- * shrink below that (see the `className` on `DialogPrimitive.Content`
+ * shrink below that (see the `className` on `DialogContent` (`@/components/ui/dialog`)
  * below), content can need more than 403px, and the `<form>`'s own
  * `overflow-auto`/`min-h-0` is what makes that scroll inside the fixed
  * frame instead of clipping — see that style block's own comment for the
@@ -113,10 +113,17 @@ import type { MonthDay, RecurrenceFrequency } from "@meologue/core";
 import { parseRecurrence } from "@meologue/core";
 import { format } from "date-fns";
 import { CalendarDays } from "lucide-react";
-import { Dialog as DialogPrimitive } from "radix-ui";
 import { type FormEvent, useEffect, useId, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Calendar } from "@/components/ui/calendar";
+import {
+  Dialog,
+  DialogClose,
+  DialogContent,
+  DialogDescription,
+  DialogPortal,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { localDayKey, parseDayKey } from "@/lib/local-day-key";
 import { cn } from "@/lib/utils";
@@ -429,9 +436,10 @@ export function TaskCustomRepeatDialog({
   }
 
   return (
-    <DialogPrimitive.Root open={open} onOpenChange={onOpenChange} modal={false}>
-      <DialogPrimitive.Portal>
-        <DialogPrimitive.Content
+    <Dialog open={open} onOpenChange={onOpenChange} modal={false}>
+      <DialogPortal>
+        <DialogContent
+          open={open}
           data-testid="custom-repeat-dialog"
           // See this file's own header comment (task-time-dialog.tsx's
           // identical SCHED-11 follow-up) — not preventDefault()-ed, so
@@ -485,10 +493,10 @@ export function TaskCustomRepeatDialog({
             boxShadow: "rgba(0, 0, 0, 0.16) 0px 2px 8px 0px",
           }}
         >
-          <DialogPrimitive.Title className="sr-only">Custom repeat</DialogPrimitive.Title>
-          <DialogPrimitive.Description className="sr-only">
+          <DialogTitle className="sr-only">Custom repeat</DialogTitle>
+          <DialogDescription className="sr-only">
             Build a custom recurrence rule for this Task.
-          </DialogPrimitive.Description>
+          </DialogDescription>
 
           <form
             onSubmit={handleSave}
@@ -617,7 +625,7 @@ export function TaskCustomRepeatDialog({
                     Checked for the same behind-the-dialog risk as the
                     "Select date" popover above, and it is NOT at risk: unlike
                     `PopoverContent`, this listbox is never portalled — it is
-                    an ordinary descendant of `DialogPrimitive.Content`
+                    an ordinary descendant of `DialogContent` (`@/components/ui/dialog`)
                     (`unitMenuRef`'s own sibling below), so it paints inside
                     that Content's own `z-[70]` stacking context rather than
                     competing with it. Its `z-10` only has to beat this
@@ -779,18 +787,18 @@ export function TaskCustomRepeatDialog({
               lump of dead space above this row — the thing being fixed.
             */}
             <div className="flex justify-end gap-2">
-              <DialogPrimitive.Close asChild>
+              <DialogClose asChild>
                 <Button type="button" variant="outline" size="sm">
                   Cancel
                 </Button>
-              </DialogPrimitive.Close>
+              </DialogClose>
               <Button type="submit" size="sm">
                 Save
               </Button>
             </div>
           </form>
-        </DialogPrimitive.Content>
-      </DialogPrimitive.Portal>
-    </DialogPrimitive.Root>
+        </DialogContent>
+      </DialogPortal>
+    </Dialog>
   );
 }

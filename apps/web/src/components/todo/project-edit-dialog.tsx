@@ -36,18 +36,26 @@
  * Favourite in on top of that speculation would be inventing a shape the
  * ledger never measured.
  *
- * Built directly on the Radix `Dialog` primitive `alert-dialog.tsx`
- * already uses (`Dialog as DialogPrimitive` from `"radix-ui"`), the same
- * choice `label-dialog.tsx` makes and for the identical reason: this is
- * an ordinary form, not a destructive confirmation, so it keeps Radix's
- * own default `role="dialog"` rather than `ConfirmDialog`'s
+ * Built on the shared `ui/dialog.tsx` (`@/components/ui/dialog`, issue
+ * #342's own focus-restore wrapper around the Radix `Dialog` primitive),
+ * the same choice `label-dialog.tsx` makes and for the identical reason:
+ * this is an ordinary form, not a destructive confirmation, so it keeps
+ * Radix's own default `role="dialog"` rather than `ConfirmDialog`'s
  * `role="alertdialog"`.
  */
 import type { Project } from "@meologue/core";
 import { LABEL_COLOURS } from "@meologue/core";
-import { Dialog as DialogPrimitive } from "radix-ui";
 import { type FormEvent, useState } from "react";
 import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogClose,
+  DialogContent,
+  DialogDescription,
+  DialogOverlay,
+  DialogPortal,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 
@@ -166,24 +174,23 @@ export function ProjectEditDialog({
   }
 
   return (
-    <DialogPrimitive.Root open={open} onOpenChange={onOpenChange}>
-      <DialogPrimitive.Portal>
-        <DialogPrimitive.Overlay
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogPortal>
+        <DialogOverlay
           className={cn(
             "fixed inset-0 z-50 bg-black/50 duration-150 data-open:animate-in data-open:fade-in-0 data-closed:animate-out data-closed:fade-out-0",
           )}
         />
-        <DialogPrimitive.Content
+        <DialogContent
+          open={open}
           className={cn(
             "fixed top-1/2 left-1/2 z-50 w-[calc(100%-2rem)] max-w-sm -translate-x-1/2 -translate-y-1/2 rounded-xl border border-border bg-popover p-4 text-popover-foreground shadow-lg outline-hidden duration-150 data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95",
           )}
         >
-          <DialogPrimitive.Title className="text-sm font-medium text-foreground">
-            Edit project
-          </DialogPrimitive.Title>
-          <DialogPrimitive.Description className="sr-only">
+          <DialogTitle className="text-sm font-medium text-foreground">Edit project</DialogTitle>
+          <DialogDescription className="sr-only">
             Set the project's name, colour, description and parent project.
-          </DialogPrimitive.Description>
+          </DialogDescription>
           <form onSubmit={handleSubmit} className="mt-3 flex flex-col gap-3">
             <div className="flex flex-col gap-1">
               <div className="flex items-center justify-between">
@@ -257,18 +264,18 @@ export function ProjectEditDialog({
               </div>
             )}
             <div className="mt-2 flex justify-end gap-2">
-              <DialogPrimitive.Close asChild>
+              <DialogClose asChild>
                 <Button type="button" variant="outline" size="sm">
                   Cancel
                 </Button>
-              </DialogPrimitive.Close>
+              </DialogClose>
               <Button type="submit" size="sm" disabled={name.trim() === ""}>
                 Save
               </Button>
             </div>
           </form>
-        </DialogPrimitive.Content>
-      </DialogPrimitive.Portal>
-    </DialogPrimitive.Root>
+        </DialogContent>
+      </DialogPortal>
+    </Dialog>
   );
 }

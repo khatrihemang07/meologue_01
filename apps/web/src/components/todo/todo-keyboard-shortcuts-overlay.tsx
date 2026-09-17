@@ -10,7 +10,13 @@
  * this app are in the table at all (that module's own header comment lists
  * what's missing and why).
  */
-import { Dialog as DialogPrimitive } from "radix-ui";
+import {
+  Dialog,
+  DialogContent,
+  DialogOverlay,
+  DialogPortal,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { formatKeyHint, groupedBindingsBySection } from "@/lib/todo-keymap";
 
 export interface TodoKeyboardShortcutsOverlayProps {
@@ -25,13 +31,14 @@ export function TodoKeyboardShortcutsOverlay({
   const sections = groupedBindingsBySection();
 
   return (
-    <DialogPrimitive.Root open={open} onOpenChange={onOpenChange}>
-      <DialogPrimitive.Portal>
-        <DialogPrimitive.Overlay className="fixed inset-0 z-50 bg-black/50 duration-150 data-open:animate-in data-open:fade-in-0 data-closed:animate-out data-closed:fade-out-0" />
-        <DialogPrimitive.Content className="fixed top-1/2 left-1/2 z-50 max-h-[80vh] w-[calc(100%-2rem)] max-w-md -translate-x-1/2 -translate-y-1/2 overflow-y-auto rounded-xl border border-border bg-popover p-4 text-popover-foreground shadow-lg outline-hidden duration-150 data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0">
-          <DialogPrimitive.Title className="mb-3 font-semibold text-base">
-            Keyboard Shortcuts
-          </DialogPrimitive.Title>
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogPortal>
+        <DialogOverlay className="fixed inset-0 z-50 bg-black/50 duration-150 data-open:animate-in data-open:fade-in-0 data-closed:animate-out data-closed:fade-out-0" />
+        <DialogContent
+          open={open}
+          className="fixed top-1/2 left-1/2 z-50 max-h-[80vh] w-[calc(100%-2rem)] max-w-md -translate-x-1/2 -translate-y-1/2 overflow-y-auto rounded-xl border border-border bg-popover p-4 text-popover-foreground shadow-lg outline-hidden duration-150 data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0"
+        >
+          <DialogTitle className="mb-3 font-semibold text-base">Keyboard Shortcuts</DialogTitle>
           <div className="flex flex-col gap-4">
             {sections.map(({ section, rows }) => (
               <div key={section}>
@@ -54,8 +61,8 @@ export function TodoKeyboardShortcutsOverlay({
               </div>
             ))}
           </div>
-        </DialogPrimitive.Content>
-      </DialogPrimitive.Portal>
-    </DialogPrimitive.Root>
+        </DialogContent>
+      </DialogPortal>
+    </Dialog>
   );
 }

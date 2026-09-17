@@ -98,9 +98,16 @@
  * instead of Save, so `onSave` never fires and the draft is discarded the
  * same as Cancel.
  */
-import { Dialog as DialogPrimitive } from "radix-ui";
 import { useEffect, useId, useState } from "react";
 import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogClose,
+  DialogContent,
+  DialogDescription,
+  DialogPortal,
+  DialogTitle,
+} from "@/components/ui/dialog";
 
 // The former inline control's own default (task-schedule-popover.tsx's
 // prior `DEFAULT_TIME`, relocated here with it) — 9am reads as "start of
@@ -143,9 +150,10 @@ export function TaskTimeDialog({
   }
 
   return (
-    <DialogPrimitive.Root open={open} onOpenChange={onOpenChange} modal={false}>
-      <DialogPrimitive.Portal>
-        <DialogPrimitive.Content
+    <Dialog open={open} onOpenChange={onOpenChange} modal={false}>
+      <DialogPortal>
+        <DialogContent
+          open={open}
           data-testid="time-dialog"
           // See this file's own header comment (SCHED-11's follow-up,
           // pass2-2026-09-11.md §7) — not preventDefault()-ed, so Radix's
@@ -161,12 +169,10 @@ export function TaskTimeDialog({
             boxShadow: "rgba(0, 0, 0, 0.16) 0px 2px 8px 0px",
           }}
         >
-          <DialogPrimitive.Title className="sr-only">
-            Select start and end time
-          </DialogPrimitive.Title>
-          <DialogPrimitive.Description className="sr-only">
+          <DialogTitle className="sr-only">Select start and end time</DialogTitle>
+          <DialogDescription className="sr-only">
             Set the Task's start time, or remove it.
-          </DialogPrimitive.Description>
+          </DialogDescription>
 
           <label className="flex items-center gap-2">
             <input
@@ -197,14 +203,14 @@ export function TaskTimeDialog({
             <Button type="button" size="sm" onClick={handleSave}>
               Save
             </Button>
-            <DialogPrimitive.Close asChild>
+            <DialogClose asChild>
               <Button type="button" variant="outline" size="sm">
                 Cancel
               </Button>
-            </DialogPrimitive.Close>
+            </DialogClose>
           </div>
-        </DialogPrimitive.Content>
-      </DialogPrimitive.Portal>
-    </DialogPrimitive.Root>
+        </DialogContent>
+      </DialogPortal>
+    </Dialog>
   );
 }
