@@ -7,9 +7,8 @@ Accepted. Builds on [0044](0044-the-composer-holds-a-document.md), which chose `
 the `list_item` it belongs to — as the shape `prosemirror-schema-list`'s own commands
 (`splitListItem`/`liftListItem`/`sinkListItem`) are documented to expect. This ADR is the first time
 that choice runs into a case `sinkListItem` itself cannot reach at all, for a structural reason
-rather than a bug in it. Matches UpNote's own observed behaviour — the `upnote-editor-behaviour.md`/
-`upnote-macos-detail.md`/`upnote-android-detail.md` findings that a since-retired ADR named the
-specification this ADR follows. [0070](0070-the-composer-keeps-tab-and-shift-tab-in-bare-prose-is-the-keyboard-exit.md)
+rather than a bug in it. Matches UpNote's own observed behaviour on both macOS and Android, which a
+since-retired ADR named the specification this ADR follows. [0070](0070-the-composer-keeps-tab-and-shift-tab-in-bare-prose-is-the-keyboard-exit.md)
 is the other half of issue #233: that ADR decides what Tab/Shift-Tab do once there is nothing left
 to indent or outdent; this one decides what indenting itself does for the one case that was
 previously impossible.
@@ -28,12 +27,10 @@ already works today, which is precisely why the defect is easy to miss in review
 practice: the first thing anyone does with a brand-new two-line list is try to nest the second line
 under the first, and only later — often not at all — try nesting the first line itself.
 
-`upnote-editor-behaviour.md`'s own Lists table states plainly that UpNote has no such gap: "Tab on
-the first item of a list | also nests, producing `<ul><ul><li>…`." `upnote-android-detail.md`'s Gap
-sweep Group D confirms the identical result independently on the other platform ("This matches macOS
-exactly"). The reason UpNote has no gap here at all, rather than a differently-shaped one, is
-structural, not a difference in polish: `upnote-editor-behaviour.md`'s own module comment states it
-directly — "Nesting is emitted as a `<ul>` that is a *sibling* of the `<li>`, not a child of it" —
+The recorded Lists table states plainly that UpNote has no such gap: "Tab on the first item of a
+list | also nests, producing `<ul><ul><li>…`." The Android Gap sweep Group D confirms the identical
+result independently on the other platform ("This matches macOS exactly"). The reason UpNote has no gap here at all, rather than a differently-shaped one, is
+structural, not a difference in polish: the same record states it directly — "Nesting is emitted as a `<ul>` that is a *sibling* of the `<li>`, not a child of it" —
 `<ul><li>one</li><ul><li>two</li></ul></ul>`, invalid per the HTML spec, and exactly what UpNote's
 shipped editor writes anyway. Nesting a lone item under THAT shape needs no wrapper at all: the
 attachment point is the enclosing `<ul>` tag itself, which already exists and needs nothing spliced
