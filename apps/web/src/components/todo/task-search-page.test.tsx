@@ -235,3 +235,56 @@ describe("TaskSearchPage", () => {
     expect(screen.getByText("let's schedule a follow-up")).toBeInTheDocument();
   });
 });
+
+// Issue #358: "the behaviour holds... in Search" — completed matches used
+// to sort into one list, interleaved with active matches by creation date;
+// they now render in their own block below the active matches, paginated
+// like every other completed block in Todo. "Show completed" itself is
+// untouched — it still decides whether a completed Task is searched at all
+// (issue #183), independent of this shape change.
+describe("TaskSearchPage — completed matches render in their own trailing block (issue #358)", () => {
+  it("renders active matches, then completed matches below them, once Show completed is on", () => {
+    const { container } = renderPage(
+      {
+        tasks: [task({ id: "a", content: "uniqzetaword active" })],
+        completedTasks: [
+          task({ id: "b", content: "uniqzetaword done", completedAt: "2026-01-05T00:00:00.000Z" }),
+        ],
+      },
+      ["/todo/search?q=uniqzetaword"],
+    );
+
+    fireEvent.click(screen.getByLabelText("Show completed"));
+
+    const active = screen.getByText("uniqzetaword active");
+    const completed = screen.getByText("uniqzetaword done");
+    expect(active).toBeInTheDocument();
+    expect(completed).toBeInTheDocument();
+    // Two separate <ul>s, active first — not one merged list.
+    const lists = container.querySelectorAll("ul");
+    expect(lists.length).toBeGreaterThanOrEqual(2);
+    expect(lists[0]?.contains(active)).toBe(true);
+    expect(lists[1]?.contains(completed)).toBe(true);
+  });
+
+  it("shows a Load-more control only once completed matches exceed one page", async () => {
+    const completedMatches = Array.from({ length: 11 }, (_, index) =>
+      task({
+        id: `done-${index}`,
+        content: `uniqzetaword ${index}`,
+        completedAt: "2026-01-05T00:00:00.000Z",
+      }),
+    );
+    renderPage({ completedTasks: completedMatches }, ["/todo/search?q=uniqzetaword"]);
+
+    fireEvent.click(screen.getByLabelText("Show completed"));
+
+    expect(screen.queryAllByText(/^uniqzetaword \d+$/)).toHaveLength(10);
+    const loadMore = screen.getByRole("button", { name: "+1 completed task" });
+
+    fireEvent.click(loadMore);
+
+    expect(await screen.findByText("uniqzetaword 10")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /completed task/ })).toBeNull();
+  });
+});

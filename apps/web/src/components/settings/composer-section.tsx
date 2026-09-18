@@ -20,6 +20,16 @@ import { useSettingsStore } from "@/lib/settings";
  * page (issue #170) well before Todo's other settings existed to weigh it
  * against.
  *
+ * Issue #358's "Completed tasks" toggle below has no such Composer-shaped
+ * reason — it governs how Todo's own lists render, not anything about
+ * writing — but there is still no dedicated `Todo` topic section on this
+ * page (five exist: Appearance, Composer, AI, Sync, Data), and `AiSection`'s
+ * own "Chat list" row already sets the precedent that a Device-local Todo
+ * setting with nowhere else to go lands wherever is least wrong rather than
+ * growing a sixth section for one row. This one keeps "Smart date
+ * recognition" company here because both are Todo-only settings this page
+ * has nowhere better to put, not because either belongs to the Composer.
+ *
  * Every setting here is Device-local (ADR 0008), read and written straight
  * off `useSettingsStore` with no props threaded down from the page.
  */
@@ -28,6 +38,10 @@ export function ComposerSection() {
   const setStoredFormatBarVisible = useSettingsStore((state) => state.setFormatBarVisible);
   const smartDatesEnabled = useSettingsStore((state) => state.smartDatesEnabled);
   const setStoredSmartDatesEnabled = useSettingsStore((state) => state.setSmartDatesEnabled);
+  const completedTasksVisible = useSettingsStore((state) => state.completedTasksVisible);
+  const setStoredCompletedTasksVisible = useSettingsStore(
+    (state) => state.setCompletedTasksVisible,
+  );
 
   // No `applyX` step: there is no on-screen paint for a `localStorage`
   // write to drive immediately from here — `composer.tsx` reads this
@@ -41,6 +55,13 @@ export function ComposerSection() {
   // next time it renders.
   function toggleSmartDatesEnabled() {
     setStoredSmartDatesEnabled(!smartDatesEnabled);
+  }
+
+  // No `applyX` step, for the identical reason above: `task-list.tsx`
+  // reads this setting itself, the next time Inbox, a Project, a Filter or
+  // Search renders its own list.
+  function toggleCompletedTasksVisible() {
+    setStoredCompletedTasksVisible(!completedTasksVisible);
   }
 
   return (
@@ -88,6 +109,25 @@ export function ComposerSection() {
             label="Smart date recognition"
             checked={smartDatesEnabled}
             onToggle={toggleSmartDatesEnabled}
+          />
+        </SettingsSection>
+
+        {/*
+          Issue #358. Off (the default) matches Todoist's own measured
+          default (ROW-14, parity-ledger.md): completing a Task removes its
+          row from Inbox, a Project's own view, a Filter's own matches and
+          Search's own matches immediately, with nothing left behind. On
+          relocates it below the active rows instead, with a control to
+          load older ones.
+        */}
+        <SettingsSection
+          label="Completed tasks"
+          hint="Off hides a completed Task everywhere in Todo, the instant it's completed. On keeps it visible, below the active Tasks, with a control to load older ones."
+        >
+          <SwitchRow
+            label="Show completed Tasks"
+            checked={completedTasksVisible}
+            onToggle={toggleCompletedTasksVisible}
           />
         </SettingsSection>
       </DeviceGroup>

@@ -3,6 +3,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen } from "@testing-library/react";
 import { MemoryRouter } from "react-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useSettingsStore } from "@/lib/settings";
 import { FilterView, type FilterViewProps } from "./filter-view";
 
 // FilterView reads "now" off the system clock (localDayKey(new Date())),
@@ -237,6 +238,84 @@ describe("FilterView — criterion 2, several result lists from one comma-separa
     expect(screen.getByText(/^today · 1/)).toBeInTheDocument();
     expect(screen.getByText("overdue task")).toBeInTheDocument();
     expect(screen.getByText("today task")).toBeInTheDocument();
+  });
+});
+
+// Issue #358: "the behaviour holds... in a Filter view" — off (the
+// default) is unchanged from before this ticket (no completed Task ever
+// reaches this screen); on evaluates the identical query against
+// completedTasks too and renders matches below the active ones.
+describe("FilterView — completed matches (issue #358)", () => {
+  afterEach(() => {
+    useSettingsStore.getState().setCompletedTasksVisible(false);
+  });
+
+  it("never shows a completed match while the setting is off", () => {
+    const doneToday = task({
+      id: "done-today",
+      date: "2026-09-10",
+      completedAt: "2026-09-10T08:00:00.000Z",
+      content: "call mum",
+    });
+    renderFilterView({
+      filter: filter({ query: "today" }),
+      tasks: [],
+      completedTasks: [doneToday],
+    });
+
+    expect(screen.queryByText("call mum")).not.toBeInTheDocument();
+    expect(screen.getByText("No matching Tasks.")).toBeInTheDocument();
+  });
+
+  it("shows a completed match below the active ones once the setting is on", () => {
+    useSettingsStore.getState().setCompletedTasksVisible(true);
+    const dueToday = task({ id: "due-today", date: "2026-09-10", content: "buy milk" });
+    const doneToday = task({
+      id: "done-today",
+      date: "2026-09-10",
+      completedAt: "2026-09-10T08:00:00.000Z",
+      content: "call mum",
+    });
+    renderFilterView({
+      filter: filter({ query: "today" }),
+      tasks: [dueToday],
+      completedTasks: [doneToday],
+    });
+
+    const active = screen.getByText("buy milk");
+    const completed = screen.getByText("call mum");
+    expect(active).toBeInTheDocument();
+    expect(completed).toBeInTheDocument();
+    expect(completed).toHaveClass("completed-task-text");
+    // Below, not interleaved — DOM order is active first, completed after.
+    expect(
+      active.compareDocumentPosition(completed) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  });
+
+  it("shows a Load-more control only once completed matches exceed one page", () => {
+    useSettingsStore.getState().setCompletedTasksVisible(true);
+    const completedMatches = Array.from({ length: 11 }, (_, index) =>
+      task({
+        id: `done-${index}`,
+        date: "2026-09-10",
+        completedAt: "2026-09-10T08:00:00.000Z",
+        content: `done ${index}`,
+      }),
+    );
+    renderFilterView({
+      filter: filter({ query: "today" }),
+      tasks: [],
+      completedTasks: completedMatches,
+    });
+
+    expect(screen.queryAllByText(/^done \d+$/)).toHaveLength(10);
+    const loadMore = screen.getByRole("button", { name: "+1 completed task" });
+
+    fireEvent.click(loadMore);
+
+    expect(screen.getByText("done 10")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /completed task/ })).toBeNull();
   });
 });
 

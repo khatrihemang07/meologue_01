@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   ACCENTS,
   DEFAULT_ACCENT,
+  DEFAULT_COMPLETED_TASKS_VISIBLE,
   DEFAULT_HIDDEN_DESTINATIONS,
   DEFAULT_REFLECT_MODEL,
   DEFAULT_SMART_DATES_ENABLED,
@@ -225,6 +226,62 @@ describe("settings store", () => {
       return import("./settings").then((fresh) => {
         expect(fresh.useSettingsStore.getState().smartDatesEnabled).toBe(
           fresh.DEFAULT_SMART_DATES_ENABLED,
+        );
+      });
+    });
+  });
+
+  // Issue #358 — same shape as "smart date recognition" above, same reason:
+  // a boolean stored as literal "true"/"false" strings, defaulting on a
+  // missing or unrecognised value rather than throwing.
+  describe("completed tasks visibility", () => {
+    it("round-trips a written value, in the store and in storage", () => {
+      useSettingsStore.getState().setCompletedTasksVisible(true);
+
+      expect(useSettingsStore.getState().completedTasksVisible).toBe(true);
+      expect(localStorage.getItem("meologue.completed-tasks-visible")).toBe("true");
+    });
+
+    it("does not throw when localStorage refuses the write, and still updates the store", () => {
+      vi.spyOn(localStorage, "setItem").mockImplementation(() => {
+        throw new Error("storage unavailable");
+      });
+
+      expect(() => useSettingsStore.getState().setCompletedTasksVisible(true)).not.toThrow();
+      expect(useSettingsStore.getState().completedTasksVisible).toBe(true);
+    });
+
+    it("defaults to off, matching Todoist's own measured default (issue #350)", () => {
+      expect(DEFAULT_COMPLETED_TASKS_VISIBLE).toBe(false);
+    });
+
+    it("reads a stored 'true' back at load", () => {
+      localStorage.setItem("meologue.completed-tasks-visible", "true");
+
+      vi.resetModules();
+      return import("./settings").then((fresh) => {
+        expect(fresh.useSettingsStore.getState().completedTasksVisible).toBe(true);
+      });
+    });
+
+    it("treats a hand-edited value that isn't 'true' as off, not as a parse error", () => {
+      localStorage.setItem("meologue.completed-tasks-visible", "yes-please");
+
+      vi.resetModules();
+      return import("./settings").then((fresh) => {
+        expect(fresh.useSettingsStore.getState().completedTasksVisible).toBe(false);
+      });
+    });
+
+    it("degrades to the default when localStorage throws on read", () => {
+      vi.spyOn(localStorage, "getItem").mockImplementation(() => {
+        throw new Error("storage unavailable");
+      });
+
+      vi.resetModules();
+      return import("./settings").then((fresh) => {
+        expect(fresh.useSettingsStore.getState().completedTasksVisible).toBe(
+          fresh.DEFAULT_COMPLETED_TASKS_VISIBLE,
         );
       });
     });

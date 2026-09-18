@@ -71,6 +71,20 @@ test("adding, completing (with Undo), reordering and reloading all leave Todo ex
   const first = uniqueTaskContent("todo-first");
   const second = uniqueTaskContent("todo-second");
 
+  // Issue #358: meologue's own "Completed tasks" display option now
+  // defaults OFF, matching Todoist's own measured default (ROW-14,
+  // parity-ledger.md) — completing a Task removes its row from the list
+  // entirely rather than leaving it in place. This test's own assertions
+  // just below describe the OTHER measured state (the row relocates,
+  // struck through, `aria-checked="true"`), which is what this suite
+  // already exercised before #358 existed — so this seeds the setting on,
+  // via the identical `localStorage`-before-`goto` pattern
+  // `installDateOffset` (helpers.ts) already uses, rather than rewriting
+  // every assertion below for the new default.
+  await page.addInitScript(() => {
+    localStorage.setItem("meologue.completed-tasks-visible", "true");
+  });
+
   await openDestination(page, "Todo");
   await expect(page).toHaveURL("/todo/inbox");
 

@@ -584,11 +584,46 @@ const CHUNK_BUDGETS = {
   // already-stale 92,478.
   // Re-measured 2026-09-17 after ADR 0084 added the Browse hub to this
   // route: 96,130 -> 96,709 gzip (+579 bytes for `browse-view.tsx`). The
-  // ceiling is NOT raised — this route runs on ~3% headroom rather than the
-  // ~30% the rest of this table assumes, so the next Todo view to land here
-  // trips it, and the fix then is a lazy boundary (as HEAD's own
-  // task-detail-view commit did) rather than a bigger number.
-  "src/pages/todo-page.tsx": { ceilingBytes: 99_000, baselineBytes: 96_709 },
+  // ceiling was NOT raised then — this route ran on ~3% headroom rather
+  // than the ~30% the rest of this table assumes, so the next Todo view to
+  // land here would trip it — and issue #358 is exactly that prediction
+  // coming true, measured at 98,963 gzip immediately before this ticket's
+  // own work (three intervening tickets' drift this table never recorded:
+  // one-palette's token/font changes, the Composer's day-jump controls, and
+  // the single-completion-toast rework), 37 bytes of headroom against the
+  // unchanged 99,000 ceiling.
+  //
+  // Issue #358 (ROW-14, parity-ledger.md): meologue's own "Completed tasks"
+  // display setting, off by default — hidden entirely off, relocated below
+  // the active list with a Load-more control on. This is not a candidate
+  // for a lazy split the way `task-detail-view.tsx`/`task-schedule-
+  // sheet.tsx` above were: those render only once a reader asks for a
+  // specific Task's detail or schedule, gated on `openTask`/
+  // `schedulingTask` being non-null, so a Suspense boundary genuinely
+  // removes bytes from the common case. Completed-Task display is core
+  // list rendering — `task-list.tsx`/`task-tree.tsx` render on every visit
+  // to Inbox, Todo's own default view, with no gate to hang a lazy
+  // boundary on — so `use-completed-tasks-page.ts`,
+  // `completed-tasks-load-more.tsx` and `completed-tasks-page-size.ts`
+  // (all new, small, first-party weight, shared by `task-tree.tsx`,
+  // `filter-view.tsx` and `task-search-page.tsx`) would ship on this route
+  // eagerly regardless of where they lived; a `lazy()` boundary here would
+  // add an `import()` round trip to Inbox's own first paint for a handful
+  // of bytes, not remove them from the download. Measured 99,280 gzip
+  // immediately after landing — +317 bytes over the 98,963 this ticket
+  // started from, entirely first-party (the three modules above, plus the
+  // new `SettingsSection` row wired through `todo-page.tsx`'s own
+  // `FilterView` call site).
+  //
+  // Re-baselined rather than split, per this file's own stated preference
+  // order when no honest split exists. `ceilingBytes` keeps the identical
+  // 37-byte absolute headroom the ceiling carried over this ticket's own
+  // starting measurement (99,000 - 98,963), rather than resetting to this
+  // section's ~30% norm: this route has run on a deliberately thin margin
+  // since PR #259 (the entry immediately above), and widening it now would
+  // hide the next regression the same way the last three tickets' silent
+  // drift already did.
+  "src/pages/todo-page.tsx": { ceilingBytes: 99_317, baselineBytes: 99_280 },
 };
 
 /**

@@ -8,8 +8,8 @@
  *
  * Persisted as plain `localStorage` string keys, one per setting —
  * `meologue.theme`, `meologue.server-url`, since #128 `meologue.accent` and
- * `meologue.text-size`, and since #134 `meologue.hidden-destinations` — not
- * a single JSON blob under
+ * `meologue.text-size`, since #134 `meologue.hidden-destinations`, and since
+ * #358 `meologue.completed-tasks-visible` — not a single JSON blob under
  * Zustand's `persist` middleware, which writes the whole store under one
  * key. Three things depend on that format: the inline
  * blocking script in `index.html` that applies the theme before first paint
@@ -59,6 +59,7 @@ const DEFAULT_REFLECT_MODEL_KEY = "meologue.default-reflect-model";
 // below) rather than losing the whole preference.
 const HIDDEN_DESTINATIONS_KEY = "meologue.hidden-destinations";
 const CAPABILITIES_KEY = "meologue.capabilities";
+const COMPLETED_TASKS_VISIBLE_KEY = "meologue.completed-tasks-visible";
 
 /** The prefix every key this file writes shares — see `readAllDeviceSettings` below. */
 const DEVICE_SETTINGS_PREFIX = "meologue.";
@@ -408,6 +409,48 @@ function writeStoredSmartDatesEnabled(enabled: boolean): void {
 }
 
 /**
+ * Issue #358: whether a completed Task ever renders at all in Inbox, a
+ * Project's own view, a Filter's own matches, or Search's own matches —
+ * Device-local, exactly like `smartDatesEnabled`/`formatBarVisible` above,
+ * and stored the identical `"true"`/`"false"` way for the identical reason
+ * (no finite id list a corrupt value could be validated against).
+ *
+ * Defaults to **off**, matching Todoist's own measured default (issue
+ * #350's live drive, both web and Android, `ROW-14` in the parity ledger):
+ * completing a Task there makes its row disappear immediately, with no
+ * completed block and no Load-more control, and it stays gone after a
+ * reload/relaunch. Before this ticket meologue instead interleaved every
+ * completed Task inline, in place, among its active siblings, unconditionally
+ * — a divergence introduced by a parity fix (`5e8c073`/`5f3ce95`) built on a
+ * ledger row that a later live drive disproved. Switching this **on**
+ * matches the other measured state: completed Tasks relocate out of the
+ * active list into their own block below it, with a control to load older
+ * ones (`useCompletedTasksPage`, `hooks/use-completed-tasks-page.ts`) — the
+ * `+N completed tasks` control both platforms showed is a page-size hint,
+ * not a growing expander, so this app's own version keeps the exact same
+ * shape rather than a live count of anything.
+ */
+export const DEFAULT_COMPLETED_TASKS_VISIBLE = false;
+
+function readStoredCompletedTasksVisible(): boolean {
+  try {
+    const stored = localStorage.getItem(COMPLETED_TASKS_VISIBLE_KEY);
+    return stored === null ? DEFAULT_COMPLETED_TASKS_VISIBLE : stored === "true";
+  } catch {
+    return DEFAULT_COMPLETED_TASKS_VISIBLE;
+  }
+}
+
+function writeStoredCompletedTasksVisible(visible: boolean): void {
+  try {
+    localStorage.setItem(COMPLETED_TASKS_VISIBLE_KEY, visible ? "true" : "false");
+  } catch {
+    // Refused write — the in-memory value below still applies for this
+    // session, same degradation every other setting here has.
+  }
+}
+
+/**
  * Issue #202: which model a fresh `/reflect` Conversation starts on, before
  * the reader has touched `question-composer.tsx`'s own per-ask picker —
  * a Device-local default, exactly like `formatBarVisible`/
@@ -694,6 +737,8 @@ interface SettingsState {
    * row itself (`chat-list.tsx`'s `useDestinations()` is the only reader).
    */
   hiddenDestinations: ReadonlySet<HideableDestinationId>;
+  /** Issue #358: whether a completed Task renders at all in Todo. See `DEFAULT_COMPLETED_TASKS_VISIBLE`'s own doc comment above. */
+  completedTasksVisible: boolean;
   setTheme: (theme: Theme) => void;
   setAccent: (accent: AccentId) => void;
   setTextSize: (size: TextSizeId) => void;
@@ -705,6 +750,7 @@ interface SettingsState {
   setCapabilities: (capabilities: ServerCapabilities | null) => void;
   setServerReachable: (reachable: boolean) => void;
   setHiddenDestinations: (hidden: ReadonlySet<HideableDestinationId>) => void;
+  setCompletedTasksVisible: (visible: boolean) => void;
 }
 
 /**
@@ -727,6 +773,7 @@ export const useSettingsStore = create<SettingsState>()((set) => ({
   capabilities: readStoredCapabilities(),
   serverReachable: true,
   hiddenDestinations: readStoredHiddenDestinations(),
+  completedTasksVisible: readStoredCompletedTasksVisible(),
   setTheme: (theme) => {
     writeStoredTheme(theme);
     set({ theme });
@@ -773,6 +820,10 @@ export const useSettingsStore = create<SettingsState>()((set) => ({
   setHiddenDestinations: (hiddenDestinations) => {
     writeStoredHiddenDestinations(hiddenDestinations);
     set({ hiddenDestinations });
+  },
+  setCompletedTasksVisible: (completedTasksVisible) => {
+    writeStoredCompletedTasksVisible(completedTasksVisible);
+    set({ completedTasksVisible });
   },
 }));
 

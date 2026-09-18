@@ -23,6 +23,7 @@ import {
 } from "@/lib/last-todo-view";
 import { localDayKey } from "@/lib/local-day-key";
 import { ENTRY_STORE_QUERY_KEY } from "@/lib/query-keys";
+import { useSettingsStore } from "@/lib/settings";
 import type { EntryStoreOutletContext } from "@/pages/entry-store-layout";
 import { TodoPage } from "./todo-page";
 
@@ -744,6 +745,11 @@ describe("TodoPage", () => {
   // "Completed (n)" disclosure lived below `TaskList`'s own empty-state
   // paragraph regardless of what was inside it.
   it("does not read Inbox as empty when it holds only a completed Task", () => {
+    // Issue #358: this scope only falls through to render a completed-only
+    // list once `completedTasksVisible` is on — off (the default) reads
+    // Inbox as empty here, correctly, since Todoist's own off-state hides
+    // the row entirely (task-list.tsx's own doc comment).
+    useSettingsStore.getState().setCompletedTasksVisible(true);
     renderTodoPage(
       inboxContext([], {
         completedTasks: [
@@ -754,6 +760,7 @@ describe("TodoPage", () => {
 
     expect(screen.queryByText(/Nothing in your Inbox/)).not.toBeInTheDocument();
     expect(screen.getByText("done already")).toBeInTheDocument();
+    useSettingsStore.getState().setCompletedTasksVisible(false);
   });
 
   it("lists active Tasks", async () => {
@@ -969,6 +976,9 @@ describe("TodoPage", () => {
   // not a pending-undo ref (`pendingUndoRef`, todo-page.tsx) that a toast
   // could have long since cleared.
   it("restores a completed Task inline, through its own checkbox, independent of any toast", () => {
+    // Issue #358: this row only renders at all once `completedTasksVisible`
+    // is on — see the identical note on the empty-state test above.
+    useSettingsStore.getState().setCompletedTasksVisible(true);
     const uncompleteTask = vi.fn();
     renderTodoPage(
       readyContext({
@@ -982,6 +992,7 @@ describe("TodoPage", () => {
     fireEvent.click(screen.getByRole("checkbox", { name: "Mark task as incomplete" }));
 
     expect(uncompleteTask).toHaveBeenCalledWith("a");
+    useSettingsStore.getState().setCompletedTasksVisible(false);
   });
 
   // Issue #178 moved Delete off the row's own hover actions into the

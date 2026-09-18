@@ -9,6 +9,7 @@ describe("ComposerSection", () => {
     useSettingsStore.setState({
       formatBarVisible: true,
       smartDatesEnabled: true,
+      completedTasksVisible: false,
     });
   });
 
@@ -94,6 +95,44 @@ describe("ComposerSection", () => {
         "true",
       );
       expect(useSettingsStore.getState().smartDatesEnabled).toBe(true);
+    });
+  });
+
+  // Issue #358.
+  describe("completed tasks visibility", () => {
+    it("is off by default, matching Todoist's own measured default", () => {
+      render(<ComposerSection />);
+
+      expect(screen.getByRole("switch", { name: "Show completed Tasks" })).toHaveAttribute(
+        "aria-checked",
+        "false",
+      );
+    });
+
+    it("turns on on click, and persists it", () => {
+      render(<ComposerSection />);
+
+      fireEvent.click(screen.getByRole("switch", { name: "Show completed Tasks" }));
+
+      expect(screen.getByRole("switch", { name: "Show completed Tasks" })).toHaveAttribute(
+        "aria-checked",
+        "true",
+      );
+      expect(useSettingsStore.getState().completedTasksVisible).toBe(true);
+      expect(localStorage.getItem("meologue.completed-tasks-visible")).toBe("true");
+    });
+
+    it("turns off again on a second click", () => {
+      useSettingsStore.setState({ completedTasksVisible: true });
+      render(<ComposerSection />);
+
+      fireEvent.click(screen.getByRole("switch", { name: "Show completed Tasks" }));
+
+      expect(screen.getByRole("switch", { name: "Show completed Tasks" })).toHaveAttribute(
+        "aria-checked",
+        "false",
+      );
+      expect(useSettingsStore.getState().completedTasksVisible).toBe(false);
     });
   });
 });

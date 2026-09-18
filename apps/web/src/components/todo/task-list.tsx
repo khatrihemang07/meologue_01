@@ -20,13 +20,13 @@
 import type { Project, Section, Task } from "@meologue/core";
 import type { TaskDetailActions } from "@/components/todo/task-row";
 import { TaskTree } from "@/components/todo/task-tree";
+import { useSettingsStore } from "@/lib/settings";
 
 export interface TaskListProps {
   /** Top-level Tasks in this scope — TaskStore.listByProject's own result, Inbox's or one Project's. */
   tasks: Task[];
   /**
-   * ROW-14 (parity-ledger.md), the user's 2026-09-13 decision to match
-   * Todoist: every completed Task anywhere (the flat `completedTasks`
+   * Every completed Task anywhere (the flat `completedTasks`
    * `useEntryStore()` already returns, `todo-page.tsx`) — this component
    * narrows it to top-level, this-scope rows itself
    * (`topLevelCompletedTasks` below), the identical "the caller hands
@@ -34,6 +34,13 @@ export interface TaskListProps {
    * `tasks`/`sections`/`projectId` already establish for the active half.
    * Defaults to empty so a caller with nothing completed anywhere (or one
    * that hasn't been updated yet) needs no change.
+   *
+   * Issue #358: whether any of this ever reaches `TaskTree` at all is
+   * gated on `completedTasksVisible` below, not decided by this prop —
+   * a caller still hands over the same whole-account list regardless of
+   * the setting, exactly as `#310`'s `suppressProjectBadge` split already
+   * keeps "what this scope's own rows are" separate from "how they're
+   * currently drawn."
    */
   completedTasks?: Task[];
   /** Un-completes a Task from `completedTasks` above — forwarded straight through to every `TaskTree` this list renders (see that component's own doc comment). */
@@ -79,25 +86,35 @@ export function TaskList({
   countTaskChildren,
   listTasksInProject,
 }: TaskListProps) {
-  // ROW-14 (parity-ledger.md): narrowed to THIS scope's own top-level rows
-  // — `completedTasks` itself is the flat, whole-account list every other
-  // caller of it already filters client-side (`todo-page.tsx`'s
-  // `openTaskSubtasks`, its own doc comment on the identical narrowing).
-  // `parentId === null` is what "top-level" means here; a completed
-  // sub-task is deliberately left out of this narrowing — see
-  // `TaskTree`'s own `completedTasks` doc comment for why interleaving one
-  // level deeper is this ticket's own named, deferred gap rather than
-  // built ahead of being asked for.
-  const topLevelCompletedTasks = completedTasks.filter(
-    (task) => task.projectId === projectId && task.parentId === null,
-  );
+  // Issue #358: off (the default, matching Todoist's own measured default —
+  // ROW-14, parity-ledger.md) means a completed Task never reaches
+  // `TaskTree` at all, from this level down — the same posture Todoist
+  // itself takes ("the row disappears entirely and immediately," not
+  // merely styled differently), rather than fetching/filtering the list
+  // and then hiding the result with CSS.
+  const completedTasksVisible = useSettingsStore((state) => state.completedTasksVisible);
+
+  // Narrowed to THIS scope's own top-level rows — `completedTasks` itself
+  // is the flat, whole-account list every other caller of it already
+  // filters client-side (`todo-page.tsx`'s `openTaskSubtasks`, its own doc
+  // comment on the identical narrowing). `parentId === null` is what
+  // "top-level" means here; a completed sub-task is deliberately left out
+  // of this narrowing — see `TaskTree`'s own `completedTasks` doc comment
+  // for why interleaving one level deeper is this ticket's own named,
+  // deferred gap rather than built ahead of being asked for.
+  const topLevelCompletedTasks = completedTasksVisible
+    ? completedTasks.filter((task) => task.projectId === projectId && task.parentId === null)
+    : [];
 
   if (tasks.length === 0 && topLevelCompletedTasks.length === 0) {
     // A real state, not a blank panel — todo-page.tsx's own pre-#171
-    // Inbox comment on this exact rule, extended here to cover a Project
-    // with Sections but nothing filed in any of them yet. ROW-14 widens
-    // the condition itself: a scope holding only completed Tasks now
-    // falls through to render them, rather than reading as empty.
+    // Inbox comment on this exact rule, extended by ROW-14's original fix
+    // to cover a Project with Sections but nothing filed in any of them
+    // yet: a scope holding only completed Tasks falls through to render
+    // them, rather than reading as empty — but only once
+    // `completedTasksVisible` is on; off, `topLevelCompletedTasks` is
+    // already empty above, so a scope with only (hidden) completed Tasks
+    // correctly reads as empty again, matching Todoist's own off-state.
     return <p className="px-3 py-6 text-center text-muted-foreground text-sm">{emptyMessage}</p>;
   }
 

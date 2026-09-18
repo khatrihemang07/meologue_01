@@ -19,12 +19,25 @@
  * clicking that checkbox un-completes it right from this page — issue
  * #183's own reference-behaviour research observed exactly that
  * affordance on a real Todoist's own search results.
+ *
+ * **Issue #358's own "the behaviour holds... in Search" criterion.** This
+ * page's "Show completed" checkbox above is untouched — it stays the one
+ * door that decides whether a completed Task is searched at all, exactly
+ * as issue #183 built it, independent of `completedTasksVisible`
+ * (lib/settings.ts). What changes is the *shape* of a result set once that
+ * checkbox does let completed matches through: they used to sort into one
+ * merged, interleaved list alongside active matches; now they render in
+ * their own trailing block below the active matches, paginated by
+ * `useCompletedTasksPage` — the identical shape Inbox/Project/Filter now
+ * all use for a completed block (`ROW-14`, parity-ledger.md).
  */
 import type { Comment, Project, Task } from "@meologue/core";
 import { matchesSubstring, matchesWholeWord } from "@meologue/core";
 import { Check } from "lucide-react";
 import { useEffect, useMemo, useRef } from "react";
 import { useSearchParams } from "react-router";
+import { CompletedTasksLoadMore } from "@/components/todo/completed-tasks-load-more";
+import { useCompletedTasksPage } from "@/hooks/use-completed-tasks-page";
 import { projectNameFor } from "@/lib/project-name";
 import { cn } from "@/lib/utils";
 
@@ -104,17 +117,42 @@ export function TaskSearchPage({
   // header comment. Creation order (id is a time-ordered uuidv7, ../../
   // ../packages/core/src/id.ts), the same "no relevance re-ranking"
   // ordering TaskStore.search itself uses.
-  const taskResults = useMemo(() => {
+  //
+  // Issue #358: split into `activeTaskResults`/`completedTaskResults`
+  // rather than one merged, sorted array — each still ordered by creation
+  // exactly as before, but rendered as two blocks (this file's own header
+  // comment) instead of interleaved together.
+  const activeTaskResults = useMemo(() => {
     const trimmed = query.trim();
     if (trimmed === "") {
       return [];
     }
     const matcher = includeCompleted ? matchesWholeWord : matchesSubstring;
-    const candidates = includeCompleted ? [...tasks, ...completedTasks] : tasks;
-    return candidates
+    return tasks
       .filter((t) => matcher(t.content, trimmed) || matcher(t.description, trimmed))
       .sort((a, b) => (a.createdAt < b.createdAt ? -1 : a.createdAt > b.createdAt ? 1 : 0));
-  }, [tasks, completedTasks, query, includeCompleted]);
+  }, [tasks, query, includeCompleted]);
+
+  const completedTaskResults = useMemo(() => {
+    const trimmed = query.trim();
+    if (trimmed === "" || !includeCompleted) {
+      // "Show completed" itself is what decides whether a completed Task
+      // is searched at all (this file's own header comment) — unrelated
+      // to `completedTasksVisible`, which this page never reads.
+      return [];
+    }
+    return completedTasks
+      .filter(
+        (t) => matchesWholeWord(t.content, trimmed) || matchesWholeWord(t.description, trimmed),
+      )
+      .sort((a, b) => (a.createdAt < b.createdAt ? -1 : a.createdAt > b.createdAt ? 1 : 0));
+  }, [completedTasks, query, includeCompleted]);
+
+  const completedResultsPage = useCompletedTasksPage(completedTaskResults.length);
+  const visibleCompletedTaskResults = completedTaskResults.slice(
+    0,
+    completedResultsPage.visibleCount,
+  );
 
   const commentResults = useMemo(() => {
     const trimmed = query.trim();
@@ -201,41 +239,50 @@ export function TaskSearchPage({
           Type to search Task titles, Descriptions and Comments.
         </p>
       ) : tab === "tasks" ? (
-        taskResults.length === 0 ? (
+        activeTaskResults.length === 0 && completedTaskResults.length === 0 ? (
           <p className="px-1 py-6 text-center text-muted-foreground text-sm">No matches</p>
         ) : (
-          <ul className="flex flex-col gap-0.5">
-            {taskResults.map((task) => {
-              const completed = task.completedAt !== null;
-              return (
-                <li key={task.id} className="flex items-center gap-2 rounded-md px-2 py-2 text-sm">
-                  <button
-                    type="button"
-                    aria-label={completed ? "Mark as not done" : undefined}
-                    onClick={() => (completed ? onUncompleteTask(task.id) : undefined)}
-                    className={cn(
-                      "flex size-4 shrink-0 items-center justify-center rounded-full border",
-                      completed && "border-primary bg-primary text-primary-foreground",
-                    )}
-                  >
-                    {completed && <Check aria-hidden="true" className="size-3" />}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => onOpenTask(task)}
-                    className="flex min-w-0 flex-1 flex-col items-start text-left"
-                  >
-                    <span className={cn("truncate", completed && "completed-task-text")}>
-                      {task.content}
-                    </span>
-                    <span className="truncate text-muted-foreground text-xs">
-                      {projectNameFor(projects, task.projectId)}
-                    </span>
-                  </button>
-                </li>
-              );
-            })}
-          </ul>
+          <>
+            {activeTaskResults.length > 0 && (
+              <ul className="flex flex-col gap-0.5">
+                {activeTaskResults.map((task) => (
+                  <TaskResultRow
+                    key={task.id}
+                    task={task}
+                    projects={projects}
+                    onOpenTask={onOpenTask}
+                    onUncompleteTask={onUncompleteTask}
+                  />
+                ))}
+              </ul>
+            )}
+            {/*
+              Issue #358: a completed match's own trailing block, below the
+              active matches rather than merged among them — this file's
+              own header comment on why this is the one thing that changed
+              here. Only ever non-empty once "Show completed" is checked,
+              which is what `completedTaskResults` above already gates.
+            */}
+            {visibleCompletedTaskResults.length > 0 && (
+              <>
+                <ul className="flex flex-col gap-0.5">
+                  {visibleCompletedTaskResults.map((task) => (
+                    <TaskResultRow
+                      key={task.id}
+                      task={task}
+                      projects={projects}
+                      onOpenTask={onOpenTask}
+                      onUncompleteTask={onUncompleteTask}
+                    />
+                  ))}
+                </ul>
+                <CompletedTasksLoadMore
+                  remaining={completedResultsPage.remaining}
+                  onLoadMore={completedResultsPage.loadMore}
+                />
+              </>
+            )}
+          </>
         )
       ) : commentResults.length === 0 ? (
         <p className="px-1 py-6 text-center text-muted-foreground text-sm">No matches</p>
@@ -269,5 +316,51 @@ export function TaskSearchPage({
         </ul>
       )}
     </div>
+  );
+}
+
+/**
+ * One Task result's own row — active or completed alike, extracted only so
+ * `TaskSearchPage` above can render the identical row twice (the active
+ * block, then issue #358's own completed block) without duplicating the
+ * checkbox/uncomplete markup. Unchanged from before this ticket beyond the
+ * extraction itself.
+ */
+function TaskResultRow({
+  task,
+  projects,
+  onOpenTask,
+  onUncompleteTask,
+}: {
+  task: Task;
+  projects: Project[];
+  onOpenTask: (task: Task) => void;
+  onUncompleteTask: (taskId: string) => void;
+}) {
+  const completed = task.completedAt !== null;
+  return (
+    <li className="flex items-center gap-2 rounded-md px-2 py-2 text-sm">
+      <button
+        type="button"
+        aria-label={completed ? "Mark as not done" : undefined}
+        onClick={() => (completed ? onUncompleteTask(task.id) : undefined)}
+        className={cn(
+          "flex size-4 shrink-0 items-center justify-center rounded-full border",
+          completed && "border-primary bg-primary text-primary-foreground",
+        )}
+      >
+        {completed && <Check aria-hidden="true" className="size-3" />}
+      </button>
+      <button
+        type="button"
+        onClick={() => onOpenTask(task)}
+        className="flex min-w-0 flex-1 flex-col items-start text-left"
+      >
+        <span className={cn("truncate", completed && "completed-task-text")}>{task.content}</span>
+        <span className="truncate text-muted-foreground text-xs">
+          {projectNameFor(projects, task.projectId)}
+        </span>
+      </button>
+    </li>
   );
 }

@@ -1214,6 +1214,7 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
           <FilterView
             filter={currentFilter}
             tasks={tasks}
+            completedTasks={completedTasks}
             projects={projects}
             labels={labels}
             listSections={listSections}
