@@ -4,7 +4,6 @@ import { useQuery } from "@tanstack/react-query";
 import { Search } from "lucide-react";
 import { Suspense, useEffect, useMemo, useState } from "react";
 import { Link, useLocation, useNavigate, useParams, useSearchParams } from "react-router";
-import { toast } from "sonner";
 import { BackToChats } from "@/components/back-to-chats";
 import { inlineProse } from "@/components/inline-prose";
 import { Shell } from "@/components/shell";
@@ -30,6 +29,7 @@ import { TodoKeyboardShortcutsOverlay } from "@/components/todo/todo-keyboard-sh
 import { TodoNav } from "@/components/todo/todo-nav";
 import { UpcomingView } from "@/components/todo/upcoming-view";
 import { ConfirmDialog } from "@/components/ui/alert-dialog";
+import { toast } from "@/components/ui/toast";
 import { useCompletionToast } from "@/hooks/use-completion-toast";
 import { useTodoKeymap } from "@/hooks/use-todo-keymap";
 import { useTodoSidebarLayout } from "@/hooks/use-wide-layout";

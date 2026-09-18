@@ -623,7 +623,21 @@ const CHUNK_BUDGETS = {
   // since PR #259 (the entry immediately above), and widening it now would
   // hide the next regression the same way the last three tickets' silent
   // drift already did.
-  "src/pages/todo-page.tsx": { ceilingBytes: 99_317, baselineBytes: 99_280 },
+  //
+  // Issue #357 replaced `sonner` with a hand-rolled wrapper over Radix's
+  // `Toast` primitive (`components/ui/toast.tsx`) — `radix-ui` was already
+  // a dependency (every other Radix-backed component in this app imports
+  // from it), so this shipped no new third-party package, only a small
+  // first-party queue/store plus Tailwind classes reusing tokens already
+  // paid for elsewhere. Genuinely lighter than sonner's own bundled CSS
+  // and animation machinery: measured 92,795 gzip immediately after
+  // landing, 6,485 bytes BELOW the 99,280 this ticket started from.
+  // Re-baselined downward rather than left wide, per this route's own
+  // stated policy just above — a ceiling that stayed at 99,317 would hide
+  // a regression back toward sonner's own weight the same way a wide
+  // ceiling hid the last three tickets' drift. `ceilingBytes` keeps the
+  // identical 37-byte headroom this row has carried since PR #259.
+  "src/pages/todo-page.tsx": { ceilingBytes: 92_832, baselineBytes: 92_795 },
 };
 
 /**

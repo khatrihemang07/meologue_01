@@ -1,6 +1,6 @@
 import { renderHook } from "@testing-library/react";
-import { toast } from "sonner";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { toast } from "@/components/ui/toast";
 import { COMPLETION_TOAST_DURATION_MS } from "@/platform/completion-toast-duration";
 import { useCompletionToast } from "./use-completion-toast";
 
@@ -12,8 +12,8 @@ import { useCompletionToast } from "./use-completion-toast";
 // vitest's "test" mode would only prove the web fallback works, and would
 // look like a broken seam the day Android's figure is asserted the same
 // way.
-vi.mock("sonner", () => {
-  const toast = vi.fn() as unknown as typeof import("sonner").toast;
+vi.mock("@/components/ui/toast", () => {
+  const toast = vi.fn() as unknown as typeof import("@/components/ui/toast").toast;
   let nextCustomToastId = 1;
   // biome-ignore lint/suspicious/noExplicitAny: attaching mock methods to a mock function, the same shape sonner's own `toast` carries in production.
   (toast as any).custom = vi.fn(() => `custom-toast-${nextCustomToastId++}`);

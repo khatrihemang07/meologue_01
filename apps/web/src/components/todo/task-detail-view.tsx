@@ -86,7 +86,6 @@ import { DropdownMenu } from "radix-ui";
 import type * as React from "react";
 import { forwardRef, Suspense, useEffect, useRef, useState } from "react";
 import { useOutletContext } from "react-router";
-import { toast } from "sonner";
 import { entryProse } from "@/components/entry-prose";
 import { inlineProse } from "@/components/inline-prose";
 import { LazyActivityFeed } from "@/components/todo/lazy-activity-feed";
@@ -102,6 +101,7 @@ import {
   DialogPortal,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { toast } from "@/components/ui/toast";
 import { useAutoGrowTextarea } from "@/hooks/use-auto-grow-textarea";
 import { useTaskDateState } from "@/hooks/use-task-date-state";
 import { useWideLayout } from "@/hooks/use-wide-layout";

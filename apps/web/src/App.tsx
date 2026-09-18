@@ -1,6 +1,6 @@
 import { lazy, Suspense } from "react";
 import { BrowserRouter, Navigate, Route, Routes } from "react-router";
-import { Toaster } from "@/components/ui/sonner";
+import { Toaster } from "@/components/ui/toast";
 import { useBackButton } from "@/hooks/use-back-button";
 import { lastTodoPath } from "@/lib/last-todo-view";
 import { ChatListPage } from "@/pages/chat-list-page";

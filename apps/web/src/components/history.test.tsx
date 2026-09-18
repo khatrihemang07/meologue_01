@@ -11,8 +11,8 @@ import {
 } from "@testing-library/react";
 import type { ReactElement, ReactNode } from "react";
 import { MemoryRouter, Outlet, Route, Routes, useLocation } from "react-router";
-import { toast } from "sonner";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { toast } from "@/components/ui/toast";
 import { copyText } from "@/lib/clipboard";
 import * as entryDayModule from "@/lib/entry-day";
 import { formatTaskReference } from "@/lib/inline-markdown";
@@ -58,7 +58,7 @@ function render(ui: ReactElement, options?: RenderOptions): RenderResult {
 // jsdom has no clipboard worth exercising, and `<Toaster />` is mounted by
 // App, not by History.
 vi.mock("@/lib/clipboard", () => ({ copyText: vi.fn() }));
-vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
+vi.mock("@/components/ui/toast", () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
 
 function entry(overrides: Partial<Entry>): Entry {
   return {

@@ -13,8 +13,8 @@ import type {
   UnzipBackupResult,
 } from "@meologue/core";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { toast } from "sonner";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { toast } from "@/components/ui/toast";
 import type {
   FetchServerBackupResult,
   RebuildMismatchedEmbeddingsResult,

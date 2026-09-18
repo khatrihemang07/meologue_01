@@ -59,8 +59,8 @@ export default defineConfig(({ mode }) => {
           // The composer may hold a half-typed Entry when a new version
           // deploys — "autoUpdate" would reload out from under the user and
           // discard it. "prompt" hands control to registerServiceWorker
-          // (@/platform/register-service-worker), which shows a sonner
-          // toast offering to reload instead.
+          // (@/platform/register-service-worker), which shows a toast
+          // (@/components/ui/toast) offering to reload instead.
           registerType: "prompt",
           // Registration is called explicitly from main.tsx via the
           // register-service-worker platform seam, not injected as a

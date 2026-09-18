@@ -1,15 +1,15 @@
 import type { Task } from "@meologue/core";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { toast } from "sonner";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { toast } from "@/components/ui/toast";
 import { LONG_PRESS_MS } from "@/lib/swipe-recognizer";
 import { OPEN_SCHEDULE_EVENT } from "@/lib/todo-keymap";
 import { mouseDragLeft, swipeDown, swipeLeft } from "@/test/swipe";
 import { TaskTree } from "./task-tree";
 
-vi.mock("sonner", () => {
-  const toast = vi.fn() as unknown as typeof import("sonner").toast;
+vi.mock("@/components/ui/toast", () => {
+  const toast = vi.fn() as unknown as typeof import("@/components/ui/toast").toast;
   // biome-ignore lint/suspicious/noExplicitAny: attaching a mock method to a mock function — see todo-page.test.tsx's identical comment.
   (toast as any).error = vi.fn();
   return { toast };

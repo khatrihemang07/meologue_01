@@ -15,7 +15,6 @@ import {
   useState,
 } from "react";
 import { Link, useNavigate } from "react-router";
-import { toast } from "sonner";
 import { DatePickerSheet } from "@/components/date-picker-sheet";
 import { EntryActionsSheet } from "@/components/entry-actions";
 import { EntryBubble } from "@/components/entry-bubble";
@@ -23,6 +22,7 @@ import { entrySnippet } from "@/components/entry-row";
 import { HistoryScrollContext } from "@/components/shell";
 import { TaskScheduleChips } from "@/components/task-schedule-chips";
 import { ConfirmDialog } from "@/components/ui/alert-dialog";
+import { toast } from "@/components/ui/toast";
 import { useDayReferrers } from "@/hooks/use-day-referrers";
 import { useSwipeActions } from "@/hooks/use-swipe-actions";
 import { copyText } from "@/lib/clipboard";

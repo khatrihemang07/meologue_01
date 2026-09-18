@@ -1,9 +1,9 @@
 import { Suspense, useState } from "react";
-import { toast } from "sonner";
 import { DeviceGroup } from "@/components/settings/device-group";
 import { LazyDestructiveConfirmDialog as DestructiveConfirmDialog } from "@/components/settings/lazy-destructive-confirm-dialog";
 import { SettingsSection } from "@/components/settings/settings-section";
 import { Button } from "@/components/ui/button";
+import { toast } from "@/components/ui/toast";
 import {
   fetchServerBackup,
   rebuildMismatchedEmbeddings,

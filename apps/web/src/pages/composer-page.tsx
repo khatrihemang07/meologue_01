@@ -1,13 +1,13 @@
 import type { Entry, Task } from "@meologue/core";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useLocation, useNavigate, useSearchParams } from "react-router";
-import { toast } from "sonner";
 import { BackToChats } from "@/components/back-to-chats";
 import { Composer, type ComposerHandle } from "@/components/composer";
 import { History, type HistorySeekTarget } from "@/components/history";
 import { Shell } from "@/components/shell";
 import { TaskDetailView } from "@/components/todo/task-detail-view";
 import { TaskScheduleSheet } from "@/components/todo/task-schedule-sheet";
+import { toast } from "@/components/ui/toast";
 import { useCompletionToast } from "@/hooks/use-completion-toast";
 import { useCompletionUndoShortcut } from "@/hooks/use-completion-undo-shortcut";
 import { useHistorySearch } from "@/hooks/use-history-search";

@@ -12,8 +12,8 @@ import {
   useLocation,
   useNavigate,
 } from "react-router";
-import { toast } from "sonner";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { toast } from "@/components/ui/toast";
 import { TODO_SIDEBAR_QUERY, WIDE_LAYOUT_QUERY } from "@/hooks/use-wide-layout";
 import {
   clearLastTodoView,
@@ -81,8 +81,8 @@ vi.mock("@/pages/entry-store-layout", async (importOriginal) => {
 // `CompletionToastBody` element and render it, and `.dismiss` records the
 // id either `raise`'s own Undo handler or a later completion replacing it
 // closes.
-vi.mock("sonner", () => {
-  const toast = vi.fn() as unknown as typeof import("sonner").toast;
+vi.mock("@/components/ui/toast", () => {
+  const toast = vi.fn() as unknown as typeof import("@/components/ui/toast").toast;
   // biome-ignore lint/suspicious/noExplicitAny: attaching mock methods to a mock function, the same shape sonner's own `toast` carries in production (a callable object with `.error`/`.custom`/`.dismiss` etc as properties).
   (toast as any).error = vi.fn();
   let nextCustomToastId = 1;
@@ -846,10 +846,15 @@ describe("TodoPage", () => {
   // `toast.custom()` (the shared `useCompletionToast` hook's own `raise`,
   // `use-completion-toast.tsx` — completion-toast.tsx's own header comment
   // has the full reasoning), so this asserts against the real
-  // `CompletionToastBody` element the `jsx` callback produces — a
-  // `role="alert"` element containing the message and a real "Undo"
-  // `<button>` — rather than against `toast`'s call args the way the old
-  // plain-`toast()` shape allowed.
+  // `CompletionToastBody` element the `jsx` callback produces — the
+  // message and a real "Undo" `<button>` — rather than against `toast`'s
+  // call args the way the old plain-`toast()` shape allowed. Issue #357
+  // moved the `role`/`aria-live` announcement off this body and onto
+  // `components/ui/toast.tsx`'s own `Toaster` (Radix's native accessible
+  // announcer), so rendering the bare `jsx` factory standalone here — with
+  // no `Toaster` above it — no longer exposes a `role="alert"` element to
+  // query by; `toast.test.tsx` covers that announcement against the real
+  // `Toaster` instead.
   it("completes a Task and offers an Undo toast wired to uncompleteTask", async () => {
     const completeTask = vi.fn();
     const uncompleteTask = vi.fn();
@@ -875,12 +880,11 @@ describe("TodoPage", () => {
     const [jsxFactory] = customCall;
     render(jsxFactory("toast-a"));
 
-    const alertToast = screen.getByRole("alert");
     // CMT-04: Todoist's own task-agnostic, count-based wording, not the
     // task-specific `Completed "<name>"` this replaced.
-    expect(alertToast).toHaveTextContent("1 task completed");
+    expect(screen.getByText("1 task completed")).toBeInTheDocument();
 
-    fireEvent.click(within(alertToast).getByRole("button", { name: "Undo" }));
+    fireEvent.click(screen.getByRole("button", { name: "Undo" }));
     expect(uncompleteTask).toHaveBeenCalledWith("a");
     // The Undo click has to dismiss the toast itself now (completion-toast.tsx's
     // own header comment) — sonner's own `action` button did this for free;

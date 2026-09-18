@@ -1,10 +1,10 @@
 import type { Task } from "@meologue/core";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { useState } from "react";
 import { MemoryRouter, Outlet, Route, Routes, useNavigate, useSearchParams } from "react-router";
-import { toast } from "sonner";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { toast } from "@/components/ui/toast";
 import { formatTaskReference } from "@/lib/inline-markdown";
 import { useSettingsStore } from "@/lib/settings";
 import type { EntryStoreOutletContext } from "@/pages/entry-store-layout";
@@ -21,8 +21,8 @@ import { ComposerPage } from "./composer-page";
 // itself to render the real `CompletionToastBody`, and `.dismiss` records
 // the id closed either by the toast's own Undo button or by a later
 // completion replacing it).
-vi.mock("sonner", () => {
-  const toast = vi.fn() as unknown as typeof import("sonner").toast;
+vi.mock("@/components/ui/toast", () => {
+  const toast = vi.fn() as unknown as typeof import("@/components/ui/toast").toast;
   // biome-ignore lint/suspicious/noExplicitAny: attaching mock methods to a mock function, the same shape sonner's own `toast` carries in production (a callable object with `.error`/`.custom`/`.dismiss` etc as properties).
   (toast as any).error = vi.fn();
   let nextCustomToastId = 1;
@@ -1903,7 +1903,12 @@ describe("ComposerPage", () => {
     // `todo-page.test.tsx`'s own "completes a Task and offers an Undo
     // toast wired to uncompleteTask" test asserts it there: against the
     // real `CompletionToastBody` element the `jsx` callback produces, not
-    // against `toast`'s own call args.
+    // against `toast`'s own call args. Issue #357 moved the announcement
+    // itself off this body and onto `components/ui/toast.tsx`'s own
+    // `Toaster` (Radix's native accessible announcer) — `toast.test.tsx`
+    // covers that against the real `Toaster`, so rendering the bare `jsx`
+    // factory standalone here no longer has a `role="alert"` element to
+    // query by.
     it("completing a Task from the overlay raises an announced Undo toast wired to uncompleteTask", () => {
       const completeTask = vi.fn();
       const uncompleteTask = vi.fn();
@@ -1932,10 +1937,9 @@ describe("ComposerPage", () => {
       const [jsxFactory] = customCall;
       render(jsxFactory("toast-a"));
 
-      const alertToast = screen.getByRole("alert");
-      expect(alertToast).toHaveTextContent('Completed "buy milk"');
+      expect(screen.getByText('Completed "buy milk"')).toBeInTheDocument();
 
-      fireEvent.click(within(alertToast).getByRole("button", { name: "Undo" }));
+      fireEvent.click(screen.getByRole("button", { name: "Undo" }));
       expect(uncompleteTask).toHaveBeenCalledWith(taskId);
       expect(toast.dismiss).toHaveBeenCalledWith("toast-a");
     });

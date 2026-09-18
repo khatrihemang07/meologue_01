@@ -1,6 +1,6 @@
 import { useRef } from "react";
-import { toast } from "sonner";
 import { CompletionToastBody } from "@/components/todo/completion-toast";
+import { toast } from "@/components/ui/toast";
 import { COMPLETION_TOAST_DURATION_MS } from "@/platform/completion-toast-duration";
 
 /**

@@ -2,16 +2,16 @@ import type { Comment, Event, Label, Project, Section, Task } from "@meologue/co
 import { fireEvent, render, screen, within } from "@testing-library/react";
 import { useEffect, useRef, useState } from "react";
 import { MemoryRouter } from "react-router";
-import { toast } from "sonner";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { toast } from "@/components/ui/toast";
 import { TaskDetailView } from "./task-detail-view";
 
-// DET-16 — mirrors `todo-page.test.tsx`'s own `vi.mock("sonner", ...)` shape
+// DET-16 — mirrors `todo-page.test.tsx`'s own `vi.mock("@/components/ui/toast", ...)` shape
 // (that file's own header comment on why): `toast` is a plain callable here
 // (no `.error`, unlike that file), since this view never raises an error
 // toast of its own.
-vi.mock("sonner", () => {
-  const toast = vi.fn() as unknown as typeof import("sonner").toast;
+vi.mock("@/components/ui/toast", () => {
+  const toast = vi.fn() as unknown as typeof import("@/components/ui/toast").toast;
   return { toast };
 });
 
