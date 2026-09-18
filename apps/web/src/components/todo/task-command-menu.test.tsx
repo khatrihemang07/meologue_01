@@ -213,10 +213,6 @@ describe("TaskCommandMenu", () => {
     expect(onSetPriority).toHaveBeenCalledWith(4);
   });
 
-  // Ledger row PRI-02: Todoist's own picker exposes the identically-
-  // inverted value as `data-value` on each item (P1 -> "4" … P4 -> "1",
-  // live-audit-dom/flow3-PRI-01-02-03-todoist.json). Structural DOM
-  // parity only — the inversion itself already matched before this.
   it("exposes the stored (inverted) priority as data-value on each picker item", () => {
     renderMenu();
 

@@ -1,34 +1,3 @@
-/**
- * Every Label — issue #229's own gap: `use-labels.ts`'s own pre-#229
- * header comment states it plainly, "`rename`/`setColour`/`remove` exist
- * in core and are wired to no UI at all," and there was no `/todo/labels`
- * route for one to live behind.
- *
- * **STR-04 and STR-05 (meologue-reference/todoist/parity-ledger.md).** This
- * screen used to do create/rename/recolour inline on the row, following
- * `projects-view.tsx`'s own shape. The 2026-09-13 live audit
- * (`live-audit-dom/flow9-STR-04-todoist.json`,
- * `flow9-STR-05-todoist.json`) recorded Todoist doing all three through a
- * modal (`label-dialog.tsx`'s own `LabelDialog`, "Add label" / "Edit
- * label") reached from an "Add new label" button and a per-row options
- * menu — Edit · Add to favorites · Move to shared labels · Copy link to
- * label · Delete, in that DOM order. The user decided on 2026-09-13 to
- * match that shape. This file now builds the menu with only the two
- * items that apply: Edit (opens `LabelDialog`) and Delete (opens the
- * `ConfirmDialog` below, unchanged). "Add to favorites", "Move to shared
- * labels" and "Copy link to label" have nothing to be built against —
- * `label-types.ts` carries no favourite or shared-Label field, and there
- * is no per-Label route for a link to point at — exactly as this file's
- * own pre-2026-09-13 header comment already argued for the inline shape;
- * that argument still holds for the menu shape.
- *
- * **Flat, unlike Projects.** A Label carries no `parentId` (../../../
- * packages/core/src/label-types.ts) — there is nothing here for
- * `depthOf` (projects-view.tsx) to compute, and no favourite/archived
- * flag either (that type's own doc comment never grew either field,
- * unlike Project's), so this view offers exactly what the type supports:
- * a name, a colour, and a delete.
- */
 import type { Label } from "@meologue/core";
 import { MoreHorizontal } from "lucide-react";
 import { DropdownMenu } from "radix-ui";

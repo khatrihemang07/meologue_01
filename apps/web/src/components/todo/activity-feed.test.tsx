@@ -205,9 +205,6 @@ describe("ActivityFeed", () => {
     expect(row.textContent).toContain("Buy milk");
   });
 
-  // CMT-06, re-driven live (flow 5): Todoist shows `{content}` unquoted,
-  // as a preview chip — never wrapped in literal quote marks the way this
-  // app used to render it.
   it("renders a comment's own content unquoted, as a preview chip", () => {
     render(
       <ActivityFeed
@@ -230,12 +227,6 @@ describe("ActivityFeed", () => {
     expect(row.textContent).not.toContain('"sounds good"');
   });
 
-  // CMT-06 (re-driven live, flow 5) reverses this app's own earlier
-  // divergence: Todoist's activity log has no line at all for a comment
-  // edit, so an old "updated" comment Event — the shape a store or a
-  // restored backup can still carry from before use-comments.ts stopped
-  // recording one — must render nothing, not a leftover "Edited a
-  // comment" row.
   it("hides an old-shaped comment 'updated' Event entirely, rather than showing 'Edited a comment'", () => {
     render(
       <ActivityFeed
@@ -257,10 +248,6 @@ describe("ActivityFeed", () => {
     expect(screen.getByText("Nothing here yet.")).toBeInTheDocument();
   });
 
-  // CMT-06, re-driven live (flow 5): Todoist shows a Task subject's bare
-  // name, with no leading glyph — `SubjectChip`'s own comment
-  // (activity-feed.tsx) has the full account of why only the "○" glyph is
-  // dropped and not the Project/Section ones.
   it("shows a Task subject's bare name, with no leading glyph", () => {
     render(
       <ActivityFeed events={[event({ eventType: "added" })]} tasks={[task()]} projects={[]} />,
@@ -271,7 +258,7 @@ describe("ActivityFeed", () => {
     expect(row.textContent).not.toContain("○");
   });
 
-  it("still shows a Project subject's own glyph — CMT-06 never measured that one live", () => {
+  it("still shows a Project subject's own glyph — never measured that one live", () => {
     render(
       <ActivityFeed
         events={[
@@ -290,10 +277,6 @@ describe("ActivityFeed", () => {
     expect(row.textContent).toContain("Groceries");
   });
 
-  // CMT-06's own content-preview chip is a plain-text flattening, not raw
-  // markdown source — `flattenCommentPreview` (inline-markdown.ts) is what
-  // reproduces Todoist's own two measured strings; this is the render-side
-  // proof that `describeEventLine` actually calls it.
   it("flattens a comment's own markdown in the content-preview chip, rather than showing raw source", () => {
     render(
       <ActivityFeed

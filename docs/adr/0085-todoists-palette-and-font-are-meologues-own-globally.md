@@ -6,8 +6,8 @@ Accepted. **Supersedes [0069](0069-todo-renders-through-its-own-token-scope.md)*
 `[data-surface="todo"]` token scope that ADR built is deleted, not narrowed. Reverses 0069's own
 rejected alternative #1 ("repaint the whole application in Todoist's palette") deliberately, with
 its stated cost now accepted rather than refused. Also retires the four-value "completed checklist
-item" Settings option (issue #163), and corrects `THEME-01`'s status in the parity ledger from
-`blocked` to `divergent` (closed by decision on 2026-09-11).
+item" Settings option (issue #163), and records the light-theme difference as a settled decision
+rather than an open gap (made on 2026-09-11).
 
 ## Context
 
@@ -67,15 +67,14 @@ unchanged in value, just unconditional now instead of attribute-gated.
 
 **The four-value "completed checklist item" Settings option (issue #163) is retired.** It offered a
 choice between UpNote's four looks for a ticked checklist item; Todo's own rows never obeyed it
-(ROW-15 pinned them to Todoist's always-struck-through grey regardless), so once the rest of the app
+(they were pinned to Todoist's always-struck-through grey regardless), so once the rest of the app
 adopts Todoist's palette wholesale, carrying a Settings option that Todo itself never listened to
 stops making sense as a separate axis. `lib/settings.ts`'s `CompletedStyleId`, `COMPLETED_STYLES`,
 `DEFAULT_COMPLETED_STYLE` and their storage helpers are deleted; `lib/theme.ts`'s
 `applyCompletedStyle` is deleted; the picker (`composer-section.tsx`, `completed-style-row.tsx`) is
 deleted; `apps/e2e/tests/completed-style.spec.ts` is deleted. `--checked-list-text-decoration` and
 `--checked-list-text-color` become fixed `:root` values — line-through, Todoist's own grey — so
-History, the Composer and Todo render a completed item identically, everywhere, always. ROW-15 stays
-`matched`: it was already asking for exactly this look on Todo's own rows.
+History, the Composer and Todo render a completed item identically, everywhere, always.
 
 A stored `meologue.completed-style` value is tolerated, not migrated. `lib/settings.ts`'s generic
 `applyDeviceSettings` writes any `meologue.*` key through unconditionally on a Restore, with no
@@ -83,12 +82,10 @@ per-key allowlist — a Device that restores an old backup, or one that simply s
 before this change, keeps it sitting in `localStorage`. Nothing reads it any more, so nothing needs
 to guard against it: silence is the whole of the tolerance.
 
-**`THEME-01`'s stale status is corrected.** ADR 0069 and `index.css` both recorded it as `blocked`,
-pending a light-theme capture pass. The ledger has recorded it as `divergent` since 2026-09-11, on
-the owner's decision that "meologue's light theme is its own design, not a replica, and light-mode
-parity rows are no longer tracked" — no capture pass was ever coming, and this decision predates
-this ADR by a week. Both in-repo references are corrected to match; the ledger itself is untouched
-here.
+**The light-theme gap is a settled decision, not an open question.** ADR 0069 and `index.css` both
+recorded it as pending a light-theme capture pass. The owner decided on 2026-09-11 that "meologue's
+light theme is its own design, not a replica" — no capture pass was ever coming, and that decision
+predates this ADR by a week. Both in-repo references are corrected to match.
 
 ## Consequences
 
@@ -116,8 +113,8 @@ disagreed with whatever the other three surfaces had chosen, and issue #351 does
 switch to close that gap when the alternative is removing the switch entirely.
 
 **Light theme stays an unverified approximation**, exactly as ADR 0069 shipped it — this ADR moves
-where those values live, not what they are — but it is no longer tracked as an open gap. `THEME-01`
-is closed `divergent`; there will be no future light-theme capture pass to close it further.
+where those values live, not what they are — but it is no longer tracked as an open gap; there will
+be no future light-theme capture pass.
 
 ## Alternatives considered
 
@@ -129,9 +126,9 @@ is closed `divergent`; there will be no future light-theme capture pass to close
   re-font half of the jitter while leaving the neutral re-paint half untouched, and kept every
   claim/release/portal-re-declaration mechanism this ADR deletes. A partial fix to a mechanism this
   ADR concludes should not exist at all.
-- **Keep the four-value completed-style option, make it apply to Todo too.** Rejected: ROW-15 is a
-  parity row, not a preference — Todoist's own completed rows are not optional, so making Todo obey
-  a fifth, "Todoist" completed-style value would have meant either breaking parity when a reader
-  picked one of the other four, or a fifth choice that always just re-selected itself back to what
+- **Keep the four-value completed-style option, make it apply to Todo too.** Rejected: Todo's
+  completed-row look is a fixed decision, not a preference — Todoist's own completed rows are not
+  optional, so making Todo obey a fifth, "Todoist" completed-style value would have meant either
+  departing from that look when a reader picked one of the other four, or a fifth choice that always just re-selected itself back to what
   Todo already did unconditionally. Deleting the choice is simpler and matches what Todo already
   enforced.

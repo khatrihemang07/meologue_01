@@ -217,16 +217,6 @@ export const TEXT_SIZES: { id: TextSizeId; label: string }[] = [
 
 export const DEFAULT_TEXT_SIZE: TextSizeId = "default";
 
-// A checked checklist item's own text used to be one of four Device-local
-// looks here (issue #163, matching UpNote) — `CompletedStyleId`,
-// `COMPLETED_STYLES`, `DEFAULT_COMPLETED_STYLE` ("gray", UpNote's own
-// default). Issue #351 retires the choice: Todoist's own always-struck-through
-// grey (ROW-15) is now the one look this app ever renders, in History, the
-// Composer and Todo alike, so there is no id list left to validate a stored
-// value against. See the `meologue.completed-style` comment near the top
-// of this file for how a value from before this change is tolerated, not
-// migrated.
-
 /**
  * The Destinations a reader can hide from the root screen's list (issue
  * #134, extended to Todo by issue #168) — Composer, Reflect, Digest and
@@ -408,28 +398,6 @@ function writeStoredSmartDatesEnabled(enabled: boolean): void {
   }
 }
 
-/**
- * Issue #358: whether a completed Task ever renders at all in Inbox, a
- * Project's own view, a Filter's own matches, or Search's own matches —
- * Device-local, exactly like `smartDatesEnabled`/`formatBarVisible` above,
- * and stored the identical `"true"`/`"false"` way for the identical reason
- * (no finite id list a corrupt value could be validated against).
- *
- * Defaults to **off**, matching Todoist's own measured default (issue
- * #350's live drive, both web and Android, `ROW-14` in the parity ledger):
- * completing a Task there makes its row disappear immediately, with no
- * completed block and no Load-more control, and it stays gone after a
- * reload/relaunch. Before this ticket meologue instead interleaved every
- * completed Task inline, in place, among its active siblings, unconditionally
- * — a divergence introduced by a parity fix (`5e8c073`/`5f3ce95`) built on a
- * ledger row that a later live drive disproved. Switching this **on**
- * matches the other measured state: completed Tasks relocate out of the
- * active list into their own block below it, with a control to load older
- * ones (`useCompletedTasksPage`, `hooks/use-completed-tasks-page.ts`) — the
- * `+N completed tasks` control both platforms showed is a page-size hint,
- * not a growing expander, so this app's own version keeps the exact same
- * shape rather than a live count of anything.
- */
 export const DEFAULT_COMPLETED_TASKS_VISIBLE = false;
 
 function readStoredCompletedTasksVisible(): boolean {

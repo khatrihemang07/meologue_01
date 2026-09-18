@@ -1,135 +1,3 @@
-/**
- * The global Quick Add modal (issue #260 — NAV-07, QA-13/QA-15/QA-16/
- * QA-18, PRI-04, parity ledger). Opened from anywhere in Todo — the
- * sidebar's "Add task" button (`todo-sidebar.tsx`) and the `q` key
- * (`todo-keymap.ts`'s `quick-add` binding, driven live in `keyboard.md`'s
- * own "Quick Add (opened with Q for inspection only...)" capture) both
- * dispatch `OPEN_QUICK_ADD_EVENT`, which `todo-page.tsx` listens for and
- * turns into this dialog's own `open` state — the identical document-event
- * fan-in `OPEN_COMMAND_MENU_EVENT`/`OPEN_SCHEDULE_EVENT` already use
- * (`todo-keymap.ts`'s own doc comments), needed here because the sidebar
- * sits outside `EntryStoreLayout`'s Outlet and cannot call `handleAdd`
- * directly (`todo-sidebar.tsx`'s own header comment on that structural
- * split).
- *
- * **Geometry, from the one live-measured artifact this ticket has**
- * (`meologue-reference/todoist/live-audit-dom/quickadd-dialog-todoist.json`,
- * identity asserted `role="dialog"` `aria-label="Quick Add"`, dark theme):
- * 580×66px at rest, 580×97px once a date is recognised, radius 12px,
- * padding 16px on all four sides, border `1px solid rgb(61,61,61)`,
- * background `rgb(40,40,40)`, shadow `rgba(0,0,0,.2) 0 4px 8px`. Width,
- * padding, radius, border and background all read off
- * `--td-composer-*`/`--muted-foreground`-adjacent tokens `index.css`
- * already declares (QA-16's own "trap for whoever builds this": those
- * tokens existed with zero consumers before this file). Height is NOT
- * set explicitly anywhere below — 66px vs 97px is what the box model
- * already produces once the Remove-date row is conditionally rendered,
- * not a value this component chooses.
- *
- * **That 66→97px growth is now what this file does too (issue #264).**
- * Flow 12's round S1 (2026-09-13, `flow12-S1-QA-13-14-15-16-18-both.json`)
- * reported Todoist "no longer shrinks at rest", flat at 97px in both
- * states, and concluded the reference had drifted. **Round S2 the next
- * day overturned that** (`flow12-S2-verification-both.json`, both sides
- * driven in one session, ≥800ms settle on every read): Todoist reads
- * **580×66px at rest and 580×97px once text is present**, because its
- * Inbox/Date/Priority/Labels toolbar row is only rendered once the field
- * is non-empty — the original capture was right, and S1's "the reference
- * moved" was a bad reading. Two sources now agree against the flat
- * reading, so this file grows on text the same way.
- *
- * **The 66/97 arithmetic, worked from the box model, not guessed.** The
- * chrome outside the content is fixed by the tokens above and never
- * changes: `1 border + 16 padding + <content> + 16 padding + 1 border`,
- * i.e. 34px of chrome either way.
- * - **Rest** (66px): chrome (34) + a single content row of **32px**
- *   (`h-8`, the editor plus the dismiss button below, vertically
- *   centred) — the identical `h-8` idiom `add-task-form.tsx`'s own
- *   `EDITOR_BOX_CLASSES` already uses for its own editor row, not a
- *   fresh magic number.
- * - **Grown** (97px): chrome (34) + the same 32px editor row + a footer
- *   block that must total **31px** (97 − 34 − 32), against the original
- *   design's 53px (`12 mt-3 + 1 border-t + 12 pt-3 + 28 h-7 button`).
- *   Landed on `mt-1 (4) + border-t (1) + pt-0.5 (2) + h-6 "xs"-size
- *   buttons (24)` = 4 + 1 + 2 + 24 = **31px exactly** — the footer
- *   buttons shrink from `size="sm"` to `size="xs"` to make that number
- *   reachable with real Tailwind spacing rather than an arbitrary
- *   `h-[Npx]`.
- *
- * A dismiss (X) button sits in the editor row in both states — the
- * editor row's own height (32px) doesn't change between rest and grown,
- * so nothing in this file hides it once the footer appears. **QA-15:
- * that X is a plain close affordance, not a stand-in for Todoist's red
- * Ramble/dictate button.** meologue has no dictation feature; this file
- * deliberately does not add one, stub one, or add a disabled placeholder
- * for one — QA-15 stays a known open item in the parity ledger rather
- * than being papered over with a fake control.
- *
- * **Footer — the recorded subset, not the full described one.**
- * `quick-add.md` describes six footer controls (More actions, Select
- * project, Set date, Set priority, Add labels, then Cancel/Add task);
- * the live DOM capture only pins down four by `aria-label` — More
- * actions, Remove date, Cancel, Add task (`qa15_footerButtons` in the
- * artifact above) — the other three were never confirmed to carry an
- * aria-label at all (QA-15's own "Not established" caveat). This dialog
- * builds exactly the four that are actually pinned down, in the order
- * QA-18 measured (`Tab` from the title lands on More actions first).
- * Project/priority/label PICKERS are a different ticket's surface
- * (`task-schedule-popover.tsx`) and are not duplicated here; PRI-04's own
- * pill is shown instead, using whatever priority the shared parse already
- * recognised, since the composer already carries that information whether
- * or not a dedicated "Set priority" button exists yet.
- *
- * **Escape vs. the `#`/`@` popup — issue #261, the Radix trap
- * `task-title-editor.tsx` names but cannot fix alone.** Radix's
- * `DismissableLayer` (what `Dialog.Content` is built on) wires its own
- * Escape handler on `document`, capture phase, BEFORE the contenteditable's
- * own bubble-phase keydown handler ever runs (confirmed against
- * `@radix-ui/react-dismissable-layer`'s own source: `addEventListener(...,
- * { capture: true })`, and its handler calls `onDismiss()` — closing this
- * dialog — unless the consumer's own `onEscapeKeyDown` called
- * `preventDefault()` first). **What actually gates ProseMirror's own
- * handling is `defaultPrevented`, not propagation** — `prosemirror-view`'s
- * own dispatch gate (`eventBelongsToView`) refuses to run this view's
- * `handleKeyDown` at all once ANYONE earlier in the same event's lifecycle
- * called `event.preventDefault()`, capture-phase included. An earlier
- * version of this comment argued the opposite — that because
- * `DismissableLayer` "never calls `stopPropagation()`", the keystroke
- * would still reach the editor's own bubble handler after `Content`'s own
- * `preventDefault()` ran. That is exactly backwards: propagation
- * continuing is irrelevant when the gate checked is `defaultPrevented`,
- * and `Content`'s own `preventDefault()` (below) trips that gate before
- * `quick-add-autocomplete.ts`'s own `handleKeyDown` ever runs — Escape did
- * nothing at all, to either layer, which is issue #261's exact symptom.
- * The fix is the same one `task-detail-view.tsx`'s `dismissGuardRef`
- * already ships (`8eafad9`): don't trust the same gated keydown to close
- * the popup — call `closeAutocompleteRef.current?.()` directly.
- * `view.dispatch()` is a plain method call, not a DOM event, so it is
- * never subject to that gate; `task-title-editor.tsx`'s own doc comment on
- * `closeAutocompleteRef` has the full proof. `onAutocompleteOpenChange`
- * (wired through both composer instances below) is the one signal this
- * dialog has for "is a popup open right now" — `Content`'s own
- * `onEscapeKeyDown` reads it, calls `preventDefault()` (keeping Radix from
- * closing the whole dialog) AND `closeAutocompleteRef.current?.()`
- * (actually closing the popup) in the same synchronous tick, rather than
- * leaving the second half to a keydown that will never arrive.
- *
- * **Issue #265 — discarding an unsaved title now confirms first.** Split
- * out of #261 (whose own acceptance criteria bundled the Escape/popup fix
- * above with this, deliberately left out as unmeasured at the time). Before
- * this, every dismissal here — the editor's own Escape `onCancel`, the
- * footer's Cancel button, and Radix `Root`'s own `onOpenChange` (Escape
- * without a popup open, an outside click, the X button) — called
- * `onOpenChange(false)` unconditionally, silently discarding whatever was
- * typed. Live Todoist (both its modal Quick Add and, corroborated
- * separately, Todoist Android's own composer — this ticket's own capture,
- * 2026-09-15) confirms first whenever the field holds text, and closes with
- * no prompt at all when it's empty. `requestDismiss` (below, next to
- * `hasText`) is the one door all of the above now go through instead,
- * reusing `task-detail-view.tsx`'s DET-15 `requestCancelEditing` shape
- * rather than inventing a second one; its own doc comment there, and
- * `requestDismiss`'s here, have the rest.
- */
 import { parseQuickAdd, uiPriorityOf } from "@meologue/core";
 import { X } from "lucide-react";
 import { Suspense, useEffect, useRef, useState } from "react";
@@ -223,16 +91,6 @@ export function QuickAddDialog({
   // directly through this instead, the identical shape
   // `task-detail-view.tsx`'s `dismissGuardRef` already uses.
   const closeAutocompleteRef = useRef<(() => void) | null>(null);
-  // Issue #265 — the discard confirmation's own `onCloseAutoFocus` (below)
-  // needs somewhere real to send focus back to when it closes without a
-  // Discard, and it opens programmatically (never from a click Radix can
-  // treat as "the trigger"), so its own default falls back to
-  // `document.body` exactly as `task-detail-view.tsx`'s DET-15 fix found.
-  // Unlike that file, this dialog has exactly one focusable editor
-  // (title only, always mounted, never swapped for another), so a plain
-  // `querySelector` scoped to this ref at close time is enough — no
-  // `focusin` listener tracking "whichever editor last had it" is needed
-  // here.
   const contentRef = useRef<HTMLDivElement | null>(null);
 
   const composer = useQuickAddComposer({
@@ -241,9 +99,6 @@ export function QuickAddDialog({
     labels,
     onCreateProject,
     onCreateLabel,
-    // QA-19 (matched, live-driven): Shift+Enter closed/cleared Quick Add
-    // on both sides — the whole dialog, not just the field, for this
-    // surface.
     onCommitted: () => onOpenChange(false),
   });
 
@@ -302,13 +157,6 @@ export function QuickAddDialog({
     }
   }, [open]);
 
-  // Live preview of the current line's own parse — the identical
-  // `parseQuickAdd`/`taskFieldsForRename` pipeline `commit` itself will
-  // run, just read a render early so the footer can react to it (QA-16's
-  // grow-on-recognition, PRI-04's pill) without waiting for Add to be
-  // pressed. `taskFieldsForRename`, not `taskFieldsFromQuickAdd`: only it
-  // distinguishes "no p[1-4] typed" (null) from "p4, typed" (1) — the
-  // distinction PRI-04's pill needs to decide whether to render at all.
   const parsed = parseQuickAdd(composer.value, composer.options);
   const preview = taskFieldsForRename(composer.value, parsed, composer.options);
   const hasDate = preview.date !== null || preview.dateString !== null;
@@ -333,33 +181,7 @@ export function QuickAddDialog({
   // here, not `"Add task"`. Verified by reading that source, not assumed.
   const hasText = composer.value.trim() !== "";
 
-  // Issue #265 — the shared door every dismissal route below now goes
-  // through, replacing three independent unconditional `onOpenChange(false)`
-  // calls (the editor's own Escape `onCancel`, the footer's Cancel button,
-  // and Radix `Root`'s own `onOpenChange`, which Escape without a popup
-  // open, an outside click, and the X button all funnel into). The shape
-  // is `task-detail-view.tsx`'s `requestCancelEditing`/`dismissGuardRef`
-  // pair for DET-15, simplified for this surface: Quick Add has only one
-  // "editing" state (open/closed), not DET-15's separate "is the form in
-  // edit mode" question, so one function suffices in place of that file's
-  // two.
-  //
-  // Wording measured live against Todoist's own modal Quick Add
-  // (2026-09-15, this ticket's own capture) and matched verbatim — same
-  // heading, same body, same Cancel/Discard button order. Not shared as a
-  // constant with DET-15's identical strings: no caller in this codebase
-  // pulls `ConfirmDialog` copy from a shared module today (every existing
-  // caller — `entry-actions.tsx`, `sessions-page.tsx`, `task-detail-view.tsx`
-  // — inlines its own title/description/confirmLabel), so introducing one
-  // module for two four-word/six-word literals would be new structure this
-  // codebase doesn't otherwise use, not a simplification.
   const [discardConfirmOpen, setDiscardConfirmOpen] = useState(false);
-  // Set only by the confirm's own Discard button (below), read only by its
-  // `onCloseAutoFocus` — distinguishes "this confirm is closing because the
-  // whole dialog is closing" (skip the focus-restore) from "this confirm is
-  // closing back to the still-open composer" (restore focus to the editor),
-  // the identical role `task-detail-view.tsx`'s own `discardConfirmedRef`
-  // plays for DET-15.
   const discardConfirmedRef = useRef(false);
 
   function requestDismiss() {
@@ -459,11 +281,6 @@ export function QuickAddDialog({
                 />
               </Suspense>
             </div>
-            {/* QA-15: Todoist's rest state carries a red Ramble/dictate
-                button here — meologue has no dictation feature, so this
-                stays a plain dismiss affordance rather than a stub or a
-                disabled placeholder for one. Known open item, not papered
-                over (this file's own header comment). */}
             <DialogClose asChild>
               <Button type="button" variant="ghost" size="icon-xs" aria-label="Close">
                 <X aria-hidden="true" className="size-3.5" />
@@ -471,11 +288,6 @@ export function QuickAddDialog({
             </DialogClose>
           </div>
 
-          {/* PRI-04: the flag icon alone carries the priority's colour —
-              the `P{n}` text stays the shared neutral grey
-              (`text-muted-foreground`, which is `rgb(204,204,204)` in dark
-              theme, the exact value scheduler-and-priority.md §10b
-              measured for the text). */}
           {hasPriority && uiPriority !== null && (
             <div className="mt-2 flex items-center gap-1.5 text-sm text-muted-foreground">
               <svg
@@ -499,12 +311,6 @@ export function QuickAddDialog({
           {hasText && (
             <div className={FOOTER_CLASSES}>
               <div className="flex items-center gap-2">
-                {/* QA-18: `Tab` from the title field lands here first —
-                    natural DOM order already gives that, since this is the
-                    editor's very next focusable sibling. No menu is wired
-                    behind it (out of scope for this ticket — the record
-                    never established its contents, only that Tab reaches
-                    it); reported as unimplemented rather than faked. */}
                 <Button type="button" variant="ghost" size="xs" aria-label="More actions">
                   <span aria-hidden="true">…</span>
                 </Button>
@@ -536,24 +342,6 @@ export function QuickAddDialog({
             </div>
           )}
 
-          {/* Issue #265 — rendered unconditionally, not nested inside the
-              `hasText` footer above: `discardConfirmOpen` alone controls
-              whether this is open, so a Discard click racing a `hasText`
-              flip in the same tick can't unmount this out from under its
-              own closing animation (`task-detail-view.tsx`'s identical
-              DET-15 comment on its own sibling `ConfirmDialog`).
-              `role="alertdialog"`, not Todoist's own `role="dialog"`: the
-              standing decision on STR-01, STR-03 and DET-15 is to keep
-              `alertdialog` on destructive confirms regardless of what
-              Todoist itself uses, and `ConfirmDialog` already carries that
-              role by hand (`alert-dialog.tsx`'s own top comment) — this is
-              that same ratified divergence again, not a fresh call. Cancel
-              stays focused by default here too (`ConfirmDialog`'s own
-              `cancelRef`), diverging from Todoist's measured default focus
-              on Discard: defaulting focus to the destructive action on a
-              confirm that exists specifically to prevent data loss would
-              undermine the one thing it's for, and a stray Enter would
-              discard the draft it just asked to protect. */}
           <ConfirmDialog
             open={discardConfirmOpen}
             onOpenChange={setDiscardConfirmOpen}
@@ -564,16 +352,6 @@ export function QuickAddDialog({
               discardConfirmedRef.current = true;
               onOpenChange(false);
             }}
-            // Reached only when this closes WITHOUT Discard (Cancel, or its
-            // own Escape) — `discardConfirmedRef` is what tells the two
-            // apart, set only by `onConfirm` just above, the identical
-            // shape `task-detail-view.tsx`'s DET-15 fix uses for the same
-            // reason. Radix's own default would try to restore focus to
-            // whatever "triggered" this dialog's open, which is nothing (it
-            // opens programmatically, from `requestDismiss`) — without this
-            // override that default strands focus on `document.body`
-            // exactly as DET-15 first found; `preventScroll` matches
-            // `ConfirmDialog`'s own `onOpenAutoFocus` call.
             onCloseAutoFocus={(event) => {
               if (discardConfirmedRef.current) {
                 discardConfirmedRef.current = false;

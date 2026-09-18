@@ -1,11 +1,3 @@
-/**
- * `TaskSchedulePopover`'s own suite (issue #227). `now` is pinned to
- * 2026-09-10 (a Thursday) throughout — the exact reference instant
- * `meologue-reference/todoist/scheduler-and-priority.md` was captured against
- * ("today" = 10 Sep 2026, Thursday) — so every hint/preview asserted here
- * is checked against the ledger's own measured values, not values this
- * suite invented independently of the reference capture.
- */
 import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { WIDE_LAYOUT_QUERY } from "@/hooks/use-wide-layout";
@@ -96,8 +88,6 @@ describe("shell by breakpoint (issue #282)", () => {
     renderPopover();
     open();
 
-    // Both a parity row (ASCHED-01) and Radix Dialog's own accessible-name
-    // requirement, satisfied by the same element.
     const heading = screen.getByText("Date");
     expect(heading.getAttribute("data-slot")).toBe("sheet-title");
     expect(screen.getByRole("dialog", { name: "Date" })).toBeTruthy();
@@ -210,19 +200,11 @@ describe("TaskSchedulePopover", () => {
     stubLayout(true);
   });
 
-  describe("quick options (SCHED-02/03)", () => {
+  describe("quick options", () => {
     it("renders Today/Tomorrow/Next week/Next weekend with the exact captured hints, in order", () => {
       renderPopover();
       open();
 
-      // Wording and order from parity-ledger.md SCHED-02, driven live on
-      // Sat 12 Sep 2026 — Today (Sat)/Tomorrow (Sun)/Next week (Mon 14
-      // Sep)/Next weekend (Sat 19 Sep). This suite is pinned to Thu 10 Sep
-      // instead (the original reference-capture instant, still used
-      // throughout the rest of this file), so the exact hint strings below
-      // are this test's own — Today/Tomorrow read a bare weekday, Next
-      // week/Next weekend read a full date, matching what the row records
-      // for each slot.
       expect(screen.getByRole("button", { name: "Today Thu" })).toHaveAccessibleName("Today Thu");
       expect(screen.getByRole("button", { name: "Tomorrow Fri" })).toHaveAccessibleName(
         "Tomorrow Fri",
@@ -258,7 +240,7 @@ describe("TaskSchedulePopover", () => {
       expect(nextWeekIdx).toBeLessThan(nextWeekendIdx);
     });
 
-    it("offers no 'No Date' option until a date is already set (SCHED-03)", () => {
+    it("offers no 'No Date' option until a date is already set", () => {
       renderPopover({ dateDay: null });
       open();
 
@@ -274,9 +256,7 @@ describe("TaskSchedulePopover", () => {
       expect(onPickDay).toHaveBeenCalledWith(null);
     });
 
-    it("drops the quick option matching the Task's current date (SCHED-03)", () => {
-      // Todoist: a Task already due today drops "Today", leaving Tomorrow
-      // · Next week · Next weekend · No Date (parity-ledger.md SCHED-03).
+    it("drops the quick option matching the Task's current date", () => {
       renderPopover({ dateDay: "2026-09-10" });
       open();
 
@@ -299,9 +279,7 @@ describe("TaskSchedulePopover", () => {
       expect(screen.getByRole("button", { name: "Next weekend Sat 12 Sep" })).toBeInTheDocument();
     });
 
-    it("drops a slot that lands on the same day as an earlier one, as Todoist does on a Sunday (SCHED-02)", () => {
-      // flow11-R1-SCHED-02-03-07-both.json: on Sun 13 Sep Todoist read
-      // Today · Tomorrow · Next weekend — Next week (Mon 14 Sep) is Tomorrow.
+    it("drops a slot that lands on the same day as an earlier one, as Todoist does on a Sunday", () => {
       renderPopover({ now: new Date(2026, 8, 13, 12, 0) });
       open();
 
@@ -361,7 +339,7 @@ describe("TaskSchedulePopover", () => {
     });
   });
 
-  describe("calendar (SCHED-06 through SCHED-10, plus the six defects measured live 2026-09-15)", () => {
+  describe("calendar ( through, plus the six defects measured live 2026-09-15)", () => {
     it("starts the week on Monday", () => {
       renderPopover();
       open();
@@ -383,7 +361,7 @@ describe("TaskSchedulePopover", () => {
       expect(screen.queryByRole("button", { name: /^Confirm/ })).not.toBeInTheDocument();
     });
 
-    it("today carries no aria-current (SCHED-07, deliberate)", () => {
+    it("today carries no aria-current (deliberate)", () => {
       renderPopover();
       open();
 
@@ -401,7 +379,7 @@ describe("TaskSchedulePopover", () => {
       );
     });
 
-    it("today's colour utility carries `!important` so it wins over the weekend utility on a weekday's cell too (SCHED-07)", () => {
+    it("today's colour utility carries `!important` so it wins over the weekend utility on a weekday's cell too", () => {
       renderPopover();
       open();
 
@@ -412,7 +390,7 @@ describe("TaskSchedulePopover", () => {
       expect(cell?.className).not.toContain("text-muted-foreground");
     });
 
-    it("today's colour utility still carries `!important` when today is itself a weekend day (SCHED-07 defect)", () => {
+    it("today's colour utility still carries `!important` when today is itself a weekend day ( defect)", () => {
       // The measured defect: Sat 12 Sep 2026 driven as "now" through the
       // SAME injected clock every other assertion in this file uses (not
       // the real system clock, which is not this date) — react-day-picker
@@ -426,25 +404,11 @@ describe("TaskSchedulePopover", () => {
 
       const cell = document.querySelector('[data-day="2026-09-12"]');
       expect(cell).toHaveAttribute("data-today", "true");
-      // The cell is both `today` and `weekend` at once — the exact
-      // collision SCHED-07 measured live. Both utilities are present on
-      // the cell (this file's own `weekend`/`today` classNames both apply
-      // unconditionally), and `today`'s carries the trailing `!` that
-      // forces it to win the cascade regardless of Tailwind's generated
-      // stylesheet order.
-      //
-      // NOTE ON WHAT THIS DOES NOT PROVE: jsdom never computes a cascade
-      // (no stylesheet is parsed/applied), so this assertion cannot show
-      // which colour actually paints — it only shows both classes are
-      // present and that `today`'s carries `!important`. The real-browser
-      // finding this row cites (grey rgb(204,204,204) instead of today-red
-      // rgb(226,106,96)) was read via `getComputedStyle` on a live page;
-      // that verification step is out of reach for this suite.
       expect(cell?.className).toContain("text-[color:var(--td-calendar-today)]!");
       expect(cell?.className).toContain("text-muted-foreground");
     });
 
-    it("the selected day is a filled circle (SCHED-08) — the cell carries data-selected", () => {
+    it("the selected day is a filled circle — the cell carries data-selected", () => {
       renderPopover({ dateDay: "2026-09-05" });
       open();
 
@@ -453,7 +417,7 @@ describe("TaskSchedulePopover", () => {
       expect(cell?.className).toContain("bg-[color:var(--td-calendar-selected)]");
     });
 
-    it("weekends dim independently of today/selected (SCHED-10)", () => {
+    it("weekends dim independently of today/selected", () => {
       renderPopover();
       open();
 
@@ -462,7 +426,7 @@ describe("TaskSchedulePopover", () => {
       expect(cell?.className).toContain("text-muted-foreground");
     });
 
-    it("a day carrying a Task gets the busy-dot modifier (SCHED-09)", () => {
+    it("a day carrying a Task gets the busy-dot modifier", () => {
       renderPopover({ datesWithTasks: new Map([["2026-09-14", 2]]) });
       open();
 
@@ -588,7 +552,7 @@ describe("TaskSchedulePopover", () => {
     });
   });
 
-  describe("Type a date (SCHED-04/05)", () => {
+  describe("Type a date", () => {
     it("resolves a plain date and shows a preview above the quick options", () => {
       renderPopover();
       open();
@@ -697,7 +661,7 @@ describe("TaskSchedulePopover", () => {
     });
   });
 
-  describe("Time dialog (SCHED-11/pass2 §7 — replaces issue #249's inline 'Add a time' toggle)", () => {
+  describe("Time dialog ( /pass2 §7 — replaces issue #249's inline 'Add a time' toggle)", () => {
     function openTimeDialog() {
       fireEvent.click(screen.getByRole("button", { name: "Time" }));
       return screen.getByRole("dialog", { name: "Select start and end time" });
@@ -725,11 +689,6 @@ describe("TaskSchedulePopover", () => {
 
       const dialog = openTimeDialog();
 
-      // SCHED-11 (live-audit-dom/flow3-SCHED-todoist.json): role="dialog",
-      // aria-label "Select start and end time", a Start time field, and
-      // Duration/Time zone deliberately not built (issue #179's removal;
-      // no per-Task timezone concept exists — see task-time-dialog.tsx's
-      // own header comment).
       expect(dialog).toBeInTheDocument();
       expect(within(dialog).getByLabelText("Add a time")).not.toBeChecked();
       expect(within(dialog).queryByLabelText("Start time")).not.toBeInTheDocument();
@@ -836,13 +795,7 @@ describe("TaskSchedulePopover", () => {
       expect(screen.getByPlaceholderText("Type a date")).toBeInTheDocument();
     });
 
-    // SCHED-11: pass2-2026-09-11.md §7 — "One Escape closes the Repeat/
-    // Time layer and the scheduler beneath it simultaneously," unlike the
-    // pre-follow-up shape where Escape closed only this dialog. Escape
-    // equals Cancel (no commit) plus closing the scheduler too — Save and
-    // Cancel themselves are unchanged, still returning to the scheduler
-    // (the tests above this one).
-    it("Escape closes both the Time dialog and the scheduler, without committing a time (SCHED-11's own follow-up)", () => {
+    it("Escape closes both the Time dialog and the scheduler, without committing a time (the follow-up)", () => {
       const { onSetTime } = renderPopover({ dateDay: "2026-09-05", dateTime: "09:00" });
       open();
       const dialog = openTimeDialog();
@@ -860,7 +813,7 @@ describe("TaskSchedulePopover", () => {
     });
   });
 
-  describe("Repeat menu (SCHED-14, issue #227)", () => {
+  describe("Repeat menu (issue #227)", () => {
     // Radix's `DropdownMenu.Trigger` opens on `pointerdown`, not `click`
     // (task-row.test.tsx's own identical "More actions" precedent) — a
     // plain `fireEvent.click` alone never opens it under jsdom.
@@ -878,10 +831,6 @@ describe("TaskSchedulePopover", () => {
         .getAllByRole("menuitem")
         .map((item) => item.textContent);
 
-      // NOW = Thu 10 Sep 2026. Every day/week/workday/month/year phrase
-      // resolves against `now` (no `dateDay` on this Task) exactly as
-      // SCHED-04's typed input would, so the weekday/day-of-month/
-      // month-and-day text below is Thu 10 Sep's own, not invented.
       expect(items).toEqual([
         "Every day",
         "Every week on Thursday",
@@ -1155,10 +1104,6 @@ describe("TaskSchedulePopover", () => {
       expect(screen.getByRole("button", { name: "Repeat" })).toBeInTheDocument();
     });
 
-    // SCHED-11's own follow-up — pass2-2026-09-11.md §7 records the same
-    // simultaneous close for "the Repeat/Time layer," not just the Time
-    // dialog: Escape here closes the Repeat menu (Radix's own default)
-    // and the scheduler beneath it together, committing nothing.
     it("Escape closes both the Repeat menu and the scheduler, per the same pass2 §7 record as the Time dialog", () => {
       const { onPickRecurrence, onPickDay } = renderPopover();
       open();

@@ -133,25 +133,6 @@ export function matchAbsoluteDate(input: string, ctx: DateRuleContext): QuickAdd
     pushIfValidCalendarDate(tokens, match, year, month, day);
   }
 
-  // Bare two-part numeric form, no year (`12/25`) — QA-09's own measured
-  // gap: meologue-reference/todoist/quick-add.md's vocabulary table has
-  // `12/25` resolving to 25 Dec in Todoist, and this form was previously
-  // not recognised at all (the three-part regex above requires an
-  // explicit `\d{4}` year, so a bare pair never matched it, and reading
-  // it as day-first under `dayMonthOrder` would make "25" a month, which
-  // `pushIfValidCalendarDate`/the roll-over reparse below always refuses
-  // as invalid). Deliberately hardcoded month-first regardless of
-  // `dayMonthOrder` — that setting's own doc comment is explicit it only
-  // disambiguates the three-part `D/M/YYYY` form; the bare two-part form
-  // is the one case actually measured against Todoist, and only in this
-  // (month-first) reading. Rolls forward to next year once passed, via
-  // the identical `resolveYearRollForward` the worded forms above use.
-  // Pushed after the three-part loop above so a real `D/M/YYYY` match
-  // (e.g. "27/1/2026") claims its span first — this looser match, which
-  // would otherwise also fire on its leading "27/1", loses the resulting
-  // overlap in ../parse-quick-add.ts's greedy resolution rather than
-  // competing with it (that function's own header comment names this
-  // exact push-order convention).
   const monthDayNoYear = /\b(\d{1,2})\/(\d{1,2})\b(?!\/\d)/g;
   for (const match of input.matchAll(monthDayNoYear)) {
     const month = Number(match[1]);
@@ -256,35 +237,6 @@ export function matchArithmeticDate(input: string, ctx: DateRuleContext): QuickA
   return tokens;
 }
 
-/**
- * `next week` — resolves to the **next Monday**, not `now` plus seven
- * days. QA-09's own second measured gap: this rule previously computed
- * `addByUnit(ctx.now, 1, "weeks")` (today+7), which drifts off the real
- * Todoist behaviour on every day but one. Two live measurements pin the
- * fix: from Thu 10 Sep 2026, Todoist gives Mon 14 Sep (docs/reference/
- * todoist/quick-add.md's own vocabulary table — 4 days ahead, not the 7
- * `addByUnit` gave); from Sat 12 Sep 2026, Todoist gives Mon 14 Sep again
- * (2 days ahead, where `addByUnit` would have given 19 Sep). Deliberately
- * *not* generalised to `next day`/`next month`/`next year`: only `week`
- * is evidenced, and stretching one verified case across the rest of
- * `ctx.language.arithmeticUnits` would be inventing forms nobody has
- * actually seen Todoist recognise (this parser's own house rule — see
- * ./en.ts's header comment). The unit word itself stays narrowed to the
- * `week`/`weeks` entries of that same table rather than a hard-coded
- * string, so a future language pack's own word for "week" is picked up
- * for free — but the *target* day is hard-coded to ISO Monday (`1`),
- * because ISO weekday numbering, unlike the word for "week," is not a
- * language-pack concern.
- *
- * The Monday is **strictly after** today, so on a Monday it is seven days
- * out, never today. Both live measurements above agree with either
- * reading, so the tiebreak is internal consistency: the scheduler's own
- * "Next week" quick option (`task-schedule-popover.tsx`) is date-fns's
- * `nextMonday`, which is strictly-after, and a typed phrase and a clicked
- * option carrying the same words must not land on different days. "Next
- * week" meaning today would also contradict the words themselves. The
- * Monday-on-a-Monday case has not been driven live against Todoist.
- */
 export function matchNextWeek(input: string, ctx: DateRuleContext): QuickAddToken[] {
   const MONDAY_ISO_WEEKDAY = 1;
   const weekWords = Object.keys(ctx.language.arithmeticUnits).filter(

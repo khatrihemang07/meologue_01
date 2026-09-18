@@ -1,48 +1,3 @@
-/**
- * STR-02 (meologue-reference/todoist/parity-ledger.md) — Todoist edits a
- * Project through a modal dialog, not inline
- * (`live-audit-dom/flow9-STR-02-both.json`): Project options menu -> Edit
- * opens a `role=dialog` carrying a Name field with an `8/120` counter,
- * Description, a Color combobox, Parent project, Access and Layout
- * comboboxes, an "Add to favorites" checkbox and a "Move project" button.
- *
- * Issue #297 gave this dialog a fourth field, Parent project: `Project.
- * parentId` was already persisted, synced and rendered (`depthOf()`
- * indents `projects-view.tsx`/`todo-sidebar.tsx`, issue #223) and
- * `ProjectStore.setProjectParent` already existed, but no UI anywhere
- * ever called it — this dialog is that UI. meologue still has no concept
- * of Access levels or a List/Board/Calendar Layout from this screen, so
- * those two stay unmeasured-and-inapplicable, not skipped by oversight;
- * this dialog builds only the fields meologue's own `Project` type and
- * `use-projects.ts` actually support: Name (with the `n/120` counter the
- * ledger's own artifact recorded), Colour, Description and now Parent
- * project.
- *
- * **The Parent chooser never offers this Project itself or any of its own
- * descendants.** `ProjectStore.setProjectParent` already refuses both —
- * self-parenting and a cycle — as its own guard
- * (`packages/core/src/test-support/project-store-contract.ts`), so this
- * dialog does not re-implement that check; it only narrows the `<select>`
- * `projects` prop by the same shape (walk `parentId` down from this
- * Project) so a reader is never offered an option certain to bounce. If
- * the store still refuses a choice — a race with another device's own
- * reparent, say — `onSetParent`'s rejection is shown inline rather than
- * swallowed, and the dialog stays open exactly as `onAddSection`'s own
- * cap refusal does in `project-view.tsx`.
- *
- * Favourite and Archive stay as `project-view.tsx`'s own standalone
- * buttons, outside this dialog: Todoist's own Archive is not one of the
- * fields this artifact recorded inside its Edit dialog at all, and moving
- * Favourite in on top of that speculation would be inventing a shape the
- * ledger never measured.
- *
- * Built on the shared `ui/dialog.tsx` (`@/components/ui/dialog`, issue
- * #342's own focus-restore wrapper around the Radix `Dialog` primitive),
- * the same choice `label-dialog.tsx` makes and for the identical reason:
- * this is an ordinary form, not a destructive confirmation, so it keeps
- * Radix's own default `role="dialog"` rather than `ConfirmDialog`'s
- * `role="alertdialog"`.
- */
 import type { Project } from "@meologue/core";
 import { LABEL_COLOURS } from "@meologue/core";
 import type * as React from "react";
@@ -60,8 +15,6 @@ import {
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 
-// Todoist's own Edit Project dialog reads `8/120` for its Name field
-// (parity-ledger.md's STR-02; `live-audit-dom/flow9-STR-02-both.json`).
 export const PROJECT_NAME_MAX = 120;
 
 export interface ProjectEditDialogProps {

@@ -1195,12 +1195,6 @@ test("Mod-Shift-9 creates a checklist from N list items and toggles every item's
   await expect(editor.locator('input[type="checkbox"]')).toHaveCount(0);
 
   await editor.press("ControlOrMeta+a");
-  // UpNote's own verified chord (meologue-reference/upnote-macos-detail.md,
-  // "Cmd+Shift+9") — no top-level menu accelerator string, verified alive
-  // by direct keypress regardless. `Mod-7`/`Mod-8` (bullet/numbered) are
-  // NOT claimed here or anywhere in this Composer — this file's own
-  // never-claim list (composer-editor.ts's formatKeymap comment) reserves
-  // the whole `Mod-1`..`Mod-9` row for browser tab-switching.
   await editor.press("ControlOrMeta+Shift+9");
 
   await expect(editor.locator('input[type="checkbox"]')).toHaveCount(2);
@@ -2274,8 +2268,6 @@ test("Mod-b, Mod-i, Mod-Shift-x and Mod-e apply their marks from the keyboard, w
   await editor.press("ControlOrMeta+i");
   await expect(editor.locator("em")).toHaveText("word");
 
-  // UpNote's own verified chord for the same action
-  // (meologue-reference/upnote-macos-detail.md, "Cmd+Shift+X").
   await editor.press("ControlOrMeta+Shift+x");
   await expect(editor.locator("s")).toHaveText("word");
 

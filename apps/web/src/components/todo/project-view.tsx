@@ -1,73 +1,3 @@
-/**
- * One Project's own screen — its header (name, colour, favourite,
- * archived, description), its Sections (issue #171's own acceptance
- * criteria: flat, manually ordered, capped at twenty, an optional
- * description, and a delete that "names the count and says it cannot be
- * undone"), and its own Tasks via `TaskList` (task-list.tsx) — "opening a
- * Project lists its Tasks, reusing the list Inbox already uses."
- *
- * **STR-02 (meologue-reference/todoist/parity-ledger.md).** Name, colour and
- * description used to be inline controls in this header — a
- * rename-on-blur `Input`, a colour `<select>`, a description `<textarea>`
- * committing on blur. The 2026-09-13 live audit
- * (`live-audit-dom/flow9-STR-02-both.json`) recorded Todoist editing all
- * three (plus fields this app has no concept of — Parent project, Access,
- * Layout) through a modal reached from the project's own options menu,
- * with a `n/120` name counter. The user decided on 2026-09-13 to match
- * that shape: `project-edit-dialog.tsx`'s own `ProjectEditDialog` now
- * owns Name/Colour/Description, opened from the "Project options menu"
- * built here with a single "Edit" item (this screen had no options menu
- * of its own before). Favourite, Archive, the activity link and Delete
- * stay exactly where they were — Todoist's own recorded Edit dialog
- * fields don't include Archive at all, and moving Favourite in on top of
- * that would be inventing a shape the ledger never measured.
- *
- * **STR-07 (meologue-reference/todoist/parity-ledger.md).** A Section's own
- * Edit/Move/Archive/Delete used to be four always-visible row controls —
- * an always-on inline rename field, explicit `Move "x" earlier` /
- * `Move "x" later` buttons, and standalone Archive/Delete buttons. The
- * 2026-09-13 live audit (`live-audit-dom/flow9-STR-07-both.json`)
- * recorded Todoist's own section header carrying a hover "More actions"
- * menu instead — Edit · Move to… · Duplicate · Copy link to section ·
- * Archive · Delete — with Edit and rename both already inline on *both*
- * sides ("Sections are the one structural object where the two apps
- * agree on surface as well as capability," that artifact's own verdict).
- * The user decided on 2026-09-13 to match the menu shape too, reusing
- * the "Project options menu" / "Label options menu" `DropdownMenu`
- * pattern (`39dd5b9`) rather than inventing a third. This file now
- * builds Edit, Move to…, Archive/Unarchive and Delete — the four
- * operations that artifact's own affordance-set verdict actually
- * measured as present on both sides.
- *
- * **Duplicate and Copy link to section are omitted, not overlooked.**
- * There is no per-Section duplicate operation anywhere in
- * `ProjectStore`, and no per-Section route for a link to point at — the
- * identical reasoning `labels-view.tsx`'s own header comment gives for
- * dropping "Add to favorites"/"Move to shared labels"/"Copy link to
- * label" from that menu.
- *
- * **Move to… reorders within the Project, it does not move a Section to
- * a different one.** `Section.projectId` (`packages/core/src/
- * project-types.ts`) is documented "always a real Project… Sections
- * never nest and never move between Projects; there is no
- * `setSectionProject`" — there is no store operation this menu item
- * could call to reassign a Section's Project even if Todoist's own
- * "Move to…" literally does that. This item keeps meologue's existing
- * earlier/later reorder (unchanged arithmetic, `reorderedKey` below;
- * unchanged pair of up/down moves), only relocated from two always-
- * visible buttons into a `DropdownMenu.Sub` under "Move to…" so a
- * reader used to Todoist's label finds the same capability meologue has
- * always had. Still keyboard-reachable: a `Sub` opens on Enter/ArrowRight
- * exactly as the existing Priority submenu (`task-command-menu.tsx`)
- * already does, and each reorder item disables itself at the same
- * first/last-Section boundary the old buttons did.
- *
- * **Delete's own confirmation wording is untouched.** Todoist's own
- * section-delete wording was read, not clicked (the live audit
- * deliberately avoided a destructive click), so there is nothing
- * verbatim to switch this dialog's existing "This destroys N Tasks…"
- * copy to — it stays exactly as it was before this menu existed.
- */
 import type { Project, Section, Task } from "@meologue/core";
 import { orderKeyBetween } from "@meologue/core";
 import { History, MoreHorizontal, Trash2 } from "lucide-react";
@@ -88,7 +18,6 @@ export interface ProjectViewProps {
   project: Project;
   sections: Section[];
   tasks: Task[];
-  /** ROW-14 (parity-ledger.md): every completed Task anywhere — forwarded straight through to `TaskList`, which does its own scoping down to this Project's own top-level rows (that component's own doc comment). Defaults to empty. */
   completedTasks?: Task[];
   /** Un-completes a Task from `completedTasks` above — forwarded straight through to `TaskList`. */
   onUncomplete?: (task: Task) => void;
@@ -123,14 +52,6 @@ export interface ProjectViewProps {
   onSetParent?: (parentId: string | null) => Promise<void>;
   onToggleFavourite: (favourite: boolean) => void;
   onToggleArchived: (archived: boolean) => void;
-  /**
-   * Issue #229 — Tombstone, never a hard delete (ProjectStore.removeProject's
-   * own doc comment). The confirmation lives in this component
-   * (`confirmingDeleteProject` below), mirroring Section delete's own
-   * "capture, then confirm" shape just below it, with Todoist's own
-   * verbatim wording (meologue-reference/todoist/quick-add.md § "Destructive
-   * confirmation wording").
-   */
   onDeleteProject: () => void;
   /** Rejects — legibly, per this ticket's own brief — on the twenty-Section cap or an empty name (ProjectStore.addSection's own doc comment). */
   onAddSection: (name: string) => Promise<void>;
@@ -217,35 +138,13 @@ export function ProjectView({
   // own wording for a Project delete names nothing but the Project this
   // whole screen is already about, so there is nothing to look up first.
   const [confirmingDeleteProject, setConfirmingDeleteProject] = useState(false);
-  // STR-02 (this file's own header comment) — the "Edit project" dialog's
-  // own open state. A plain boolean, unlike Labels' own `dialogTarget`
-  // (labels-view.tsx): this screen is always about exactly one Project
-  // (`project` above), so there is no "which one" to also capture.
   const [editing, setEditing] = useState(false);
   // Issue #342 — `ProjectEditDialog`'s own `restoreFocusTo`: the "Project
   // options menu" trigger below, the one still-mounted place a keyboard
   // user actually was once its `DropdownMenu.Item` ("Edit") unmounts with
   // the menu, before `ProjectEditDialog` even opens.
   const projectOptionsTriggerRef = useRef<HTMLButtonElement>(null);
-  // STR-07 (this file's own header comment) — which Section's row is
-  // showing its inline rename field, or `null` for none. Mirrors
-  // `editing` above for the identical reason: Todoist's own "Edit
-  // section" reveals a prefilled inline field rather than always
-  // rendering one, so this file now tracks "which one is open" instead
-  // of every row carrying a permanently-editable input.
   const [editingSectionId, setEditingSectionId] = useState<string | null>(null);
-  // STR-07's own version of issue #255's fight (task-schedule-popover.tsx's
-  // identical "Custom…"/`focusInputAfterRepeatCloseRef` precedent): Edit's
-  // `onSelect` above sets `editingSectionId`, which mounts the rename
-  // field, but Radix's own menu-close focus management runs afterward and
-  // — left alone — returns focus to the "Section options menu" trigger,
-  // blurring the just-mounted field before a reader ever sees it (its own
-  // `onBlur` then closes it right back, since the value is unchanged). The
-  // field carries no `autoFocus` of its own; this ref/handler pair focuses
-  // it manually, once, from the owning `DropdownMenu.Content`'s own
-  // `onCloseAutoFocus` — the one signal that fires after the field has
-  // actually mounted, not merely been told to — with that default
-  // trigger-refocus suppressed so it never fights this.
   const focusSectionInputAfterCloseRef = useRef(false);
   const sectionNameInputRef = useRef<HTMLInputElement>(null);
 
@@ -316,10 +215,6 @@ export function ProjectView({
               <History aria-hidden="true" className="size-4" />
             </Link>
           </Button>
-          {/* STR-02 (this file's own header comment) — the one item this
-              menu carries today is "Edit," opening `ProjectEditDialog`
-              below. Favourite/Archive/Activity/Delete stay as their own
-              standalone controls, unchanged. */}
           <DropdownMenu.Root>
             <DropdownMenu.Trigger asChild>
               <button
@@ -384,10 +279,6 @@ export function ProjectView({
               key={section.id}
               className="flex items-center gap-2 border-border border-b py-1.5 last:border-b-0"
             >
-              {/* STR-07 (this file's own header comment) — Edit reveals
-                  this exact field rather than it always being here;
-                  Todoist's own recorded shape ("INLINE, prefilled…not a
-                  modal"). */}
               {editingSectionId === section.id ? (
                 <input
                   ref={sectionNameInputRef}
@@ -414,9 +305,6 @@ export function ProjectView({
               {section.archived && (
                 <span className="shrink-0 text-muted-foreground text-xs">Archived</span>
               )}
-              {/* STR-07 (this file's own header comment) — Edit · Move
-                  to… · Archive/Unarchive · Delete, Todoist's own DOM order
-                  with Duplicate and Copy link to section left out. */}
               <DropdownMenu.Root>
                 <DropdownMenu.Trigger asChild>
                   <button

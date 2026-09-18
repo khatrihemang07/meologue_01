@@ -9,27 +9,6 @@ import { quickAddRecognitionPlugin } from "@/lib/todo-quick-add-recognition";
 import { TaskDetailView } from "./task-detail-view";
 import { TaskTitleEditor } from "./task-title-editor";
 
-/**
- * DET-07 — issue #226 attaches `todo-quick-add-recognition.ts`'s plugin to
- * the detail title exactly as `add-task-form.tsx` already attaches it to
- * Quick Add. This file deliberately does NOT mock `task-title-editor.tsx`
- * the way `task-detail-view.test.tsx` does for every other Suite: that
- * file's own header comment (and `task-title-editor.tsx`'s) says no test
- * mounts a real `EditorView` because jsdom has no `Range`/`Selection`/
- * `getBoundingClientRect` — true for simulating keystrokes and IME, which
- * is why every OTHER assertion in this codebase about typing goes through
- * `apps/e2e` instead. It is not true for constructing a view once against
- * a seeded document and reading back what it rendered, or for dispatching
- * a plain `keydown` at the mounted node (ProseMirror's keymap plugin is a
- * `document`-level event listener, not a Selection-dependent typing path)
- * — both of those work in jsdom today, verified directly before writing
- * this file. So these tests mount the REAL `TaskTitleEditor` (through the
- * REAL `TaskDetailView`, exactly as production wires it) and prove actual
- * plugin behaviour, not a stub standing in for it. `task-description-
- * editor.tsx` is still stubbed below — DET-07 has nothing to do with the
- * Description field, and mounting its own ProseMirror instance for real
- * would only add jsdom risk this file doesn't need to take on.
- */
 function StubTaskDescriptionEditor({
   value,
   onChange,
@@ -97,9 +76,6 @@ function task(overrides: Partial<Task> = {}): Task {
   };
 }
 
-// `task-detail-view.test.tsx`'s own factory, reused verbatim: QA-14's own
-// suite below (unlike every OTHER suite in this file) needs at least one
-// real Project to list in the popup.
 function project(overrides: Partial<Project> = {}): Project {
   return {
     id: "p1",
@@ -159,17 +135,6 @@ function renderView(overrides: Partial<Parameters<typeof TaskDetailView>[0]> = {
   return props;
 }
 
-/**
- * QA-14's own create-hook half: `task-detail-view.tsx`'s own
- * `titleAutocomplete` reads `addProject`/`addLabel` off `useOutletContext`
- * directly (that file's own doc comment on why: a new prop on
- * `TaskDetailViewProps` would need `todo-page.tsx`/`composer-page.tsx`,
- * both owned by another agent right now, to grow it). Proving that wiring
- * needs a REAL `<Outlet context={...}>` ancestor, unlike every other test
- * in this file — `renderView` above deliberately has none, which is what
- * lets `task-detail-view.test.tsx`'s own Router-free suite keep working
- * unchanged (`useOutletContext` returns `undefined` there, not a throw).
- */
 function renderViewWithOutlet(
   outletContext: { addProject?: (name: string) => void; addLabel?: (name: string) => void },
   overrides: Partial<Parameters<typeof TaskDetailView>[0]> = {},
@@ -220,40 +185,6 @@ function renderViewWithOutlet(
   return props;
 }
 
-/**
- * Simulates typing into the real, mounted `TaskTitleEditor` without going
- * through jsdom's absent contenteditable engine (this file's own header
- * comment on why real typing/IME can't be driven here) — dispatched as a
- * genuine `paste` DOM event instead, which `prosemirror-view`'s own
- * `editHandlers.paste` (dist/index.js) handles entirely through
- * `view.state.tr.replaceSelection(...)`, never through the DOM's own
- * Selection/Range APIs. Verified directly against a raw `EditorView` built
- * with this exact schema/plugin list before writing this file's own QA-14
- * suite: a real `paste` event with a plain-text `clipboardData` inserts the
- * text as a normal transaction, `docChanged` included, which is exactly
- * what the autocomplete plugin's own `apply()` needs to see to compute a
- * fresh `buildState` — nothing about detecting a live `#`/`@` trigger cares
- * how the text arrived.
- */
-/**
- * jsdom implements neither method AT ALL on `Range` (verified directly —
- * `"getClientRects" in document.createRange()` is `false`), not merely a
- * zero-value stand-in the way `Element.prototype.getBoundingClientRect`
- * already is (jsdom does implement that one, returning an all-zero rect).
- * `task-title-editor.tsx`'s own `popupStyle` calls `EditorView.coordsAtPos`
- * the instant a popup is open, which reaches exactly this gap
- * (`prosemirror-view`'s own `singleRect`, dist/index.js) — every OTHER
- * test in this codebase that exercises the popup avoids it by never
- * mounting the real `TaskTitleEditor` REACT component while one is open
- * (`task-title-editor.test.tsx`'s own suite drives a bare `EditorView`
- * directly, calling neither `TaskTitleEditor` nor `popupStyle`). This
- * file's own QA-14 suite is the first to mount the real component with a
- * popup actually open, so it is also the first to need this shim — scoped
- * to this file alone (not `src/test/setup.ts`) since nothing else in this
- * codebase yet needs it. Falls through to `getBoundingClientRect` exactly
- * as `singleRect` itself does when `getClientRects()` returns nothing,
- * so both need stubbing, not just one.
- */
 beforeAll(() => {
   if (typeof Range.prototype.getClientRects !== "function") {
     Range.prototype.getClientRects = (): DOMRectList => [] as unknown as DOMRectList;
@@ -285,9 +216,6 @@ function pasteText(target: HTMLElement, text: string): Event {
   return event;
 }
 
-// Pinned to the identical instant `meologue-reference/todoist/quick-add.md`
-// and `todo-quick-add-recognition.test.ts` already use, so "tod" resolves
-// to the same 2026-09-10 `matchId` both files assert on.
 beforeEach(() => {
   // `toFake: ["Date"]` only — leaving `setTimeout` real is load-bearing
   // here and not in `filter-view.test.tsx`/`today-view.test.tsx`'s own
@@ -305,17 +233,13 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-describe("DET-07 — recognition in the detail title", () => {
+describe("recognition in the detail title", () => {
   it("renders the identical recognition span the composer produces, for the same phrase", async () => {
     renderView({ task: task({ content: "call mum tod p1" }) });
 
     fireEvent.click(screen.getByTestId("task-detail-title"));
     const titleEditor = await screen.findByLabelText("Task name");
 
-    // Same three attributes `todo-quick-add-recognition.ts`'s own
-    // `decorationAttrs` gives the composer's identical plugin instance —
-    // `data-testid`, the highlighted flag, and the `td-recognition-match`
-    // class that carries the measured 4px padding (QA-01).
     const matches = titleEditor.querySelectorAll('[data-testid="natural-language-match"]');
     expect(matches).toHaveLength(2);
     const matchIds = Array.from(matches).map((el) => el.getAttribute("data-match-id"));
@@ -347,7 +271,7 @@ describe("DET-07 — recognition in the detail title", () => {
     expect(titleEditor.textContent).toBe("call mum tod p1");
   });
 
-  it("commits the title verbatim on Enter even while a recognition span is rendered — DET-07 does not change what saving does", () => {
+  it("commits the title verbatim on Enter even while a recognition span is rendered — does not change what saving does", () => {
     // Mounted directly, exactly as `task-detail-view.tsx` wires it
     // (`extraPlugins={[quickAddRecognitionPlugin(...)]}`) — this exercises
     // `task-title-editor.tsx`'s own `commit()`, which hands back
@@ -391,14 +315,7 @@ describe("DET-07 — recognition in the detail title", () => {
   });
 });
 
-// QA-14's own second half, wired into the detail title (`task-detail-
-// view.tsx`'s own `titleAutocomplete`/`autocompletePopupOpenRef`) — mounted
-// through the REAL `TaskDetailView`/`TaskTitleEditor`, exactly as DET-07's
-// suite above, for the identical reason: this is the one place that can
-// prove Radix's own Escape handling and ProseMirror's popup-close are
-// actually ordered the way `task-detail-view.tsx`'s own `dismissGuardRef`
-// comment claims, not merely reasoned about.
-describe("QA-14 — #/@ autocomplete in the detail title, and DET-15's Escape gap", () => {
+describe("#/@ autocomplete in the detail title, and the Escape gap", () => {
   it("typing '#' opens the listbox with the supplied projects", async () => {
     renderView({
       task: task({ content: "buy " }),
@@ -430,13 +347,6 @@ describe("QA-14 — #/@ autocomplete in the detail title, and DET-15's Escape ga
     pasteText(titleEditor, "#");
     await screen.findByRole("listbox");
 
-    // First Escape: dispatched once, exactly as a real keystroke would be.
-    // `dismissGuardRef`'s own DET-15 fix has to see the popup as OPEN at
-    // the instant Radix's own `document`-capture Escape listener asks —
-    // which fires before this same event ever reaches ProseMirror's
-    // bubble-phase handler on `titleEditor` itself, the ordering this
-    // suite's own header comment names. One `fireEvent.keyDown` exercises
-    // both listeners, in that real order, in one call.
     fireEvent.keyDown(titleEditor, { key: "Escape" });
 
     // The popup is gone (ProseMirror's own autocomplete plugin closed it)…

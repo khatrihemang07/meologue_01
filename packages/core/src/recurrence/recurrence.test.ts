@@ -45,16 +45,6 @@ const occurrence = (date: string): RecurrenceOutcome => ({ kind: "occurrence", d
 const ended: RecurrenceOutcome = { kind: "ended" };
 
 const CASES: readonly Case[] = [
-  // --- Daily / weekly. Issue #291: these two used to be forced
-  // completion-anchored regardless of the bang (a dueDate *after* now —
-  // an early completion, i.e. a postponement — was the one scenario
-  // where that diverged from due-anchoring). Todoist, driven live on both
-  // web and Android
-  // (meologue-reference/todoist/live-audit-dom/recurrence-reschedule-todoist-2026-09-14.json),
-  // resumes a postponed daily/weekly Task from its postponed due date
-  // plus one interval instead, so `every day`/`every week` are now
-  // due-anchored like every other bare frequency, and only `every!
-  // day`/`every! week` still anchor to completion.
   {
     description:
       '"every day" (no bang) is due-anchored, like every other frequency — a future dueDate (a postponement) wins over `now` (issue #291)',
@@ -84,11 +74,6 @@ const CASES: readonly Case[] = [
     expect: occurrence("2026-01-12"),
   },
 
-  // --- Issue #291's own three scope cases, restated directly against the
-  // engine (not just the parity artifact's DOM capture): completed on
-  // time is unaffected, completed overdue still floors at "never in the
-  // past," and completed early/postponed now lands on due + interval
-  // rather than now + interval — the one case that used to regress.
   {
     description: '"every day" completed exactly on its due date (on time) lands on tomorrow',
     dateString: "every day",
@@ -130,16 +115,6 @@ const CASES: readonly Case[] = [
     expect: occurrence("2026-01-26"),
   },
 
-  // --- Issue #301, the two cases that settle it. Driven on Todoist web
-  // 2026-09-15 and recorded in
-  // meologue-reference/todoist/live-audit-dom/recurrence-overdue-weekly-2026-09-15.json.
-  //
-  // These exist because every earlier overdue probe used `every day`,
-  // where a one-day interval has no weekday phase and no interval parity
-  // to lose — so the fixture could not separate "step whole intervals
-  // from the due date" from "max(due, today) + one interval", and the
-  // second was written into the corpus as the general rule. It is wrong
-  // for anything longer than a day.
   {
     description:
       '"every week" overdue by more than one interval steps whole weeks from its due date, keeping the weekday — Todoist web, driven: due Mon 31 Aug, completed Tue 15 Sep, lands Mon 21 Sep (issue #301). `max(due, today) + interval` would give Tue 22 Sep and lose the Monday',

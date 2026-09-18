@@ -68,10 +68,6 @@ function renderUpcomingView(overrides: Partial<Parameters<typeof UpcomingView>[0
 }
 
 describe("UpcomingView", () => {
-  // Pinned to the reference capture's own "today" (meologue-reference/todoist/
-  // README.md: 10 Sep 2026, a Thursday) so every heading this suite reads
-  // matches DATE-05's own wording verbatim, mirroring TodayView's own
-  // fixed-clock reasoning (today-view.test.tsx's header comment).
   beforeEach(() => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date(2026, 8, 10, 12, 0)); // Sep 10, 2026, local noon
@@ -163,14 +159,6 @@ describe("UpcomingView", () => {
     expect(screen.getByText("Overdue")).toBeInTheDocument();
   });
 
-  // `closest("summary")`/`closest("details")` rather than
-  // `getByRole("button", { name })`: task-detail-view.test.tsx's own
-  // Comments disclosure test hits the identical limitation (its CMT-10
-  // describe block's own comment) — a `<details>` does take the
-  // accessible role, but testing-library does not compute an accessible
-  // name from its `<summary>` child, so a named role query can't find it
-  // here even though a real browser's own accessibility tree exposes the
-  // `<summary>` itself as role "button".
   it("renders the Overdue heading inside a native <details> disclosure, not a plain <section>/<h2>", () => {
     renderUpcomingView({
       tasks: [task({ id: "late", content: "late task", date: "2026-09-01" })],

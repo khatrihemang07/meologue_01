@@ -135,15 +135,6 @@ test("/ is not a dead end at the wide breakpoint", async ({ page }) => {
 // replacement) and there is no longer a distinct "Back from Todo" flow to
 // land anywhere, dead end or not.
 
-// Issue #248: `/todo/activity` was linked only from `todo-nav.tsx` (which
-// hides itself at the wide breakpoint) and from inside a Project —
-// `todo-sidebar.tsx`, the nav that replaces `todo-nav` at that width, had
-// no Activity entry at all, the identical defect class Upcoming (#223)
-// shipped with for a full release. Labelled "Reporting" here, not
-// "Activity" — parity ledger NAV-01/NAV-11, read live against real
-// Todoist (flow 6): Todoist's own word for this destination is
-// "Reporting". `todo-nav.tsx`'s bottom bar still says "Activity"
-// (unmeasured against Todoist, out of that fix's scope).
 test("Activity is reachable from the wide-breakpoint Todo sidebar", async ({ page }) => {
   await page.setViewportSize({ width: 1200, height: 900 });
   await page.goto("/todo/inbox");

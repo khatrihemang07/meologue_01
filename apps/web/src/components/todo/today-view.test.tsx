@@ -137,11 +137,6 @@ describe("TodayView", () => {
     expect(screen.queryByText(/Overdue\s*\d/)).not.toBeInTheDocument();
   });
 
-  // ROW-13 (parity-ledger.md), issue #250: every row in Due today is due
-  // today by construction, so its own date badge says nothing a reader
-  // doesn't already know from the section heading — Todoist omits the
-  // control from the DOM there entirely (pass2-2026-09-11.md §3). Overdue
-  // keeps its own badge: an overdue row's date is never redundant.
   it("renders no date badge on a due-today row, but keeps one on an overdue row", () => {
     renderTodayView({
       tasks: [
@@ -160,15 +155,6 @@ describe("TodayView", () => {
     expect(within(dueTodayRow!).queryByText("Today")).not.toBeInTheDocument();
   });
 
-  // DATE-04 (parity-ledger.md): driven live on Today (flow 2) — a
-  // recurring Task due today is not fully suppressed the way a plain
-  // due-today row is. Todoist keeps the `due-date-control` button but
-  // empties its text, leaving an icon-only badge tinted the Today green
-  // (`live-audit-dom/flow2-ROW-13-todoist.json`'s own
-  // `recurringDueTodayRow`). meologue used to suppress the resolved date
-  // entirely here, same as a non-recurring row, and rely solely on the
-  // separate `task.dateString` text badge — this pins the icon-only badge
-  // instead.
   it("shows an icon-only recurrence badge, not the full suppression, on a recurring due-today row", () => {
     renderTodayView({
       tasks: [
@@ -190,8 +176,6 @@ describe("TodayView", () => {
     expect(within(row).queryByText("Today")).not.toBeInTheDocument();
     expect(within(row).queryByText(/↻/)).not.toBeInTheDocument();
     expect(row.querySelector("svg.lucide-repeat")).not.toBeNull();
-    // The separate literal `task.dateString` badge is untouched — only
-    // ROW-13's Today view was re-driven, not this app's own additive badge.
     expect(within(row).getByText("every day")).toBeInTheDocument();
   });
 
@@ -227,9 +211,6 @@ describe("TodayView", () => {
       onComplete,
     });
 
-    // ROW-03 (parity-ledger.md): the checkbox's accessible name is now
-    // Todoist's own fixed wording, not the Task's content — see
-    // task-row.test.tsx's own header comment on the same change.
     fireEvent.click(screen.getByRole("checkbox", { name: "Mark task as complete" }));
 
     expect(onComplete).toHaveBeenCalledWith("a", "call mum", null);

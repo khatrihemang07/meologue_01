@@ -6,27 +6,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { toast } from "@/components/ui/toast";
 import { TaskDetailView } from "./task-detail-view";
 
-// DET-16 — mirrors `todo-page.test.tsx`'s own `vi.mock("@/components/ui/toast", ...)` shape
-// (that file's own header comment on why): `toast` is a plain callable here
-// (no `.error`, unlike that file), since this view never raises an error
-// toast of its own.
 vi.mock("@/components/ui/toast", () => {
   const toast = vi.fn() as unknown as typeof import("@/components/ui/toast").toast;
   return { toast };
 });
 
-/**
- * Stands in for the real `TaskTitleEditor` — see `task-title-editor.tsx`'s
- * own header comment for why no test mounts that component directly (it
- * wraps a real ProseMirror `EditorView`, which jsdom cannot usefully
- * mount). `task-row.test.tsx` mocks the identical module the identical
- * way, for the identical reason. `commitOnBlur` is honoured here — issue
- * #229's own DET-09 rework passes `commitOnBlur={false}` for real, and a
- * stub that ignored it would let a test pass for the wrong reason.
- * `autoFocus` is honoured too — DET-10's own focus-trap tests below need
- * this stub to actually move focus, the same real thing `view.focus()`
- * does.
- */
 function StubTaskTitleEditor({
   value,
   onChange,
@@ -263,17 +247,6 @@ function renderView(overrides: Partial<Parameters<typeof TaskDetailView>[0]> = {
   const view = render(<TaskDetailView {...props} />, { wrapper: MemoryRouter });
   return {
     ...props,
-    /**
-     * DET-16: the real app never hands this view a changed `task` prop
-     * synchronously — `onRename`'s own resolution (`commitTaskTitle`,
-     * task-title-commit.ts) reaches the store through a `useMutation`, and
-     * this component only learns the result once its parent re-renders it
-     * with the updated Task (task-detail-view.tsx's own `pendingRenameDateRef`
-     * doc comment has the full account). `rerender` stands in for that
-     * later, external re-render — tests below use it to simulate the
-     * store's own write landing, the same way the real page eventually
-     * would.
-     */
     rerender: (nextOverrides: Partial<Parameters<typeof TaskDetailView>[0]> = {}) => {
       const nextProps = { ...props, ...nextOverrides };
       view.rerender(<TaskDetailView {...nextProps} />);
@@ -284,10 +257,6 @@ function renderView(overrides: Partial<Parameters<typeof TaskDetailView>[0]> = {
 
 describe("TaskDetailView", () => {
   it("renders as a dialog, carrying the Task's own title as a display element, not an editor, at rest", () => {
-    // DET-02: Todoist's own detail title at rest is a non-editable
-    // display component, not the composer's editor — a plain `<div>`
-    // here (matched live, 2026-09-13), not `getByLabelText("Task name")`,
-    // which only exists once `editingTitle` is activated (below).
     renderView({ task: task({ content: "call mum" }) });
 
     expect(screen.getByRole("dialog")).toBeInTheDocument();
@@ -295,12 +264,7 @@ describe("TaskDetailView", () => {
     expect(screen.queryByLabelText("Task name")).not.toBeInTheDocument();
   });
 
-  // ROW-06 (parity-ledger.md): row-and-detail.md §2's own finding is that
-  // this title-at-rest is the SAME display component the row uses, so the
-  // live-measured markdown rendering (`live-audit-dom/flow10-ROW-06-both.
-  // json`) applies here too — driven through the same `data-testid`,
-  // `tabIndex` and click-to-edit DET-02 already pins above.
-  it("renders markdown in the at-rest title as real formatting — ROW-06", () => {
+  it("renders markdown in the at-rest title as real formatting", () => {
     renderView({ task: task({ content: "ZZ probe **bold** _em_ `code`" }) });
 
     const title = screen.getByTestId("task-detail-title");
@@ -322,18 +286,6 @@ describe("TaskDetailView", () => {
     expect(await screen.findByLabelText("Task name")).toHaveValue("ZZ probe **bold** _em_ `code`");
   });
 
-  // CMT-06: Todoist's own per-task activity names the task in every line
-  // (flow 5), so this view no longer suppresses its subject; and an old
-  // "Edited a comment" event is neither shown nor counted.
-  //
-  // Issue #288: this used to assert `screen.getByText("Activity (1)")`
-  // directly against the detail screen's own at-rest DOM — the inline
-  // `<details>` disclosure this ticket removes. That assertion is now
-  // wrong on its face (the text isn't there until "View activity" is
-  // opened), so this rewrites it to reach the identical substance through
-  // the new route: open the overflow menu, select "View activity," and
-  // assert the same count and the same lines inside the dialog it opens.
-  // Nothing about what's being proven changed — only how it's reached.
   it("names the task in its own Activity lines, and counts only lines it shows", async () => {
     const base = {
       deviceId: "device-a",
@@ -379,7 +331,7 @@ describe("TaskDetailView", () => {
     expect(lines[0]).toContain("call mum");
   });
 
-  it("carries DET-05's own data-testid (keyboard.md §1) on the dialog content", () => {
+  it("carries the data-testid (keyboard.md §1) on the dialog content", () => {
     renderView({ task: task({ content: "call mum" }) });
 
     expect(screen.getByTestId("task-details-modal")).toBe(screen.getByRole("dialog"));
@@ -400,7 +352,7 @@ describe("TaskDetailView", () => {
     expect(await screen.findByLabelText("Task name")).toHaveValue("call mum");
   });
 
-  describe("DET-09/DET-10 — task-wide editing and the focus trap", () => {
+  describe("task-wide editing and the focus trap", () => {
     it("clicking the title activates BOTH the title and the description editors together, sharing one Cancel/Save pair", async () => {
       renderView({ task: task({ content: "call mum", description: "existing text" }) });
 
@@ -437,18 +389,7 @@ describe("TaskDetailView", () => {
       expect(await screen.findByLabelText("Task name")).toHaveFocus();
     });
 
-    // DET-10: live Todoist's own finding (`parity-ledger.md`) is that a
-    // generic click in the gap between the title and Description editors
-    // focuses neither field — it moves focus to the dialog itself. jsdom
-    // never performs a real pointer click's own "move focus to whatever's
-    // under the cursor" step (it only dispatches the synthetic `click`
-    // this fires), and has no `isContentEditable` at all, so this proves
-    // the code's OWN reaction to a generic click (it calls
-    // `contentRef.current?.focus()`) lands where intended — not that a
-    // real click at that screen position would reach this handler rather
-    // than land inside a ProseMirror box first, which needs a real
-    // browser to confirm (this ticket's own report has that caveat).
-    it("DET-10: a generic click in the gap between the title and Description editors focuses the dialog, not either field", async () => {
+    it("a generic click in the gap between the title and Description editors focuses the dialog, not either field", async () => {
       renderView({ task: task({ content: "call mum", description: "existing text" }) });
 
       fireEvent.click(screen.getByTestId("task-detail-title"));
@@ -462,7 +403,7 @@ describe("TaskDetailView", () => {
       expect(screen.getByRole("dialog")).toHaveFocus();
     });
 
-    it("DET-10: clicking a descendant of the shared edit column (the title display, the Description block) does not re-target focus to the dialog", async () => {
+    it("clicking a descendant of the shared edit column (the title display, the Description block) does not re-target focus to the dialog", async () => {
       renderView({ task: task({ content: "call mum", description: "existing text" }) });
 
       fireEvent.click(screen.getByText("existing text"));
@@ -507,8 +448,6 @@ describe("TaskDetailView", () => {
       });
       fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
 
-      // DET-15: not discarded yet — the confirm dialog is open, not the
-      // discard itself, exactly like CMT-03's own delete confirm above.
       const confirmDialog = await screen.findByRole("alertdialog");
       fireEvent.click(within(confirmDialog).getByRole("button", { name: "Discard" }));
 
@@ -518,7 +457,7 @@ describe("TaskDetailView", () => {
     });
   });
 
-  describe("DET-15 — Cancel/Escape confirm first when there are unsaved changes", () => {
+  describe("Cancel/Escape confirm first when there are unsaved changes", () => {
     it("Cancel with an unsaved title change asks before discarding, with Todoist's own wording and a Cancel/Discard pair", async () => {
       renderView({ task: task({ content: "old title" }) });
 
@@ -630,37 +569,6 @@ describe("TaskDetailView", () => {
       expect(await screen.findByRole("alertdialog")).toBeInTheDocument();
     });
 
-    // "Clicking away" is the third path named in this ticket's own
-    // report, alongside Cancel and Escape. What this proves: this file's
-    // own window-capture pointerdown guard (mirroring `CommentRow`'s
-    // identical, already-shipped Escape guard, see that component's own
-    // header comment) intercepts a pointerdown outside the whole panel
-    // and routes it through the identical confirm-first door, rather
-    // than reaching `TaskDetailView`'s `onClose`. It does NOT prove that
-    // clicking Radix's own overlay in a real browser reaches this
-    // listener before Radix's own outside-dismiss handling decides to
-    // close — that's the same document-vs-window capture-order argument
-    // `CommentRow`'s header comment already makes for Escape, and this
-    // guard is built the identical way for the identical reason, but a
-    // real browser (or at least a non-jsdom outside-click harness) would
-    // be needed to confirm Radix's own detection actually fires here the
-    // way `flow5-DET-10-meologue.json`'s click-target capture showed it
-    // does elsewhere in this same view.
-    // Radix's own outside-pointerdown detection
-    // (`usePointerDownOutside`, `@radix-ui/react-dismissable-layer`) is a
-    // two-part real-browser sequence, not one event: (1) its `document`
-    // `pointerdown` listener is registered behind a `setTimeout(0)` — a
-    // genuine detail of Radix's own implementation, not a jsdom
-    // shortcoming — so a pointerdown fired in the SAME tick a dialog
-    // mounts is dispatched before that listener exists yet; and (2)
-    // `Dialog.Content` (unlike `AlertDialog.Content`) passes
-    // `deferPointerDownOutside: true`, so the actual dismiss dispatch
-    // waits for a subsequent `click` on the same target rather than
-    // firing on `pointerdown` alone (`@radix-ui/react-dialog`'s own
-    // `DialogContentModal`, `deferPointerDownOutside: true` — this is
-    // what a real mouse click already produces as pointerdown-then-click,
-    // so a test has to fire both, not shortcut to just the one that
-    // looked sufficient at a glance).
     async function clickOutside(target: Element) {
       // Lets Radix's own mount-time `setTimeout(0)` (registering its
       // `document` pointerdown listener) run before the pointerdown below
@@ -700,7 +608,7 @@ describe("TaskDetailView", () => {
       expect(onClose).not.toHaveBeenCalled();
     });
 
-    it("a pointerdown INSIDE the panel while editing is left alone — DET-09's own 'clicking away inside does nothing' stays true", async () => {
+    it("a pointerdown INSIDE the panel while editing is left alone — the 'clicking away inside does nothing' stays true", async () => {
       renderView({ task: task({ content: "old title" }) });
 
       fireEvent.click(screen.getByTestId("task-detail-title"));
@@ -711,18 +619,6 @@ describe("TaskDetailView", () => {
       expect(screen.getByLabelText("Task name")).toBeInTheDocument();
     });
 
-    // DET-15 round 3 (`flow11-R3-DET-15-both.json`'s
-    // `attempt3_clickOutsideModal`, re-driven live against both apps):
-    // Discard after an OUTSIDE-CLICK trigger closes the whole detail
-    // modal in Todoist, because the click's own original intent — leave
-    // the task — completes once the discard is confirmed. This is new
-    // behaviour meologue didn't have before this fix: it used to only
-    // ever end editing, whichever gesture asked. Contrast the
-    // Cancel-button case (`clickDiscardAfterCancelTrigger` in the same
-    // artifact, and this file's own "clicking Discard in the
-    // confirmation ends editing... without closing the whole view" test
-    // above) and the Escape case just below — both keep `onClose`
-    // un-called, matching Todoist on every trigger but this one.
     it("clicking Discard after an outside-click trigger closes the whole view too, matching Todoist", async () => {
       const onClose = vi.fn();
       const onRename = vi.fn();
@@ -785,11 +681,7 @@ describe("TaskDetailView", () => {
     expect(onRename).not.toHaveBeenCalled();
   });
 
-  it("DET-09: blur alone does not commit or close the combined edit form", async () => {
-    // Moving focus from the title into the description (still inside the
-    // same form) must not save or cancel — only Enter, Escape or the
-    // explicit Save/Cancel pair do, per DET-09's own "one Cancel/Save
-    // pair" rule.
+  it("blur alone does not commit or close the combined edit form", async () => {
     const onRename = vi.fn();
     renderView({ task: task({ content: "old title" }), onRename });
 
@@ -828,9 +720,6 @@ describe("TaskDetailView", () => {
     expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
   });
 
-  // DET-15: Escape used to discard an in-progress, unsaved title/
-  // description edit immediately — see the `DET-15` describe block above
-  // for the Cancel-button equivalent of this same guard.
   it("Escape with an unsaved title change asks first instead of discarding immediately", async () => {
     const onRename = vi.fn();
     renderView({ task: task({ content: "old title" }), onRename });
@@ -851,14 +740,6 @@ describe("TaskDetailView", () => {
     expect(await screen.findByTestId("task-detail-title")).toBeInTheDocument();
   });
 
-  // DET-15 (a second, previously-unguarded bug found while fixing the
-  // one above): Escape while editing used to ALSO bubble to Radix's own
-  // Dialog Escape handling and close the whole view in the same
-  // keystroke — verified directly (before this file's own window-capture
-  // guard existed) by asserting `onClose` here and watching it fail.
-  // `TaskDetailView`'s `open` is hardcoded `true`, so nothing about the
-  // dialog visually disappearing would have caught this; only asserting
-  // `onClose` itself does.
   it("Escape while editing does not also close the whole Task view, whether or not there are unsaved changes", async () => {
     const onClose = vi.fn();
     renderView({ task: task({ content: "old title" }), onClose });
@@ -876,14 +757,6 @@ describe("TaskDetailView", () => {
     expect(onClose).not.toHaveBeenCalled();
   });
 
-  // DET-15 round 3: unlike the outside-click trigger (its own describe
-  // block above), Discard after an Escape-raised confirmation still only
-  // ends editing — Todoist's own re-drive never exercised Escape-then-
-  // Discard's scope directly, but `clickDiscardAfterCancelTrigger` in
-  // `flow11-R3-DET-15-both.json` groups "a Cancel-button or Escape-key
-  // trigger" together as one case, both leaving the modal open, and this
-  // is the spec's own explicit instruction: only the outside-click
-  // trigger changes scope.
   it("clicking Discard after an Escape trigger ends editing but does not close the whole view", async () => {
     const onClose = vi.fn();
     const onRename = vi.fn();
@@ -901,20 +774,6 @@ describe("TaskDetailView", () => {
     expect(onClose).not.toHaveBeenCalled();
   });
 
-  // DET-15 round 3, gap 2 (`flow11-R3-DET-15-both.json`'s own
-  // `escapeInsideConfirmation`): live Todoist returns focus to the Task
-  // name editor, draft intact, once the confirmation itself is dismissed
-  // WITHOUT discarding. meologue previously dropped focus to
-  // `document.body` here, because the confirmation was opened
-  // programmatically (`requestCancelEditing`, not a click on a real
-  // trigger element), so Radix had nothing of its own to restore focus
-  // to. `lastFocusedEditorRef`/`onCloseAutoFocus` (task-detail-view.tsx)
-  // are what fix this — this test proves it inside jsdom, which is
-  // enough here: this suite's own `toHaveFocus` assertions elsewhere
-  // (e.g. the DET-10 focus-trap tests above) already rely on jsdom's
-  // focus tracking behaving like a real browser's for exactly this kind
-  // of check, so this is the same class of proof this file already
-  // leans on, not a new or weaker one.
   it("Escape inside the open confirmation returns focus to the Task name editor, with the draft intact", async () => {
     renderView({ task: task({ content: "old title" }) });
 
@@ -1068,7 +927,7 @@ describe("TaskDetailView", () => {
     expect(screen.getByRole("button", { name: /Labels.*Home, Errands/s })).toBeInTheDocument();
   });
 
-  describe("DET-16 — a toast when a rename resolves a Date", () => {
+  describe("a toast when a rename resolves a Date", () => {
     // Pinned the same way task-detail-view-recognition.test.tsx's own
     // `beforeEach` is (that file's own comment on why `toFake: ["Date"]`
     // alone, not every timer: entering title-edit mode below goes through
@@ -1114,8 +973,6 @@ describe("TaskDetailView", () => {
       expect(toast).toHaveBeenCalledWith(
         "Date updated to Tomorrow",
         expect.objectContaining({
-          // DET-16 (parity-ledger.md): measured live, 9,609ms present and
-          // gone by 10,119ms — 10s, not the completion toast's own 11s.
           duration: 10_000,
           action: expect.objectContaining({ label: "Undo", onClick: expect.any(Function) }),
         }),
@@ -1218,7 +1075,7 @@ describe("TaskDetailView", () => {
     });
   });
 
-  describe("SCHED-15 — postponing a recurring Task keeps its rule", () => {
+  describe("postponing a recurring Task keeps its rule", () => {
     /**
      * Driven on live Todoist 2026-09-15
      * (`recurrence-reschedule-todoist-2026-09-14.json`): rescheduling a
@@ -1439,8 +1296,6 @@ describe("TaskDetailView", () => {
       expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
     });
 
-    // DET-15: same guard as the title's own Escape test above, exercised
-    // through the Description editor's `onCancel` instead.
     it("Escape with an unsaved Description change asks first instead of discarding immediately", async () => {
       const onSetDescription = vi.fn();
       renderView({ task: task({ description: "original" }), onSetDescription });
@@ -1461,13 +1316,6 @@ describe("TaskDetailView", () => {
   });
 
   describe("Comments — issue #180", () => {
-    /**
-     * CMT-09: opens a Comment's own "Comment options" menu and clicks the
-     * named item. `pointerDown`, not `click` — Radix's `DropdownMenu`
-     * opens on pointer, and a plain `click` never opens it at all (the
-     * same idiom `project-view.test.tsx` already uses for its own menu).
-     * `index` picks which Comment's menu when a test renders several.
-     */
     function openCommentOptions(itemName: string, index = 0) {
       const trigger = screen.getAllByRole("button", { name: "Comment options" })[index];
       if (trigger === undefined) {
@@ -1477,7 +1325,7 @@ describe("TaskDetailView", () => {
       fireEvent.click(screen.getByRole("menuitem", { name: itemName }));
     }
 
-    it("CMT-10: renders no Comments section at all when there are none — not an empty heading", () => {
+    it("renders no Comments section at all when there are none — not an empty heading", () => {
       renderView({ comments: [] });
 
       // Todoist's own zero state, read back from its live DOM
@@ -1501,14 +1349,7 @@ describe("TaskDetailView", () => {
       expect(screen.getByText("second reply")).toBeInTheDocument();
     });
 
-    // CMT-02/CMT-08: `CommentRow` now renders through `entryProse`'s own
-    // `"comment"` mode (entry-prose.tsx's own doc comment on the parameter)
-    // rather than the default `"entry"` mode `task.description` still uses
-    // below — a bare URL only linkifies in `"comment"` mode
-    // (entry-prose.test.tsx's own "linkifies a bare https URL" case is the
-    // direct proof of that gate; this is the same behaviour reached through
-    // this file's own real caller).
-    it("CMT-02: a Comment's own bare URL renders as a real link, opened safely in a new tab", () => {
+    it("a Comment's own bare URL renders as a real link, opened safely in a new tab", () => {
       renderView({
         comments: [comment({ id: "c1", text: "see https://example.com now" })],
       });
@@ -1519,11 +1360,6 @@ describe("TaskDetailView", () => {
       expect(link).toHaveAttribute("rel", "noopener noreferrer");
     });
 
-    /**
-     * CMT-11: the composer is collapsed at rest, so every test below that
-     * wants the field has to open it first. `openComposer` returns the
-     * field so the call sites stay one line.
-     */
     function openComposer() {
       fireEvent.click(screen.getByRole("button", { name: "Open comment editor" }));
       return screen.getByLabelText("Add a comment");
@@ -1543,7 +1379,7 @@ describe("TaskDetailView", () => {
       expect(screen.getByLabelText("Add a comment")).toBeInTheDocument();
     });
 
-    it("CMT-01: Ctrl/Cmd+Enter submits — plain Enter and Shift+Enter do not (the opposite of the task composer)", () => {
+    it("Ctrl/Cmd+Enter submits — plain Enter and Shift+Enter do not (the opposite of the task composer)", () => {
       const onAddComment = vi.fn();
       renderView({ comments: [], onAddComment });
 
@@ -1559,7 +1395,7 @@ describe("TaskDetailView", () => {
       expect(onAddComment).toHaveBeenCalledWith("typed");
     });
 
-    it("CMT-01: Cmd+Enter (metaKey) also submits", () => {
+    it("Cmd+Enter (metaKey) also submits", () => {
       const onAddComment = vi.fn();
       renderView({ comments: [], onAddComment });
 
@@ -1591,7 +1427,7 @@ describe("TaskDetailView", () => {
       expect(field).toHaveValue("original");
     });
 
-    it("CMT-03: blurring the editor (clicking away) leaves it open with the draft intact, and saves nothing — Todoist's model, where only Cancel/Update decide the edit's fate", () => {
+    it("blurring the editor (clicking away) leaves it open with the draft intact, and saves nothing — Todoist's model, where only Cancel/Update decide the edit's fate", () => {
       const onEditComment = vi.fn();
       renderView({ comments: [comment({ id: "c1", text: "original" })], onEditComment });
 
@@ -1605,7 +1441,7 @@ describe("TaskDetailView", () => {
       expect(screen.getByLabelText("Edit comment")).toHaveValue("changed");
     });
 
-    it("CMT-03: Escape discards the draft and closes the editor without saving (regression — see this commit's own message for the bug this replaced)", () => {
+    it("Escape discards the draft and closes the editor without saving (regression — see this commit's own message for the bug this replaced)", () => {
       const onEditComment = vi.fn();
       renderView({ comments: [comment({ id: "c1", text: "original" })], onEditComment });
 
@@ -1653,7 +1489,7 @@ describe("TaskDetailView", () => {
       expect(onClose).toHaveBeenCalledTimes(1);
     });
 
-    it("CMT-03: Cancel discards the draft and closes the editor without saving", () => {
+    it("Cancel discards the draft and closes the editor without saving", () => {
       const onEditComment = vi.fn();
       renderView({ comments: [comment({ id: "c1", text: "original" })], onEditComment });
 
@@ -1667,7 +1503,7 @@ describe("TaskDetailView", () => {
       expect(screen.getByText("original")).toBeInTheDocument();
     });
 
-    it("CMT-03: Update commits the trimmed draft and closes the editor", () => {
+    it("Update commits the trimmed draft and closes the editor", () => {
       const onEditComment = vi.fn();
       renderView({ comments: [comment({ id: "c1", text: "original" })], onEditComment });
 
@@ -1680,7 +1516,7 @@ describe("TaskDetailView", () => {
       expect(screen.queryByRole("textbox", { name: "Edit comment" })).not.toBeInTheDocument();
     });
 
-    it("CMT-03: Update saves nothing for a blank draft or one identical to the original", () => {
+    it("Update saves nothing for a blank draft or one identical to the original", () => {
       const onEditComment = vi.fn();
       renderView({ comments: [comment({ id: "c1", text: "original" })], onEditComment });
 
@@ -1697,7 +1533,7 @@ describe("TaskDetailView", () => {
       expect(screen.getByText("original")).toBeInTheDocument();
     });
 
-    it("CMT-03: deleting a Comment asks for confirmation first, and does not remove until confirmed", () => {
+    it("deleting a Comment asks for confirmation first, and does not remove until confirmed", () => {
       const onRemoveComment = vi.fn();
       renderView({ comments: [comment({ id: "c1" })], onRemoveComment });
 
@@ -1713,7 +1549,7 @@ describe("TaskDetailView", () => {
       expect(onRemoveComment).toHaveBeenCalledWith("c1");
     });
 
-    it("CMT-03: Cancelling the delete confirmation removes nothing", () => {
+    it("Cancelling the delete confirmation removes nothing", () => {
       const onRemoveComment = vi.fn();
       renderView({ comments: [comment({ id: "c1" })], onRemoveComment });
 
@@ -1723,7 +1559,7 @@ describe("TaskDetailView", () => {
       expect(onRemoveComment).not.toHaveBeenCalled();
     });
 
-    describe("CMT-11 — the composer is collapsed at rest", () => {
+    describe("the composer is collapsed at rest", () => {
       it("shows a 'Comment' bar and no field until it is opened", () => {
         renderView({ comments: [] });
 
@@ -1741,10 +1577,6 @@ describe("TaskDetailView", () => {
         expect(document.activeElement).toBe(field);
       });
 
-      // Issue #306: a Task row's comment badge now carries `?intent=reply`
-      // (ROW-08), and `todo-page.tsx` reads it into this prop — "land in
-      // the thread, ready to reply" means the composer arrives already
-      // expanded AND focused, not merely reachable one click away.
       it("issue #306: openCommentComposer=true starts expanded, with focus already in the field — no click needed", () => {
         renderView({ comments: [], openCommentComposer: true });
 
@@ -1756,11 +1588,6 @@ describe("TaskDetailView", () => {
         expect(document.activeElement).toBe(field);
       });
 
-      // The explicit regression case the ticket names as most likely to
-      // slip: every OTHER way of reaching this view — no `openCommentComposer`
-      // prop at all, the default every existing caller still passes — must
-      // still land on the collapsed bar, exactly as CMT-11 above already
-      // covers, restated here so the two prop values sit side by side.
       it("issue #306: openCommentComposer left unset (or false) stays collapsed at rest", () => {
         renderView({ comments: [], openCommentComposer: false });
         expect(screen.getByRole("button", { name: "Open comment editor" })).toBeInTheDocument();
@@ -1847,7 +1674,7 @@ describe("TaskDetailView", () => {
       });
     });
 
-    describe("CMT-10 — the Comments header collapses", () => {
+    describe("the Comments header collapses", () => {
       it("is a real disclosure, open by default, and collapses the thread", () => {
         renderView({ comments: [comment({ id: "c1", text: "first" })] });
 
@@ -1885,10 +1712,6 @@ describe("TaskDetailView", () => {
 
         fireEvent.click(screen.getByText("Comments 1"));
 
-        // The composer is the column's footer, a sibling of the thread
-        // rather than a member of it — collapsing the thread must not take
-        // the way to add a Comment with it. At rest that way in is the
-        // collapsed bar (CMT-11), not the field itself.
         expect(screen.getByRole("button", { name: "Open comment editor" })).toBeInTheDocument();
       });
 
@@ -1918,7 +1741,7 @@ describe("TaskDetailView", () => {
       });
     });
 
-    describe("CMT-09 — the Comment options menu", () => {
+    describe("the Comment options menu", () => {
       // This project sets neither `unstubGlobals` nor `restoreMocks`
       // (vite.config.ts's own `test` block), so a stubbed `navigator` would
       // otherwise stay stubbed for every test after it in this file.
@@ -2079,10 +1902,6 @@ describe("TaskDetailView", () => {
 
       const checkbox = screen.getByLabelText('Mark "call mum" not done');
       expect(checkbox).toBeChecked();
-      // Their selector (`data-testid`, since DET-02's 2026-09-13 match
-      // to Todoist made the at-rest title a plain div rather than a
-      // named button), this branch's assertion (#237: the shared class,
-      // never a hardcoded decoration).
       const title = screen.getByTestId("task-detail-title");
       expect(title).toHaveClass("completed-task-text");
       expect(title).not.toHaveClass("line-through");
@@ -2223,13 +2042,6 @@ describe("TaskDetailView", () => {
     });
   });
 
-  // Issue #288: the fixture that motivated this ticket — a Comment
-  // rendered once as a thread row under "Comments," and again, quoting
-  // the same text, inside a sibling "Activity" disclosure a few rows
-  // below. The ratified fix moves Activity behind the overflow menu's
-  // own "View activity" item rather than removing comment events from it
-  // (that's explicitly out of scope — CMT-06's `You commented {content}
-  // on {task}` stays matched parity, not divergent).
   describe("Issue #288 — Activity moves behind View activity, not off the feed", () => {
     function openOverflow() {
       fireEvent.pointerDown(screen.getByRole("button", { name: "Task actions" }));
@@ -2301,10 +2113,6 @@ describe("TaskDetailView", () => {
       expect(screen.queryByText(/^Activity \(/)).not.toBeInTheDocument();
     });
 
-    // The other half: comment events are NOT dropped from the feed
-    // (issue #288's own explicit "do not do this" — removing them would
-    // move parity row CMT-06 from matched to divergent). They still show
-    // once a reader actually opens View activity.
     it("still shows comment events once View activity is opened", () => {
       const commentText = "ZZ probe comment shown only once";
       renderView({

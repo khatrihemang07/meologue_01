@@ -3,28 +3,6 @@ import { CompletionToastBody } from "@/components/todo/completion-toast";
 import { toast } from "@/components/ui/toast";
 import { COMPLETION_TOAST_DURATION_MS } from "@/platform/completion-toast-duration";
 
-/**
- * CMT-05 (parity ledger) — how long a completion toast stays up. This used
- * to be a single hard-coded constant here; issue #356 moved it behind the
- * build-time platform seam (`@/platform/completion-toast-duration`,
- * ADR 0005) because Todoist web's and Todoist Android's own undo windows
- * are a measured 3x apart, so one figure is wrong for at least one
- * meologue target. See that seam's per-target files for the measurements
- * and their provenance — `completion-toast-duration.web.ts` (web, macOS
- * and sandbox: 10s) and `completion-toast-duration.android.ts` (Android:
- * ~3.5s). Under vitest (mode "test", outside the seam's target list) this
- * resolves to the web file, so existing tests asserting `duration: 10_000`
- * are exercising the same fallback the seam gives an unqualified
- * `vite build`.
- *
- * Issue #355 moved this out of `todo-page.tsx` (where it was first
- * measured, as that file's own `COMPLETION_TOAST_DURATION_MS`) into this
- * shared module: the Composer's Task overlay raises the identical
- * completion toast now (`useCompletionToast` below), and a duration
- * measured once for the action, not for the page, has exactly one home to
- * live in.
- */
-
 export interface CompletionToastControls {
   /**
    * Raises a completion Undo toast for `message`, calling `onUndo` if
@@ -41,13 +19,6 @@ export interface CompletionToastControls {
    * completion landed.
    */
   raise: (message: string, onUndo: () => void) => void;
-  /**
-   * CMT-05's one door onto `pendingUndoRef` below — `todo-page.tsx`'s
-   * `useTodoKeymap` `onUndoComplete` option and `composer-page.tsx`'s own
-   * `useCompletionUndoShortcut` (below) both call this and nothing else,
-   * so `Z`/`⌘Z` always resolves to whichever toast this hook instance is
-   * currently showing, on either surface.
-   */
   fireUndo: () => void;
 }
 
@@ -61,16 +32,6 @@ export interface CompletionToastControls {
  * stacking beside it.
  */
 export function useCompletionToast(): CompletionToastControls {
-  // CMT-05 (parity ledger) — the one thing `Z`/`⌘Z` has to act on: the
-  // most recent completion's own `undo`, live only while its toast is
-  // still showing. A `ref`, not `useState`, deliberately — this never
-  // drives a render, only `fireUndo`'s later, out-of-band read of it, the
-  // same reason `document.activeElement` (`focusedTaskId()`,
-  // todo-keymap.ts) is read fresh rather than tracked in state. `toastId`
-  // guards against a stale write: if a second completion happens before
-  // the first toast's `onAutoClose`/`onDismiss` fires, that older
-  // callback must not clear the ref out from under the newer completion
-  // it no longer describes.
   const pendingUndoRef = useRef<{ toastId: string | number; undo: () => void } | null>(null);
 
   function raise(message: string, onUndo: () => void) {

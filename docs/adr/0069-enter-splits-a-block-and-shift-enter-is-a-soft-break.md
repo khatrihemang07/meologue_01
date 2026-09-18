@@ -16,19 +16,15 @@ collector every reader in this app uses, `entryDisplayParser`/`parseEntryMarkdow
 `collectDisplayBlocks` no longer exist, and the "second parser" framing this ADR originally shipped
 with is now historical, kept in Decision's own account rather than deleted, because it is the
 reasoning a later reader needs to understand why the writer had to change at the same time. Extends
-[0072](0072-upnote-is-the-specification-per-input-modality.md)'s
-stance that UpNote's own observed behaviour, not a claim written once into an ADR's prose, is what
-"feels like UpNote" has to answer to — this ADR is the case that stance was written for:
-`meologue-reference/upnote-editor-behaviour.md`'s byte-verified record of UpNote's own block model is
-the concrete fact 0066 did not have when it reasoned its way to a different design.
-[0073](0073-editor-parity-is-proved-by-a-generated-matrix.md)'s parity fixture
-(`apps/web/src/lib/parity/parity-fixture.ts`) now carries this ADR's own target rows for the
-Composer's document model. Reuses [0041](0041-prose-renders-as-inline-markdown-at-render-time.md)'s
-`white-space: pre-wrap`, unchanged in mechanism, retargeted in purpose — see Decision. Names
+a since-retired ADR's stance that UpNote's own observed behaviour, not a claim written once into an
+ADR's prose, is what "feels like UpNote" has to answer to — this ADR is the case that stance was
+written for: a byte-verified record of UpNote's own block model is the concrete fact 0066 did not
+have when it reasoned its way to a different design. Reuses
+[0041](0041-prose-renders-as-inline-markdown-at-render-time.md)'s `white-space: pre-wrap`, unchanged
+in mechanism, retargeted in purpose — see Decision. Names
 [0067](0067-a-one-time-pass-halves-old-newline-runs.md)'s own migration historical rather than
-superseding it — that pass still runs, still does exactly what it always did, and simply stops
-being the thing standing between a legacy body and the defect it was written to prevent; see
-Consequences.
+superseding it — that pass still runs, still does exactly what it always did, and simply stops being
+the thing standing between a legacy body and the defect it was written to prevent; see Consequences.
 
 This ADR was written as a two-ticket decision, and both tickets have now landed. Issue #232 (the
 reader — `entryProse`, entry-prose.tsx; the parser, inline-markdown.ts) implemented everything that
@@ -57,19 +53,18 @@ right: this is a genuine collision between what CommonMark can express and what 
 look like. What was wrong was the conclusion it drew from that collision — that Enter itself had to
 stop splitting the block.
 
-**UpNote's own mechanism for the identical problem was sitting in this repo the whole time, unread
-until this ticket.** `meologue-reference/upnote-editor-behaviour.md`, produced by driving the shipped
-application by hand and reading its stored HTML back byte for byte, records the actual answer under
-"The one fact that explains the reported defect": UpNote's block element is a bare `<div>`, whose
-default margin is zero. Its inter-block gap is therefore exactly one line-height — one Enter looks
-like one new line not because Enter avoids creating a new block, but because the block boundary
-itself costs nothing extra to look at. `alpha` Enter `bravo` is stored, verified against the actual
-`upnote.sqlite3`, as `<div>alpha</div><div>bravo</div>` — two real sibling blocks — and `alpha`
-Shift+Enter `bravo` is stored as `alpha<br>bravo` — one block, a line break inside it. UpNote never
-had ADR 0066's problem, because it never collapsed those two into the same operation to begin with;
-the "problem" ADR 0066 solved by redefining Enter was, in UpNote's own model, never actually a
-consequence of what Enter means. It was only ever a consequence of what a Markdown paragraph
-boundary is forced to cost in the one dialect this app happens to store.
+**UpNote's own mechanism for the identical problem was documented, unread until this ticket.**
+Driving the shipped application by hand and reading its stored HTML back byte for byte records the
+actual answer under "The one fact that explains the reported defect": UpNote's block element is a
+bare `<div>`, whose default margin is zero. Its inter-block gap is therefore exactly one line-height
+— one Enter looks like one new line not because Enter avoids creating a new block, but because the
+block boundary itself costs nothing extra to look at. `alpha` Enter `bravo` is stored, verified
+against the actual `upnote.sqlite3`, as `<div>alpha</div><div>bravo</div>` — two real sibling blocks
+— and `alpha` Shift+Enter `bravo` is stored as `alpha<br>bravo` — one block, a line break inside it.
+UpNote never had ADR 0066's problem, because it never collapsed those two into the same operation to
+begin with; the "problem" ADR 0066 solved by redefining Enter was, in UpNote's own model, never
+actually a consequence of what Enter means. It was only ever a consequence of what a Markdown
+paragraph boundary is forced to cost in the one dialect this app happens to store.
 
 **Collapsing block break and soft break into one concept is what left Shift+Enter with nothing
 distinct to do, and that is the defect actually being reported now.** `isSubmitChord` excludes any

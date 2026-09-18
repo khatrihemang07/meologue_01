@@ -158,10 +158,6 @@ function renderRow(overrides: Partial<Parameters<typeof TaskRow>[0]> = {}) {
     onOutdent: vi.fn(),
     ...overrides,
   };
-  // ROW-08 (parity-ledger.md): the comment-count badge is a real
-  // react-router `<Link>` now, not a plain `<span>` — it needs a Router
-  // context to render at all, which this suite had no reason to supply
-  // before.
   render(
     <ul>
       <TaskRow {...props} />
@@ -185,12 +181,6 @@ function rowBox(): HTMLElement {
   return box;
 }
 
-/**
- * The checkbox's own aria-hidden inner `<span>` (ROW-03) — the 18×18
- * visible ring, carrying the priority `box-shadow` — now that the
- * checkbox itself is a `<button role="checkbox">` supplying only the
- * 24×24 hit box around it.
- */
 function ringSpan(): HTMLElement {
   const span = screen.getByRole("checkbox").querySelector<HTMLElement>("span");
   if (!span) throw new Error("expected the checkbox's own ring span");
@@ -202,24 +192,10 @@ describe("TaskRow", () => {
     renderRow({ task: task({ content: "call mum" }) });
 
     expect(screen.getByText("call mum")).toBeInTheDocument();
-    // ROW-03 (parity-ledger.md), the user's 2026-09-13 decision: the
-    // checkbox's accessible name is now Todoist's own fixed wording
-    // ("Mark task as complete"/"Mark task as incomplete", `lifecycle.md:70`),
-    // not the Task's content — a row no longer names the checkbox after
-    // itself. This file renders exactly one row per test (`renderRow`
-    // above), so the name alone is still unambiguous here; a caller
-    // rendering more than one row has to find the row first and the
-    // checkbox within it instead (see todo-page.test.tsx/today-view.test.tsx).
     expect(screen.getByRole("checkbox", { name: "Mark task as complete" })).not.toBeChecked();
   });
 
-  // ROW-06 (parity-ledger.md): driven live, both apps, flow 10 — Todoist
-  // parses markdown in a task title at render time
-  // (`live-audit-dom/flow10-ROW-06-both.json`), verified with a title
-  // confirmed to hold only literal delimiters, never composer-converted
-  // marks. This row used to interpolate `task.content` as plain text
-  // everywhere.
-  it("renders markdown in the title as real formatting, not literal characters — ROW-06", () => {
+  it("renders markdown in the title as real formatting, not literal characters", () => {
     renderRow({ task: task({ content: "ZZ probe **bold** _em_ `code`" }) });
 
     // The title button's own accessible name is computed from its
@@ -233,11 +209,7 @@ describe("TaskRow", () => {
     expect(titleButton.querySelector("code")?.textContent).toBe("code");
   });
 
-  // The artifact's own row aria-labels were never re-driven live against
-  // Todoist for this construct (only the tab-title/dialog-accessible-name
-  // strings were), so this row's hover-action aria-labels keep
-  // interpolating the raw, un-rendered title — unchanged by ROW-06.
-  it("keeps aria-labels as the raw, unrendered title — ROW-06 aria-labels are unrecorded", () => {
+  it("keeps aria-labels as the raw, unrendered title — aria-labels are unrecorded", () => {
     renderRow({ task: task({ content: "ZZ probe **bold** _em_ `code`" }) });
 
     expect(
@@ -320,11 +292,7 @@ describe("TaskRow", () => {
     expect(screen.queryByRole("button", { name: /Complete and archive/ })).not.toBeInTheDocument();
   });
 
-  // ROW-14 (parity-ledger.md): a completed Task now renders through this
-  // same row rather than a separate, reduced component — this file's own
-  // fix for the gap the ROW-14 change first shipped with, per
-  // `task-row-content.tsx`'s own doc comment on the checkbox and title.
-  describe("ROW-14: a completed Task renders through this same row", () => {
+  describe("a completed Task renders through this same row", () => {
     it("carries aria-checked=true and 'Mark task as incomplete'", () => {
       renderRow({ task: task({ completedAt: "2026-01-01T00:00:00.000Z" }) });
 
@@ -390,23 +358,11 @@ describe("TaskRow", () => {
       expect(screen.getByText("urgent")).toBeInTheDocument();
       expect(screen.getByText("Errands")).toBeInTheDocument();
       expect(screen.getByRole("link", { name: "2 comments" })).toBeInTheDocument();
-      // The date badge itself is asserted by text elsewhere in this suite
-      // (ROW-01's own `describe` above) rather than by its exact,
-      // day-relative wording here — `hasMetadata` (and so the 59px floor)
-      // being true is what proves a date badge rendered at all alongside
-      // the fields above.
       expect(rowBox().style.minHeight).toBe("59px");
-      // ROW-03: the priority ring is still drawn on a completed row's
-      // checkbox, filled with a check mark once ticked — the fill this
-      // component's own predecessor (`completed-tasks.tsx`'s now-removed
-      // `CompletedTaskRow`) added, carried over rather than dropped.
       expect(ringSpan().querySelector("svg")).toBeInTheDocument();
     });
 
     it("hides the 'Complete and archive recurring task' button once the Task is completed", () => {
-      // ROW-14 decision, recorded in task-row-content.tsx's own comment:
-      // "end the series" has nothing left to do to a Task that's already
-      // done — not measured against either artifact, a judgment call.
       renderRow({
         task: task({
           content: "pay rent",
@@ -427,10 +383,6 @@ describe("TaskRow", () => {
     });
 
     it("keeps its hover controls (Edit, Date, Comment, More) working — neither artifact says otherwise", () => {
-      // Neither app's own ROW-14 artifact drove a completed row's hover
-      // controls specifically — this is the fallback this ticket's own
-      // brief asks for ("if the artifact doesn't settle it, keep them
-      // working"), not a read fact.
       renderRow({ task: task({ content: "done", completedAt: "2026-01-01T00:00:00.000Z" }) });
 
       expect(screen.getByRole("button", { name: 'Edit "done"' })).toBeInTheDocument();
@@ -456,15 +408,6 @@ describe("TaskRow", () => {
     });
   });
 
-  // ROW-03/PRI-06 (parity-ledger.md), issue #250 then a later fix pass:
-  // pass2-2026-09-11.md §2 first measured the checkbox ring at 2px for P1,
-  // 1px everywhere else — flow 2's live P1-P4 fixtures (PRI-06) then showed
-  // that "everywhere else" was wrong for P2/P3 too: the ring is 2px for
-  // EVERY non-default priority (P1, P2, P3) and 1px only at P4 ("no
-  // priority"). `priority` below is the STORED value; UI P1/P2/P3/P4 are
-  // stored 4/3/2/1 (task-types.ts's own `uiPriorityOf`'s `5 - x`
-  // inversion) — this suite always states the UI level in the test name
-  // and the stored number in the fixture, never the reverse.
   it.each([
     ["P1", 4],
     ["P2", 3],
@@ -472,10 +415,6 @@ describe("TaskRow", () => {
   ])("thickens the checkbox ring to 2px at %s", (_uiLabel, storedPriority) => {
     renderRow({ task: task({ priority: storedPriority }) });
 
-    // ROW-03: the ring itself now lives on the checkbox `<button>`'s own
-    // aria-hidden inner `<span>` (the 18×18 visible ring), not on the
-    // accessible checkbox element directly — the button supplies the
-    // 24×24 hit box, which carries no box-shadow of its own.
     expect(ringSpan().style.boxShadow).toContain("2px");
   });
 
@@ -1149,7 +1088,7 @@ describe("TaskRow", () => {
     expect(screen.queryByText(/^P[1-4]$/)).not.toBeInTheDocument();
   });
 
-  it("summarises an all-day date and a deadline — a non-default priority renders no text badge (ROW-10)", () => {
+  it("summarises an all-day date and a deadline — a non-default priority renders no text badge", () => {
     renderRow({
       task: task({
         content: "call mum",
@@ -1161,9 +1100,6 @@ describe("TaskRow", () => {
 
     expect(screen.getByText("3 Sep")).toBeInTheDocument();
     expect(screen.getByText("Due 10 Sep")).toBeInTheDocument();
-    // ROW-10(a): Todoist's own `task-info-tags` is empty for a P1 Task —
-    // priority shows only through the checkbox ring (ROW-03/PRI-05/06),
-    // never a `P1`/`P2`/`P3` text badge on the row itself.
     expect(screen.queryByText("P1")).not.toBeInTheDocument();
   });
 
@@ -1173,33 +1109,14 @@ describe("TaskRow", () => {
     expect(screen.getByText("3 Sep 9:30 AM")).toBeInTheDocument();
   });
 
-  // DATE-01 (parity-ledger.md): Todoist's own date control carries an
-  // inline 12×12 calendar `<svg>` beside the date text
-  // (`live-audit-dom/flow8-DATE-01-todoist.json`), which meologue rendered
-  // no icon for at all before this fix. That artifact only ever sampled
-  // an OVERDUE row ("Yesterday", four captures in flow8-DATE-01-debug.json)
-  // — whether Todoist's non-overdue dates also carry the icon was never
-  // settled either way, so this is on every dated row, not gated to
-  // overdue, per this fix's own instruction for an unsettled artifact.
-  // jsdom paints no pixels, so this only proves the icon element is in the
-  // DOM next to the date text, not that it renders at 12×12 on screen.
-  it("shows a calendar icon beside the date text — DATE-01", () => {
+  it("shows a calendar icon beside the date text", () => {
     renderRow({ task: task({ content: "call mum", date: "2026-09-03" }) });
 
     const dateText = screen.getByText("3 Sep");
     expect(dateText.querySelector("svg.lucide-calendar")).not.toBeNull();
   });
 
-  // DATE-04 (parity-ledger.md): driven live on Today (flow 2) — a
-  // recurring Task whose date badge is suppressed (today-view.tsx's own
-  // `suppressDateBadge`, ROW-13) is NOT fully suppressed the way a plain
-  // due-today row is: Todoist keeps the `due-date-control` button but
-  // empties its text, leaving an icon-only badge tinted the Today green
-  // (`live-audit-dom/flow2-ROW-13-todoist.json`'s own
-  // `recurringDueTodayRow`, "the recurrence glyph" — a single icon, not
-  // the calendar (DATE-01) beside it). A plain, non-recurring suppressed
-  // row still renders nothing at all, unchanged from before this fix.
-  it("DATE-04: a suppressed date badge on a recurring Task still shows an icon-only recurrence glyph", () => {
+  it("a suppressed date badge on a recurring Task still shows an icon-only recurrence glyph", () => {
     renderRow({
       task: task({ content: "water plants", date: "2026-09-02", dateString: "every day" }),
       suppressDateBadge: true,
@@ -1211,7 +1128,7 @@ describe("TaskRow", () => {
     expect(rowBox().querySelector("svg.lucide-calendar")).toBeNull();
   });
 
-  it("DATE-04: a suppressed date badge on a non-recurring Task still renders nothing", () => {
+  it("a suppressed date badge on a non-recurring Task still renders nothing", () => {
     renderRow({
       task: task({ content: "call mum", date: "2026-09-02" }),
       suppressDateBadge: true,
@@ -1221,16 +1138,7 @@ describe("TaskRow", () => {
     expect(rowBox().querySelector("svg.lucide-calendar")).toBeNull();
   });
 
-  // ROW-01 (parity-ledger.md): a title-only row (no date, deadline,
-  // priority, recurrence, Label, Project, sub-task or comment count) is
-  // 43px in Todoist; a row carrying one metadata line is 59px, +16px. This
-  // used to be a single `minHeight: "59px"` floor that held every
-  // title-only row at 59 regardless. jsdom computes no layout, so this
-  // only proves the inline `minHeight` style switches with `hasMetadata`
-  // — it cannot measure the row's actual painted height. Flow 11 R2 did:
-  // the 44px action buttons held a title-only row at 47px, so they now lay
-  // out at 36px through `-my-1`, which the last test here pins.
-  describe("ROW-01: row height follows whether the row has a metadata line", () => {
+  describe("row height follows whether the row has a metadata line", () => {
     it("lays the 44px row actions out at 36px so they cannot hold a title-only row above 43px", () => {
       renderRow({ task: task({ content: "call mum" }) });
 
@@ -1250,14 +1158,7 @@ describe("TaskRow", () => {
       expect(rowBox().style.minHeight).toBe("59px");
     });
 
-    // ROW-10(a): priority no longer counts toward `hasMetadata` — Todoist
-    // shows it only via the checkbox ring, never a row-level badge — so a
-    // Task whose only attribute is a non-default priority is now a
-    // title-only row, exactly Todoist's own P1 fixture
-    // (`flow2-ROW-01-02-todoist.json`, 43px). This test used to expect
-    // 59px, back when `task.priority !== 1` was one of the checks
-    // `hasMetadata` OR'd together.
-    it("floors a row with a non-default priority (and no date) at 43px — priority is not metadata (ROW-10)", () => {
+    it("floors a row with a non-default priority (and no date) at 43px — priority is not metadata", () => {
       renderRow({ task: task({ content: "call mum", priority: 4 }) });
 
       expect(rowBox().style.minHeight).toBe("43px");
@@ -1336,12 +1237,6 @@ describe("TaskRow", () => {
       expect(screen.queryByText("Inbox")).not.toBeInTheDocument();
     });
 
-    // Issue #310 (ROW-10/AROW-14): Todoist suppresses a Task row's own
-    // Project badge inside that Project's own view — the page's own
-    // heading already names it — and shows it everywhere else
-    // (Today/Upcoming/Search/a Filter). `suppressProjectBadge` is the
-    // caller-supplied flag `task-tree.tsx` derives from `projectId !==
-    // null`; this row itself only has to obey it.
     it("hides the Project badge when suppressProjectBadge is set, even though the Task has a Project", () => {
       renderRow({
         task: task({ content: "call mum", projectId: "project-1" }),
@@ -1412,7 +1307,7 @@ describe("TaskRow", () => {
       expect(screen.getByText("2/2")).toBeInTheDocument();
     });
 
-    it("previews a Description's first line as rendered markdown beneath the title — ROW-07", () => {
+    it("previews a Description's first line as rendered markdown beneath the title", () => {
       renderRow({
         task: task({ content: "call mum", description: "**call** first\nthen leave a voicemail" }),
       });
@@ -1421,8 +1316,6 @@ describe("TaskRow", () => {
       // tap away in the detail view, not repeated here (this row's own
       // header comment on `descriptionFirstLine`).
       expect(screen.queryByText(/voicemail/)).not.toBeInTheDocument();
-      // Real HTML from markdown, not the literal `**call**` characters —
-      // ROW-07's own "real HTML from markdown" requirement.
       const strong = screen.getByText("call", { selector: "strong" });
       expect(strong).toBeInTheDocument();
     });
@@ -1457,16 +1350,6 @@ describe("TaskRow", () => {
       expect(screen.getByText("1")).toBeInTheDocument();
     });
 
-    // ROW-08 (parity-ledger.md): Todoist's own badge is a real
-    // `<a aria-label="N comment(s)" href="…?intent=reply">`
-    // (`row-and-detail.md:120`; singular confirmed live,
-    // `flow10-ROW-09-both.json`'s `"1 comment"` reading) — this used to be
-    // a plain, non-interactive `<span>`.
-    // Issue #306: `?intent=reply` closes ROW-08's one remaining
-    // divergence — Todoist's own badge carries it too
-    // (`taskDetailPath`'s own doc comment, task-detail-route.ts, has the
-    // full reasoning for why it rides the SAME address as a query
-    // parameter rather than a second route).
     it("renders the comment badge as a link to the Task's own detail route, carrying the reply intent, singular wording at 1", () => {
       renderRow({ task: task({ id: "1", content: "call mum" }), commentCount: 1 });
 

@@ -271,7 +271,7 @@ instead of letting it bleed harmlessly into padding the way an unconstrained con
 caught it; the negative margin is dropped for the Composer's own checkbox, trading tight
 bullet-alignment for a control that is always exactly where it is drawn.
 
-## Amendment (2026-09-10, while landing parity-ledger row DET-07)
+## Amendment (2026-09-10)
 
 The Tests section above says a ProseMirror `EditorView` "cannot usefully mount" in jsdom. That is
 too strong, and the boundary is worth stating precisely, because a blanket claim of impossibility

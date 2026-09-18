@@ -40,8 +40,7 @@ describe("TodoKeyboardShortcutsOverlay", () => {
     expect(screen.queryByText("Move to…")).not.toBeInTheDocument();
   });
 
-  // KBD-01/KBD-06 (parity ledger) — the missed (b)s this ticket bound.
-  it("lists the newly-bound KBD-01/KBD-06 rows, including the new Add task section", () => {
+  it("lists the newly-bound rows, including the new Add task section", () => {
     render(<TodoKeyboardShortcutsOverlay open={true} onOpenChange={vi.fn()} />);
 
     // Scoped to the section heading (`h3`) — "Add task" is also the

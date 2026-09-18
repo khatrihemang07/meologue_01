@@ -22,11 +22,11 @@ destination further.
 
 Todo exists to be Todoist. `CONTEXT.md` already commits this repo to that in writing, in the one
 glossary entry admitted on a different ground than every other — *"Project" — admitted, with a
-note* — whose whole argument is that parity with Todoist is a source this build will be read
+note* — whose whole argument is that matching Todoist is a source this build will be read
 against for years.
 
-An audit of the shipped Todo against the real application (`meologue-reference/todoist/`) found the
-divergence was not a handful of details. Dates render in one grey where Todoist carries a tone;
+An audit of the shipped Todo against the real application found the divergence was not a handful
+of details. Dates render in one grey where Todoist carries a tone;
 the row omits labels, project and a description indicator entirely; the type scale, the density and
 the palette are this app's own throughout. The instruction was to make Todo an exact clone,
 visually and functionally.
@@ -82,12 +82,10 @@ Todoist red in this codebase can see where it is allowed to apply and where it i
 not true of the four literals this replaces.
 
 **Light theme is unverified.** Todoist was only ever observed in dark theme, so every measured value
-here is a dark value. The light block is a derivation, commented as such, and was recorded as
-`THEME-01` in the parity ledger with status `blocked`, pending either a light-theme capture pass or
-a product decision that Todo is dark-accurate and light-approximate. *(Corrected: the owner made
-that decision on 2026-09-11 — "meologue's light theme is its own design, not a replica, and
-light-mode parity rows are no longer tracked." `THEME-01` is closed `divergent`, not `blocked`; no
-capture pass is coming, and none was needed.)* Shipping a guess that reads as a measurement is the
+here is a dark value. The light block is a derivation, commented as such, pending either a
+light-theme capture pass or a product decision that Todo is dark-accurate and light-approximate.
+*(Corrected: the owner made that decision on 2026-09-11 — "meologue's light theme is its own
+design, not a replica." No capture pass is coming, and none was needed.)* Shipping a guess that reads as a measurement is the
 one outcome this ADR refuses.
 
 **Two reds stay two reds.** The priority picker's swatch and the row's checkbox ring were measured

@@ -7,10 +7,9 @@ Accepted. Builds on [0044](0044-the-composer-holds-a-document.md), which chose `
 the `list_item` it belongs to — as the shape `prosemirror-schema-list`'s own commands
 (`splitListItem`/`liftListItem`/`sinkListItem`) are documented to expect. This ADR is the first time
 that choice runs into a case `sinkListItem` itself cannot reach at all, for a structural reason
-rather than a bug in it. Depends on
-[0072](0072-upnote-is-the-specification-per-input-modality.md), which names UpNote's own
-`upnote-editor-behaviour.md`/`upnote-macos-detail.md`/`upnote-android-detail.md` findings the
-specification this ADR matches. [0070](0070-the-composer-keeps-tab-and-shift-tab-in-bare-prose-is-the-keyboard-exit.md)
+rather than a bug in it. Matches UpNote's own observed behaviour — the `upnote-editor-behaviour.md`/
+`upnote-macos-detail.md`/`upnote-android-detail.md` findings that a since-retired ADR named the
+specification this ADR follows. [0070](0070-the-composer-keeps-tab-and-shift-tab-in-bare-prose-is-the-keyboard-exit.md)
 is the other half of issue #233: that ADR decides what Tab/Shift-Tab do once there is nothing left
 to indent or outdent; this one decides what indenting itself does for the one case that was
 previously impossible.
@@ -131,9 +130,8 @@ its bullet).
 
 ## Consequences
 
-**`meologue-reference/upnote-macos-detail.md`'s own Gap sweep Group B1's "Tab on the first item of a
-list also nests" finding, and `upnote-android-detail.md`'s Gap sweep Group D confirming the same on
-Android, are both now true of this Composer as well — proven live, not merely reasoned about: a
+**The macOS Gap sweep Group B1 finding — "Tab on the first item of a list also nests" — and Gap
+sweep Group D confirming the same on Android, are both now true of this Composer as well — proven live, not merely reasoned about: a
 real browser was driven by hand through exactly this scenario (a two-item list, caret moved back to
 the first item, Tab pressed) before this ADR was written down, and the resulting DOM was inspected
 directly rather than assumed from reading the code.**
@@ -155,25 +153,3 @@ time.** The term is coined and used consistently in this ADR and in `composer-co
 `sinkFirstListItem` comment, so a future glossary pass has a single, already-settled definition to
 adopt rather than one it has to invent.
 
-**`apps/web/src/lib/parity/parity-fixture.ts`'s `tab-on-first-item-of-list-also-nests` row compares
-this Composer's live document against UpNote's own two-item canonical shape — `[{level: 1, "alpha"},
-{level: 0, "bravo"}]`, no third entry — and `apps/web/src/lib/parity/canonical.ts`'s own
-`flattenList` (verified directly, by constructing exactly this Composer's own empty-parent shape
-against a real `entrySchema` document and reading `entryDocumentToCanonical`'s literal output, not
-assumed from reading the algorithm alone) unconditionally pushes ONE `CanonicalListItem` entry for
-EVERY `list_item` it walks, the empty parent included, before ever asking whether that item's own
-prose is empty.** The live result is therefore three entries — the empty parent, then "alpha" one
-level deeper, then "bravo" — not the two the fixture's own `expected` value states, for a structural
-reason `canonical.ts` has no mechanism to avoid today: `flattenList` has no notion of "this
-`list_item` exists purely as a wrapper, elide it," because nothing before this ADR ever needed one.
-UpNote's own sibling-`<ul>` shape never produces a comparable wrapper `<li>` at all — `flattenHtmlList`
-(canonical.ts) walks a `<ul>`'s own children directly, where a nested `<ul>` recurses with NO `<li>`
-entry of its own — so this is not a case either adapter reads incorrectly; it is a real, load-bearing
-difference between "a wrapper the DOM never needed" and "a wrapper this schema's own content model
-requires," that `canonical.ts`'s current `flattenList` has no code path to reconcile. Both
-`apps/web/src/lib/parity/**` and `entry-schema.ts` are outside issue #233's own file ownership, so
-this ADR records the finding — reproduced directly against a real `entrySchema` document, not
-inferred — rather than resolving it: a future pass on `canonical.ts` teaching `flattenList` to skip
-a `list_item` whose own prose is empty and whose only other content is the nested list it exists to
-hold is the natural fix, symmetrical with `flattenHtmlList`'s own existing behaviour, and does not
-require touching this ADR's own decision or the document shape it produces.

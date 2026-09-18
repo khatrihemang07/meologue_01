@@ -23,7 +23,7 @@ is what lets the pane repaint without the rest of the shell repainting with it.
 unrelated Composer-keyboard decision — every "ADR 0070" citation in `composer-commands.ts` and
 elsewhere means that one, not this one). This file moved rather than the other, since it has far
 fewer citations to correct; every citation of this ADR across the repo (`docs/adr/0069-…`,
-`meologue-reference/todoist/parity-ledger.md`, `check-bundle-size.mjs`) was updated in the same change.
+`check-bundle-size.mjs`) was updated in the same change.
 **Also amended by issue #248**, which built the Back control *What this does take* below had only
 asserted — see that section for what changed and why.
 
@@ -99,8 +99,8 @@ rather than by this paragraph.
 
 The pane now shows one of two things depending on route, which means a reader at desktop width sees
 Todo's own navigation and the chat list at different times rather than together. That is the trade:
-parity with the source this feature is measured against, paid for in one Destination's interior, at
-one breakpoint.
+agreement with the source this feature was measured against, paid for in one Destination's
+interior, at one breakpoint.
 
 Because ADR 0069 scopes the palette to the same subtree, the pane also repaints while Todo is open
 and returns to the app's own palette when it is not — one attribute, set on the element both the

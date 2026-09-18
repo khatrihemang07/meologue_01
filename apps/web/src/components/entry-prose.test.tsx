@@ -451,17 +451,7 @@ describe("entryProse", () => {
     expect(screen.queryByRole("link")).not.toBeInTheDocument();
   });
 
-  // CMT-02/CMT-08 (meologue-reference/todoist/parity-ledger.md): a Task
-  // comment (`entryProse(body, ..., "comment")`) renders four forms an
-  // Entry's own default mode deliberately leaves as literal text — a
-  // heading, a blockquote, a fenced code block, and a bare URL. Every case
-  // below also re-runs the identical body through the default "entry" mode
-  // in the SAME test, which is what makes this a regression guard for
-  // journal Entry rendering, not just a feature test for comments: a
-  // change that accidentally widened `parseEntryMarkdown` itself, or
-  // dropped the `mode` branch in `entryProse`, would fail the "entry"
-  // half right beside the "comment" half it's paired with.
-  describe('"comment" mode — CMT-02/CMT-08', () => {
+  describe('"comment" mode', () => {
     it("renders `# heading` as a real <h1>, but leaves it literal in default (entry) mode", () => {
       const comment = render(<Harness body="# heading" mode="comment" />);
       expect(
@@ -509,11 +499,6 @@ describe("entryProse", () => {
       expect(within(entry.container).getByText(/https:\/\/example\.com/)).toBeInTheDocument();
     });
 
-    // CMT-02's own safety requirement. `javascript:` never even reaches
-    // `Autolink`'s own recognition (verified directly against the parser in
-    // inline-markdown.test.ts), so this is the render-side proof that
-    // nothing in this component's own path could turn it into an `<a>`
-    // either.
     it("never turns a javascript: URL into a link", () => {
       render(<Harness body="javascript:alert(1)" mode="comment" />);
 
@@ -537,9 +522,6 @@ describe("entryProse", () => {
       expect(Array.from(items).map((li) => li.textContent)).toEqual(["milk", "eggs"]);
     });
 
-    // CMT-08's own "gap runs the other way" half: Todoist leaves `1. first`
-    // literal in a comment, but this app's own `<ol>` support (issue #152)
-    // is explicitly kept, not removed to chase that particular parity gap.
     it("keeps rendering a real ordered list in comment mode — the numbered-list gap is left alone on purpose", () => {
       const { container } = render(<Harness body={"1. first\n2. second"} mode="comment" />);
 
@@ -554,10 +536,6 @@ describe("entryProse", () => {
       expect(screen.getByText("code", { selector: "code" })).toBeInTheDocument();
     });
 
-    // Live re-drive gaps (meologue-reference/todoist/parity-ledger.md's CMT-08
-    // row): strikethrough tag, one-`\n`-stays-in-one-paragraph, and a tight
-    // list's unwrapped `<li>` text — each pinned against entry mode staying
-    // exactly as it was, in the same test that pins the comment behaviour.
     it("renders strikethrough as <del> in comment mode, but keeps <s> in default (entry) mode", () => {
       const { container: comment } = render(<Harness body="~~struck~~" mode="comment" />);
       expect(comment.querySelector("del")).toHaveTextContent("struck");

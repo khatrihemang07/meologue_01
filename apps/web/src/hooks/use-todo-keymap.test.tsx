@@ -148,13 +148,7 @@ describe("useTodoKeymap", () => {
     expect(options.onShowShortcuts).toHaveBeenCalledTimes(1);
   });
 
-  // CMT-05 (parity ledger) — `meologue-reference/todoist/keyboard.md:74`
-  // transcribes Todoist's own overlay row as "Z or ⌘Z | Undo", so both
-  // keys fire the identical `onUndoComplete` door; this hook itself has
-  // no notion of "what's pending" beyond calling that one callback
-  // unconditionally (`todo-page.tsx`'s own pending-undo ref decides
-  // whether there's anything to do).
-  describe("undo (CMT-05)", () => {
+  describe("undo", () => {
     it("calls onUndoComplete on 'z'", () => {
       const options = renderKeymap();
 
@@ -188,16 +182,6 @@ describe("useTodoKeymap", () => {
       expect(onUndoComplete).toHaveBeenCalledTimes(2);
     });
 
-    // The highest-risk part of CMT-05: a reader typing a task title (or
-    // anything else) and pressing Cmd+Z must get their text back, not an
-    // unrelated completion undone. `isTypingTarget` plus this binding's
-    // default `allowInField: false` is what's supposed to guarantee
-    // that — proved here rather than assumed. An `<input>` stands in for
-    // the composer: jsdom does not implement `HTMLElement.
-    // isContentEditable` at all (it reads `undefined`, not `false`), so
-    // a jsdom test cannot exercise the contenteditable arm of
-    // `isTypingTarget` — that arm (the Add-task/description composers)
-    // is verified on screen only, not here.
     it("does not fire inside a text field, on 'z' or Cmd+Z", () => {
       const input = document.createElement("input");
       document.body.append(input);
@@ -248,10 +232,6 @@ describe("useTodoKeymap", () => {
     document.removeEventListener(OPEN_COMMAND_MENU_EVENT, listener);
   });
 
-  // Issue #260 (NAV-07/KBD-01, parity ledger): `Q` opens the global Quick
-  // Add dialog, dispatched as a bare document event (no `taskId` detail,
-  // unlike `command-menu`/`set-date` above) since `todo-page.tsx` is the
-  // one listener regardless of what, if anything, is focused.
   it("dispatches OPEN_QUICK_ADD_EVENT on 'q'", () => {
     renderKeymap();
     const listener = vi.fn();
@@ -363,10 +343,7 @@ describe("useTodoKeymap", () => {
     expect(options.onOpenTaskDetail).not.toHaveBeenCalled();
   });
 
-  // KBD-01/KBD-06 (parity ledger) — three missed (b)s: the app-side
-  // handlers (`handleCompleteTask`, the Comment button's `onOpenDetail`,
-  // `copyTaskLink`) already existed; only the keys were missing.
-  describe("missed (b)s found by KBD-01/KBD-06", () => {
+  describe("missed (b)s found", () => {
     it("completes the focused Task on 'e'", () => {
       focusTaskRow("task-1");
       const options = renderKeymap();
@@ -484,9 +461,6 @@ describe("useTodoKeymap", () => {
     expect(options.onNavigate).toHaveBeenCalledWith("/todo/inbox");
   });
 
-  // Coordinator's own re-audit found these two wrongly excluded:
-  // `/todo/labels` and `/todo/activity` (labelled "Reporting" by
-  // `todo-sidebar.tsx`, NAV-01) are both real routes.
   it("navigates to Labels and Activity on the G-then-L and G-then-A sequences", () => {
     const options = renderKeymap();
 
@@ -556,12 +530,7 @@ describe("useTodoKeymap", () => {
     document.removeEventListener(OPEN_SCHEDULE_EVENT, listener);
   });
 
-  // KBD-03/KBD-04 (parity ledger) — measured live against Todoist
-  // (meologue-reference/todoist/live-audit-dom/flow6-KBD-03-todoist.json,
-  // flow6-KBD-04-todoist.json): both ArrowDown/ArrowUp and j/k move focus
-  // row-to-row, wrapping at both ends and walking through the "Add task"
-  // affordance and completed rows.
-  describe("row-to-row navigation (KBD-03/KBD-04)", () => {
+  describe("row-to-row navigation", () => {
     it("moves focus down on ArrowDown, then down again on 'j'", () => {
       const row1 = renderTaskRow("t1", "Row 1");
       const row2 = renderTaskRow("t2", "Row 2");
@@ -762,11 +731,6 @@ describe("useTodoKeymap", () => {
       });
 
       it("fires undo while a CHECKBOX holds focus — the path a reader actually takes", () => {
-        // CMT-05's real-world failure: completing a Task by clicking its
-        // checkbox leaves focus on that checkbox, and the old
-        // `tagName === "INPUT"` guard called that "typing", suppressing the
-        // binding so Ctrl/Cmd+Z silently did nothing. A checkbox takes no
-        // typed text, so it must not suppress anything.
         const checkbox = document.createElement("input");
         checkbox.type = "checkbox";
         document.body.append(checkbox);

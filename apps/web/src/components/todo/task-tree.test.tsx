@@ -629,9 +629,6 @@ describe("TaskTree", () => {
     });
   });
 
-  // ROW-14 (parity-ledger.md), the user's 2026-09-13 decision to match
-  // Todoist: a completed Task interleaves inline, at its own `orderKey`
-  // position, in this same list — not in a separate collapsed disclosure.
   describe("completed Tasks render in a trailing block below the active list (issue #358)", () => {
     it("renders after every active row, in a block of its own, with aria-checked", async () => {
       const a = task({ id: "a", content: "first", orderKey: "A" });
@@ -791,14 +788,6 @@ describe("TaskTree", () => {
     });
   });
 
-  // Issue #310 (ROW-10/AROW-14): a Project's own view already names the
-  // Project in its own heading, so a Task row inside it suppresses the
-  // repeated badge — Inbox (`projectId: null`) and every cross-project
-  // view (Today/Upcoming, which never route through `TaskTree` at all)
-  // keep it. `TaskTree`'s own `projectId` prop is the one signal this
-  // whole tree shares (`suppressProjectBadge`'s own doc comment,
-  // task-row-content.tsx, has the full reasoning for why a Section bucket
-  // needs no separate flag — it's still the same non-null `projectId`).
   describe("Project badge — issue #310", () => {
     const errands = {
       id: "project-1",

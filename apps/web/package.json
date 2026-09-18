@@ -9,7 +9,6 @@
     "build:web": "tsc -b && node scripts/check-css-cascade.mjs && vite build --mode web",
     "build:android": "tsc -b && node scripts/check-css-cascade.mjs && vite build --mode android && node scripts/check-bundle-size.mjs android",
     "check:bundle-size": "node scripts/check-bundle-size.mjs",
-    "generate:parity-doc": "node scripts/generate-parity-doc.mjs",
     "build:macos": "tsc -b && node scripts/check-css-cascade.mjs && vite build --mode macos",
     "build:sandbox": "tsc -b && node scripts/check-css-cascade.mjs && vite build --mode sandbox",
     "preview": "vite preview",

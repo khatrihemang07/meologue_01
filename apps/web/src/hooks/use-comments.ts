@@ -21,46 +21,6 @@ export interface UseCommentsResult {
   removeComment: (id: string) => void;
 }
 
-/**
- * Owns Todo's Comments for whichever view is mounted under
- * EntryStoreLayout (issue #180) — the Comment-shaped sibling of
- * use-labels.ts, following its exact shape (a query, a mutation per
- * write, no `requestSync` nudge) for the identical reason that file's own
- * header comment gives for mirroring use-history.ts.
- *
- * **That parenthetical used to read "Comment Sync doesn't exist yet, issue
- * #182", and it has been false since #182 landed** — `sync-engine.ts`
- * pushes and pulls Comments today, on their own Cursor. Corrected here
- * during issue #332, whose whole subject is a neighbouring comment that
- * stated behaviour in the voice of a decision and then stopped being true.
- *
- * What survives the correction is the *behaviour*, not its old excuse: a
- * Comment write still fires no `requestSync`, unlike use-tasks.ts's and
- * use-history.ts's, so it waits for the ambient `SYNC_INTERVAL_MS` tick
- * (5s, ../../../packages/core/src/protocol.ts) rather than pushing at
- * once. Whether that is worth keeping is an open question and deliberately
- * not settled here — #332 only establishes that it *widens* the window in
- * which an edit can race its own creation's acknowledgement, which is why
- * `CommentStore.applyAcknowledged` now guards that race rather than the
- * nudge being added to dodge it.
- *
- * `taskStore` (issue #184) is read-only here — every Comment Event this
- * hook records needs its parent Task's own `projectId` for the
- * per-Project surface (../../../packages/core/src/event-types.ts's own
- * `projectId` doc comment), and `CommentStore` alone has no way to
- * answer that. `eventStore` is Todo's activity log itself — recording
- * add and delete matches Todoist's own activity log verbatim (CMT-06,
- * re-driven live, flow 5: `You commented {content} on {task}` /
- * `You deleted a comment from {task}`). Editing a comment records
- * *nothing* — also CMT-06's own live finding, and the opposite of this
- * hook's first cut, which logged an "Edited a comment" Event Todoist has
- * no equivalent for; `editComment` below no longer calls
- * `recordCommentEvent` at all, so Todoist's "no event" is matched at the
- * source rather than papered over at render time. (An "updated" comment
- * Event can still turn up from an old store or a restored backup written
- * before this fix — `format-event.ts`'s `isRenderableEvent` is what
- * keeps a stale one like that out of the feed.)
- */
 export function useComments(
   commentStore: CommentStore,
   taskStore: TaskStore,
@@ -129,11 +89,6 @@ export function useComments(
   }
 
   const editMutation = useMutation({
-    // CMT-06 (re-driven live, flow 5): Todoist's own activity log records
-    // no Event at all for a comment edit, so this mutation no longer calls
-    // `recordCommentEvent` the way `upsertMutation`/`removeMutation` still
-    // do — the fix belongs here, at the source, rather than in how the
-    // feed renders an "updated" comment Event after the fact.
     mutationFn: async ({ id, text }: { id: string; text: string }) => {
       await commentStore.edit(id, text);
     },

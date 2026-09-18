@@ -261,12 +261,6 @@ function App() {
               `/todo/labels/:labelId` screen to show that this list
               doesn't already edit inline. */}
               <Route path="/todo/labels" element={<TodoPage view="labels" />} />
-              {/* ANAV-01 (fork ADR 0082, resolved): the bottom bar's own
-              fourth row (`todo-nav.tsx`) now opens this instead of carrying
-              Filters/Activity/Projects as rows of their own —
-              `browse-view.tsx`'s own header comment has the full brief. A
-              plain static literal, like every other `/todo/*` route above
-              that carries no dynamic segment. */}
               <Route path="/todo/browse" element={<TodoPage view="browse" />} />
               {/* A Task's own address (issue #178), still under `/todo/*` per
               ADR 0049's own constraint on where Todo's internal navigation

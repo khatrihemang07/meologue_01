@@ -1,13 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { descriptionDocFromText, descriptionTextFromDoc } from "./task-description-editor";
 
-/**
- * `descriptionDocFromText`/`descriptionTextFromDoc` are pure — no
- * `EditorView` to mount, so this suite drives them directly the same way
- * `composer-editor.test.ts` builds `entrySchema` nodes without a real
- * browser (that file's own header comment on why: jsdom cannot usefully
- * mount ProseMirror at all). DET-12: bold, bullet list, inline code.
- */
 function roundTrip(text: string): string {
   return descriptionTextFromDoc(descriptionDocFromText(text));
 }

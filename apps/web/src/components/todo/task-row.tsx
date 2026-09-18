@@ -51,12 +51,6 @@ export interface TaskDetailActions {
    * threads through here.
    */
   onSetDateString: (id: string, dateString: string | null, today: LocalDayKey) => void;
-  /**
-   * Day-keys carrying at least one active Task, mapped to how many —
-   * threaded straight through to `TaskSchedulePopover`'s identical prop
-   * (its own doc comment: SCHED-09's calendar dot and SCHED-04's preview
-   * subline share this one source).
-   */
   datesWithTasks: ReadonlyMap<string, number>;
   /**
    * Renames this Task (issue #225) — reached by clicking the row's own
@@ -129,13 +123,6 @@ export interface TaskRowProps {
    * and calling `onCompleteForever` below, based on the gesture.
    */
   onComplete: () => void;
-  /**
-   * Un-completes this Task (ROW-14, parity-ledger.md) — the door back for
-   * a completed Task rendered inline through this same row, forwarded
-   * straight to `TaskRowContent`'s identical prop (that file's own doc
-   * comment). Optional: Today and Upcoming never hand this row a
-   * completed Task, so they never need to pass it.
-   */
   onUncomplete?: () => void;
   /**
    * Ends a recurring Task's series (TaskStore.completeForever's own doc
@@ -313,63 +300,6 @@ export interface TaskRowProps {
   suppressProjectBadge?: boolean;
 }
 
-/**
- * One Task's own row, active or completed, in Inbox, a Project's own
- * view, or Today (issue #169 — every one of those renders this same row
- * rather than each growing its own; ROW-14, parity-ledger.md, extended
- * that to a completed Task too — Todoist's own completed row is "the same
- * row component... distinguished only by an added `--completed` class,"
- * not a second, reduced one). This file owns the `<li>` — identity
- * (`data-task-id`, and `data-completed-task` once `task.completedAt` is
- * set — see that attribute's own comment below), the full command set's
- * own `onContextMenu`/`.`-key handler, and this row's own sub-tasks as
- * `children` — and the drag/keyboard-reorder wiring TaskTree hands it
- * unbound (`onHandlePointerDown` et al., `onMoveUp`/`onIndent` et al.,
- * TaskRowProps' own doc comments on each) — omitted entirely for a
- * completed row, task-tree.tsx's own call site, so it renders with no
- * drag handle at all rather than an inert one (the same "no affordance
- * for a gesture that can't happen here" rule Today's own rows already
- * follow). Everything a reader actually SEES — the checkbox, the title,
- * the metadata line, the hover actions — is issue #224's `TaskRowContent`
- * (task-row-content.tsx), one call below: that split exists because this
- * file had grown to 41KB before it, and nearly all of that weight was the
- * drag/nesting/keyboard machinery described above, not anything about
- * what a row looks like.
- *
- * **The `<li>` itself carries only identity and the full command set's own
- * handlers; `TaskRowContent`'s own root `<div data-task-row-box>` carries
- * every visual concern** — issue #192, and unchanged in shape by #224's
- * later split. Before #192, this `<li>` was both the list item *and* the
- * row: every visual class and the depth padding lived on it directly,
- * which worked only because a Task's own sub-tasks rendered as a second
- * `<ul>` beside this `<li>`, never inside it — invalid HTML (a `ul` may
- * hold only `li`), and a structure that handed assistive technology no
- * relationship between a Task and its sub-tasks at all, only the illusion
- * of one from `paddingLeft` (task-tree.tsx's own header comment carries
- * the fuller account, and this file's own task-row.test.tsx now pins the
- * a11y evidence for the fix). Nesting the sub-task `<ul>` inside this
- * `<li>` fixes the markup, but everything this `<li>` used to render
- * directly would otherwise now describe the *whole subtree* rather than
- * just this row: a hover state would light up every descendant, and
- * `paddingLeft` would indent the nested `<ul>` a second time on top of
- * the depth padding its own rows already carry. `TaskRowContent`'s own
- * div is what keeps every one of those scoped to this row alone —
- * `children` (sub-tasks, if any) lands as its sibling inside the `<li>`,
- * not as its descendant.
- *
- * `onContextMenu`/`onKeyDown` stay on the `<li>`, not on `TaskRowContent`'s
- * div — the one thing about this row #192 did *not* have to move, and
- * #224 didn't either — but they gain a `stopPropagation()` neither needed
- * before: with a sub-task's own `<ul>` now a DOM descendant of this
- * `<li>`, a right-click or a `.` keypress on a *child* row would
- * otherwise bubble up through this row's own `<li>` too and pop a second
- * command menu open on the parent — something that was structurally
- * impossible before #192, since the two `<ul>`s were siblings, not
- * ancestor and descendant. `<li>` also carries its own accessible
- * `listitem` role for free, which is what keeps these handlers off
- * biome's `noStaticElementInteractions` lint without an explicit `role`
- * — the same reason they never moved onto that div in the first place.
- */
 export function TaskRow({
   task,
   detailActions,
@@ -491,14 +421,6 @@ export function TaskRow({
   return (
     <li
       data-task-id={task.id}
-      // ROW-14 (parity-ledger.md): a completed Task renders through this
-      // very row, inline, at its own `orderKey` position — this marker
-      // (derived straight from `task.completedAt`, the same field
-      // `TaskRowContent`'s own `isCompleted` reads, rather than a second
-      // prop this file would have to keep in sync with it) is what lets
-      // `task-tree.tsx`'s `measureRows` exclude a completed row from drag
-      // and keyboard-reorder geometry — that file's own header comment on
-      // why a completed row is never a legal drop/nest target.
       data-completed-task={task.completedAt !== null ? "true" : undefined}
       // The full command set, reached from anywhere on the row — issue
       // #178's own reference behaviour ("the full command set lives

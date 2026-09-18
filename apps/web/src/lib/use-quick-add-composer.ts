@@ -1,23 +1,3 @@
-/**
- * The one piece of "type a line, parse it, hand back Task fields" logic
- * both of Todoist's task-creation surfaces share (issue #260's own brief:
- * "reuse the same title editor, recognition and autocomplete... don't
- * fork the add logic") — the in-list inline composer (`add-task-form.tsx`,
- * NAV-10/NAV-12) and the global Quick Add dialog (`quick-add-dialog.tsx`,
- * NAV-07/QA-13 through QA-20). Lifted out of `add-task-form.tsx`'s own
- * pre-#260 body, which is where every line below already lived and was
- * proven — this file changes none of the parsing behaviour, only where it
- * lives.
- *
- * Both callers pass this hook's own `commit`/`extraPlugins`/`autocomplete`
- * straight through to a `LazyTaskTitleEditor`; neither re-derives
- * `parseQuickAdd`/`taskFieldsFromQuickAdd` itself. `value` is exposed too,
- * live, so a caller that wants to preview the parse before Add is pressed
- * (`quick-add-dialog.tsx`'s own footer — PRI-04's pill, QA-16's grow-on-
- * recognition) can run the identical parse itself without this hook
- * growing a "give me the preview" API of its own; see
- * `quick-add-dialog.tsx`'s own `usePreview` for that.
- */
 import type { QuickAddOptions } from "@meologue/core";
 import { parseQuickAdd } from "@meologue/core";
 import { useRef, useState } from "react";

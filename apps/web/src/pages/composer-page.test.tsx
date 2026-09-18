@@ -1780,9 +1780,6 @@ describe("ComposerPage", () => {
       fireEvent.click(screen.getByRole("button", { name: "buy milk" }));
 
       expect(screen.getByRole("dialog")).toBeInTheDocument();
-      // Issue #225: the detail title is a non-editable display element at
-      // rest (DET-02), not a form control with a `value` — a plain `<div>`,
-      // as Todoist's is.
       expect(screen.getByTestId("task-detail-title")).toHaveTextContent("buy milk");
       stillOnComposer();
     });
@@ -1821,9 +1818,6 @@ describe("ComposerPage", () => {
       );
 
       expect(screen.getByRole("dialog")).toBeInTheDocument();
-      // Issue #225: the detail title is a non-editable display element at
-      // rest (DET-02), not a form control with a `value` — a plain `<div>`,
-      // as Todoist's is.
       expect(screen.getByTestId("task-detail-title")).toHaveTextContent("buy milk");
     });
 
@@ -1926,9 +1920,6 @@ describe("ComposerPage", () => {
       expect(completeTask).toHaveBeenCalledWith(taskId);
       expect(toast.custom).toHaveBeenCalledWith(
         expect.any(Function),
-        // CMT-05: the same measured 10s `todo-page.tsx`'s own completion
-        // toast carries — not sonner's unconfigured default this page's
-        // toast used before #355.
         expect.objectContaining({ duration: 10_000 }),
       );
 
@@ -1970,13 +1961,6 @@ describe("ComposerPage", () => {
       expect(toast.dismiss).toHaveBeenCalledWith(firstToastId);
     });
 
-    // Issue #355 — `Z`/`⌘Z` reach the Composer's own completion toast now
-    // too, through the identical `pendingUndoRef` mechanism
-    // `todo-page.test.tsx`'s own "keyboard undo of a completion (CMT-05)"
-    // tests cover there. This page carries no `use-todo-keymap.ts`-style
-    // table of its own (its own `useCompletionUndoShortcut` mount, above,
-    // is the standalone chord match that exists because of that), so
-    // these are the first tests of that reachability on this surface.
     describe("keyboard undo of the completion toast (issue #355)", () => {
       it("undoes the most recent completion on 'z'", () => {
         const completeTask = vi.fn();

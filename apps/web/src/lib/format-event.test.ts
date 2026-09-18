@@ -77,12 +77,11 @@ describe("describeEventLine", () => {
       tasks: [task()],
       projects: [],
     });
-    // CMT-06: `You completed {task}`.
     expect(line.lead).toBe("You completed");
     expect(line.subject).toEqual({ glyph: "○", label: "Buy milk", href: taskDetailPath(task()) });
   });
 
-  it("CMT-06: uncompleting a Task carries no extra clause", () => {
+  it("uncompleting a Task carries no extra clause", () => {
     const line = describeEventLine(event({ eventType: "uncompleted" }), {
       tasks: [task()],
       projects: [],
@@ -91,7 +90,7 @@ describe("describeEventLine", () => {
     expect(line.detail).toBeUndefined();
   });
 
-  it("CMT-06: adding a Task", () => {
+  it("adding a Task", () => {
     const line = describeEventLine(event({ eventType: "added" }), {
       tasks: [task()],
       projects: [],
@@ -160,11 +159,6 @@ describe("describeEventLine", () => {
       { tasks: [], projects: [] },
     );
     expect(line.lead).toBe("Set the date on");
-    // format-task-date.ts's formatDay now reads day-then-month (DATE-11,
-    // parity-ledger.md) — this Activity surface was never itself measured
-    // against Todoist, but day-then-month is Todoist's order everywhere
-    // else, so the fix reaches here too rather than leaving one date
-    // phrase in the app spelled the old way.
     expect(line.detail).toBe("to 1 Feb");
     expect(line.subject?.label).toBe("Buy milk");
   });
@@ -190,7 +184,7 @@ describe("describeEventLine", () => {
     expect(line.subject).toBeUndefined();
   });
 
-  it("CMT-06: a rename shows only the resulting name, never an old→new pair", () => {
+  it("a rename shows only the resulting name, never an old→new pair", () => {
     const line = describeEventLine(
       event({ eventType: "updated", extra: { content: "new title", lastContent: "old title" } }),
       { tasks: [task({ content: "new title" })], projects: [] },
@@ -200,11 +194,7 @@ describe("describeEventLine", () => {
     expect(line.detail).toBeUndefined();
   });
 
-  // CMT-06, re-driven live (flow 5): `{content}` renders as an unquoted
-  // chip in Todoist's own DOM, not the quoted `detail` string this module
-  // used to build — so it rides in `contentPreview`, never wrapped in
-  // literal quote marks.
-  it("CMT-06: Description templates — added, changed, removed, content unquoted", () => {
+  it("Description templates — added, changed, removed, content unquoted", () => {
     const added = describeEventLine(
       event({ eventType: "updated", extra: { description: "buy milk", lastDescription: null } }),
       { tasks: [task()], projects: [] },
@@ -256,10 +246,7 @@ describe("describeEventLine", () => {
     });
   });
 
-  // CMT-06, re-driven live (flow 5): `{content}` is an unquoted, clickable
-  // preview chip in Todoist's own DOM — `contentPreview`, never a quoted
-  // `detail` string.
-  it("CMT-06: You commented {content} on {task}, content unquoted", () => {
+  it("You commented {content} on {task}, content unquoted", () => {
     const line = describeEventLine(
       event({
         objectType: "comment",
@@ -294,7 +281,7 @@ describe("describeEventLine", () => {
     expect(line.subject).toBeUndefined();
   });
 
-  it("CMT-06: You deleted a comment from {task}, with no comment body shown", () => {
+  it("You deleted a comment from {task}, with no comment body shown", () => {
     const line = describeEventLine(
       event({
         objectType: "comment",
@@ -311,12 +298,6 @@ describe("describeEventLine", () => {
     expect(line.detail).toBeUndefined();
   });
 
-  // CMT-06 (re-driven live, flow 5) reverses this: Todoist records no
-  // Event at all for a comment edit, so use-comments.ts no longer records
-  // one either. This shape can still turn up from an old store or a
-  // restored backup written before that fix — `describeEventLine` still
-  // renders it safely rather than crashing, but `isRenderableEvent` below
-  // is what actually keeps it out of the feed a reader sees.
   it("still renders a comment 'updated' Event safely, for an old stored shape this app no longer writes", () => {
     const line = describeEventLine(
       event({ objectType: "comment", objectId: "c1", eventType: "updated" }),
@@ -356,11 +337,6 @@ describe("describeEventLine", () => {
 });
 
 describe("isRenderableEvent", () => {
-  // CMT-06: the one Event shape this app must hide from a reader entirely
-  // — Todoist has no equivalent line to show for a comment edit, so an old
-  // "updated" comment Event (from a store or backup written before this
-  // fix) renders nothing rather than the "Edited a comment" line this app
-  // used to show.
   it("is false for a comment's 'updated' Event", () => {
     expect(isRenderableEvent(event({ objectType: "comment", eventType: "updated" }))).toBe(false);
   });

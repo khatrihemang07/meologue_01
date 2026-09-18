@@ -1,44 +1,3 @@
-/**
- * The `#project` / `@label` autocomplete popup — issue #226's own second
- * half, left unbuilt by the ledger's QA-13/QA-14 rows
- * (`meologue-reference/todoist/parity-ledger.md`): the parser already
- * recognises `#project`/`@label` tokens
- * (`packages/core/src/quick-add/rules.ts`'s `matchProject`/`matchLabel`),
- * but nothing ever showed a picker while typing one. This file is the
- * ProseMirror side of that picker — a plugin that watches the caret for a
- * live `#`/`@` trigger and turns it into a filtered option list;
- * `quick-add-autocomplete-listbox.tsx` is the React-rendered `role="listbox"`
- * this plugin's own state drives, and `task-title-editor.tsx` is where the
- * two are wired together (its own header comment on why a decoration
- * plugin, not a second contenteditable, is how this app builds anything
- * that has to live *inside* the title's own text).
- *
- * **What Todoist's own capture establishes** (`quick-add.md` § "Autocomplete
- * popups", `live-audit-dom/qa-flow-QA-13-14.json`,
- * `live-audit-dom/flow10-QA-14-todoist.json`):
- * - `data-testid="content-editor-suggestions-dropdown"`, `role="listbox"`
- *   with `role="option"` rows, opened the instant `#`/`@` is typed.
- * - `#` lists every Project, filtered as more is typed; `@` lists every
- *   Label the same way. A query that matches nothing shows one fallback row,
- *   *"Project not found.Create <text>"* / *"Label not found.Create <text>"*
- *   (the DOM text runs the two sentences together with no visible
- *   separator — rendered here as two stacked lines for legibility, since
- *   the ledger's own artifact never claims that concatenation is
- *   meaningful, only that it is what got captured).
- * - The composer's own `role` flips from `textbox` to `combobox` while the
- *   popup is open (`qa-flow-QA-13-14.json`'s `role_of_composer_while_open`).
- *
- * **What is NOT established, and where this file makes its own call**
- * (flagged again in `task-title-editor.tsx`'s own integration and in this
- * ticket's report): the exact filter algorithm (substring vs. prefix), the
- * "Inbox first, then a My Projects heading" grouping, and arrow-key
- * navigation itself ("inconclusive" per `quick-add.md`) were never
- * measured. This module filters by a case-insensitive substring match, in
- * whatever order its caller's own Project/Label list is already in, and
- * implements a plain circular ArrowUp/ArrowDown — a standard listbox
- * pattern, not a Todoist measurement.
- */
-
 import type { EditorState, Transaction } from "prosemirror-state";
 import { Plugin, PluginKey } from "prosemirror-state";
 import type { EditorView } from "prosemirror-view";
@@ -143,18 +102,6 @@ export function filterEntries(
   return entries.filter((entry) => entry.name.toLowerCase().includes(needle));
 }
 
-/**
- * The rows a popup shows for one `entries`/`query` pair.
- * - An empty query lists everything, unfiltered (Todoist: "`#` lists real
- *   projects... typing filters" — the listing itself happens before any
- *   filtering starts, and `@` with zero Labels opens genuinely empty per
- *   `flow10-QA-14-todoist.json`'s `optionCountAtBareAt: 0`, not a "Create"
- *   fallback — there is nothing yet to fall back FROM).
- * - A non-empty query with no match falls back to one `"create"` row
- *   (QA-13/QA-14's own fallback text).
- * - A non-empty query with matches lists only those — Todoist's own capture
- *   never shows the fallback row alongside real matches.
- */
 export function computeOptionRows(
   entries: readonly AutocompleteEntry[],
   query: string,
@@ -314,10 +261,6 @@ export function quickAddAutocompletePlugin(
         }
         if (event.key === "Enter" || event.key === "Tab") {
           if (current.options.length === 0) {
-            // Bare `@` with zero Labels (Todoist's own captured state,
-            // `flow10-QA-14-todoist.json`): nothing to select, so let the
-            // keystroke fall through to its ordinary meaning (submit,
-            // move focus) rather than swallow it for no reason.
             return false;
           }
           selectAutocompleteOption(view, current, getOptions());

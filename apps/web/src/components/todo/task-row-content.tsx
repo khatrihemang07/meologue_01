@@ -74,17 +74,6 @@ export interface TaskRowContentProps {
   subtaskDone: number;
   onComplete: () => void;
   onCompleteForever: () => void;
-  /**
-   * Un-completes this Task — ROW-14's own gap (parity-ledger.md): this
-   * component already derives `isCompleted` from `task.completedAt` and
-   * renders the correct `aria-checked`/"Mark task as incomplete" wording
-   * (`git show c0d16a4`), but until now the checkbox's own `onClick`
-   * always called `onComplete`, with no way back. Optional — every caller
-   * that only ever hands this component an active Task (Today, Upcoming)
-   * has no completed state to reverse and needs no change; `task-tree.tsx`
-   * is the one caller that renders a completed Task through this
-   * component now and always supplies it.
-   */
   onUncomplete?: () => void;
   onRequestDelete: () => void;
   /**
@@ -124,75 +113,10 @@ export interface TaskRowContentProps {
    */
   scheduleOpen: boolean;
   onScheduleOpenChange: (open: boolean) => void;
-  /**
-   * ROW-13 (parity-ledger.md), issue #250: Today's own "Due today" section
-   * shows every row due today, so the tone-coloured date badge below says
-   * nothing there a reader doesn't already know from the section heading.
-   * pass2-2026-09-11.md §3 measured Todoist omitting the date control from
-   * the DOM entirely on such a row, not merely hiding it with CSS — this
-   * prop is that same suppression, threaded down from whichever caller
-   * knows it is rendering a "due today, and only today" list (today-view.tsx's
-   * own `dueToday` section; its `overdue` section leaves this unset, since
-   * an overdue Task's own date is not redundant there). Defaults to
-   * `false` — every other caller (Inbox, a Project's own view, Today's own
-   * Overdue section) keeps the badge exactly as before.
-   */
   suppressDateBadge?: boolean;
-  /**
-   * Issue #310 (ROW-10/AROW-14, parity-ledger.md + parity-ledger-android.md):
-   * Todoist shows a Task row's Project badge only in a **cross-project**
-   * view — Today, Upcoming, Search, a Filter — and suppresses it inside
-   * that Project's own view, where the page's own heading already names
-   * it and the badge repeats a fact the reader isn't asking for
-   * (`meologue-reference/todoist/live-audit-dom/row-badges-2026-09-15.json`
-   * § ROW-10). Threaded down exactly like `suppressDateBadge` above:
-   * `task-tree.tsx` is the one place that knows whether the whole tree
-   * it's rendering belongs to one Project (its own `projectId` prop,
-   * non-null) or is Inbox (`null`) — same signal `handleOutdent` already
-   * reads there for an unrelated reason — and passes `projectId !== null`
-   * straight through. Today/Upcoming (`today-view.tsx`, `upcoming-view.tsx`)
-   * render `TaskRow` directly and never set this, so they default to
-   * `false` and keep the badge, unchanged.
-   *
-   * **A Section inside a Project inherits this, not by a second flag but
-   * because there isn't a second code path to give one.** `task-list.tsx`
-   * groups a Project's own Tasks into per-Section buckets, but every
-   * bucket — unsectioned or not — is still just another `TaskTree` call
-   * with the SAME `projectId`, this Project's own id, never `null`. A
-   * Section is "inside a Project" in exactly the sense Todoist's own
-   * distinction cares about (its own project/section identity, not a
-   * separate context), so the one `projectId !== null` check already
-   * covers it without this file — or any caller — needing to know
-   * Sections exist at all.
-   *
-   * A filter that happens to select a single Project was NOT driven live
-   * before this fix shipped (issue #310's own "worth deciding rather than
-   * assuming") — `filter-view.tsx` renders its own row markup, not
-   * `TaskRowContent`, so it is entirely unaffected by this prop either
-   * way; that omission is deliberate, not an oversight, until Todoist's
-   * own behaviour there is established.
-   */
   suppressProjectBadge?: boolean;
 }
 
-/**
- * The classes that reveal a row affordance on hover (ROW-04), named once
- * rather than repeated at each of the six sites that need them.
- *
- * **Written out in full here, never assembled.** Tailwind scans source as
- * raw text, so a class built by interpolation — `${variant}:opacity-0` —
- * is never emitted at all and the name reaches the DOM with no rule behind
- * it. That failed silently in this very file once, leaving every drag
- * handle and action icon at full opacity on every row while the whole
- * suite stayed green. A `const` holding the *complete, literal* strings is
- * safe for exactly the reason the interpolated variant was not: the
- * scanner can see them.
- *
- * The `pointer-fine` variant itself (index.css) is `(hover: hover)` OR
- * `(pointer: fine)` — the second arm is what keeps these reachable in a
- * Tauri window, which can report a coarse pointer for a trackpad and would
- * otherwise hide every row action outright.
- */
 const HOVER_REVEAL_CLASSES =
   "pointer-fine:opacity-0 pointer-fine:group-hover:opacity-100 pointer-fine:focus-visible:opacity-100";
 
@@ -242,33 +166,6 @@ export function TaskRowContent({
   suppressDateBadge = false,
   suppressProjectBadge = false,
 }: TaskRowContentProps) {
-  // Issue #225: inline row editing, which did not exist before this
-  // ticket. Driven on the live app after the ticket's first pass shipped
-  // a guessed gesture (a double-click, since removed): Todoist's own
-  // hover controls — Complete, **Edit**, Date, Comment, More actions, in
-  // that order — already include a pencil that activates the shared
-  // `tiptap ProseMirror` editor in place, no dialog, no URL change. The
-  // "Edit" button below (`aria-label={"Edit \"" + task.content + "\""}`,
-  // this file's own pre-existing hover action) is that measured
-  // affordance, not a new one — it used to call `onOpenDetail` the same
-  // as the title itself; it now activates `editingTitle` instead. A
-  // single click on the title keeps its one unambiguous meaning from
-  // before this ticket — this app's own row title has always been a
-  // `<button>` that opens the detail route — unchanged now that
-  // activation has its own dedicated control. No timing heuristic needed.
-  //
-  // One real structural divergence, recorded in the ledger (ROW-11) rather
-  // than silently absorbed: Todoist swaps the whole row out for an edit
-  // form at the same position in the list (`editorInsideRow` measured
-  // `false` — the editor is a sibling of `li.task_list_item`, not a
-  // descendant). This component mounts `TaskTitleEditor` *inside* the
-  // existing row instead, alongside the checkbox and metadata line that
-  // stay visible underneath it. Matching Todoist's own swap would mean a
-  // second row-shaped host rendered outside this `<li>` entirely — a
-  // bigger structural change than this ticket's own brief asked for, and
-  // not worth it for a divergence with no observed behavioural
-  // consequence (the same editor, the same commit/cancel keys, land
-  // either way).
   const [editingTitle, setEditingTitle] = useState(false);
 
   // Issue #247: the identical recognition plugin add-task-form.tsx and
@@ -287,32 +184,6 @@ export function TaskRowContent({
   const optionsRef = useRef<QuickAddOptions>({ now: localDayKey(new Date()), smartDates });
   optionsRef.current = { now: localDayKey(new Date()), smartDates };
 
-  // QA-14's own second half, wired into the row's rename editor: the
-  // `#`/`@` autocomplete popup (`quick-add-autocomplete.ts`) needs live
-  // Project/Label lists plus a create hook, none of which `TaskRowContent`
-  // otherwise has in scope — `detailActions.projects`/`.labels` (above,
-  // already threaded for the Project/Labels metadata badges) cover the
-  // list half, but the create half (`addProject`/`addLabel`) has no
-  // equivalent on `TaskDetailActions`, and adding one would mean
-  // `todo-page.tsx` growing two new fields on the object it builds — a
-  // file another agent owns right now, rebuilding the composer. Reading
-  // `useOutletContext` directly here instead, rather than through
-  // `TaskDetailActions` or a bespoke context/provider: `TaskRow`/
-  // `TaskRowContent` are never rendered anywhere but inside `todo-page.tsx`'s
-  // own subtree, itself a child of `EntryStoreLayout`'s `<Outlet
-  // context={...}>` (App.tsx) — the exact same door `todo-page.tsx`'s own
-  // `useEntryStore()` already opens (that hook is nothing but this call,
-  // typed — entry-store-layout.tsx's own header comment on the export).
-  // `useOutletContext` is a plain `React.useContext` under the hood
-  // (react-router's own `hooks.ts`), so it needs no `<Outlet>`/Router
-  // ancestor to be SAFE to call — outside one it simply reads the
-  // context's default (`undefined`), never throws — which is what keeps
-  // `task-row.test.tsx`'s existing `MemoryRouter`-only rendering (no
-  // `EntryStoreLayout` in that tree) working unchanged: `addProject`/
-  // `addLabel` there are `undefined`, so selecting "Create" only inserts
-  // the typed token and mints nothing (`QuickAddAutocompleteOptions`'s own
-  // doc comment already treats that as a fully supported, non-crashing
-  // case, not a special one this file has to guard itself).
   const autocompleteOutlet = useOutletContext<EntryStoreOutletContext | undefined>();
   const autocomplete: QuickAddAutocompleteOptions = {
     getProjects: () => detailActions.projects,
@@ -362,16 +233,6 @@ export function TaskRowContent({
   const projectName =
     task.projectId === null ? null : projectNameFor(detailActions.projects, task.projectId);
   const descriptionFirstLine = task.description?.split("\n")[0] ?? "";
-  // Whether the metadata line has anything at all to show — extended by
-  // issue #224 with Labels/Project/sub-tasks alongside the pre-existing
-  // Date/Deadline/Priority/recurrence/comment checks, so a plain Task
-  // with none of these still renders no empty, gap-holding line.
-  // ROW-10(a) (parity-ledger.md): Todoist shows priority ONLY through the
-  // checkbox ring — `task-info-tags` reads empty even for a P1 Task
-  // (`live-audit-dom/flow2-ROW-09-10-todoist.json`) — so `task.priority`
-  // no longer counts toward whether this row has a metadata line. A
-  // priority-only Task is now a title-only row (43px, ROW-01), exactly
-  // Todoist's own P1 fixture (`flow2-ROW-01-02-todoist.json`).
   const hasMetadata =
     (dateDisplay !== null && !suppressDateBadge) ||
     task.deadline !== null ||
@@ -441,70 +302,11 @@ export function TaskRowContent({
         // it never cancels, and a unit test cannot observe this at all.
         "touch-pan-y",
         "group flex items-center gap-2 rounded-lg border-t-2 border-t-transparent transition-colors",
-        // ROW-02 (parity-ledger.md): a full-width divider, 0px inset —
-        // living here rather than on the `<li>` around it because
-        // `border-bottom` is measured from this element's own border-box,
-        // which starts at the same left edge as the `<li>`'s regardless
-        // of the `paddingLeft` below (padding sits *inside* the border,
-        // never shifting it) — so the divider stays flush with the list's
-        // own edge for a depth-1 row and a nested one alike, matching the
-        // reference's own "not indented to align with the checkbox" note.
         "border-b border-border",
-        // ROW-04: the row background no longer tints on hover — Todoist's
-        // own reference measured no change at all, confirmed both by
-        // computed style and by pixel-diffing a hover screenshot against
-        // rest. `hover:bg-muted` used to sit here; only the four hover
-        // actions below still animate anything now.
         isDropTarget && "border-t-primary",
         isNestTarget && "bg-primary/10 ring-2 ring-primary ring-inset",
-        // Issue #308's own acceptance criterion: "the row visibly lifts
-        // while held." `-translate-y-1` (Tailwind's 4px step) matches the
-        // ~4 CSS px the reference itself was observed floating above its
-        // own resting position (this file's own `isDragging` doc comment,
-        // TaskRowProps, carries the on-device measurement); `shadow-lg`
-        // plus an opaque `bg-background` is what makes "drawn on top of
-        // its own neighbours" legible rather than merely offset, since
-        // this row keeps its `<li>`'s own slot in the DOM the whole time
-        // (ROW-14's own interleaving already renders every row without
-        // reordering the list live) and would otherwise just overlap the
-        // next row's own top border with no visual cue that it's the one
-        // being held.
         isDragging && "relative z-10 -translate-y-1 bg-background shadow-lg",
       )}
-      // ROW-01: 59px is the row's own baseline height for a single-line
-      // title plus one metadata line; a title-only row (no date, deadline,
-      // priority, recurrence, Label, Project, sub-task or comment count —
-      // `hasMetadata`, above, the SAME boolean that decides whether the
-      // metadata `<span>` below renders at all) is 43px, +16px shorter.
-      // Restated live (`live-audit-2026-09-11.md`): the corpus's original
-      // 59px was measured on "hair wash," which carries a date badge, so it
-      // was always the one-metadata-line height, never a fixed one; a
-      // disposable title-only fixture measured 43px instead. This used to
-      // be a single hard-coded `minHeight: "59px"` floor that held every
-      // title-only row at 59 regardless — keying the floor to `hasMetadata`
-      // ties it to the actual rendered content instead of a second,
-      // independent guess at whether this row has a metadata line.
-      //
-      // Still `min-h`, not a fixed `h`, for the reason it always was: a
-      // title long enough to wrap (ROW-05's own 4-line clamp, below) has to
-      // be allowed to grow the row rather than clip against a hard ceiling
-      // the reference itself never measured against a wrapped title. "No
-      // padding on the row itself" is why this box carries none of its
-      // own: the checkbox, title and metadata line supply whatever internal
-      // spacing they need, and centring via `items-center` is what keeps a
-      // short, unwrapped title vertically balanced inside whichever floor
-      // applies, rather than pinned to its top.
-      //
-      // Two measured literals switched on `hasMetadata`, not a formula: the
-      // row has no padding of its own to derive one from.
-      //
-      // The row actions (Edit, Date, Comment, More, and the recurring
-      // archive button) are `size-11`, a 44px touch target that stays in the
-      // layout at `opacity: 0`. Flow 11 R2 read a title-only row at 47px
-      // against Todoist's 43: that 44px button plus this box's 2px
-      // drop-target top border and 1px divider. Each action carries `-my-1`,
-      // so it keeps its full 44px hit area but lays out at 36px, and the 43px
-      // floor is what sets the row.
       style={{
         minHeight: hasMetadata ? "59px" : "43px",
         paddingLeft: `${12 + (depth - 1) * 20}px`,
@@ -563,34 +365,6 @@ export function TaskRowContent({
               onOutdent?.();
             }
           }}
-          // Revealed with the rest of the row's affordances (ROW-04), not
-          // standing permanently — Todoist's own handle appears on hover
-          // ahead of Edit/Date/Comment/More, and a grip drawn on every row
-          // at rest is the single most obvious tell that a list is not it.
-          //
-          // `focus-visible:opacity-100` is not decoration here: this button
-          // is the keyboard reorder target (arrow keys to move, Alt+arrows
-          // to indent), so it has to become visible when tabbed to or the
-          // whole reordering path is invisible to a keyboard reader.
-          //
-          // Issue #309: `hidden pointer-fine:flex`, not merely
-          // `HOVER_REVEAL_CLASSES`'s opacity toggle — the same pair
-          // Edit/Date/Comment already carry below. On a device that reports
-          // BOTH `(pointer: coarse)` AND `(hover: none)` (a genuine
-          // touchscreen, per this file's own `pointer-fine` doc comment)
-          // `hidden` wins and the button drops OUT of this flex row's
-          // layout entirely, not merely to zero opacity — which is what
-          // reclaims the 32px (24px handle + this row's own `gap-2`) it
-          // used to reserve, landing the checkbox at this box's own
-          // `paddingLeft` (12px) with nothing added to compensate. Reordering
-          // on such a device is the long-press lift (#308, `task-row.tsx`'s
-          // own `onContextMenu`/pointer wiring), not this handle — this
-          // component's own `onKeyDown` below (arrow keys, Alt+arrows) is
-          // unreached with the handle hidden, but a touch-only device has no
-          // arrow keys to press either. On a pointer device (fine pointer,
-          // or genuine hover) `pointer-fine:flex` restores it exactly as
-          // before, and the keyboard reorder/reparent path below is
-          // untouched.
           className={cn(
             "hidden pointer-fine:flex size-6 shrink-0 touch-none cursor-grab items-center justify-center rounded text-muted-foreground active:cursor-grabbing",
             HOVER_REVEAL_CLASSES,
@@ -599,64 +373,13 @@ export function TaskRowContent({
           <GripVertical aria-hidden="true" className="size-4" />
         </button>
       )}
-      {/*
-        ROW-03: a 24×24 hit box around an 18×18 visible ring. The user's
-        2026-09-13 decision was to match Todoist's own element/role/name
-        exactly here: `<button class="task_checkbox" role="checkbox"
-        aria-checked="…" aria-label="Mark task as complete">`
-        (`live-audit-dom/flow11-R2-ROW-03-PRI-05-06-both.json`'s own
-        structural note; the wording itself, including the completed-state
-        "Mark task as incomplete", is `lifecycle.md:70`). This used to be a
-        `<label><input type="checkbox" readOnly aria-label={task.content}>`
-        — a different element, role and accessible name than Todoist's own,
-        the one structural divergence ROW-03 still carried after issue #250
-        fixed the ring's width axis.
-        A `<button>`, not a `<label>` wrapping an `<input>`, is now what
-        supplies the 24×24 hit box directly — a button's own click target
-        IS its border-box, so there is no wrapper needed to turn "an 18px
-        control" into "a 24px hit box" the way `<label>` forwarding a click
-        to its `<input>` used to. The 18×18 ring itself moves to a plain
-        `aria-hidden` inner `<span>`, sized independently of the button's
-        own 24×24 box, so the ring's own dimensions and priority colour
-        (below) are untouched by the element swap.
-
-        The ring's own WIDTH (issue #250, ROW-03's own "dimensionally
-        incomplete" caveat) is a second axis pass2-2026-09-11.md §2
-        measured and this used to flatten to a fixed 1px everywhere.
-
-        Restated again by PRI-06 (flow 2, driven live with P1-P4 fixtures):
-        the ring is 2px for EVERY non-default priority — P1 `rgb(255,112,
-        102)`, P2 `rgb(255,154,19)`, P3 `rgb(82,151,255)` — and 1px only at
-        P4 ("no priority", `rgb(169,169,169)`). This used to test
-        `uiPriorityOf(...) === 1`, so only P1 got the 2px ring and P2/P3
-        fell through to the 1px branch alongside P4 — testing "not the
-        default level" (`!== 4`) instead is what covers all three.
-
-        **CMT-05 trap, checked rather than assumed:** clicking this button
-        leaves focus ON it, exactly as the old `<input>` did — a `<button>`
-        is not one of `isTypingTarget`'s `INPUT`/`TEXTAREA`/
-        `isContentEditable` cases, so it was never at risk of re-tripping
-        the CMT-05 bug (`todo-keymap.ts`'s own denylist existed for the
-        `<input>` case specifically), and `z`/`Ctrl+Z` undo after a click
-        was re-verified against this exact button.
-      */}
-      {/* biome-ignore lint/a11y/useSemanticElements: deliberately NOT a native `<input type="checkbox">` — ROW-03's own header comment above explains why (the 24×24 hit box has to be the button's own border-box, with the 18×18 ring on a separate inner span so the two sizes stay independent, which a native checkbox's own fixed widget can't do); this is also Todoist's own exact element (`<button class="task_checkbox" role="checkbox">`), not a divergence to fix. */}
+      {/* biome-ignore lint/a11y/useSemanticElements: deliberately NOT a native `<input type="checkbox">` — the 24×24 hit box has to be the button's own border-box, with the 18×18 ring on a separate inner span so the two sizes stay independent, which a native checkbox's fixed-size widget can't do. */}
       <button
         type="button"
         role="checkbox"
         aria-checked={isCompleted}
-        // Todoist's own exact wording (`lifecycle.md:70`,
-        // `keyboard.md:244/278`) — ROW-14 (parity-ledger.md) is what
-        // actually exercises the `true` branch now: a completed Task
-        // renders through this same row inline, in place, rather than
-        // leaving the list for a separate one, so `isCompleted` is real
-        // here, not merely future-proofing.
         aria-label={isCompleted ? "Mark task as incomplete" : "Mark task as complete"}
         onClick={(event: MouseEvent<HTMLButtonElement>) => {
-          // ROW-14: an already-completed Task's checkbox only ever
-          // reverses that — Shift+Click "complete and archive recurring"
-          // (below) has nothing left to end once the Task is done, so it
-          // isn't checked here at all.
           if (isCompleted) {
             onUncomplete?.();
             return;
@@ -682,28 +405,11 @@ export function TaskRowContent({
           }}
           className="flex size-[18px] shrink-0 items-center justify-center rounded-full"
         >
-          {/* ROW-14: the fill this row's own predecessor
-              (`completed-tasks.tsx`'s now-removed `CompletedTaskRow`)
-              added on top of the ring so a checked row reads as checked
-              at a glance, not merely by `aria-checked` — carried over
-              here rather than dropped, since a ring that looks identical
-              whether ticked or not was never something either app's own
-              artifact asked for either way. */}
           {isCompleted && <Check aria-hidden="true" className="size-3" strokeWidth={3} />}
         </span>
       </button>
       <span className="flex min-w-0 flex-1 flex-col">
         {editingTitle ? (
-          // Todoist's own display/edit split (row-and-detail.md §2,
-          // DET-06): the row hosts the shared editor only while actually
-          // editing, never permanently — `<Suspense fallback={...}>` is
-          // what keeps ProseMirror out of Todo's own eager chunk even
-          // though this row renders synchronously (`lazy-task-title-
-          // editor.ts`'s own header comment has the bundle numbers). The
-          // fallback repeats the display button's own text rather than a
-          // spinner, so the one frame before the lazy chunk resolves
-          // shows the same words the reader just double-clicked, not a
-          // flash of empty space.
           <Suspense
             fallback={
               <span
@@ -731,111 +437,24 @@ export function TaskRowContent({
           <button
             type="button"
             onClick={() => detailActions.onOpenDetail(task)}
-            // ROW-05: long titles wrap and clamp after 4 lines — they do
-            // NOT truncate to one (the user's own complaint this ticket
-            // names). `line-clamp-4` replaces the old `truncate`.
-            //
-            // ROW-14/ROW-15 (parity-ledger.md): `completed-task-text`
-            // (issue #237's shared completed-style class, the same one
-            // `task-detail-view.tsx`, `filter-view.tsx` and
-            // `task-search-page.tsx` already gate on `completedAt`) —
-            // this row's own predecessor gap: `isCompleted` was already
-            // computed above, but nothing here read it until now.
             className={cn(
               "line-clamp-4 block w-full text-left hover:underline",
               "text-[length:var(--td-row-font-size)] leading-[length:var(--td-row-line-height)]",
               isCompleted && "completed-task-text",
             )}
-            // KBD-03/04 (parity ledger): this button, not the `<li data-
-            // task-id>` it lives inside, is what Todoist's own measured
-            // target actually is — a `role="button"` element carrying the
-            // task title (`meologue-reference/todoist/live-audit-dom/flow6-
-            // KBD-03-todoist.json`). `use-todo-keymap.ts`'s `focusAdjacentRow`
-            // walks every `[data-row-nav-target]` in one live `querySelectorAll`
-            // to build the row-to-row cycle straight from the DOM, so a
-            // future row type only needs this one attribute to join it —
-            // no second, hand-maintained list to fall out of sync with
-            // (exactly the parity defect a destination added to one nav
-            // but not the other already produced once in this repo).
             data-row-nav-target
           >
-            {/* ROW-06 (parity-ledger.md): driven live, both apps, flow 10 —
-                Todoist parses markdown in a task TITLE at render time
-                (`<strong>`/`<em>`/`<code>` in the row's own
-                `div.task_content`), verified with a title whose stored text
-                was confirmed to hold only literal delimiters, never
-                composer-converted marks
-                (`live-audit-dom/flow10-ROW-06-both.json`'s own
-                `decisiveTest`). `task.content` itself is untouched — this
-                is `inlineProse` (inline-prose.tsx), the same inline-only
-                renderer ADR 0041 already uses for a Description preview two
-                lines below, chosen because a title is one line and that
-                renderer never enters the block layer. The stored/edited
-                value stays raw: this only swaps what the reader sees. Every
-                `aria-label` on this row still interpolates the raw
-                `task.content` (below and throughout this file) — the
-                artifact only measured Todoist keeping ITS OWN raw markdown
-                on the tab-title/dialog-accessible-name strings, never on a
-                hover button's aria-label, so there is nothing recorded to
-                match there; changing them was also not asked for, and
-                `line-clamp-4`/`hover:underline` above needs no change either. */}
             {inlineProse(task.content)}
           </button>
         )}
-        {/* ROW-07: a Description previews as real HTML from markdown, one
-            line, beneath the title — `inlineProse` (not the block-level
-            `entryProse`) because a "first line" preview is exactly the
-            unwrapped inline content that renderer already returns with no
-            block wrapper of its own (inline-prose.tsx's own header
-            comment), and a `<ul>`/second `<p>` from a multi-paragraph
-            Description would defeat the one-line `truncate` below rather
-            than cooperate with it. Only the first `\n`-delimited line, not
-            the whole Description: this is a preview, and the full text is
-            one tap away in the detail view (task-detail-view.tsx) already. */}
         {task.description !== null && (
           <div className="truncate text-muted-foreground text-xs">
             {inlineProse(descriptionFirstLine)}
           </div>
         )}
         {hasMetadata && (
-          // ROW-09: adjacent flex children with a gap, no separator glyph
-          // between any two of them — issue #224 extends this same rule
-          // to every new field (Labels, Project, sub-task count) rather
-          // than inventing a comma/pipe/dot the reference never showed
-          // for the two fields it did observe (date, comment count).
           <span className="flex flex-wrap items-center gap-x-2 text-muted-foreground text-xs">
-            {/* DATE-01 (parity-ledger.md), issue #257: an inline 12×12
-                calendar `<svg>` beside the date text, measured live on an
-                overdue row (`live-audit-dom/flow8-DATE-01-todoist.json`) —
-                `hasSvgIconInsideDateControl: true`, `svgViewBox: "0 0 12
-                12"`. That artifact only ever sampled overdue rows (four
-                "Yesterday" captures, `flow8-DATE-01-debug.json`), so
-                whether Todoist's non-overdue dates (Today, a weekday, "21
-                Sep") also carry the icon was NOT settled either way — put
-                here on every dated row, per this fix's own instruction for
-                an unsettled artifact, rather than gated to overdue only. */}
             {dateDisplay !== null && suppressDateBadge && isRecurring ? (
-              // DATE-04 (parity-ledger.md): driven live on Today (flow 2)
-              // — a recurring Task due today is NOT fully suppressed like
-              // a plain due-today row (ROW-13) is. Todoist keeps the
-              // `due-date-control` button but empties its text, leaving an
-              // icon-only badge: `<span class="date date_today"><svg
-              // .../></span>`, tinted the Today green
-              // (`rgb(37,184,76)`, `live-audit-dom/flow2-ROW-13-todoist.
-              // json`'s own `colorOfRecurrenceIcon`). The artifact's own
-              // verdict calls that lone svg "the recurrence glyph," not a
-              // second calendar icon beside it — a single icon replacing
-              // both the calendar (DATE-01) and the date text, not the two
-              // stacked — so this renders `Repeat` alone, colour-matched
-              // via `dateDisplay.colour` (already "today" green here,
-              // since this only fires on a due-today row), and no text.
-              // No `aria-label` was recorded on Todoist's own button
-              // (`due-date-control` carries none), so none is added here
-              // either. Non-Today views (Inbox, Upcoming) were not
-              // re-driven for this row — `flow2-ROW-13-todoist.json` notes
-              // "Todoist's Inbox rendering of the same task was not read" —
-              // so they keep the existing "Today ↻" plus the separate
-              // `task.dateString` badge below, unchanged.
               <span aria-hidden="true" style={{ color: dateDisplay.colour }}>
                 <Repeat className="size-3" />
               </span>
@@ -849,32 +468,12 @@ export function TaskRowContent({
               )
             )}
             {task.deadline !== null && <span>Due {formatDay(task.deadline)}</span>}
-            {/* ROW-10(a): Todoist shows NO priority text badge on a row —
-                `task-info-tags` is empty even for a P1 Task
-                (`live-audit-dom/flow2-ROW-09-10-todoist.json`), priority
-                shows only through the checkbox ring (ROW-03/PRI-05/PRI-06).
-                This used to render `P1`/`P2`/`P3` here for every non-default
-                priority; removed rather than kept "for information," since
-                the reference itself never shows it and `hasMetadata` above
-                no longer counts priority either. */}
             {resolvedLabels.map((label) => (
               <LabelBadge key={label.id} label={label} />
             ))}
-            {/* Issue #310 (ROW-10/AROW-14): this Project's own view already
-                says which Project it is in the page's own heading —
-                `suppressProjectBadge`'s own doc comment above carries the
-                full reasoning, including why a Section inherits this for
-                free rather than needing a second flag. */}
             {projectName !== null && !suppressProjectBadge && (
               <span className="truncate">{projectName}</span>
             )}
-            {/* `task.dateString` verbatim — "the string is the truth"
-                (task-types.ts's own doc comment) — stays alongside the ↻
-                DATE-04 now appends to `dateDisplay.text` itself; the two
-                aren't redundant so much as two different audiences for
-                the identical fact, the glyph for a glance, the literal
-                rule for a reader who wants to know exactly what they
-                typed. */}
             {task.dateString !== null && <span>{task.dateString}</span>}
             {subtaskCount > 0 && (
               // Issue #298: `done/total`, as Todoist's own badge reads.
@@ -898,29 +497,6 @@ export function TaskRowContent({
               </span>
             )}
             {commentCount > 0 && (
-              // ROW-08 (parity-ledger.md): Todoist's own badge is a real
-              // `<a aria-label="N comment(s)" href="…?intent=reply">`
-              // (`row-and-detail.md:120`, singular confirmed live —
-              // `flow10-ROW-09-both.json`'s own `"1 comment"` reading —
-              // plural `"2 comments"` from `flow2-ROW-06-07-08-todoist.
-              // json`) — this used to be a plain, non-interactive `<span>`.
-              // `taskDetailPath` (task-detail-route.ts) is the one place
-              // this app already builds a Task's own detail address, and
-              // issue #306 is what closed the one remaining divergence
-              // ROW-08 disclosed: `commentIntent: true` appends the same
-              // `?intent=reply` Todoist's own badge carries (that
-              // function's own doc comment has the full "why a query
-              // param, on the same address" reasoning), and
-              // `task-detail-view.tsx`'s `TaskDetailView` now reads it
-              // (via `todo-page.tsx`'s `hasCommentReplyIntent`) to open its
-              // comment composer already expanded and focused rather than
-              // at rest — CMT-11's own doc comment (task-detail-view.tsx)
-              // covers that behaviour in full.
-              // `stopPropagation` keeps this link's own navigation from
-              // also bubbling into whatever ancestor click handling this
-              // row picks up in the future — the same defensive posture
-              // the checkbox's Shift+Click branch above already takes for
-              // a different reason.
               <Link
                 to={taskDetailPath(task, { commentIntent: true })}
                 aria-label={`${commentCount} comment${commentCount === 1 ? "" : "s"}`}
@@ -934,13 +510,6 @@ export function TaskRowContent({
           </span>
         )}
       </span>
-      {/* ROW-14 decision: hidden once the Task is already completed — "end
-          the series" has nothing left to do to a Task that's already
-          done, and the checkbox's own Shift+Click branch above is
-          disabled for the identical reason. Neither artifact measured a
-          completed recurring row's own hover controls (this ticket's own
-          report), so this is a judgment call, not a read fact: recorded
-          here rather than left to look like an oversight. */}
       {isRecurring && !isCompleted && (
         <button
           type="button"
@@ -1036,25 +605,6 @@ export function TaskRowContent({
         datesWithTasks={detailActions.datesWithTasks}
         onPickDay={(day) => {
           setScheduleDay(day);
-          // SCHED-15: only "No Date" ends a Recurrence now — picking a day
-          // postpones this occurrence and keeps the rule. The previous
-          // comment here called clearing on every pick "a deliberate,
-          // disclosed design decision", and it was; it was also wrong
-          // against the reference, and it silently ended a series every
-          // time a repeating Task was rescheduled. `task-detail-view.tsx`'s
-          // own identical handler carries the full account and the
-          // artifact it was driven from — this file mirrors it, as it
-          // already mirrored the behaviour being replaced.
-          //
-          // `localDayKey(new Date())`, not `new Date().toISOString()` —
-          // issue #296. `TaskStore.setDateString`'s own `today` parameter
-          // has always meant a floating local day, never an instant;
-          // passing the instant relied on ../recurrence/'s engine silently
-          // slicing its first ten characters, which names the UTC
-          // calendar day rather than this Device's own — see
-          // TaskStore.setDateString's own doc comment (packages/core) for
-          // the full account, and issue #290 for the identical fix applied
-          // to advanceRecurring/postpone.
           if (day === null && task.dateString !== null) {
             detailActions.onSetDateString(task.id, null, localDayKey(new Date()));
           }

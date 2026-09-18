@@ -50,25 +50,6 @@ export function taskDetailSlug(content: string): string {
   return slug === "" ? "task" : slug;
 }
 
-/**
- * Issue #306's own query parameter — the door a Task row's comment-count
- * badge (`ROW-08`, task-row-content.tsx) opens onto "land in the thread,
- * ready to reply," matching Todoist's own `<a href="…/?intent=reply">`.
- *
- * A query parameter on the SAME address, not a route-shaped alternative
- * (e.g. `/todo/task/<slug>-<id>/reply`): this module's own header comment
- * already settled that the detail route's address IS the Task's address
- * (issue #178's "a Task has its own address" criterion), so a second path
- * naming the identical Task would either have to redirect back to the
- * first — pointless — or become a second bookmarkable "address" for one
- * Task, which is the thing #178 ruled out. A query string also carries
- * the intent, and only the intent: `taskIdFromParam` above reads the
- * `:taskSlugId` route param alone and never sees the query string at all,
- * so this needed no change there to stay stale-slug-tolerant. And a query
- * param is exactly the shape #178's own "reference behaviour, observed
- * live" note already borrowed the route from — Todoist's own choice here
- * too.
- */
 export const COMMENT_REPLY_INTENT_PARAM = "intent";
 const COMMENT_REPLY_INTENT_VALUE = "reply";
 

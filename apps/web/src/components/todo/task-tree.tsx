@@ -78,38 +78,7 @@ import { OPEN_SCHEDULE_EVENT } from "@/lib/todo-keymap";
 export interface TaskTreeProps {
   /** This sibling group, in (orderKey, id) order — TaskStore.listByProject/listChildren's own guarantee, whichever one supplied it. */
   tasks: Task[];
-  /**
-   * Issue #358: this exact sibling group's own completed Tasks, rendered as
-   * a trailing block **below** the active `tasks` above, in their own
-   * `<ul>`, paginated by `useCompletedTasksPage` — matching both Todoist
-   * platforms' own measured behaviour (`ROW-14`, parity-ledger.md: a
-   * completed row relocates out of the active list into a block below it,
-   * with a Load-more control for older history), which is NOT what an
-   * earlier ticket (`5e8c073`/`5f3ce95`) built here: that pair interleaved
-   * a completed Task inline, in place, at its own `orderKey` position, on a
-   * ledger row a later live drive against the real Todoist disproved.
-   * `TaskList` (this file's own caller, one level up) already passes an
-   * *empty* array here whenever `completedTasksVisible` (lib/settings.ts)
-   * is off — matching Todoist's own off-default of hiding a completed
-   * row entirely — so this component itself stays unaware of the setting
-   * and just renders whatever it's handed.
-   *
-   * Each row still renders through the identical `TaskRow` an active
-   * sibling does, not a reduced copy of one (this file's own earlier
-   * `CompletedTaskRow` mistake, corrected by `5f3ce95` and preserved
-   * here: Todoist's own row is "the same row component... distinguished
-   * only by an added `--completed` class," not a second one).
-   *
-   * Defaults to empty, which is what every *nested* recursive call below
-   * still passes (implicitly, by omitting this prop) — a completed
-   * sub-task still doesn't render at all, unchanged from before this
-   * ticket: no artifact has ever measured a completed block one level
-   * deep, and threading this merge through every nesting level is a
-   * materially bigger, unmeasured change this ticket's own report names
-   * as deferred rather than built ahead of being asked for.
-   */
   completedTasks?: Task[];
-  /** Un-completes one of `completedTasks` above — the identical `uncompleteTask` door every other completion-reversal in this app already goes through (CMT-05, parity ledger). Meaningless, and never called, when `completedTasks` is empty. */
   onUncomplete?: (task: Task) => void;
   /**
    * The Task that owns this group, or `undefined` for a Project/Inbox/
@@ -589,12 +558,6 @@ export function TaskTree({
   }
 
   if (tasks.length === 0 && completedTasks.length === 0) {
-    // Issue #171's own original guard, widened by ROW-14 and left that way
-    // by issue #358: a sibling group with nothing active AND nothing
-    // completed still renders nothing, but one with only completed rows
-    // (which only reaches this component at all once `completedTasksVisible`
-    // is on — `task-list.tsx`'s own gating) still falls through to the
-    // trailing block below rather than disappearing.
     return null;
   }
 
@@ -662,39 +625,10 @@ export function TaskTree({
           }`}
         />
       </ul>
-      {/*
-        Issue #358: a separate `<ul>`, entirely outside `listRef`'s own
-        container above — not a second bucket inside the same list — so a
-        completed row can never be measured, dragged onto, or counted by
-        any of this file's own reorder arithmetic (all of it scoped to
-        `listRef`). Rendered below the active list, matching both Todoist
-        platforms' own measured relocation (`ROW-14`, parity-ledger.md),
-        replacing the inline interleave `5e8c073`/`5f3ce95` built on a
-        ledger row a later live drive disproved.
-      */}
       {visibleCompletedTasks.length > 0 && (
         <>
           <ul className="flex flex-col">
             {visibleCompletedTasks.map((task) => (
-              // Renders through the identical `TaskRow` an active sibling
-              // does, not a separate, smaller component — Todoist's own
-              // completed row IS "the same row component... distinguished
-              // only by an added `--completed` class"
-              // (flow2-ROW-14-15-DATE-02-todoist.json), which `5f3ce95`
-              // fixed and this ticket preserves rather than reverting. No
-              // drag/reorder props are passed (the seven `TaskRowProps'
-              // own doc comment names, all omitted together) — a completed
-              // row gets no grip handle and stays out of `measureRows`'
-              // own selector by construction now (that function's own
-              // comment) — and no `children`, since a completed sub-task
-              // still doesn't render at all (this file's own
-              // `completedTasks` doc comment). `onComplete`/
-              // `onCompleteForever` are real callbacks rather than no-ops
-              // purely so a future caller flipping `isCompleted` off
-              // mid-render (there is none today) wouldn't find a dead
-              // wire; `TaskRowContent`'s own checkbox never reaches either
-              // once `isCompleted` is true, so in practice they're inert
-              // here.
               <TaskRow
                 key={task.id}
                 task={task}

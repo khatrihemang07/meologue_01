@@ -1,47 +1,3 @@
-/**
- * The shared Task description editor — issue #229 (DET-11/DET-12).
- * Todoist's own reference (`meologue-reference/todoist/lifecycle.md` §1) is a
- * `tiptap ProseMirror` editor with **no formatting toolbar anywhere** that
- * renders Markdown **live, as input rules** while typing: `**bold**`,
- * `` `code` ``, and a `- `/`* ` bullet marker. This file is the smallest
- * schema and plugin set that reproduces exactly those three, deliberately
- * not the whole of `entrySchema` (entry-schema.ts) — numbered lists,
- * checklists, References, headings and the rest are out of this ticket's
- * own scope (DET-12's own three named constructs), and `entrySchema`'s own
- * editor (`composer-editor.ts`) is ~69 KB gzip, an order of magnitude past
- * `task-detail-view.tsx`'s entire remaining bundle budget
- * (`check-bundle-size.mjs`'s own comment on this chunk has the number).
- *
- * **Why a bespoke schema, not `entrySchema`.** Same reasoning
- * `task-title-editor.tsx`'s own header comment gives for `taskTitleSchema`:
- * the smallest schema that is still genuinely ProseMirror. `list_item`
- * here holds `text*` directly (no nested `paragraph`, unlike
- * `entrySchema`'s own `itemContent`) — deliberately, so that a bullet
- * point is itself a textblock. That single choice is what lets `Enter`
- * inside a bullet create a new bullet via `baseKeymap`'s ordinary
- * `splitBlock` alone (`bullet_list`'s content `"list_item+"` already
- * accepts a second sibling item), with no need for
- * `prosemirror-schema-list`'s `splitListItem`/`liftListItem` commands —
- * those exist to split a `paragraph` *inside* a `list_item`, a problem
- * this schema never has because there is no inner `paragraph` to split.
- *
- * **Existing markdown text round-trips through this schema, not through
- * it.** A Description already on a Task (including one saved by the old
- * plain `<textarea>`, pre-#229) may contain constructs this schema has no
- * node for — a numbered list, a heading, a hand-typed reference. Rather
- * than lose or crash on that, `descriptionDocFromText` treats every line
- * that doesn't start with `- `/`* ` as its own literal paragraph (bold/
- * code marks aside) and never merges, drops or reflows a line — a
- * construct this schema can't represent renders as inert plain text, not
- * as a decoding error. `descriptionTextFromDoc` is its exact inverse, so a
- * round trip that never touched a bullet or a mark is byte-identical.
- *
- * **The bare-URL rewrite is not here, on purpose.** DET-13 (Todoist
- * fetches a bare URL's page title on save) is network-dependent and is
- * this app's own recorded divergence (`meologue-reference/todoist/parity-ledger.md`,
- * DET-13, `divergent`) — nothing in this file recognises or rewrites a
- * URL at all.
- */
 import { baseKeymap } from "prosemirror-commands";
 import { redo, undo } from "prosemirror-history";
 import { InputRule, inputRules } from "prosemirror-inputrules";
@@ -54,12 +10,6 @@ import { Decoration, DecorationSet, EditorView } from "prosemirror-view";
 import { useEffect, useRef } from "react";
 import { cn } from "@/lib/utils";
 
-/**
- * The smallest schema that reproduces DET-12's own three named constructs
- * — bold, a bullet list, inline code — and nothing else. See this file's
- * own header comment for why `list_item` holds `text*` directly rather
- * than `entrySchema`'s nested `paragraph`.
- */
 export const descriptionSchema = new Schema({
   nodes: {
     doc: { content: "block+" },
@@ -100,12 +50,6 @@ const paragraphType = descriptionSchema.nodes.paragraph;
 const bulletListType = descriptionSchema.nodes.bullet_list;
 const listItemType = descriptionSchema.nodes.list_item;
 
-/**
- * Tokenises one line's own text into runs of at most one mark each —
- * `**bold**` and `` `code` ``, non-overlapping, never nested (DET-12 names
- * only these two marks; a construct outside them, or one nested inside
- * another, is left as literal text rather than mis-parsed).
- */
 function parseInlineRuns(text: string): { text: string; mark: MarkType | null }[] {
   const runs: { text: string; mark: MarkType | null }[] = [];
   const pattern = /\*\*([^*]+)\*\*|`([^`]+)`/g;
@@ -292,9 +236,7 @@ export interface TaskDescriptionEditorProps {
   value: string;
   /** Fires on every transaction that changes the document, handing back Markdown text (`descriptionTextFromDoc`) — the live draft a caller's own Save button reads, mirroring `TaskTitleEditor`'s identical `onChange`. */
   onChange: (value: string) => void;
-  /** Escape — the caller's job is to discard the whole combined edit form (title and description together, DET-09), exactly as `TaskTitleEditor`'s own `onCancel` does for the title half. */
   onCancel: () => void;
-  /** Defaults to `"Description"` — DET-11's own verbatim placeholder wording. */
   placeholder?: string;
   autoFocus?: boolean;
   className?: string;

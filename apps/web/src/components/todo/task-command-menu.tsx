@@ -227,10 +227,6 @@ export function TaskCommandMenu({
               <span
                 aria-hidden="true"
                 className="size-3.5 shrink-0 rounded-full border"
-                // The picker's own swatch colour, not the row ring's — this
-                // preview sits inside the Priority picker itself, and
-                // PRI-05 (parity-ledger.md) is explicit that the two are
-                // genuinely different values for P1.
                 style={{ borderColor: priorityPickerColour(uiPriority) }}
               />
               Priority
@@ -243,11 +239,6 @@ export function TaskCommandMenu({
                     key={ui}
                     className={itemClassName}
                     aria-pressed={ui === uiPriority}
-                    // Todoist's own picker carries the identically-inverted
-                    // value on each item as `data-value` (P1 -> "4" … P4 ->
-                    // "1", ledger row PRI-02, live-audit-dom/flow3-PRI-01-02-03-todoist).
-                    // `storedPriorityOf` is the same inversion our store
-                    // already applies — this only exposes it on the DOM.
                     data-value={storedPriorityOf(ui)}
                     onSelect={() => onSetPriority(storedPriorityOf(ui))}
                   >

@@ -13,8 +13,6 @@ import {
   remapWithdrawnSpans,
 } from "./todo-quick-add-recognition";
 
-// "today" = 10 Sep 2026 (Thursday) — matching
-// meologue-reference/todoist/quick-add.md's own captured reference instant.
 const NOW = mustParseLocalDayKey("2026-09-10");
 
 describe("remapWithdrawnSpans", () => {
@@ -100,12 +98,7 @@ describe("matchIdForToken", () => {
     ).toBe("Family");
   });
 
-  // QA-10: a time-only phrase carries no date in meologue where Todoist
-  // bundles one in — "12 Sep 5:00 PM" vs. the bare "17:00". The chip's
-  // matchId now takes the merged date+time straight from the same
-  // parse's own `QuickAddResult.date` (parse-quick-add.ts's
-  // mergeDateAndTime), rather than the token's bare `time` field.
-  describe("time — QA-10, bundles the resolved day rather than a bare time", () => {
+  describe("time — bundles the resolved day rather than a bare time", () => {
     it("uses the merged date+time when one is supplied", () => {
       expect(
         matchIdForToken(
@@ -160,7 +153,7 @@ describe("computeQuickAddMatches", () => {
     ]);
   });
 
-  it("clearing the field and retyping the identical text re-recognises it (QA-07)", () => {
+  it("clearing the field and retyping the identical text re-recognises it", () => {
     const afterClear = remapWithdrawnSpans("tod", "", [{ start: 0, end: 3 }]);
     const afterRetype = remapWithdrawnSpans("", "tod", afterClear);
 
@@ -169,9 +162,7 @@ describe("computeQuickAddMatches", () => {
     ]);
   });
 
-  // QA-10, end to end: a time-only phrase's chip now bundles the implied
-  // day (here "today", NOW's own date) rather than the bare time.
-  it("bundles today's date into a time-only phrase's matchId (QA-10)", () => {
+  it("bundles today's date into a time-only phrase's matchId", () => {
     const matches = computeQuickAddMatches("5pm", { now: NOW }, []);
 
     expect(matches).toEqual([
@@ -180,27 +171,7 @@ describe("computeQuickAddMatches", () => {
   });
 });
 
-// QA-06 — strict DOM parity, decided 2026-09-12 (meologue-reference/todoist/
-// parity-ledger.md's QA-06 row): on withdrawal, meologue must REPLACE the
-// recognised span with a new node, exactly as Todoist's own tiebreak
-// (meologue-reference/todoist/live-audit-dom/qa06-tiebreak-todoist.json)
-// showed — not restyle the held one in place, which is what meologue did
-// before this fix (qa06-tiebreak-meologue.json).
-//
-// This mounts a real `EditorView`, the thing `task-title-editor.tsx`'s own
-// header comment says a test here normally can't do ("jsdom implements no
-// Range, no Selection... cannot usefully mount"). That limitation is about
-// simulating real typing/IME/caret placement through the DOM's own
-// Selection APIs — nothing this test needs. `handleKeyDown` and
-// `baseKeymap`'s commands read and write `view.state`/`view.dispatch`
-// directly, never the DOM selection, so a synthetic `keydown` dispatched
-// on `view.dom` drives the exact same code path a real browser keystroke
-// does (`prosemirror-view`'s own `editHandlers.keydown`, dist/index.js:
-// 3189, calls `view.someProp("handleKeyDown", ...)` before falling back to
-// `captureKeyDown`), and ProseMirror's DOM rendering (decoration diffing,
-// `patchOuterDeco`) runs for real against jsdom's DOM — a `MutationObserver`
-// on it sees exactly what the live tiebreak's own probe saw.
-describe("quickAddRecognitionPlugin — DOM node identity on withdrawal (QA-06)", () => {
+describe("quickAddRecognitionPlugin — DOM node identity on withdrawal", () => {
   let view: EditorView | undefined;
   let host: HTMLDivElement | undefined;
 
@@ -262,7 +233,6 @@ describe("quickAddRecognitionPlugin — DOM node identity on withdrawal (QA-06)"
     const observer = new MutationObserver((records) => mutations.push(...records));
     observer.observe(editorHost, { childList: true, subtree: true, attributes: true });
 
-    // First Backspace: withdraws, deletes no character (QA-04).
     const firstEvent = backspace(editorView);
     // `MutationObserver` callbacks land in a microtask; this test never
     // awaits one, so pull the queued records synchronously instead of
@@ -272,9 +242,6 @@ describe("quickAddRecognitionPlugin — DOM node identity on withdrawal (QA-06)"
 
     expect(firstEvent.defaultPrevented).toBe(true);
     expect(editorView.state.doc.textContent).toBe("tod");
-    // The caret never moved — no character was deleted, only the
-    // highlight withdrawn (QA-04's own width measurement: the text is
-    // unchanged).
     expect(editorView.state.selection.from).toBe(3);
 
     // The held reference is detached — Todoist's own measured behaviour
@@ -290,8 +257,6 @@ describe("quickAddRecognitionPlugin — DOM node identity on withdrawal (QA-06)"
     expect(replaced.tagName).toBe("SPAN");
     expect(replaced.textContent).toBe("tod");
     expect(replaced.getAttribute("data-match-id")).toBe("2026-09-10");
-    // Withdrawn styling dropped (QA-01/QA-06): no highlight attribute, no
-    // class — an ordinary, unstyled span.
     expect(replaced.getAttribute("data-highlighted-match")).toBeNull();
     expect(replaced.className).toBe("");
 

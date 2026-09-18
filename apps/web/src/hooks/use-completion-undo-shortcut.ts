@@ -37,32 +37,6 @@ function isTypingTarget(target: EventTarget | null): boolean {
   return false;
 }
 
-/**
- * The `Z`/`⌘Z` undo binding (CMT-05), reachable outside Todo too (issue
- * #355). Todo's own copy lives in the full `TODO_KEY_BINDINGS` table
- * (`@/lib/todo-keymap`) because that table is also what
- * `todo-keyboard-shortcuts-overlay.tsx` renders its "Z or ⌘Z | Undo" hint
- * from — `todo-page.tsx` keeps using it unchanged, wiring its
- * `onUndoComplete` option straight to a `useCompletionToast`
- * (`use-completion-toast.tsx`) instance's own `fireUndo`. The Composer's
- * Task overlay has no such table, and no shortcuts overlay of its own to
- * keep in sync with one, so `composer-page.tsx` mounts this instead: a
- * standalone chord match (`isTypingTarget` above; the chord check below is
- * a narrower, two-key special case of `chordFor`'s own `mod+`/`shift+`
- * composition, not that general formatter) reaching the identical
- * `fireUndo` a `useCompletionToast` instance already exposes.
- *
- * Deliberately its own module, not folded into `use-completion-toast.tsx`
- * alongside the hook it calls into: `todo-page.tsx` never needs this half
- * (its own `Z`/`⌘Z` reachability already comes from `TODO_KEY_BINDINGS`
- * above), and Vite's own automatic chunking groups a module with whichever
- * other modules share its exact set of importers — folding this in there
- * would have put it in the one chunk `use-completion-toast.tsx` itself
- * lands in, which `todo-page.tsx` also depends on for the half it *does*
- * need, paying for code it never calls. Keeping this the one and only
- * thing `composer-page.tsx` alone imports from here keeps it out of
- * `todo-page.tsx`'s own bundle entirely.
- */
 export function useCompletionUndoShortcut(fireUndo: () => void): void {
   const fireUndoRef = useRef(fireUndo);
   fireUndoRef.current = fireUndo;

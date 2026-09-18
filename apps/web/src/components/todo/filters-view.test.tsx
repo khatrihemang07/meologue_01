@@ -60,8 +60,6 @@ describe("FiltersView", () => {
     expect(screen.getByText(/No Filters yet/)).toBeInTheDocument();
   });
 
-  // Ledger row NAV-06: Todoist's own combined page carries this heading
-  // above its filters list; meologue's carried none.
   it("carries a My Filters heading above the filter list", () => {
     renderFiltersView([]);
 
@@ -91,10 +89,7 @@ describe("FiltersView", () => {
   });
 });
 
-// Issue #229's own fix for ledger row NAV-06: "Filters & Labels" is one
-// destination covering both — this page's own Labels section, plus a
-// real link to full Label management.
-describe("FiltersView — Labels section (NAV-06)", () => {
+describe("FiltersView — Labels section", () => {
   it("renders with no labels prop at all, unchanged (every pre-#229 caller)", () => {
     render(
       <MemoryRouter>

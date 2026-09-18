@@ -66,17 +66,6 @@ export interface RecurrenceRule {
   readonly frequency: RecurrenceFrequency;
   /** Repeat-count multiplier — "every 3 months" is {kind:"monthly", interval:3}; "every other week" is {kind:"weekly", interval:2}. Always >= 1. */
   readonly interval: number;
-  /**
-   * "due" or "completion" — already resolved from the literal `!` by
-   * ./parser.ts's resolveAnchor, so a consumer of a parsed rule never has
-   * to re-derive it itself. Uniform across every frequency: due-anchored
-   * without the bang, completion-anchored with it. It wasn't always
-   * uniform — `every day`/`every week` used to be completion-anchored
-   * regardless of the bang, "the detail" issue #170 originally named "most
-   * descriptions get wrong"; issue #291 retired that carve-out for
-   * parity with Todoist (see ../recurrence.ts's module doc comment for
-   * the full account), so the bang is now the only thing this decides.
-   */
   readonly anchor: "due" | "completion";
   /** HH:MM, 24-hour, or null for an all-day rule ("every day" vs "every day at 9am"). */
   readonly time: string | null;

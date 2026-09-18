@@ -112,14 +112,6 @@ export function ComposerSection() {
           />
         </SettingsSection>
 
-        {/*
-          Issue #358. Off (the default) matches Todoist's own measured
-          default (ROW-14, parity-ledger.md): completing a Task removes its
-          row from Inbox, a Project's own view, a Filter's own matches and
-          Search's own matches immediately, with nothing left behind. On
-          relocates it below the active rows instead, with a control to
-          load older ones.
-        */}
         <SettingsSection
           label="Completed tasks"
           hint="Off hides a completed Task everywhere in Todo, the instant it's completed. On keeps it visible, below the active Tasks, with a control to load older ones."

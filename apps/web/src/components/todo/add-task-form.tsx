@@ -1,48 +1,3 @@
-/**
- * Todo's in-list add-task affordance (issue #170, converted to the shared
- * `TaskTitleEditor` by #226, rebuilt collapsed-by-default by issue #260 —
- * NAV-10/NAV-12, parity ledger).
- *
- * **Collapsed by default, expands on click.** Todoist's own reference
- * (NAV-12, quick-add.md § Quick Add chrome) is explicit: the resting
- * affordance is a static `<button>` reading "Add task" — 14px,
- * `rgb(128,128,128)`, no border — that expands into a real composer only
- * once clicked. Issue #252 already matched the resting row's *position*
- * (after the list) and *weight* (borderless, 14px) but deliberately left
- * this click-to-reveal behaviour unbuilt, naming it NAV-12's own scope
- * note: folding it in at the time would have broken every test and the
- * e2e add-task flow, which assumed an always-mounted, always-open field.
- * This file is that deferred half.
- *
- * **Shared add logic, not forked.** The actual parse/commit — `value`,
- * `resetKey`, the recognition plugin, the `#`/`@` autocomplete — all live
- * in `use-quick-add-composer.ts`, shared verbatim with `quick-add-
- * dialog.tsx` (issue #260's own brief: "don't fork the add logic"). This
- * component only owns the collapsed/expanded chrome around it.
- *
- * **Collapses on Cancel or Escape** (NAV-12's own claim), both routed
- * through the identical `collapse` callback below — but does **not**
- * collapse after a successful Add (issue #260's Defect 1). A previous
- * version of this comment cited QA-19 for the opposite behaviour
- * ("collapses again after a successful Add, not 'stays open for the next
- * task'"); that citation was misapplied. QA-19 measured `Shift+Enter`
- * inside the global Quick Add *dialog* (`quick-add-dialog.tsx`) — a
- * different surface, where closing on commit IS correct and still
- * happens there. It says nothing about this in-list composer's Add
- * button. What actually governs this component is the flow-12 S1 live
- * drive (2026-09-13): Todoist's own in-list composer, after Add,
- * "stayed mounted, EMPTY, and focused — does NOT collapse"
- * (`meologue-reference/todoist/live-audit-dom/flow12-S1-NAV-07-10-12-
- * both.json`). The two findings do not conflict — they describe two
- * different surfaces, each still true on its own. `keyboard.md`'s own
- * "Add task" section transcribes Enter as "Save new task and create
- * another one below," which reads closer to the corrected behaviour, but
- * that transcription is still UNVERIFIED (`keyboard.md`'s own header
- * warns the whole keymap table is transcription-only unless a row is
- * separately marked verified) — this file follows the live-driven flow-12
- * S1 record, not the transcription, per this ticket's own instruction to
- * prefer the verified source when the two disagree.
- */
 import { Suspense, useEffect, useState } from "react";
 import { LazyTaskTitleEditor } from "@/components/todo/lazy-task-title-editor";
 import { Button } from "@/components/ui/button";
@@ -70,21 +25,9 @@ export interface AddTaskFormProps {
   onCreateLabel?: (name: string) => void;
 }
 
-// Reads `--td-add-task-font-size`/`--td-add-task-placeholder` (index.css,
-// NAV-10) — the resting row's own measured 14px/`rgb(128,128,128)`, not
-// the Quick Add title's 16px/23px pair (`--td-composer-title-*`), which
-// only applies once the composer is actually open below.
 const TRIGGER_CLASSES =
   "flex items-center gap-2 rounded-md px-2.5 py-1.5 text-[length:var(--td-add-task-font-size)] text-[color:var(--td-add-task-placeholder)] hover:text-foreground disabled:pointer-events-none disabled:opacity-60";
 
-// The open composer's own box — a bordered card now that it is a genuine,
-// transient editor rather than the permanent resting row (issue #252's
-// borderless `border-transparent` applied to the *collapsed* trigger
-// above instead; see that issue's own history in this file's git log for
-// why the always-open field used to carry this class name for a different
-// reason). Reads the identical `--td-composer-title-font-size`/`-line-
-// height` tokens QA-20 fixed, at every width, matching Todoist's own
-// Quick Add title (16px/23px) once a reader has actually clicked in.
 const EDITOR_BOX_CLASSES =
   "h-8 w-full min-w-0 rounded-lg border border-transparent bg-transparent px-1 py-1 text-[length:var(--td-composer-title-font-size)] leading-[length:var(--td-composer-title-line-height)] outline-none";
 
@@ -155,19 +98,6 @@ export function AddTaskForm({
   if (!open) {
     return (
       <div className="px-3 py-2" data-add-task-field>
-        {/*
-          KBD-04 (parity ledger): Todoist's own "Add task" affordance is a
-          plain `<button>` and is itself the row-to-row cycle's one
-          non-row stop (`flow11-R2-...`'s own measured traversal) —
-          `data-row-nav-target` marks this button directly as that stop,
-          the same way `completed-tasks.tsx`'s Restore button and
-          `task-row-content.tsx`'s title button mark themselves
-          (`todo-keymap.ts`'s own `rowNavTargets` reads this attribute
-          live, off the tree, so marking it here needs no change there).
-          Once expanded below, the cycle's stop shifts onto the editor's
-          own `role="textbox"` instead (the existing `[data-add-task-
-          field] [role="textbox"]` selector already covers that).
-        */}
         <button
           type="button"
           data-row-nav-target

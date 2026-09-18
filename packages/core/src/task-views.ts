@@ -136,51 +136,6 @@ export interface UpcomingDay {
   tasks: Task[];
 }
 
-/**
- * Upcoming (issue #223's second half): today() looks backward and at the
- * present moment (overdue, due today); this looks forward, one day-section
- * per calendar day that actually has a dated Task, starting with today
- * itself. Todoist's own Upcoming view groups the identical way — its day
- * headings run "10 Sep ‧ Today ‧ Thursday," "11 Sep ‧ Tomorrow ‧ Friday,"
- * "12 Sep ‧ Saturday" (meologue-reference/todoist/scheduler-and-priority.md
- * §9, DATE-05 in the parity ledger) — today's own section heading first,
- * not omitted the way a calendar app might start a "forthcoming" list on
- * tomorrow.
- *
- * **`date` only, never `deadline`.** today()'s own union deliberately
- * folds a Deadline in — CONTEXT.md's point that an undated Task still has
- * to surface once its hard cutoff arrives. Upcoming has no such rescue
- * case to cover: it's a calendar, one section per day something is
- * *planned* for, and a Deadline is a cutoff a Task must be done by, not a
- * day it's scheduled on — DATE-08 in the ledger records that Deadline's
- * own row rendering is still unobserved (Pro-gated in the captured
- * account), so this deliberately doesn't invent a rule for it beyond
- * "not part of this grouping."
- *
- * **This function's own day map still starts at today — the `dayKey <
- * todayKey` guard below is unchanged.** What sits above it changed
- * (issue #299): this module used to say Overdue "stays in Today, not
- * here… never doubled into both views," and `UpcomingView` enforced that
- * by never rendering `today()`'s `overdue` bucket at all. That rule was
- * adopted without a cited reference, and it's the opposite of Todoist's
- * own shape — Todoist shows an overdue Task in both Today and Upcoming.
- * meologue now matches: `UpcomingView` renders a separate Overdue section
- * (today()'s own `overdue` bucket, unmodified — no second derivation of
- * "overdue" lives here) ahead of the day sections below, so an overdue
- * Task appears in both views. This function itself didn't need to change
- * to make that true — its day-keyed map was already, and remains, the
- * complement of `overdue`; the doubling is `UpcomingView` additionally
- * rendering `today()`'s bucket alongside what this function returns, not
- * a change to what this function returns. A Task due exactly today is
- * still the one day both views share on their own terms: today() calls
- * it `dueToday`, Upcoming calls it this list's first section.
- *
- * Each day's Tasks are sorted with the identical compareForToday chain
- * today() already uses (this module's own header comment: grouping never
- * invents a second ordering), and the days themselves come back
- * chronological — a caller renders them top to bottom and gets Upcoming's
- * whole shape for free.
- */
 export function upcoming(tasks: Task[], now: string): UpcomingDay[] {
   const todayKey = now.slice(0, 10);
   const byDay = new Map<string, Task[]>();
@@ -212,43 +167,6 @@ export interface UpcomingWeekStripDay {
   hasDatedTask: boolean;
 }
 
-/**
- * The Upcoming week strip's own range and per-day dot flag (issue #343) —
- * a Monday-start calendar week *containing* `now`, not a rolling 7 days
- * from `now`. Settled by a live, read-only measurement of Todoist Android
- * across three different "todays" that all read the identical range
- * (issue #343's own tracking comment): a rolling window would have moved
- * with the day, and it didn't. meologue already hardcodes Monday as the
- * first day of the week for its own date picker
- * (`task-schedule-popover.tsx`'s `weekStartsOn={1}`), so the strip needs
- * no new week-start setting to agree with it.
- *
- * **A function of its own, deliberately never folded into `upcoming()`
- * above.** `upcoming()` has three existing callers
- * (`TodoPage`/`TodoSidebar`/`UpcomingView`) that all depend on its
- * `dayKey < todayKey` guard to mean "never a day before today" — the
- * Upcoming badge count and `TodoPage`'s own prev/next task list would
- * both silently grow to include this week's already-past days if that
- * guard were loosened to satisfy the strip instead. The strip's own range
- * routinely needs exactly those earlier-this-week days (a Thursday "now"
- * still has to show Monday through Wednesday, unselected but present) —
- * an irreconcilable difference in what the two guards mean, not a detail
- * to compromise on. Keeping this a separate function costs one extra
- * pass over `tasks`; the alternative costs three call sites a regression
- * this module can't detect for them.
- *
- * **The dot: `date` only, same as `upcoming()`'s own day sections, never
- * `deadline`.** `upcoming()`'s own doc comment above already makes this
- * call for the day-section list — a Deadline is a cutoff, not a day a
- * Task is scheduled on, and DATE-08 in the parity ledger leaves Deadline's
- * own row rendering unmeasured rather than inventing a rule for it. This
- * function's dot is the strip's promise about that same day list, one
- * layer up — a dot with no section beneath it (or a bare day with a dot)
- * would contradict the sections `UpcomingView` renders directly below the
- * strip, so `hasDatedTask` reads the identical field `upcoming()` reads
- * and nothing else. Whether a Deadline should ever surface here is left
- * open on purpose, not decided by omission.
- */
 export function upcomingWeekStrip(tasks: Task[], now: string): UpcomingWeekStripDay[] {
   const todayKey = now.slice(0, 10);
   const mondayKey = startOfWeekKey(todayKey);
@@ -345,23 +263,6 @@ function daysBetween(fromKey: string, toKey: string): number {
   return Math.round((toUtc - fromUtc) / 86_400_000);
 }
 
-/**
- * The exact heading wording DATE-05 records — `upcoming()`'s own
- * `UpcomingDay.dayKey` in, a heading string out. Deliberately a *second*
- * function rather than folded into `upcoming()` itself: grouping is a
- * pure question about which Tasks fall on which day, wording is a pure
- * question about how to say a day out loud, and a caller (or a test) that
- * wants one has no reason to also compute the other.
- *
- * Only today and tomorrow ever get a relative word — every other day is
- * `{day} {month} {separator} {weekday}`, weekday-only, exactly as
- * DATE-05's own "12 Sep ‧ Saturday" (no relative word, because Saturday
- * is neither today nor tomorrow in that capture) already shows. No year
- * is ever printed, for a further-out day either — DATE-05's own evidence
- * never shows one, and CLAUDE.md's own rule against inventing evidence
- * cuts against adding a fourth segment nothing here was ever seen to
- * carry.
- */
 export function upcomingDayHeading(dayKey: string, now: string): string {
   const todayKey = now.slice(0, 10);
   const [year, monthPart, dayPart] = dayKey.split("-");

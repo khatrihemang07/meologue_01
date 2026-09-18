@@ -5,7 +5,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useSettingsStore } from "@/lib/settings";
 import { ProjectView } from "./project-view";
 
-/** Opens the project's own "Project options menu" (STR-02) and clicks the named item. */
 function openProjectMenuAndClick(itemName: string) {
   // Radix's `DropdownMenu.Trigger` opens on `pointerdown`, not `click`
   // (task-schedule-popover.test.tsx's own identical "Repeat menu"
@@ -15,7 +14,6 @@ function openProjectMenuAndClick(itemName: string) {
   fireEvent.click(screen.getByRole("menuitem", { name: itemName }));
 }
 
-/** Opens the given Section row's "Section options menu" (STR-07) — mirrors labels-view.test.tsx's own identical `openRowMenuAndClick` for the identical `DropdownMenu` shape. */
 function openSectionMenu(rowIndex: number) {
   const triggers = screen.getAllByRole("button", { name: "Section options menu" });
   const trigger = triggers[rowIndex];
@@ -144,7 +142,7 @@ function renderProjectView(overrides: Partial<Parameters<typeof ProjectView>[0]>
   return { ...render(<ProjectView {...props} />, { wrapper: MemoryRouter }), props };
 }
 
-describe("ProjectView — Edit project dialog (STR-02)", () => {
+describe("ProjectView — Edit project dialog", () => {
   it("opens from the Project options menu, prefilled with the current name, colour and description", async () => {
     renderProjectView({
       project: project({ name: "Groceries", colour: "#DC4C3E", description: "Weekly shop" }),
@@ -159,7 +157,7 @@ describe("ProjectView — Edit project dialog (STR-02)", () => {
     expect(screen.getByLabelText("Project description")).toHaveValue("Weekly shop");
   });
 
-  it("shows the 120-character counter and caps the name field (STR-02's own n/120 reading)", async () => {
+  it("shows the 120-character counter and caps the name field (the n/120 reading)", async () => {
     renderProjectView({ project: project({ name: "Groceries" }) });
 
     openProjectMenuAndClick("Edit");
@@ -276,10 +274,7 @@ describe("ProjectView — Edit project dialog (STR-02)", () => {
   });
 });
 
-describe("ProjectView — delete (STR-01, unchanged wording)", () => {
-  // Verbatim (meologue-reference/todoist/quick-add.md § "Destructive
-  // confirmation wording"): "Delete project? The <name> project and all
-  // its tasks will be permanently deleted. This action cannot be undone."
+describe("ProjectView — delete (unchanged wording)", () => {
   it("shows Todoist's own verbatim delete wording", async () => {
     renderProjectView({ project: project({ name: "Groceries" }) });
 
@@ -319,7 +314,7 @@ describe("ProjectView — delete (STR-01, unchanged wording)", () => {
   });
 });
 
-describe("ProjectView — Section options menu (STR-07)", () => {
+describe("ProjectView — Section options menu", () => {
   it("carries Edit, Move to…, Archive and Delete, in Todoist's own DOM order minus Duplicate/Copy link to section", () => {
     renderProjectView({ sections: [section()] });
 
@@ -446,12 +441,6 @@ describe("ProjectView — Section options menu (STR-07)", () => {
   });
 
   describe("Archive and Delete", () => {
-    // The confirmation names the count and says it cannot be undone (issue
-    // #171's own acceptance criterion, and the divergence 171-brief.md
-    // records from Todoist's own gentler dialog): the reader sees the real
-    // number before confirming, not a generic warning. Wording itself is
-    // untouched by STR-07 (this file's own header comment) — Todoist's own
-    // was never captured.
     it("Delete names the true destruction count, awaited fresh before the dialog opens", async () => {
       const countSectionDestruction = vi.fn(async () => 7);
       renderProjectView({ sections: [section()], countSectionDestruction });
@@ -548,20 +537,7 @@ describe("ProjectView — Sections cap", () => {
   });
 });
 
-// ROW-14 (parity-ledger.md): a Project's own view had NO completed-Task
-// display at all before ROW-14's own ticket (`todo-page.tsx`'s own
-// pre-existing comment named that gap explicitly) — `completedTasks`/
-// `onUncomplete` are this file's own door onto `TaskList`'s identical
-// props (that component's own doc comment, and `task-tree.test.tsx`,
-// cover what a completed row itself looks like and where it renders; this
-// only proves the pass-through and the scoping).
-//
-// Issue #358: `completedTasksVisible` (lib/settings.ts) defaults to off,
-// so every test below that expects a completed Task to actually render
-// turns it on explicitly and turns it back off afterward — the identical
-// gate `task-list.tsx` itself reads before ever narrowing `completedTasks`
-// down to this Project's own rows.
-describe("ProjectView — completed Tasks (ROW-14, issue #358)", () => {
+describe("ProjectView — completed Tasks (issue #358)", () => {
   beforeEach(() => {
     useSettingsStore.getState().setCompletedTasksVisible(true);
   });

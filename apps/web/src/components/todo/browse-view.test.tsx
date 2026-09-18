@@ -24,9 +24,6 @@ describe("BrowseView", () => {
     expect(screen.getByRole("link", { name: "Search" })).toHaveAttribute("href", "/todo/search");
   });
 
-  // Issue #229/NAV-06's own wording, matching todo-sidebar.tsx rather than
-  // todo-nav-destinations.ts's plain "Filters" — this list's own header
-  // comment explains why the two are free to diverge on label text.
   it("links Filters & Labels to /todo/filters", () => {
     renderBrowse();
 
@@ -36,7 +33,6 @@ describe("BrowseView", () => {
     );
   });
 
-  // Parity ledger NAV-01/NAV-11's own wording for /todo/activity.
   it("links Reporting to /todo/activity", () => {
     renderBrowse();
 

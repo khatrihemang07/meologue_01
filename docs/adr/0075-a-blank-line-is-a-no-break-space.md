@@ -6,12 +6,10 @@ Accepted. Closes the gap [0069](0069-enter-splits-a-block-and-shift-enter-is-a-s
 open. 0069 made Enter split a block and Shift+Enter a soft break, and made the two distinguishable in
 storage — `\n\n` against a GFM backslash hard break. It did not give an empty paragraph a spelling,
 and said so: pressing Enter twice produced a blank line in the Composer that did not survive Send and
-reload. This ADR is that spelling. Extends
-[0072](0072-upnote-is-the-specification-per-input-modality.md) — UpNote keeps a blank line because it
-stores HTML, where one is a real `<div><br></div>` block, byte-verified in the macOS gap sweep's
-block-model table. We keep Markdown, so the behaviour has to be re-derived rather than inherited.
-[0073](0073-editor-parity-is-proved-by-a-generated-matrix.md)'s harness gains the assertion that
-would have caught this, described in Consequences.
+reload. This ADR is that spelling. UpNote keeps a blank line because it stores HTML, where one is a real
+`<div><br></div>` block, byte-verified in the macOS gap sweep's block-model table. We keep
+Markdown, so the behaviour has to be re-derived rather than inherited. The assertion that would
+have caught this is described in Consequences.
 
 ## Context
 
@@ -20,9 +18,9 @@ on read, which is CommonMark's blank-line rule doing exactly what it is specifie
 ⏎ `bravo` showed a blank line in the Composer, and lost it the moment the Entry was Sent and
 re-opened.
 
-The parity fixture's own `enter-twice-outside-list-leaves-exactly-one-blank-block` row passed
-throughout. That row is not wrong; the harness was incomplete. It replays keystrokes into a live
-Composer and reads the resulting document back, and never writes that document down. A break
+The Composer's own keystroke tests for this case passed throughout. They were not wrong; they were
+incomplete. They replay keystrokes into a live Composer and read the resulting document back, and
+never write that document down. A break
 surviving the Composer and a break surviving storage are two different claims, and the suite was only
 ever making the first one.
 
@@ -116,13 +114,11 @@ break. This is not a transitional kindness. A Restore reinjects old data shapes 
 migrated" is a state this app can never actually reach, and the tolerance is a permanent property
 rather than a step on the way to removing it.
 
-**The harness now writes what it reads.** `composer-parity.spec.ts` asserts, for every row, that the
-live document's stored form canonicalises back to the same expected shape — so an encoding that
-renders correctly but cannot be written down and read back fails at the row that introduced it. That
-assertion immediately found a pre-existing defect unrelated to this ADR: a checkbox's mandatory
-separator space survives into the Composer's load path as real text. Filed separately, and the three
-checkbox rows assert storage *idempotence* until it is fixed, with the exemption marked for deletion
-rather than adjustment.
+**A keystroke test must write what it reads.** Asserting that a live document's stored form reads
+back to the same shape is what catches an encoding that renders correctly but cannot be written down
+and read back. That assertion immediately found a pre-existing defect unrelated to this ADR: a
+checkbox's mandatory separator space survives into the Composer's load path as real text. Filed
+separately.
 
 **A blank line is now expressible, so it can be typed by accident.** Two Enters have always been easy
 to press. They previously collapsed silently; now they persist. This is the intended behaviour and

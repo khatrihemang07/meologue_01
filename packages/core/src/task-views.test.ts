@@ -642,11 +642,7 @@ describe("upcomingWeekStrip() — issue #343's Monday-start week, four different
   });
 });
 
-describe("upcomingDayHeading() — the exact wording DATE-05 records", () => {
-  // "today" for this whole block matches the reference capture itself
-  // (meologue-reference/todoist/README.md: "today" = 10 Sep 2026, a Thursday),
-  // so every expected string here is copied verbatim from
-  // scheduler-and-priority.md §9 rather than reasoned about independently.
+describe("upcomingDayHeading() — the exact heading wording", () => {
   const CAPTURED_TODAY = "2026-09-10";
 
   it("reads exactly '10 Sep ‧ Today ‧ Thursday' for today itself", () => {

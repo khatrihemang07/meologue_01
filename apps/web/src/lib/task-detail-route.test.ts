@@ -83,10 +83,6 @@ describe("taskDetailPath / taskIdFromParam", () => {
   });
 });
 
-// Issue #306: `taskDetailPath`'s own `commentIntent` option, and
-// `hasCommentReplyIntent`'s read of it back out of a URL's search params —
-// the door a Task row's comment badge opens onto "land in the thread,
-// ready to reply" (ROW-08, matching Todoist's own `?intent=reply`).
 describe("taskDetailPath commentIntent / hasCommentReplyIntent", () => {
   it("appends ?intent=reply only when commentIntent is requested", () => {
     const t = task({ content: "Buy milk" });

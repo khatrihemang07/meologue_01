@@ -128,12 +128,6 @@ describe("TodoSidebar", () => {
     expect(screen.getByRole("navigation")).toHaveAccessibleName("Todo");
   });
 
-  // NAV-07 (parity ledger), issue #260: "Add task" stopped being a link to
-  // `/todo/inbox` the moment it started opening the global Quick Add
-  // dialog instead of navigating anywhere — Todoist's own sidebar entry
-  // does the identical thing (opens Quick Add from wherever the reader
-  // already is). It is asserted separately, by role="button", from the
-  // five real navigation links below.
   it("offers Add task as a button (not a link) that opens Quick Add from anywhere", async () => {
     renderSidebar("/todo/inbox");
     await screen.findByRole("link", { name: "Inbox" });
@@ -177,11 +171,6 @@ describe("TodoSidebar", () => {
     ]);
   });
 
-  // NAV-01's own fix: the count now lives in aria-label ("Inbox, 9
-  // tasks", read live against real Todoist) — aria-label overrides an
-  // element's accessible name outright, so this is what `getByRole`'s own
-  // `name` option now has to match. The digit stays on screen, hidden from
-  // the accessibility tree, so the name never reads "Inbox1".
   it("carries each row's count in aria-label and keeps it on screen, hidden from the name", async () => {
     renderSidebar("/todo/inbox", {
       tasks: [
@@ -225,19 +214,6 @@ describe("TodoSidebar", () => {
     expect(inbox).not.toHaveAttribute("aria-label");
   });
 
-  // Issue #248: `/todo/activity` was reachable from `todo-nav.tsx` (which
-  // hides itself at this same breakpoint) and from inside a Project, but
-  // never from this sidebar — the identical defect class Upcoming shipped
-  // with for a full release (todo-nav.tsx's own header comment). No count
-  // badge: Activity is a log, not a pending-work count.
-  //
-  // Labelled "Reporting", not "Activity" — parity ledger NAV-01/NAV-11,
-  // read live against real Todoist (flow 6): Todoist's own word for this
-  // destination is "Reporting". todo-nav.tsx's bottom bar still says
-  // "Activity" (unmeasured, out of this fix's scope) — the two
-  // navigations are free to word a shared destination differently
-  // (todo-nav-destinations.ts's own header comment); only the `to` path
-  // has to agree.
   it("offers Activity as a real link labelled Reporting, with no count badge", async () => {
     renderSidebar("/todo/inbox");
 
@@ -295,11 +271,6 @@ describe("TodoSidebar", () => {
     });
 
     await screen.findByRole("heading", { name: "Favourites" });
-    // "My Projects" — NAV-01/defect 33's own fix: real Todoist's "My
-    // Projects" is a link to /todo/projects, not a bare heading the way
-    // meologue's "Projects" used to be, which also happened to be the
-    // only instance of defect 33 that wasn't yet covered by a shared-list
-    // test: there was no /todo/projects link anywhere at this width.
     expect(screen.getByRole("link", { name: "My Projects" })).toHaveAttribute(
       "href",
       "/todo/projects",

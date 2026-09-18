@@ -27,33 +27,8 @@ export interface UseTodoKeymapOptions {
   onOpenQuickFind: () => void;
   onShowShortcuts: () => void;
   onNavigate: (path: string) => void;
-  /**
-   * CMT-05 (parity ledger) — fired for `undo-complete` (`Z`/`⌘Z`,
-   * `@/lib/todo-keymap`'s own doc comment on that binding has the fuller
-   * reasoning). `todo-page.tsx` owns the one thing there is to undo — a
-   * ref holding the most recent completion's own `uncompleteTask` call,
-   * set when its toast is raised and cleared the moment it is used or the
-   * toast closes — and this option is that ref's single door, called
-   * unconditionally. When nothing is pending it is `todo-page.tsx`'s own
-   * no-op to make, not a lookup this hook performs, matching every other
-   * binding here whose target can come back absent (`fire()`'s own
-   * `taskId !== null` guards just below).
-   */
   onUndoComplete: () => void;
-  /**
-   * KBD-01/KBD-06 (parity ledger) — `complete-task` (`E`). Mirrors
-   * `onOpenTaskDetail`'s own "hand the whole Task in, not just its id"
-   * shape, because `todo-page.tsx`'s `handleCompleteTask` already takes
-   * one: a missed (b), not a documented exclusion — the handler existed
-   * the whole time, it just had no key.
-   */
   onCompleteTask: (task: Task) => void;
-  /**
-   * KBD-01/KBD-06 — `copy-link` (`⌘⇧C`). `todo-page.tsx`'s `copyTaskLink`
-   * already exists (it's what "More actions" → "Copy link to task" calls)
-   * and already takes a whole Task, the same missed-(b) shape as
-   * `onCompleteTask` above.
-   */
   onCopyLink: (task: Task) => void;
 }
 
@@ -138,11 +113,6 @@ export function useTodoKeymap(options: UseTodoKeymapOptions): void {
         case "undo-complete":
           opts.onUndoComplete();
           return;
-        // KBD-03/04: row-to-row focus movement — `focusAdjacentRow`
-        // (todo-keymap.ts) owns the whole cycle (DOM order, wrap, the
-        // "Add task" affordance, completed rows), so this case is a bare
-        // fan-out, the same shape every other single-purpose binding here
-        // already takes.
         case "focus-next-row":
           focusAdjacentRow("next");
           return;
@@ -163,9 +133,6 @@ export function useTodoKeymap(options: UseTodoKeymapOptions): void {
           }
           return;
         }
-        // KBD-01/KBD-06: a missed (b) — `handleCompleteTask` (`todo-
-        // page.tsx`) already exists, the same door the row's own checkbox
-        // click already uses.
         case "complete-task": {
           const task = taskId !== null ? opts.resolveTask(taskId) : null;
           if (task !== null) {
@@ -173,11 +140,6 @@ export function useTodoKeymap(options: UseTodoKeymapOptions): void {
           }
           return;
         }
-        // KBD-01/KBD-06: this app has no comment-only surface — commenting
-        // lives inside the Task detail view, which is exactly where the
-        // row's own "Comment" hover button already sends a click
-        // (`task-row-content.tsx`), so this reuses `onOpenTaskDetail`
-        // rather than adding a second option for the same destination.
         case "comment-task": {
           const task = taskId !== null ? opts.resolveTask(taskId) : null;
           if (task !== null) {
@@ -185,9 +147,6 @@ export function useTodoKeymap(options: UseTodoKeymapOptions): void {
           }
           return;
         }
-        // KBD-01/KBD-06: another missed (b) — `copyTaskLink` (`todo-
-        // page.tsx`) already exists, the same door "More actions" → "Copy
-        // link to task" already uses.
         case "copy-link": {
           const task = taskId !== null ? opts.resolveTask(taskId) : null;
           if (task !== null) {
@@ -259,15 +218,9 @@ export function useTodoKeymap(options: UseTodoKeymapOptions): void {
         case "go-labels":
           opts.onNavigate("/todo/labels");
           return;
-        // Coordinator's own re-audit: `/todo/activity` is real, and
-        // `todo-sidebar.tsx` labels it "Reporting" (NAV-01) — see
-        // todo-keymap.ts's own doc comment on `go-reporting`.
         case "go-reporting":
           opts.onNavigate("/todo/activity");
           return;
-        // KBD-01/KBD-06: the one `O then …` row with a real destination
-        // (`/settings`, App.tsx) — see todo-keymap.ts's own header comment
-        // for why the other three `O then …` rows stay unbound.
         case "go-settings":
           opts.onNavigate("/settings");
           return;
@@ -278,9 +231,6 @@ export function useTodoKeymap(options: UseTodoKeymapOptions): void {
         case "go-themes":
           opts.onNavigate("/settings");
           return;
-        // KBD-01/KBD-06: jumps straight to the Add-task field rather than
-        // cycling row by row (`focusAdjacentRow`) to reach it —
-        // `focusAddTaskField` (todo-keymap.ts) owns the whole selector.
         case "focus-add-task":
           focusAddTaskField();
           return;
