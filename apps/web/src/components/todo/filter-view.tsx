@@ -144,7 +144,11 @@ export function FilterView({
     setSaveError(null);
     try {
       const id = onCreate(trimmedName, queryText, colour);
-      navigate(`/todo/filters/${id}`);
+      // `replace` (ADR 0079's follow-up, ADR 0086): landing on the new
+      // Filter's own address is still Todo's own interior navigation, not
+      // a departure — a plain `navigate` here left `/todo/filters/new`'s
+      // now-meaningless address behind for Back to land on.
+      navigate(`/todo/filters/${id}`, { replace: true });
     } catch (error) {
       setSaveError(error instanceof Error ? error.message : "Couldn't save this Filter.");
     }
@@ -291,7 +295,11 @@ export function FilterView({
         confirmLabel="Delete"
         onConfirm={() => {
           onRemove();
-          navigate("/todo/filters");
+          // `replace` (ADR 0079's follow-up, ADR 0086): the Filter this
+          // reader was just standing on no longer exists — a plain
+          // `navigate` left its now-dead address behind for Back to land
+          // back on, same class of gap as the create path just above.
+          navigate("/todo/filters", { replace: true });
         }}
       />
     </div>

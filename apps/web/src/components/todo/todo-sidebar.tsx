@@ -119,6 +119,12 @@ function CountRow({
     <div className="relative">
       <NavLink
         to={to}
+        // `replace` (ADR 0079's follow-up, ADR 0086): the sidebar's rows
+        // are `todo-nav.tsx`'s own rows rendered at a wider breakpoint,
+        // not a second navigation surface with different rules — moving
+        // between Todo's own views is interior state there too, so it
+        // must not grow the history stack a NavLink pushes by default.
+        replace
         aria-label={count > 0 ? `${label}, ${count} ${count === 1 ? "task" : "tasks"}` : undefined}
         className={({ isActive }) =>
           cn(
@@ -182,6 +188,11 @@ function ProjectRow({ project, depth }: { project: Project; depth: number }) {
   return (
     <NavLink
       to={`/todo/projects/${project.id}`}
+      // `replace` (ADR 0079's follow-up, ADR 0086): opening one Project
+      // from another is still moving between Todo's own views, not
+      // leaving Todo, for the identical reason `CountRow`'s own `NavLink`
+      // just above does the same.
+      replace
       className={({ isActive }) =>
         cn(
           "flex items-center gap-2.5 rounded-md py-1.5 pr-2 text-sm hover:bg-muted",

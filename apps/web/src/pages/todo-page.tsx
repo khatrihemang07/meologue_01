@@ -895,15 +895,26 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
     navigate(taskDetailPath(task), { replace: true, state: { from: backgroundView } });
   }
 
-  // Closes the detail view back onto whichever background it opened over
-  // — a real navigation to `backgroundPath(backgroundView)`, not
-  // `navigate(-1)`: `back-to-chats.tsx`'s own header comment gives the
-  // identical reasoning for why a real link beats history navigation
-  // here — a reader who opened this Task's address directly (a bookmark,
-  // a shared link, a reload) has no in-app history entry to go back to,
-  // and closing has to land somewhere sensible regardless.
+  // Closes the detail view back onto whichever background it opened over.
+  // `openTaskDetail` is a real push (the Task's own address is a departure
+  // a reader dismisses, ADR 0079/ADR 0086's exception for a modal), so
+  // closing is the mirror of `digest-reader-page.tsx`'s and
+  // `sessions-page.tsx`'s own `goBack()`: `navigate(-1)` pops that entry
+  // when one exists, landing exactly back on whatever was open before —
+  // no need to compute `backgroundPath` at all in the common case, since
+  // popping restores the real prior URL. `location.key === "default"`
+  // means there is nothing behind us to pop — a reader who opened this
+  // Task's address directly (a bookmark, a shared link, a reload) has no
+  // in-app history entry to go back to — so that case falls back to a
+  // `replace` onto `backgroundPath(backgroundView)` instead: a real
+  // navigation, landing sensibly, but not a push that would leave the
+  // dead Task address behind for a second Back to return to.
   function closeTaskDetail() {
-    navigate(backgroundPath(backgroundView));
+    if (location.key === "default") {
+      navigate(backgroundPath(backgroundView), { replace: true });
+    } else {
+      navigate(-1);
+    }
   }
 
   // "Copy link to task" (the command menu's own item) — the same address
@@ -1219,7 +1230,11 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
             }
             onDeleteProject={() => {
               removeProject(currentProject.id);
-              navigate("/todo/projects");
+              // `replace` (ADR 0079's follow-up, ADR 0086): the deleted
+              // Project's own address is now dead — a plain `navigate`
+              // left it behind for Back to land back on, the identical
+              // gap `filter-view.tsx`'s own delete path had.
+              navigate("/todo/projects", { replace: true });
             }}
             onAddSection={handleAddSection}
             onRenameSection={renameSection}
@@ -1556,7 +1571,14 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
         projects={projects}
         onOpenTask={openTaskDetail}
         onOpenProject={(projectId) =>
-          navigate(projectId === null ? "/todo/inbox" : `/todo/projects/${projectId}`)
+          // `replace` (ADR 0079's follow-up, ADR 0086): Quick-find opening
+          // a Project is still moving between Todo's own views — the same
+          // reasoning as `openTaskDetail`'s sibling row-click, except a
+          // Project's own screen isn't a modal a reader dismisses, so
+          // unlike `openTaskDetail` this doesn't earn a history entry.
+          navigate(projectId === null ? "/todo/inbox" : `/todo/projects/${projectId}`, {
+            replace: true,
+          })
         }
         onShowMoreResults={openFullSearch}
       />

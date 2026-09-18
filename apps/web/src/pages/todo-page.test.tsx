@@ -2,7 +2,16 @@ import type { Comment, Event, Task } from "@meologue/core";
 import { QueryClient, QueryClientProvider, queryOptions } from "@tanstack/react-query";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { useState } from "react";
-import { Link, MemoryRouter, Navigate, Outlet, Route, Routes, useNavigate } from "react-router";
+import {
+  Link,
+  MemoryRouter,
+  Navigate,
+  Outlet,
+  Route,
+  Routes,
+  useLocation,
+  useNavigate,
+} from "react-router";
 import { toast } from "sonner";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { TODO_SIDEBAR_QUERY, WIDE_LAYOUT_QUERY } from "@/hooks/use-wide-layout";
@@ -222,17 +231,36 @@ function GoBackProbe() {
   );
 }
 
-function renderTodoPage(context: EntryStoreOutletContext, initialPath = "/todo/inbox") {
+// Issue #353 (ADR 0086): renders the current pathname so a test can assert
+// exactly where a navigation landed, mirroring digest-reader-page.test.tsx's
+// own identical `LocationProbe`.
+function LocationProbe() {
+  const location = useLocation();
+  return <p data-testid="location-path">{location.pathname}</p>;
+}
+
+// `initialEntries` defaults to just the reader's own path — the same single
+// -entry stack (so `location.key === "default"`, the cold-load/deep-link
+// case) every pre-existing test in this file already renders against.
+// Issue #353's own tests, which need Todo actually *entered* (so there's a
+// real entry behind it for Back to pop to), pass their own multi-entry
+// stack instead.
+function renderTodoPage(
+  context: EntryStoreOutletContext,
+  initialPath = "/todo/inbox",
+  initialEntries: string[] = [initialPath],
+) {
   const queryClient = new QueryClient();
   return render(
     <QueryClientProvider client={queryClient}>
-      <MemoryRouter initialEntries={[initialPath]}>
+      <MemoryRouter initialEntries={initialEntries} initialIndex={initialEntries.length - 1}>
         {/* A real link to a non-`/todo/*` route (ADR 0049's own suggested
             test shape: "navigate to `/composer` ... through the router") —
             TodoPage itself has no reason to link to Composer, so this is the
             test's own way out, not a control this ticket adds to the page. */}
         <Link to="/composer">Leave Todo</Link>
         <GoBackProbe />
+        <LocationProbe />
         <Routes>
           <Route element={<Outlet context={context} />}>
             {/* Issue #352: mirrors App.tsx's own bare `/todo` redirect —
@@ -1975,6 +2003,104 @@ describe("TodoPage — Search door (issue #307)", () => {
     fireEvent.click(screen.getByRole("button", { name: "Simulate Back" }));
     expect(screen.getByRole("heading", { name: "Today" })).toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: "Search" })).not.toBeInTheDocument();
+  });
+});
+
+// Issue #353, ADR 0086 ("Todo's own views are interior state, not
+// departures") — the follow-up ADR 0079 named explicitly and left undone:
+// moving between Todo's own views must not push a history entry, and the
+// Task detail's own address is the one deliberate exception (a modal is
+// something a reader dismisses, not a screen they leave). These prove the
+// three shapes ADR 0079's own Consequences section named — a real Back
+// press after visiting several interior views, a real Back press
+// dismissing the one interior navigation that still earns a history
+// entry, and closing that same navigation with nothing behind it to pop.
+describe("TodoPage — Back leaves Todo, not walks its views (issue #353, ADR 0086)", () => {
+  afterEach(removeMatchMedia);
+
+  // A real uuid, mirroring the main describe block's own `DETAIL_TASK_ID`
+  // — `taskIdFromParam`'s regex (lib/task-detail-route.ts) only ever reads
+  // the trailing uuid, so a plain `"a"` id wouldn't resolve to anything,
+  // whether reached by a row click or a direct link.
+  const DETAIL_TASK_ID = "22222222-2222-7222-8222-222222222222";
+
+  it("visiting several Todo views then pressing Back once leaves Todo", () => {
+    installNarrowMatchMedia();
+    // Entering Todo from the root screen is itself a real push — the one
+    // entry a Back press has to pop past to actually leave Todo.
+    // `["/composer", "/todo/inbox"]` puts it there, the same "opened from
+    // the cards" shape digest-reader-page.test.tsx's own stepping test
+    // uses to prove the identical rule for Digest.
+    renderTodoPage(readyContext(), "/todo/inbox", ["/composer", "/todo/inbox"]);
+    expect(screen.getByRole("heading", { name: "Inbox" })).toBeInTheDocument();
+
+    const nav = screen.getByRole("navigation", { name: "Todo" });
+    fireEvent.click(within(nav).getByRole("link", { name: "Today" }));
+    expect(screen.getByRole("heading", { name: "Today" })).toBeInTheDocument();
+
+    fireEvent.click(within(nav).getByRole("link", { name: "Upcoming" }));
+    expect(screen.getByRole("heading", { name: "Upcoming" })).toBeInTheDocument();
+
+    // A single Back, after visiting three of Todo's own views (Inbox,
+    // Today, Upcoming), leaves Todo outright — each row's `replace`
+    // (`todo-nav.tsx`) means none of the moves between them grew the
+    // history stack, so the only real entry to pop is the one that
+    // entered Todo in the first place.
+    fireEvent.click(screen.getByRole("button", { name: "Simulate Back" }));
+
+    expect(screen.getByText("Composer")).toBeInTheDocument();
+    expect(screen.queryByRole("navigation", { name: "Todo" })).not.toBeInTheDocument();
+  });
+
+  it("Back with a Task detail open closes it and reveals the list underneath; a second Back leaves Todo", async () => {
+    renderTodoPage(
+      inboxContext([task({ id: DETAIL_TASK_ID, content: "call mum" })]),
+      "/todo/inbox",
+      ["/composer", "/todo/inbox"],
+    );
+    await waitFor(() => expect(screen.getByText("call mum")).toBeInTheDocument());
+
+    // Opening the Task from its row is `openTaskDetail`'s real push (kept
+    // exactly as it was — ADR 0086's deliberate exception), so there is a
+    // real entry for Back to pop.
+    fireEvent.click(screen.getByText("call mum"));
+    expect(await screen.findByRole("dialog")).toBeInTheDocument();
+
+    // First Back closes the Task detail rather than leaving Todo — a
+    // modal is dismissed, not walked out of, and popping its own entry
+    // lands exactly back on the list it opened over. `hidden: true` —
+    // Radix's own Dialog marks this background button `aria-hidden` while
+    // open (composer-page.test.tsx's own identical comment on the same
+    // gap); the click still fires on the real DOM node regardless of what
+    // the accessibility tree currently exposes.
+    fireEvent.click(screen.getByRole("button", { name: "Simulate Back", hidden: true }));
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(screen.getByRole("navigation", { name: "Todo" })).toBeInTheDocument();
+    expect(screen.getByText("call mum")).toBeInTheDocument();
+
+    // Second Back leaves Todo for the root screen.
+    fireEvent.click(screen.getByRole("button", { name: "Simulate Back" }));
+    expect(screen.getByText("Composer")).toBeInTheDocument();
+    expect(screen.queryByRole("navigation", { name: "Todo" })).not.toBeInTheDocument();
+  });
+
+  it("closing a Task detail opened by direct link, with no history behind it, still lands on the background rather than doing nothing", async () => {
+    renderTodoPage(
+      inboxContext([task({ id: DETAIL_TASK_ID, content: "call mum" })]),
+      `/todo/task/call-mum-${DETAIL_TASK_ID}`,
+    );
+
+    await waitFor(() => expect(screen.getByRole("dialog")).toBeInTheDocument());
+    // A single-entry stack — `location.key === "default"` — the same
+    // "bookmark, shared link, or reload" case `closeTaskDetail`'s own
+    // comment names. `navigate(-1)` has nothing to pop here, so a Back
+    // press aimed at this dialog has to fall back to a real `replace`
+    // navigation instead of doing nothing.
+    fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" });
+
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(screen.getByTestId("location-path")).toHaveTextContent("/todo/inbox");
+    expect(screen.getByRole("heading", { name: "Inbox" })).toBeInTheDocument();
   });
 });
 
