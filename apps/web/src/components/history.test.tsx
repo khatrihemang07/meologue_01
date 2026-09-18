@@ -19,7 +19,9 @@ import { formatTaskReference } from "@/lib/inline-markdown";
 import { dayReferrersQueryKey } from "@/lib/query-keys";
 import type { EntryStoreOutletContext } from "@/pages/entry-store-layout";
 import { swipeLeft, tap } from "@/test/swipe";
+import { installResizeObserverStub, stubOffsetSize } from "@/test/virtualized-scroll";
 import { History } from "./history";
+import { HistoryScrollContext, Shell } from "./shell";
 
 // Issue #146: History now calls `useNavigate()` (confirming a date picked
 // from either day marker), which throws outside a Router. Every render in
@@ -2036,5 +2038,293 @@ describe("History", () => {
 
       await waitFor(() => expect(screen.queryByText(/Referred to by/)).not.toBeInTheDocument());
     });
+  });
+});
+
+// Issue #354: the Composer's bottom-left day-jump pair, balancing the
+// jump-to-newest circle Shell already anchors bottom-right. History
+// publishes the day state (`HistoryDayJumpState`, shell.tsx) and registers
+// the actual jump; Shell owns the two rendered controls. A plain jsdom
+// render proves nothing about either half — no ResizeObserver, no layout,
+// `virtualizer.range` pinned at its initial guess — so every test below
+// that cares about *which* day is topmost drives a real, sized virtualizer
+// through `@/test/virtualized-scroll`'s harness (this file's own header
+// comment on why `DayReferrersRow` still needs a `QueryClient`, and
+// `use-pinned-scroll.test.tsx`'s `VirtualizedNewestHarness` for the
+// `scrollTo` polyfill jsdom needs before a programmatic scroll does
+// anything at all).
+describe("the day-jump pair, bottom-left (issue #354)", () => {
+  const VIEWPORT_PX = 100;
+
+  // Engineered so every row's *estimated* height is also its only height
+  // under jsdom (history.tsx's own `measureElement` override keeps the
+  // running estimate whenever a real measurement reads back `0`, which
+  // `getBoundingClientRect` always does here) — a separator or an Entry is
+  // exactly `ESTIMATED_ROW_HEIGHT_PX` (56px, history.tsx), a `dayReferrers`
+  // row (no probe supplied, below) is exactly 0. That makes every row
+  // offset below plain arithmetic instead of something read back from a
+  // real layout this suite has no access to.
+  //
+  // Today gets five Entries, the older two days one each, specifically so
+  // that landing at the very *start* of today is still comfortably more
+  // than `NEWEST_THRESHOLD_PX` (24px, use-pinned-scroll.ts) away from the
+  // true newest edge — with only one Entry per day throughout, "scrolled to
+  // the start of today" and "at the newest end" collapse into the same
+  // handful of pixels and the two states this suite tells apart become
+  // impossible to reach independently.
+  //
+  // Three days, not two, and `OVERSCAN` (25, history.tsx) left at its real
+  // value rather than mocked down: with 13 flattened rows total, 25 rows of
+  // overscan padding covers every one of them regardless of scroll
+  // position, which is exactly the shape that would let a wrong
+  // implementation (`getVirtualItems()[0]` instead of `virtualizer.range`)
+  // report the OLDEST day as topmost no matter where the reader has
+  // scrolled to. Getting the right day back out of *this* fixture is only
+  // possible by reading the real, non-overscan-padded range.
+  const DAY_MINUS_2 = entry({
+    id: "d2",
+    body: "two days ago",
+    createdAt: "2026-08-18T10:00:00.000Z",
+  });
+  const YESTERDAY = entry({ id: "y1", body: "yesterday", createdAt: "2026-08-19T10:00:00.000Z" });
+  const TODAY_ENTRIES = [1, 2, 3, 4, 5].map((n) =>
+    entry({
+      id: `t${n}`,
+      body: `today entry ${n}`,
+      createdAt: `2026-08-20T09:0${n}:00.000Z`,
+    }),
+  );
+  const THREE_DAY_FIXTURE = [DAY_MINUS_2, YESTERDAY, ...TODAY_ENTRIES];
+  // Row offsets this fixture produces (see the header comment above for
+  // where 56/0 per row comes from): sep(d-2) 0-56, dayReferrers 56-56,
+  // entry 56-112; sep(yesterday) 112-168, dayReferrers 168-168, entry
+  // 168-224; sep(today) 224-280, dayReferrers 280-280, five entries
+  // 280-560. Total document height: 560px.
+  const TOTAL_HEIGHT_PX = 560;
+  const TODAY_SEPARATOR_START_PX = 224;
+  const YESTERDAY_SEPARATOR_START_PX = 112;
+
+  // Mounts the real Shell/History pairing and gives it a real, sized
+  // viewport (this describe block's own header comment). `stubOffsetSize`
+  // alone is not enough: `@tanstack/react-virtual`'s own
+  // `observeElementRect` only re-reads `offsetWidth`/`offsetHeight` in
+  // response to an actual ResizeObserver notification (or its own initial,
+  // synchronous read at subscribe time — always `{width: 0, height: 0}`,
+  // since that happens during mount, before any test has stubbed
+  // anything). Skipping `triggerResize` after the stub leaves the
+  // virtualizer's own idea of the viewport permanently zero-sized, which is
+  // exactly the "measured viewport size is exactly zero" case history.tsx's
+  // own comment on `getVirtualItems()` describes — `virtualizer.range`
+  // stays `null` forever, and every day-jump assertion below would silently
+  // read the very first flattened row instead of a real scroll position.
+  function mountComposer(entries: Entry[]) {
+    const { triggerResize } = installResizeObserverStub();
+    renderComposer(entries);
+    const scroller = screen.getByTestId("shell-scroll-region");
+    stubOffsetSize(scroller, { width: 400, height: VIEWPORT_PX });
+    act(() => triggerResize(scroller));
+    return scroller;
+  }
+
+  function renderComposer(entries: Entry[]) {
+    return render(
+      <Shell title="Composer" pinnedThread={{ watch: entries.length }}>
+        <History entries={entries} syncEnabled={false} />
+      </Shell>,
+    );
+  }
+
+  // Lands the reader at `scrollTop` against a document of `totalHeight` —
+  // the `scrollHeight`/`clientHeight` half of "how big is this box"
+  // (`usePinnedScroll` reads these directly for `awayFromNewest`; see
+  // `mountComposer`'s own comment for the other, unrelated half the
+  // virtualizer itself reads), overridden the same way shell.test.tsx's own
+  // `setScrollGeometry` does. `scrollTo` is polyfilled unconditionally, not
+  // only when a test clicks a control: jsdom's own
+  // `Element.prototype.scrollTo` is a no-op, and `@tanstack/virtual-core`'s
+  // `elementScroll` (the only thing `scrollToIndex` ever calls) needs it —
+  // see `VirtualizedNewestHarness`'s identical polyfill
+  // (use-pinned-scroll.test.tsx) for the same requirement against a
+  // bespoke virtualizer instead of the real History/Shell pairing this
+  // suite drives.
+  function scrollTo(scroller: HTMLElement, scrollTop: number, totalHeight: number) {
+    Object.defineProperty(scroller, "scrollHeight", { value: totalHeight, configurable: true });
+    Object.defineProperty(scroller, "clientHeight", { value: VIEWPORT_PX, configurable: true });
+    scroller.scrollTo = ((options?: ScrollToOptions) => {
+      const top = options?.top;
+      if (typeof top === "number") {
+        scroller.scrollTop = top;
+        scroller.dispatchEvent(new Event("scroll"));
+      }
+    }) as typeof scroller.scrollTo;
+    scroller.scrollTop = scrollTop;
+    fireEvent.scroll(scroller);
+  }
+
+  it("shows neither control while pinned to the newest end, even though today has Entries", () => {
+    pinClock("2026-08-20T12:00:00.000Z");
+    mountComposer(THREE_DAY_FIXTURE);
+
+    expect(screen.queryByRole("button", { name: /Jump to the start of/ })).not.toBeInTheDocument();
+  });
+
+  it("shows only the start-of-today control once scrolled up but still within today", () => {
+    pinClock("2026-08-20T12:00:00.000Z");
+    const scroller = mountComposer(THREE_DAY_FIXTURE);
+
+    // Lands inside today's own block (an Entry row, not its separator) —
+    // the "day named is the viewport's top day, not an overscan row"
+    // criterion cuts both ways: this fixture's `OVERSCAN` (25) covers every
+    // row regardless of scroll position, so only reading the real,
+    // non-overscan range tells this position apart from the one below.
+    scrollTo(scroller, 300, TOTAL_HEIGHT_PX);
+
+    expect(screen.getByRole("button", { name: "Jump to the start of today" })).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: /Jump to the start of Yesterday/ }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("shows both controls, day-in-view above start-of-today, once scrolled above today", () => {
+    pinClock("2026-08-20T12:00:00.000Z");
+    const scroller = mountComposer(THREE_DAY_FIXTURE);
+
+    // Lands on yesterday's own separator.
+    scrollTo(scroller, 150, TOTAL_HEIGHT_PX);
+
+    const todayControl = screen.getByRole("button", { name: "Jump to the start of today" });
+    const yesterdayControl = screen.getByRole("button", { name: "Jump to the start of Yesterday" });
+    expect(todayControl).toBeInTheDocument();
+    expect(yesterdayControl).toBeInTheDocument();
+
+    // Stacked vertically, never side by side (the acceptance criteria's own
+    // wording) — `flex-col-reverse` is what turns "day-in-view mounted
+    // second, in DOM order" into "day-in-view drawn above start-of-today,
+    // anchored at the same bottom-3 spot regardless of whether the second
+    // control exists at all." DOM order is the one thing jsdom can actually
+    // confirm; the reversed stacking itself is a CSS class assertion, not a
+    // layout one, for the same reason every other width/shape assertion in
+    // this suite reads a class instead of a measured box.
+    const container = todayControl.closest('[data-testid="day-jump-controls"]');
+    expect(container).not.toBeNull();
+    expect(container).toHaveClass("flex-col-reverse");
+    const buttons = container?.querySelectorAll("button") ?? [];
+    expect(Array.from(buttons)).toEqual([todayControl, yesterdayControl]);
+  });
+
+  it("shows neither control when today has no Entries, however far the reader has scrolled", () => {
+    pinClock("2026-08-20T12:00:00.000Z");
+    // Only the two older days — no separator for today exists in
+    // `flatItems` at all (`flattenGroups` only emits one for a day that
+    // actually has an Entry), which is this suite's own stand-in for "no
+    // day boundary to jump to." Total height: two 112px day blocks (see the
+    // fixture's own header comment for how 112 is derived) = 224.
+    const scroller = mountComposer([DAY_MINUS_2, YESTERDAY]);
+
+    scrollTo(scroller, 0, 224);
+
+    expect(screen.queryByRole("button", { name: /Jump to the start of/ })).not.toBeInTheDocument();
+  });
+
+  it("keeps the day-jump controls outside the scroll region, so neither can cover an Entry", () => {
+    pinClock("2026-08-20T12:00:00.000Z");
+    const scroller = mountComposer(THREE_DAY_FIXTURE);
+    scrollTo(scroller, 150, TOTAL_HEIGHT_PX);
+
+    const container = screen.getByTestId("day-jump-controls");
+    expect(scroller.contains(container)).toBe(false);
+  });
+
+  it("each control jumps to its own day's separator, not merely somewhere nearby", () => {
+    pinClock("2026-08-20T12:00:00.000Z");
+    const scroller = mountComposer(THREE_DAY_FIXTURE);
+    scrollTo(scroller, 150, TOTAL_HEIGHT_PX);
+
+    fireEvent.click(screen.getByRole("button", { name: "Jump to the start of Yesterday" }));
+    expect(scroller.scrollTop).toBe(YESTERDAY_SEPARATOR_START_PX);
+
+    // Scrolling to yesterday's own separator leaves the reader "above
+    // today" still, so both controls remain — clicking the second one from
+    // here proves each targets its own day independently rather than the
+    // pair sharing one target underneath.
+    fireEvent.click(screen.getByRole("button", { name: "Jump to the start of today" }));
+    expect(scroller.scrollTop).toBe(TODAY_SEPARATOR_START_PX);
+  });
+
+  // Issue #354: icon-only below `min-[900px]` (`WIDE_LAYOUT_QUERY`,
+  // use-wide-layout.ts), an inline text label beside the circle from there
+  // up — jsdom evaluates no media query at all, so this suite can only
+  // confirm the responsive class is the one actually gating the label
+  // (`hidden` by default, `min-[900px]:inline` from that width up) and that
+  // the accessible name never depends on it, exactly the "the date is in
+  // the accessible label at every width" acceptance criterion.
+  it("hides the text label below the min-[900px] breakpoint but always carries the day in aria-label", () => {
+    pinClock("2026-08-20T12:00:00.000Z");
+    const scroller = mountComposer(THREE_DAY_FIXTURE);
+    scrollTo(scroller, 150, TOTAL_HEIGHT_PX);
+
+    const todayControl = screen.getByRole("button", { name: "Jump to the start of today" });
+    const label = todayControl.parentElement?.querySelector("span[aria-hidden]");
+    expect(label).not.toBeNull();
+    expect(label).toHaveClass("hidden", "min-[900px]:inline");
+    expect(label).toHaveTextContent("Today");
+  });
+
+  // Issue #354: "jumping to a day that has not been paged in yet still
+  // works" — reusing the identical `onSeekNeedsOlder` retry the
+  // date-Reference seek effect already runs (the "date-Reference seek"
+  // describe block above), rather than a second, parallel paging loop.
+  // Exercised directly against `HistoryScrollContext`, bypassing Shell
+  // entirely: neither of the two buttons Shell actually renders can ever
+  // target a day that isn't loaded (`topmostDayKey` is always something
+  // currently rendered; `todayKey` is only ever offered once
+  // `hasTodaySeparator` is already true), so this pins down the underlying
+  // mechanism the same way the pre-existing seek tests do, independent of
+  // whether any caller happens to reach it that way today.
+  it("asks for an older page via onSeekNeedsOlder when the day-jump target isn't loaded, then reaches it once the page lands", () => {
+    const onSeekNeedsOlder = vi.fn();
+    let registered: ((dayKey: string) => void) | null = null;
+    const recentEntry = entry({ id: "1", body: "recent", createdAt: "2026-08-18T10:00:00.000Z" });
+    // A real, detached element is enough here — this test never scrolls it
+    // (unlike the fixture suite above, it only cares about `onSeekNeedsOlder`
+    // call counts), it just has to be a genuine `HTMLDivElement` so
+    // `virtualizer.scrollToIndex`'s own DOM calls have something to run
+    // against without throwing.
+    const detachedScrollElement = document.createElement("div");
+
+    function Harness({ entries }: { entries: Entry[] }) {
+      return (
+        <div>
+          <HistoryScrollContext.Provider
+            value={{
+              scrollElement: detachedScrollElement,
+              registerScrollToNewest: () => {},
+              registerScrollToDay: (fn) => {
+                registered = fn;
+              },
+              publishDayJumpState: () => {},
+            }}
+          >
+            <History entries={entries} syncEnabled={false} onSeekNeedsOlder={onSeekNeedsOlder} />
+          </HistoryScrollContext.Provider>
+        </div>
+      );
+    }
+
+    const { rerender } = render(<Harness entries={[recentEntry]} />);
+
+    act(() => {
+      registered?.("2020-01-01");
+    });
+    expect(onSeekNeedsOlder).toHaveBeenCalledTimes(1);
+
+    // The older page lands and holds the target day.
+    const olderEntry = entry({ id: "2", body: "older", createdAt: "2020-01-01T10:00:00.000Z" });
+    rerender(<Harness entries={[recentEntry, olderEntry]} />);
+
+    // Settled, not merely retried again: the day-jump effect found the
+    // target this time and stopped, the same "found -> stop asking" shape
+    // the date-Reference seek's own retry tests pin down.
+    expect(onSeekNeedsOlder).toHaveBeenCalledTimes(1);
   });
 });

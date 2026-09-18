@@ -935,11 +935,24 @@ export function History({
     [groups, tasks, completedTasks, events, offsetMinutes],
   );
 
+  // Issue #354: whether today has a separator row at all — the day-jump
+  // pair's own gate (`HistoryDayJumpState.hasTodaySeparator`, shell.tsx).
+  // `flattenGroups` only ever emits a separator for a day that actually has
+  // an Entry, so this is exactly "does today have an Entry," the same
+  // condition the acceptance criteria name directly ("neither control
+  // appears when today has no Entries, since there is no day boundary to
+  // jump to").
+  const hasTodaySeparator = useMemo(
+    () => flatItems.some((item) => item.kind === "separator" && item.dayKey === todayKey),
+    [flatItems, todayKey],
+  );
+
   // Issue #83: the scroll element and the upward jump-to-newest hookup —
   // see HistoryScrollContext's own comment (shell.tsx) for why both cross
   // this boundary as a context rather than a prop Shell would have to know
   // the shape of.
-  const { scrollElement, registerScrollToNewest } = useContext(HistoryScrollContext);
+  const { scrollElement, registerScrollToNewest, registerScrollToDay, publishDayJumpState } =
+    useContext(HistoryScrollContext);
 
   // The one thing this measures itself, rather than asking Shell for it:
   // how much of *this component's own* rendered content — the
@@ -1096,6 +1109,55 @@ export function History({
     return () => registerScrollToNewest(null);
   }, [flatItems.length, registerScrollToNewest, virtualizer]);
 
+  // Issue #354: the day-jump pair's own target, held here as component
+  // state rather than in the URL the way the date-Reference `seek` prop
+  // above is (composer-page.tsx's `?d=`). Jumping to today or to the day
+  // currently in view is interior scroll state (ADR 0079) — it must not
+  // push (or even replace) a history entry the way following a Reference
+  // deliberately does — so it cannot ride the same `?d=` param `seek`
+  // reads, only a second, local place to hold it.
+  const [dayJumpTarget, setDayJumpTarget] = useState<string | null>(null);
+
+  // Issue #354: hands Shell a way to set the target above without Shell
+  // needing to know this is a `useState` setter rather than something more
+  // elaborate — the same registration shape `registerScrollToNewest` uses,
+  // just parameterised on which day. Re-registers on every render (unlike
+  // `registerScrollToNewest`, this closure captures nothing that changes)
+  // only because `setDayJumpTarget` itself is referentially stable across
+  // renders, so the effect's dependency array never actually re-fires it.
+  useEffect(() => {
+    registerScrollToDay(setDayJumpTarget);
+    return () => registerScrollToDay(null);
+  }, [registerScrollToDay]);
+
+  // Issue #354: "page until you arrive," reusing the exact convergence
+  // shape the date-Reference seek effect below already runs against
+  // `flatItems` — the same `findIndex` for a day's separator, the same
+  // `onSeekNeedsOlder` retry when it isn't loaded yet (composer-page.tsx's
+  // `handleSeekNeedsOlder` neither knows nor cares whether the request
+  // came from a followed `[[date]]` mark or this pair's own button). It
+  // does not call `onSeekSettled`, unlike that effect: that callback's job
+  // is clearing `?d=`/`?e=` from the URL, and `dayJumpTarget` was never
+  // written there — this effect clears its own state directly instead once
+  // it lands. It also never flashes a row (`highlightedEntryId` is an
+  // Entry-seek concept only), and it aligns `"start"` for the identical
+  // reason the date-Reference seek does: the target day's separator
+  // belongs at the top of the viewport, same as ordinary scrolling.
+  useEffect(() => {
+    if (dayJumpTarget === null) {
+      return;
+    }
+    const targetIndex = flatItems.findIndex(
+      (item) => item.kind === "separator" && item.dayKey === dayJumpTarget,
+    );
+    if (targetIndex === -1) {
+      onSeekNeedsOlder?.();
+      return;
+    }
+    virtualizer.scrollToIndex(targetIndex, { align: "start" });
+    setDayJumpTarget(null);
+  }, [dayJumpTarget, flatItems, virtualizer, onSeekNeedsOlder]);
+
   // Issue #143: which Entry, if any, a seek just landed on should still be
   // flashed — set by the seek effect below the instant it finds an "entry"
   // kind target, and cleared by its own timer a fixed duration later (the
@@ -1204,6 +1266,19 @@ export function History({
   // same "hand off once the current one scrolls out of the way" judgement,
   // made explicitly in JS instead.
   const showOverlayPill = topmostDayKey !== null && topmostItem?.kind !== "separator";
+
+  // Issue #354: publishes exactly what Shell's bottom-left day-jump pair
+  // needs to decide what to show — see `HistoryDayJumpState`'s own comment
+  // (shell.tsx) for why this flows up through the context rather than Shell
+  // reaching in. Runs on every render this trio could have changed on
+  // (`topmostDayKey` moves with the virtualizer's own `range`, which is not
+  // a plain prop Shell could otherwise observe), and reports `null` on
+  // unmount so Shell can never render these controls off a since-unmounted
+  // History's last known state.
+  useEffect(() => {
+    publishDayJumpState({ topmostDayKey, todayKey, hasTodaySeparator });
+    return () => publishDayJumpState(null);
+  }, [topmostDayKey, todayKey, hasTodaySeparator, publishDayJumpState]);
 
   if (entries.length === 0) {
     return (

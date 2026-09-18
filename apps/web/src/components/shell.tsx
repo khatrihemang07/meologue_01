@@ -1,10 +1,11 @@
-import { ArrowDown, ArrowLeft, Search as SearchIcon } from "lucide-react";
+import { ArrowDown, ArrowLeft, ArrowUp, Search as SearchIcon } from "lucide-react";
 import { createContext, type ReactNode, useCallback, useEffect, useMemo, useState } from "react";
 import { useLocation, useNavigationType } from "react-router";
 import { SyncStatusIndicator } from "@/components/sync-status-indicator";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { usePinnedScroll } from "@/hooks/use-pinned-scroll";
+import { formatDaySeparator } from "@/lib/entry-day";
 import { cn } from "@/lib/utils";
 
 /**
@@ -38,14 +39,66 @@ import { cn } from "@/lib/utils";
  * `scrollToNewestIndex` option). `null` unregisters, called on unmount so a
  * stale closure over a since-unmounted virtualizer can never fire.
  */
+/**
+ * Issue #354: what the bottom-left day-jump pair needs from History, the
+ * same "History publishes, Shell renders" split `registerScrollToNewest`
+ * already uses for the bottom-right control — Shell owns both controls
+ * (outside the scroll region, so neither can ever cover a row; see
+ * shell.test.tsx's own "outside the scroll region" assertion on the
+ * jump-to-newest control), but only History's virtualizer and flattened
+ * row list know which day is topmost, what today's key is, or whether
+ * today even has a separator to land on.
+ */
+export interface HistoryDayJumpState {
+  /**
+   * The day at the top of the viewport right now, or `null` before
+   * anything has been measured — history.tsx's own `topmostDayKey`,
+   * deliberately `virtualizer.range?.startIndex`, not
+   * `getVirtualItems()[0]` (which includes overscan-rendered rows above
+   * the real viewport and would name the day one scroll-frame early).
+   */
+  topmostDayKey: string | null;
+  /** The Device's current local day (history.tsx's own `todayKey`) — the "start of today" target. */
+  todayKey: string;
+  /**
+   * Whether `todayKey` actually has a separator row in History's
+   * flattened list. Only a day with at least one Entry gets one
+   * (`flattenGroups`), which is why both controls hide entirely rather
+   * than jumping to a day boundary that doesn't exist when today is
+   * empty.
+   */
+  hasTodaySeparator: boolean;
+}
+
 export interface HistoryScrollContextValue {
   scrollElement: HTMLDivElement | null;
   registerScrollToNewest: (fn: (() => void) | null) => void;
+  /**
+   * Issue #354: `registerScrollToNewest`'s sibling for a specific day
+   * rather than the newest end — the day-jump pair's own escape hatch into
+   * the virtualizer. Unlike `registerScrollToNewest`, the registered
+   * function itself takes an argument: Shell has two different days it may
+   * want to reach (today, or whichever day is topmost) from the one
+   * registration, not one fixed target.
+   */
+  registerScrollToDay: (fn: ((dayKey: string) => void) | null) => void;
+  /**
+   * Issue #354: the data half of the pair above — see
+   * `HistoryDayJumpState`'s own comment for why this flows up from History
+   * rather than being something Shell reaches in and reads. `null` reports
+   * "nothing to show," the same as `registerScrollToNewest`'s own `null`:
+   * History unmounting, or (composer-page.tsx being its only mount site) a
+   * page with no History at all — which is what keeps these controls
+   * Composer-only without Shell needing a route check of its own.
+   */
+  publishDayJumpState: (state: HistoryDayJumpState | null) => void;
 }
 
 export const HistoryScrollContext = createContext<HistoryScrollContextValue>({
   scrollElement: null,
   registerScrollToNewest: () => {},
+  registerScrollToDay: () => {},
+  publishDayJumpState: () => {},
 });
 
 interface PinnedThreadConfig {
@@ -271,6 +324,65 @@ interface ShellProps {
   hideAppBar?: boolean;
 }
 
+/**
+ * Issue #354: one half of the bottom-left day-jump pair. Same size/shape as
+ * the jump-to-newest circle (`size-10 rounded-full`, shared verbatim below)
+ * so the two read as one family of control rather than two unrelated ones —
+ * the circle itself never grows, at any width, which is what "the two never
+ * overlap and never need extra room" actually rests on.
+ *
+ * The visible text label is the width-responsive half: hidden below
+ * `min-[900px]` (`WIDE_LAYOUT_QUERY`, use-wide-layout.ts — the same
+ * breakpoint Todo's own column already steps at, reused here rather than a
+ * second, independent guess at "wide enough"), an inline caption beside the
+ * circle from there up. It carries `aria-hidden` because it exists only to
+ * echo, visually, what `aria-label` below already says in full — a screen
+ * reader with no "icon-only" mode of its own must not hear the same day
+ * named twice.
+ *
+ * `aria-label` itself never varies by width: the accessible name always
+ * carries the day, exactly as `dayJumpAriaLabel` composes it, so a keyboard
+ * or screen-reader user on a narrow window learns exactly what a sighted
+ * reader on a wide one sees written out beside the circle.
+ */
+function dayJumpAriaLabel(dayKey: string, todayKey: string): string {
+  return dayKey === todayKey
+    ? "Jump to the start of today"
+    : `Jump to the start of ${formatDaySeparator(dayKey, todayKey)}`;
+}
+
+function DayJumpButton({
+  dayKey,
+  todayKey,
+  onClick,
+}: {
+  dayKey: string;
+  todayKey: string;
+  onClick: () => void;
+}) {
+  const label = formatDaySeparator(dayKey, todayKey);
+  return (
+    <div className="flex items-center gap-2">
+      <Button
+        type="button"
+        variant="secondary"
+        size="icon"
+        aria-label={dayJumpAriaLabel(dayKey, todayKey)}
+        onClick={onClick}
+        className="size-10 shrink-0 rounded-full border border-border shadow-md motion-safe:animate-in motion-safe:fade-in"
+      >
+        <ArrowUp aria-hidden="true" className="size-4" />
+      </Button>
+      <span
+        aria-hidden="true"
+        className="hidden rounded-md border border-border bg-background/90 px-2 py-1 text-xs font-medium text-foreground shadow-md backdrop-blur-sm min-[900px]:inline motion-safe:animate-in motion-safe:fade-in"
+      >
+        {label}
+      </span>
+    </div>
+  );
+}
+
 // The app shell every page renders through (ticket 50, replacing the
 // centred max-w-xl Card ticket 25 introduced). A fixed top app bar, a
 // scrollable content region, and a reserved composer slot that #51 fills
@@ -331,14 +443,39 @@ export function Shell({
     setScrollToNewestFn(() => fn);
   }, []);
 
+  // Issue #354: `registerScrollToNewest`'s day-jump sibling — see
+  // `HistoryScrollContext`'s own comment on `registerScrollToDay` for why
+  // the registered function itself takes an argument. Same "state, not a
+  // ref, because registration has to be observable" reasoning as
+  // `scrollToNewestFn` above, and the same updater-form requirement below.
+  const [scrollToDayFn, setScrollToDayFn] = useState<((dayKey: string) => void) | null>(null);
+  const registerScrollToDay = useCallback((fn: ((dayKey: string) => void) | null) => {
+    setScrollToDayFn(() => fn);
+  }, []);
+
+  // Issue #354: what History has published about the reader's current day
+  // position — see `HistoryDayJumpState`'s own comment. `null` until
+  // History registers (or on any page without one), which is what keeps
+  // the controls below from ever rendering off stale data from a
+  // previous page.
+  const [dayJumpState, setDayJumpState] = useState<HistoryDayJumpState | null>(null);
+  const publishDayJumpState = useCallback((state: HistoryDayJumpState | null) => {
+    setDayJumpState(state);
+  }, []);
+
   // Issue #83: the scroll element History's virtualizer measures against,
   // populated via a callback ref rather than read straight off `scrollRef`
   // below — see HistoryScrollContext's own comment for why a bare
   // `RefObject` isn't enough for a descendant to react to reliably.
   const [scrollElement, setScrollElement] = useState<HTMLDivElement | null>(null);
   const historyScrollContextValue = useMemo(
-    () => ({ scrollElement, registerScrollToNewest }),
-    [scrollElement, registerScrollToNewest],
+    () => ({
+      scrollElement,
+      registerScrollToNewest,
+      registerScrollToDay,
+      publishDayJumpState,
+    }),
+    [scrollElement, registerScrollToNewest, registerScrollToDay, publishDayJumpState],
   );
 
   const { scrollRef, handleScroll, awayFromNewest, jumpToNewest } = usePinnedScroll({
@@ -395,6 +532,30 @@ export function Shell({
     setSearchOpen(false);
     search?.onDismiss();
   }
+
+  // Issue #354: the day-jump pair's own visibility rule. Gated on
+  // `awayFromNewest` the same as the jump-to-newest control — "scrolled up"
+  // is the whole reason either corner has anything to show, per the issue's
+  // own framing ("Scrolling up through History gives a reader a way back
+  // down but no way to reach the start of a day"). `hasTodaySeparator`
+  // false (today has no Entries at all) hides both controls outright: there
+  // is no day boundary to land on. `dayJumpState` stays `null` on every
+  // page but the Composer (History is the only thing that ever calls
+  // `publishDayJumpState`, and composer-page.tsx is its only mount site),
+  // which is what keeps this feature Composer-only without a route check.
+  const dayJumpTodayKey = dayJumpState?.todayKey ?? null;
+  const showDayJumpControls =
+    pinnedThread !== undefined &&
+    awayFromNewest &&
+    dayJumpState?.hasTodaySeparator === true &&
+    dayJumpTodayKey !== null;
+  // The day-in-view control only earns its place once it would say
+  // something the "start of today" control doesn't already say — reading
+  // as the acceptance criteria's own two states: one control while still
+  // within today, a second once the topmost visible day is an earlier one.
+  const dayInViewKey = dayJumpState?.topmostDayKey ?? null;
+  const showDayInView =
+    showDayJumpControls && dayInViewKey !== null && dayInViewKey !== dayJumpTodayKey;
 
   return (
     // One pane, sized to whatever `chat-shell-layout.tsx` gives it, rather
@@ -696,6 +857,49 @@ export function Shell({
           >
             <ArrowDown aria-hidden="true" className="size-4" />
           </Button>
+        )}
+
+        {/*
+          Issue #354: the day-jump pair, balancing the jump-to-newest circle
+          above — the identical "anchored to this wrapper, not the
+          viewport" shape, for the identical reason (a corner of the thread
+          covered beats a full line, and it costs no permanent thread
+          height). Living in this same wrapper, outside the scroll region,
+          is what keeps it from ever covering an Entry, the same guarantee
+          shell.test.tsx already pins for the newest-end control.
+
+          `flex-col-reverse`, not `flex-col`: anchoring at `bottom-3` and
+          stacking in reverse is what keeps "start of today" pinned to that
+          same bottom-3 spot regardless of whether the second control is
+          mounted above it, rather than needing to know the pair's total
+          height to anchor correctly. The acceptance criteria's own order —
+          day-in-view above start-of-today — falls out of DOM order once
+          reversed: the first child (today) lands at the anchor, the second
+          (day-in-view) stacks above it.
+
+          The two never render side by side, and never share a row with the
+          jump-to-newest control on the opposite corner: each is its own
+          absolutely positioned box, so there is nothing here for either to
+          collide with regardless of how little width the viewport has.
+        */}
+        {showDayJumpControls && dayJumpTodayKey !== null && (
+          <div
+            data-testid="day-jump-controls"
+            className="absolute bottom-3 left-4 z-10 flex flex-col-reverse items-start gap-2"
+          >
+            <DayJumpButton
+              dayKey={dayJumpTodayKey}
+              todayKey={dayJumpTodayKey}
+              onClick={() => scrollToDayFn?.(dayJumpTodayKey)}
+            />
+            {showDayInView && dayInViewKey !== null && (
+              <DayJumpButton
+                dayKey={dayInViewKey}
+                todayKey={dayJumpTodayKey}
+                onClick={() => scrollToDayFn?.(dayInViewKey)}
+              />
+            )}
+          </div>
         )}
 
         {floatingAction}
