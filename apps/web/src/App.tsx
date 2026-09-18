@@ -2,6 +2,7 @@ import { lazy, Suspense } from "react";
 import { BrowserRouter, Navigate, Route, Routes } from "react-router";
 import { Toaster } from "@/components/ui/sonner";
 import { useBackButton } from "@/hooks/use-back-button";
+import { lastTodoPath } from "@/lib/last-todo-view";
 import { ChatListPage } from "@/pages/chat-list-page";
 import { ChatShellLayout } from "@/pages/chat-shell-layout";
 
@@ -167,8 +168,24 @@ function App() {
               containing a "." for the identical reason a Session id or a
               Digest `date` never does — flagged here for the same reason
               those two routes' own comments flag it, so nobody later routes
-              something dotted into this segment. */}
-              <Route path="/todo" element={<Navigate to="/todo/inbox" replace />} />
+              something dotted into this segment.
+
+              Issue #352: the redirect target itself is no longer the bare
+              literal `"/todo/inbox"` — `lastTodoPath()` (`lib/last-todo-
+              view.ts`) resolves to whichever view Todo was last on, and
+              only falls back to Inbox when nothing (yet) is remembered.
+              "Todo has no fresh, undirected view" (above) is still exactly
+              why a fallback is needed at all — it's just no longer the
+              *only* thing this route can resolve to. `lastTodoPath()` is a
+              plain, synchronous, non-lazy function precisely so this route
+              can call it directly without pulling `TodoPage`'s own lazy
+              chunk into this file; it cannot itself tell a since-deleted
+              Project or Filter from a live one (it has no access to
+              Todo's data here), so a stale remembered address still lands
+              on that address's own route — `todo-page.tsx`'s own
+              `backgroundView` is what falls the reader back to Inbox once
+              it can tell the two apart. */}
+              <Route path="/todo" element={<Navigate to={lastTodoPath()} replace />} />
               <Route path="/todo/inbox" element={<TodoPage />} />
               <Route path="/todo/today" element={<TodoPage view="today" />} />
               {/* Upcoming (issue #223's second half) — the sibling ADR 0049

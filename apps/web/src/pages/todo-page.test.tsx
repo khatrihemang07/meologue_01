@@ -2,10 +2,16 @@ import type { Comment, Event, Task } from "@meologue/core";
 import { QueryClient, QueryClientProvider, queryOptions } from "@tanstack/react-query";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { useState } from "react";
-import { Link, MemoryRouter, Outlet, Route, Routes, useNavigate } from "react-router";
+import { Link, MemoryRouter, Navigate, Outlet, Route, Routes, useNavigate } from "react-router";
 import { toast } from "sonner";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { TODO_SIDEBAR_QUERY, WIDE_LAYOUT_QUERY } from "@/hooks/use-wide-layout";
+import {
+  clearLastTodoView,
+  lastTodoPath,
+  readLastTodoView,
+  writeLastTodoView,
+} from "@/lib/last-todo-view";
 import { localDayKey } from "@/lib/local-day-key";
 import { ENTRY_STORE_QUERY_KEY } from "@/lib/query-keys";
 import type { EntryStoreOutletContext } from "@/pages/entry-store-layout";
@@ -229,6 +235,12 @@ function renderTodoPage(context: EntryStoreOutletContext, initialPath = "/todo/i
         <GoBackProbe />
         <Routes>
           <Route element={<Outlet context={context} />}>
+            {/* Issue #352: mirrors App.tsx's own bare `/todo` redirect —
+                `lastTodoPath()` resolves to the remembered view instead of
+                the literal `"/todo/inbox"` this route used to carry, so a
+                test can drive the same redirect this helper's callers rely
+                on rather than a second, hand-rolled one. */}
+            <Route path="/todo" element={<Navigate to={lastTodoPath()} replace />} />
             <Route path="/todo/inbox" element={<TodoPage />} />
             <Route path="/todo/today" element={<TodoPage view="today" />} />
             {/* Issue #254: added for the in-column heading's own tests
@@ -241,6 +253,10 @@ function renderTodoPage(context: EntryStoreOutletContext, initialPath = "/todo/i
             <Route path="/todo/filters" element={<TodoPage view="filters" />} />
             <Route path="/todo/filters/new" element={<TodoPage view="filter" />} />
             <Route path="/todo/filters/:filterId" element={<TodoPage view="filter" />} />
+            {/* Issue #352's own "specific ... Label" acceptance criterion
+                — mirrors App.tsx's real `/todo/labels`, not otherwise
+                needed by this helper's earlier callers. */}
+            <Route path="/todo/labels" element={<TodoPage view="labels" />} />
             {/* Issue #307: Search's own route, mirroring App.tsx's real
                 `/todo/search` — needed for the header search door's own
                 tests below. */}
@@ -2099,5 +2115,152 @@ describe("TodoPage — sidebar column (owner's amendment to ADR 0076)", () => {
     expect(
       await screen.findByRole("link", { name: "Reporting" }, { timeout: 5000 }),
     ).toHaveAttribute("href", "/todo/activity");
+  });
+});
+
+// Issue #352: opening Todo returns the reader to the view they were last
+// on rather than always Inbox — `lib/last-todo-view.ts`'s own header
+// comment has the storage-choice reasoning; this describe block covers
+// the two halves that live on this page: recording `backgroundView`
+// (below) and, via `renderTodoPage`'s own bare `/todo` route (added for
+// this ticket, mirroring App.tsx's real one), resolving it back.
+describe("TodoPage — remembers the last view (issue #352)", () => {
+  beforeEach(() => {
+    clearLastTodoView();
+  });
+
+  afterEach(() => {
+    clearLastTodoView();
+  });
+
+  const project = {
+    id: "p1",
+    deviceId: "device-a",
+    name: "Groceries",
+    colour: "#DC4C3E",
+    favourite: false,
+    archived: false,
+    parentId: null,
+    description: null,
+    orderKey: "A",
+    createdAt: "2026-01-01T00:00:00.000Z",
+    updatedAt: "2026-01-01T00:00:00.000Z",
+    seq: 1,
+    syncedAt: "2026-01-01T00:00:00.000Z",
+    deletedAt: null,
+  };
+
+  const filter = {
+    id: "f1",
+    deviceId: "device-a",
+    name: "Due today",
+    colour: "#DC4C3E",
+    query: "today",
+    createdAt: "2026-01-01T00:00:00.000Z",
+    updatedAt: "2026-01-01T00:00:00.000Z",
+    seq: 1,
+    syncedAt: "2026-01-01T00:00:00.000Z",
+    deletedAt: null,
+  };
+
+  it.each([
+    ["/todo/inbox", { view: "inbox" }],
+    ["/todo/today", { view: "today" }],
+    ["/todo/upcoming", { view: "upcoming" }],
+    ["/todo/projects", { view: "projects" }],
+    ["/todo/filters", { view: "filters" }],
+    ["/todo/labels", { view: "labels" }],
+    ["/todo/activity", { view: "activity" }],
+    ["/todo/browse", { view: "browse" }],
+  ] as const)("records %s as the last view", (path, expected) => {
+    renderTodoPage(readyContext(), path);
+
+    expect(readLastTodoView()).toEqual(expected);
+  });
+
+  it("records a specific Project, by id", () => {
+    renderTodoPage(readyContext({ projects: [project] }), "/todo/projects/p1");
+
+    expect(readLastTodoView()).toEqual({ view: "project", projectId: "p1" });
+  });
+
+  it("records a specific Filter, by id", () => {
+    renderTodoPage(readyContext({ filters: [filter] }), "/todo/filters/f1");
+
+    expect(readLastTodoView()).toEqual({ view: "filter", filterId: "f1" });
+  });
+
+  it("never records Todo's Search screen", () => {
+    writeLastTodoView({ view: "today" });
+
+    renderTodoPage(readyContext(), "/todo/search");
+
+    expect(readLastTodoView()).toEqual({ view: "today" });
+  });
+
+  it("never records a Task detail address, even though a real view renders behind it", () => {
+    writeLastTodoView({ view: "today" });
+
+    renderTodoPage(inboxContext([task({ id: "a", content: "call mum" })]), "/todo/task/call-mum-a");
+
+    expect(readLastTodoView()).toEqual({ view: "today" });
+  });
+
+  it("resolves a bare /todo to nothing remembered as Inbox", () => {
+    renderTodoPage(readyContext(), "/todo");
+
+    expect(screen.getByRole("heading", { name: "Inbox" })).toBeInTheDocument();
+  });
+
+  it("resolves a bare /todo to a remembered Today", () => {
+    writeLastTodoView({ view: "today" });
+
+    renderTodoPage(readyContext(), "/todo");
+
+    expect(screen.getByRole("heading", { name: "Today" })).toBeInTheDocument();
+  });
+
+  it("resolves a bare /todo to a remembered Upcoming", () => {
+    writeLastTodoView({ view: "upcoming" });
+
+    renderTodoPage(readyContext(), "/todo");
+
+    expect(screen.getByRole("heading", { name: "Upcoming" })).toBeInTheDocument();
+  });
+
+  it("returns to a specific Project after leaving Todo and coming back", () => {
+    const away = renderTodoPage(readyContext({ projects: [project] }), "/todo/projects/p1");
+    expect(readLastTodoView()).toEqual({ view: "project", projectId: "p1" });
+    away.unmount();
+
+    renderTodoPage(readyContext({ projects: [project] }), "/todo");
+
+    expect(screen.getByRole("heading", { name: "Groceries" })).toBeInTheDocument();
+  });
+
+  it("returns to a specific Filter after leaving Todo and coming back", () => {
+    const away = renderTodoPage(readyContext({ filters: [filter] }), "/todo/filters/f1");
+    expect(readLastTodoView()).toEqual({ view: "filter", filterId: "f1" });
+    away.unmount();
+
+    renderTodoPage(readyContext({ filters: [filter] }), "/todo");
+
+    expect(screen.getByRole("heading", { name: "Due today" })).toBeInTheDocument();
+  });
+
+  it("falls back to Inbox when the remembered Project has since been deleted", () => {
+    writeLastTodoView({ view: "project", projectId: "gone" });
+
+    renderTodoPage(readyContext({ projects: [] }), "/todo");
+
+    expect(screen.getByRole("heading", { name: "Inbox" })).toBeInTheDocument();
+  });
+
+  it("falls back to Inbox when the remembered Filter has since been deleted", () => {
+    writeLastTodoView({ view: "filter", filterId: "gone" });
+
+    renderTodoPage(readyContext({ filters: [] }), "/todo");
+
+    expect(screen.getByRole("heading", { name: "Inbox" })).toBeInTheDocument();
   });
 });

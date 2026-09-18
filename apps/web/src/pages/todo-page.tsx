@@ -34,6 +34,7 @@ import { ConfirmDialog } from "@/components/ui/alert-dialog";
 import { useTodoKeymap } from "@/hooks/use-todo-keymap";
 import { useTodoSidebarLayout } from "@/hooks/use-wide-layout";
 import { commentCountForTask, commentsForTask } from "@/lib/comment-counts";
+import { writeLastTodoView } from "@/lib/last-todo-view";
 import { localDayKey } from "@/lib/local-day-key";
 import { sectionsQueryKey, tasksInProjectQueryKey } from "@/lib/query-keys";
 import type { QuickAddTaskFields } from "@/lib/quick-add-task";
@@ -105,6 +106,63 @@ function backgroundPath(background: TodoBackgroundView): string {
     return `/todo/activity${background.search ?? ""}`;
   }
   return `/todo/${background.view}`;
+}
+
+/**
+ * The one Inbox `TodoBackgroundView` literal every fallback below shares —
+ * originally just the taskSlugId branch's own "no `location.state.from`
+ * to recover" case (see `backgroundView` below), extended by issue #352
+ * to also cover a remembered Project or Filter id that no longer resolves
+ * (`resolveBackgroundView` below). One shared object, not a second literal
+ * written at the new call site, is what keeps both cases reading as the
+ * identical "nothing to show here, Inbox is the deliberate default"
+ * answer `App.tsx`'s own `/todo` redirect already gives when nothing was
+ * remembered at all.
+ */
+const INBOX_BACKGROUND_VIEW: TodoBackgroundView = { view: "inbox", projectId: null };
+
+/**
+ * The non-Task-detail half of `backgroundView` below — a bare `view` prop
+ * plus whichever route param names *which* Project/Filter, resolved
+ * against the live `projects`/`filters` lists so a stale remembered
+ * address (a since-deleted Project or Filter — issue #352's own
+ * acceptance criterion) reads as `INBOX_BACKGROUND_VIEW` rather than a
+ * `currentProject`/`currentFilter` that stays `null` forever. A directly
+ * bookmarked or reloaded address for a Project/Filter that simply hasn't
+ * finished loading yet hits this same check — `projects`/`filters` come
+ * back as one atomic array (`use-projects.ts`'s/`use-filters.ts`'s own
+ * doc comments: a personal list, never paginated), so by the time either is
+ * non-empty the fetch has already settled, the same "can't tell loading
+ * from missing" ambiguity `currentProject === null`'s own render branch
+ * below already accepted for a still-empty list. `/todo/filters/new` (no
+ * `routeFilterId` at all) is not this case — an unsaved query has nothing
+ * to have gone stale — so only a *present* id gets checked against the
+ * live list.
+ */
+function resolveBackgroundView(
+  view: TodoBackgroundView["view"],
+  routeProjectId: string | undefined,
+  routeFilterId: string | undefined,
+  search: string,
+  projects: readonly Project[],
+  filters: readonly Filter[],
+): TodoBackgroundView {
+  if (view === "project" && routeProjectId !== undefined) {
+    return projects.some((project) => project.id === routeProjectId)
+      ? { view: "project", projectId: routeProjectId }
+      : INBOX_BACKGROUND_VIEW;
+  }
+  if (view === "filter" && routeFilterId !== undefined) {
+    return filters.some((filter) => filter.id === routeFilterId)
+      ? { view: "filter", projectId: null, filterId: routeFilterId }
+      : INBOX_BACKGROUND_VIEW;
+  }
+  return {
+    view,
+    projectId: null,
+    filterId: view === "filter" ? null : undefined,
+    search: view === "search" || view === "activity" ? search : undefined,
+  };
 }
 
 /**
@@ -321,6 +379,13 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
   // it, threaded down to `TaskDetailView`.
   const [searchParams] = useSearchParams();
 
+  // Pulled out of the big `useEntryStore()` destructure below (which still
+  // pulls everything else) so `backgroundView` — computed next — has
+  // `projects`/`filters` in scope for `resolveBackgroundView`'s own
+  // existence check (issue #352). Two bindings, not the whole context, so
+  // it stays obvious this early call exists for that one dependency.
+  const { projects, filters } = useEntryStore();
+
   // Which background view renders *behind* the Task detail modal/sheet —
   // this file's own header comment on `TodoBackgroundView`/`backgroundPath`
   // explains why `/todo/task/:taskSlugId` (App.tsx) passes no `view` prop
@@ -328,22 +393,58 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
   // link or a reload of a Task's own address carries no such state (there
   // was no "opened from" navigation to remember), so it falls back to
   // Inbox — the identical fallback `/todo` itself redirects to
-  // (App.tsx's own `<Navigate to="/todo/inbox" />`), rather than this
-  // page inventing a second "nothing chosen" default.
+  // (App.tsx's own `<Navigate to={lastTodoPath()} />`, issue #352), rather
+  // than this page inventing a second "nothing chosen" default.
+  //
+  // The non-Task-detail branch runs every route `App.tsx` points at this
+  // page through `resolveBackgroundView` (above), not just the address
+  // issue #352's own remembered-view redirect can land on — a directly
+  // bookmarked or reloaded `/todo/projects/:projectId` for a Project that
+  // no longer exists gets the identical Inbox fallback, which is a strict
+  // improvement over what this branch used to do (silently build a
+  // `TodoBackgroundView` `currentProject`/`currentFilter` could never
+  // resolve, rendering the "Loading…" paragraph below forever) rather
+  // than a second, narrower behaviour written just for the redirect case.
   const backgroundView: TodoBackgroundView =
     taskSlugId !== undefined
-      ? ((location.state as { from?: TodoBackgroundView } | null)?.from ?? {
-          view: "inbox",
-          projectId: null,
-        })
-      : {
+      ? ((location.state as { from?: TodoBackgroundView } | null)?.from ?? INBOX_BACKGROUND_VIEW)
+      : resolveBackgroundView(
           view,
-          projectId: view === "project" ? (routeProjectId ?? null) : null,
-          filterId: view === "filter" ? (routeFilterId ?? null) : null,
-          search: view === "search" || view === "activity" ? location.search : undefined,
-        };
+          routeProjectId,
+          routeFilterId,
+          location.search,
+          projects,
+          filters,
+        );
   const currentProjectId = backgroundView.projectId;
   const currentFilterId = backgroundView.filterId ?? null;
+
+  // Issue #352: records `backgroundView` as the view a bare `/todo`
+  // should resolve to next — `lastTodoPath()`'s own header comment names
+  // this effect as the write half of that redirect. Skipped for Search
+  // (never a landing view — `TodoBackgroundView.search`'s own doc comment)
+  // and for a Task detail address (`taskSlugId !== undefined`): opening
+  // Todo must land on a view, never reopen someone's modal, so a Task's
+  // own address is never the thing remembered even though the background
+  // view behind it is a perfectly real one. `backgroundView.view` already
+  // narrows out `"search"` before the final branch below, matching
+  // `LastTodoView`'s own narrower union without a separate cast.
+  useEffect(() => {
+    if (taskSlugId !== undefined || backgroundView.view === "search") {
+      return;
+    }
+    if (backgroundView.view === "project") {
+      if (backgroundView.projectId !== null) {
+        writeLastTodoView({ view: "project", projectId: backgroundView.projectId });
+      }
+      return;
+    }
+    if (backgroundView.view === "filter") {
+      writeLastTodoView({ view: "filter", filterId: backgroundView.filterId ?? null });
+      return;
+    }
+    writeLastTodoView({ view: backgroundView.view });
+  }, [taskSlugId, backgroundView]);
 
   const {
     tasks,
@@ -383,7 +484,6 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
     addComment,
     editComment,
     removeComment,
-    projects,
     addProject,
     renameProject,
     setProjectColour,
@@ -401,7 +501,6 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
     archiveSection,
     unarchiveSection,
     events,
-    filters,
     addFilter,
     renameFilter,
     setFilterColour,
