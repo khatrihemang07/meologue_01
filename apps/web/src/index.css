@@ -662,16 +662,31 @@
  * form alone could never match it; with the attribute gone there is only
  * one selector left to write.
  *
- * `--muted` is NOT re-pointed here, unlike in the scope this replaces:
- * Todoist's own dark sidebar/body ground measures `rgb(38,38,38)`, which is
- * exactly `oklch(0.269 0 0)` — the value the base dark block already
- * carries — so the override changed nothing and is dropped rather than
- * carried across.
+ * `--muted` MUST be re-pointed here, and the reason is the cascade, not the
+ * value. Todoist's dark ground measures `rgb(38,38,38)`, which is exactly
+ * the `oklch(0.269 0 0)` the base `.dark` block above already carries — so
+ * under the `[data-surface="todo"]` scope this replaces, the dark override
+ * genuinely was redundant and was dropped when the scope was folded in.
+ *
+ * Folding changed that. `:root` and `.dark` have identical specificity
+ * (0,1,0), so source order decides between them — and the light half of
+ * these values now lives in a `:root` block placed BELOW the base `.dark`
+ * block. Any token that block sets and this one does not therefore paints
+ * its LIGHT value in dark theme. Dropping `--muted` did exactly that: every
+ * `bg-muted` surface in dark theme — History's Entry bubbles, hover states,
+ * `--td-popover-background` — turned `rgb(246,246,246)`, near-white.
+ *
+ * So the rule for this block is not "re-point what differs from the base
+ * dark values" but "re-point everything the light `:root` block sets that
+ * the base `.dark` block also sets", whether or not the number changes.
+ * `index.css.test.ts` asserts that invariant, because it is invisible to
+ * both the type checker and jsdom, which resolves no cascade.
  */
 .dark {
   --background: rgb(31, 31, 31);
   --foreground: rgb(255, 255, 255);
   --border: rgb(61, 61, 61);
+  --muted: rgb(38, 38, 38);
   --muted-foreground: rgb(204, 204, 204);
   --td-composer-background: rgb(40, 40, 40);
   /* KBD-05/THEME-03: the measured keyboard-focus tint
