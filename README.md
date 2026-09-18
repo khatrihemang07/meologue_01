@@ -116,8 +116,10 @@ The build scripts run the web build, `cap sync`, and Gradle in one step, and pri
 | Sandbox | `./scripts/build-android-sandbox.sh` | `com.meologue.app.sandbox` |
 
 Each script copies its APK into `build/production/` or `build/sandbox/`, renaming Gradle's
-build-type-derived `app-release.apk` to `meologue.apk` on the way. `build/` is generated and
-gitignored.
+build-type-derived `app-release.apk` on the way: the Production APK becomes
+`meologue_<versionName>.apk`, the Sandbox one `meologue-sandbox.apk`. Production keeps only the
+newest `.apk` and `.dmg` at the top of `build/production/`; a version bump moves the previous ones
+into `build/production/archive/`. `build/` is generated and gitignored.
 
 A debug build stays a manual `./gradlew assembleDebug` in `apps/android`. Run
 `./scripts/setup-signing.sh` from the repository root before the first release build; the Sandbox

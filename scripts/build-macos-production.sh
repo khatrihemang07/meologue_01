@@ -102,6 +102,9 @@ nb_say "cargo tauri build"
 # the piped command is what keeps `set -e`/`pipefail` from aborting the
 # script before this can look at the result, and `${PIPESTATUS[0]}` recovers
 # `cargo tauri build`'s own exit code rather than `tee`'s.
+# Two jobs, not cargo's default of one per core: an 8-job release build was
+# OOM-killed on this 8GB machine. Overridable for a bigger one.
+export CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-2}"
 _tauri_started_at=$(date +%s)
 _tauri_log=$(mktemp)
 trap 'rm -f "$_tauri_log"' EXIT
@@ -176,6 +179,7 @@ nb_publish "$APP" "$OUT_DIR" "$(basename "$APP")"
 if DMG=$(nb_find_dmg "$DMG_DIR" "$DMG_PRODUCT"); then
   nb_report_artifact "$DMG" identifier "$BUNDLE_ID"
   nb_publish "$DMG" "$OUT_DIR" "$(basename "$DMG")"
+  nb_archive_superseded "$OUT_DIR" "$OUT_DIR/$(basename "$DMG")" "${DMG_PRODUCT}_*.dmg"
 else
   nb_say "WARNING: no .dmg was produced — the .app above is published and usable."
   nb_say "  Most often a stale /Volumes/meologue is still mounted; clear it with:"

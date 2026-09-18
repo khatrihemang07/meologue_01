@@ -31,7 +31,6 @@ cd "$(dirname "$0")/.."
 . scripts/lib/native-build.sh
 
 OUT_DIR=build/production
-APK_SRC="$OUT_DIR/meologue.apk"
 APP_SRC="$OUT_DIR/meologue.app"
 DMG_PRODUCT=meologue
 VERSION_FILE=apps/macos/tauri.conf.json
@@ -42,7 +41,7 @@ SIGNING_AUTHORITY="meologue Dev"
 
 _usage() {
   cat <<USAGE
-usage: $0 [--build] [--dry-run] [--no-preflight]
+usage: $0 [--build] [--dry-run] [--clean] [--no-preflight]
 
 Attaches build/production/'s signed macOS .dmg and Android .apk to a new
 GitHub Release, tagged v<version> from $VERSION_FILE.
@@ -53,6 +52,9 @@ GitHub Release, tagged v<version> from $VERSION_FILE.
   --dry-run        run every guard below and stage the assets, but skip
                     every 'gh' write — print the command that would run
                     instead of running it
+  --clean          after --build, delete apps/android/app/build (~150MB).
+                    Never touches apps/macos/target or ~/.gradle: those are
+                    the caches that make the next release a warm build.
   --no-preflight   skip the prerequisite check (gh present and authenticated)
 USAGE
   return 0
@@ -66,11 +68,13 @@ USAGE
 # as they do in every build script.
 DO_BUILD=0
 DRY_RUN=0
+DO_CLEAN=0
 _pass_through=()
 for _arg in "$@"; do
   case $_arg in
     --build)   DO_BUILD=1 ;;
     --dry-run) DRY_RUN=1 ;;
+    --clean)   DO_CLEAN=1 ;;
     *)         _pass_through[${#_pass_through[@]}]=$_arg ;;
   esac
 done
@@ -117,6 +121,20 @@ if [ "$DO_BUILD" = 1 ]; then
   # below sees as newest — not because order matters to Android at all.
   ./scripts/build-android-production.sh
   ./scripts/build-macos-production.sh
+
+  # The build scripts stop Gradle's daemon themselves; this is the record that
+  # nothing is left running, since a resident JVM or cargo on an 8GB machine
+  # is what makes the NEXT thing you do fail.
+  if pgrep -fl 'GradleDaemon|gradle-launcher|rustc|cargo' >/dev/null 2>&1; then
+    nb_say "WARNING: build processes still running:"
+    pgrep -fl 'GradleDaemon|gradle-launcher|rustc|cargo' >&2 || true
+  else
+    nb_say "no gradle/cargo processes left running"
+  fi
+  if [ "$DO_CLEAN" = 1 ]; then
+    nb_say "--clean: removing apps/android/app/build"
+    rm -rf apps/android/app/build
+  fi
 fi
 
 # ---------------------------------------------------------------------------
@@ -140,6 +158,10 @@ VERSION=$(sed -n 's/^[[:space:]]*"version":[[:space:]]*"\([^"]*\)".*/\1/p' "$VER
 if [ -z "$VERSION" ]; then
   _abort "could not read \"version\" from $VERSION_FILE — is it still valid JSON?"
 fi
+# Named for the version by build-android-production.sh (nb_archive_superseded
+# keeps only the newest in $OUT_DIR), so a stale APK from another version can
+# never satisfy this path.
+APK_SRC="$OUT_DIR/meologue_${VERSION}.apk"
 nb_say "publishing v$VERSION"
 
 # ---------------------------------------------------------------------------
