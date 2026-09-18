@@ -120,11 +120,12 @@ import type { EntryStoreOutletContext } from "@/pages/entry-store-layout";
 /**
  * DET-16 (parity-ledger.md): live Todoist's own "Date updated to Tomorrow"
  * toast, with Undo, was present through 9,609ms and gone by 10,119ms after
- * Save (`rename-capture-2026-09-11.md`; flow 4, polled every ~500ms). 10s,
- * not `todo-page.tsx`'s own 11s `COMPLETION_TOAST_DURATION_MS` — that
- * row's own note is explicit that the two toasts' lifetimes should not be
- * assumed to share a duration, and this is a separate measurement, not a
- * reused one.
+ * Save (`rename-capture-2026-09-11.md`; flow 4, polled every ~500ms). 10s —
+ * the same value the shared completion toast's own
+ * `COMPLETION_TOAST_DURATION_MS` carries (`use-completion-toast.tsx`,
+ * issue #355) — but this is still its own independent measurement, not a
+ * reused constant: the two aren't sharing a source, they just happen to
+ * match now that both have been corrected to ~10s.
  */
 const RENAME_DATE_TOAST_DURATION_MS = 10_000;
 

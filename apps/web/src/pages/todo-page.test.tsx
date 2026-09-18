@@ -67,15 +67,19 @@ vi.mock("@/pages/entry-store-layout", async (importOriginal) => {
 
 // `toast` is callable (task-tree.tsx's reparent-refused toast, issue #171,
 // via `.error`) and, since CMT-04, also carries a `.custom` and a
-// `.dismiss` — `raiseCompletionToast` (todo-page.tsx) switched its Undo
-// toast from plain `toast(message, {...})` to `toast.custom(jsx, {...})`
-// so the toast's own JSX can carry `role="alert"`/`aria-live="polite"`
-// (completion-toast.tsx's own header comment has the full reasoning; no
-// `role` option exists anywhere in sonner 2.0.8). `.custom`'s mock returns
-// an incrementing id — the same id `toast.custom` hands its `jsx`
-// callback in production — so a test can call the captured `jsx` factory
-// itself to get the real `CompletionToastBody` element and render it, and
-// `.dismiss` records the id `raiseCompletionToast`'s Undo handler closes.
+// `.dismiss` — the shared `useCompletionToast` hook's own `raise`
+// (`use-completion-toast.tsx`, issue #355; `todo-page.tsx` calls it
+// directly rather than through a local wrapper of its own) switched the
+// completion Undo toast from plain `toast(message, {...})` to
+// `toast.custom(jsx, {...})` so the toast's own JSX can carry
+// `role="alert"`/`aria-live="polite"` (completion-toast.tsx's own header
+// comment has the full reasoning; no `role` option exists anywhere in
+// sonner 2.0.8). `.custom`'s mock returns an incrementing id — the same id
+// `toast.custom` hands its `jsx` callback in production — so a test can
+// call the captured `jsx` factory itself to get the real
+// `CompletionToastBody` element and render it, and `.dismiss` records the
+// id either `raise`'s own Undo handler or a later completion replacing it
+// closes.
 vi.mock("sonner", () => {
   const toast = vi.fn() as unknown as typeof import("sonner").toast;
   // biome-ignore lint/suspicious/noExplicitAny: attaching mock methods to a mock function, the same shape sonner's own `toast` carries in production (a callable object with `.error`/`.custom`/`.dismiss` etc as properties).
@@ -832,12 +836,13 @@ describe("TodoPage", () => {
   });
 
   // CMT-04 (parity ledger): the completion toast is raised through
-  // `toast.custom()` (`raiseCompletionToast`, todo-page.tsx —
-  // completion-toast.tsx's own header comment has the full reasoning), so
-  // this asserts against the real `CompletionToastBody` element the `jsx`
-  // callback produces — a `role="alert"` element containing the message
-  // and a real "Undo" `<button>` — rather than against `toast`'s call
-  // args the way the old plain-`toast()` shape allowed.
+  // `toast.custom()` (the shared `useCompletionToast` hook's own `raise`,
+  // `use-completion-toast.tsx` — completion-toast.tsx's own header comment
+  // has the full reasoning), so this asserts against the real
+  // `CompletionToastBody` element the `jsx` callback produces — a
+  // `role="alert"` element containing the message and a real "Undo"
+  // `<button>` — rather than against `toast`'s call args the way the old
+  // plain-`toast()` shape allowed.
   it("completes a Task and offers an Undo toast wired to uncompleteTask", async () => {
     const completeTask = vi.fn();
     const uncompleteTask = vi.fn();

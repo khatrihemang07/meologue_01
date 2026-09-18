@@ -8,6 +8,8 @@ import { History, type HistorySeekTarget } from "@/components/history";
 import { Shell } from "@/components/shell";
 import { TaskDetailView } from "@/components/todo/task-detail-view";
 import { TaskScheduleSheet } from "@/components/todo/task-schedule-sheet";
+import { useCompletionToast } from "@/hooks/use-completion-toast";
+import { useCompletionUndoShortcut } from "@/hooks/use-completion-undo-shortcut";
 import { useHistorySearch } from "@/hooks/use-history-search";
 import { commentsForTask } from "@/lib/comment-counts";
 import { localDayKey } from "@/lib/local-day-key";
@@ -354,6 +356,20 @@ export function ComposerPage() {
   // scheduled" is never a separate question from "which Task is open."
   const [schedulingOpen, setSchedulingOpen] = useState(false);
 
+  // Issue #355: the identical shared completion-toast machinery
+  // `todo-page.tsx` uses (`use-completion-toast.tsx`'s own header comment),
+  // not a second, page-local implementation. Before this ticket, this
+  // page's own `handleCompleteTask`/`handleCompleteForeverTask` raised a
+  // plain `toast(message, { action: {...} })` — no `role="alert"`, sonner's
+  // unconfigured ~4s duration rather than the measured 10s, and no
+  // `pendingUndoRef` registration, so `Z`/`⌘Z` could never reach it. This
+  // page carries no `use-todo-keymap.ts`-style table of its own to give
+  // that binding a home, so `useCompletionUndoShortcut` mounts the
+  // identical `Z`/`⌘Z` chord match standalone, reaching the same
+  // `fireUndo` `todo-page.tsx`'s own keymap option calls.
+  const completionToast = useCompletionToast();
+  useCompletionUndoShortcut(completionToast.fireUndo);
+
   // Completes a Task from outside Todo's own row (the Day block, or the
   // overlay's own checkbox) — the identical `dateString` branch
   // todo-page.tsx's `handleComplete` already makes, reused rather than
@@ -378,9 +394,7 @@ export function ComposerPage() {
       return;
     }
     completeTask(task.id);
-    toast(`Completed "${task.content}"`, {
-      action: { label: "Undo", onClick: () => uncompleteTask(task.id) },
-    });
+    completionToast.raise(`Completed "${task.content}"`, () => uncompleteTask(task.id));
   }
 
   // Issue #302: the Task detail overlay's own overflow menu now reaches
@@ -390,16 +404,14 @@ export function ComposerPage() {
   // below is the shared `TaskDetailView`, not a stripped-down copy of it.
   // Wording matches `todo-page.tsx`'s own `handleCompleteForever` toast
   // verbatim; the Undo action mirrors `handleCompleteTask`'s own pair just
-  // above rather than that file's own `raiseCompletionToast` machinery
-  // (`CompletionToastBody`/`pendingUndoRef`), which exists to let a second
-  // completion toast replace a still-open first one — a scenario this
-  // page's own simpler, one-toast-at-a-time surface has never needed to
-  // solve.
+  // above, through the identical shared `completionToast` (issue #355) —
+  // this page no longer keeps a separate, simpler one-toast-at-a-time
+  // implementation of its own.
   function handleCompleteForeverTask(task: Task) {
     completeForeverTask(task.id);
-    toast("1 task completed — the recurrence has ended", {
-      action: { label: "Undo", onClick: () => uncompleteTask(task.id) },
-    });
+    completionToast.raise("1 task completed — the recurrence has ended", () =>
+      uncompleteTask(task.id),
+    );
   }
 
   // Issue #302: the Task detail overlay's own overflow menu — the
