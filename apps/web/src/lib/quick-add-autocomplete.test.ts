@@ -85,7 +85,7 @@ describe("computeOptionRows", () => {
 });
 
 describe("insertionTextFor", () => {
-  it("is the sigil, the canonical name, and one trailing space (quick-add.md's own recorded example)", () => {
+  it("is the sigil, the canonical name, and one trailing space", () => {
     expect(insertionTextFor("#", "Inbox")).toBe("#Inbox ");
     expect(insertionTextFor("@", "urgent")).toBe("@urgent ");
   });

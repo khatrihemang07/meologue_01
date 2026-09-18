@@ -840,24 +840,6 @@ export function TaskSchedulePopover({
                       )}
                     </DropdownMenu.Item>
                   ))}
-                  {/*
-                    Issue #292: this now opens Todoist's own dedicated
-                    Custom repeat dialog (`task-custom-repeat-dialog.tsx`,
-                    captured 2026-09-15 in `live-audit-dom/custom-repeat-
-                    dialog-todoist-2026-09-15.json`) rather than focusing
-                    the "Type a date" input, which was #227's disclosed
-                    scope cut and read as a dead end: the menu closed and
-                    nothing appeared.
-
-                    It opens through the SAME two-step hand-off the focus
-                    case above needed, and for the same reason — setting a
-                    ref here and acting in `onCloseAutoFocus` — because a
-                    Radix `Dialog` opened straight from `onSelect` fights
-                    this menu's own `FocusScope` while it is still tearing
-                    down (issue #255's root cause). A dialog losing that
-                    race doesn't error; it opens and is immediately
-                    dismissed, which looks exactly like a dead menu item.
-                  */}
                   <DropdownMenu.Item
                     className={repeatItemClassName}
                     onSelect={() => {

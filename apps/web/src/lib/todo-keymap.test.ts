@@ -128,7 +128,7 @@ describe("bindingById", () => {
     expect(bindingById("nope")).toBeUndefined();
   });
 
-  it("finds every binding added", () => {
+  it("finds every binding added by the keyboard audit", () => {
     expect(bindingById("complete-task")?.keys).toEqual(["e"]);
     expect(bindingById("comment-task")?.keys).toEqual(["c"]);
     expect(bindingById("copy-link")?.keys).toEqual(["mod+shift+c"]);

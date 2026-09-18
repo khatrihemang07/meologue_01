@@ -343,7 +343,7 @@ describe("useTodoKeymap", () => {
     expect(options.onOpenTaskDetail).not.toHaveBeenCalled();
   });
 
-  describe("missed (b)s found", () => {
+  describe("missed (b)s found in the keyboard audit", () => {
     it("completes the focused Task on 'e'", () => {
       focusTaskRow("task-1");
       const options = renderKeymap();

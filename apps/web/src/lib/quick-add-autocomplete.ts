@@ -116,7 +116,6 @@ export function computeOptionRows(
   return filtered.map((entry) => ({ kind: "entry", entry }) as const);
 }
 
-/** The literal text inserted on selecting one option — sigil + canonical name + one trailing space, `quick-add.md`'s own recorded example ("e.g. `#Inbox `"). */
 export function insertionTextFor(sigil: AutocompleteSigil, name: string): string {
   return `${sigil}${name} `;
 }

@@ -238,13 +238,6 @@ const MONTH_ABBREVIATIONS = [
   "Dec",
 ] as const;
 
-// U+2027 HYPHENATION POINT — the exact glyph Todoist's own Upcoming day
-// headings use as a separator (scheduler-and-priority.md §9's own
-// "separator glyph is ‧"), not the visually similar U+2022 BULLET or a
-// plain "·" (U+00B7 MIDDLE DOT) a keyboard or a font substitution could
-// easily produce instead. Getting this one character wrong is exactly the
-// kind of thing a screenshot comparison would never catch and a string
-// diff would.
 const DAY_HEADING_SEPARATOR = "‧";
 
 // Both `dayKey`s are `YYYY-MM-DD`; parsed with Date.UTC rather than the

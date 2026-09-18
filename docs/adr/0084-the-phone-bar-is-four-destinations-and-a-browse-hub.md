@@ -58,8 +58,8 @@ Browse. A weaker claim, and the strongest one still true — an invariant that m
 code would not have caught either original defect.
 
 **Width-gated, not platform-branched.** The bar renders below 1200px on every target, so a narrow
-desktop window gets Browse too. 0082 records that no Todo component is branched by build target and
-treats that as load-bearing evidence — `vite.config.ts` resolves six aliases per target and every one
+desktop window gets Browse too. No Todo component is branched by build target, and that is
+load-bearing evidence here — `vite.config.ts` resolves six aliases per target and every one
 is a platform shim, never a UI component. Branching here to keep six tabs on narrow web would have
 been the first exception, bought for a shell nobody has measured against either reference.
 

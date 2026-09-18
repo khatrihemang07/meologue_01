@@ -22,17 +22,13 @@ describe("formatTaskDate", () => {
   });
 
   it("further overdue falls back to the plain absolute day, still toned overdue — the 'further out' gap, the overdue side of it", () => {
-    // Mirrors the one piece of indirect evidence available: the captured
-    // account's completed, 9-days-overdue Task rendered as the plain
-    // "1 Sep" (scheduler-and-priority.md §9), not a second relative
-    // phrase like "9 days ago."
     const display = formatTaskDate("2026-09-01", { now: NOW });
     expect(display.text).toBe("1 Sep");
     expect(display.tone).toBe("overdue");
     expect(display.colour).toBe("var(--td-date-overdue)");
   });
 
-  it("due today reads 'Today', toned today, in the measured green — (Dark theme)", () => {
+  it("due today reads 'Today', toned today, in the measured green (Dark theme)", () => {
     const display = formatTaskDate("2026-09-10", { now: NOW });
     expect(display.text).toBe("Today");
     expect(display.tone).toBe("today");
@@ -41,7 +37,7 @@ describe("formatTaskDate", () => {
 
   // Same capture: measured `rgb(255,154,20)` orange — a tone of its own,
   // no longer folded into "upcoming".
-  it("due tomorrow reads 'Tomorrow', toned tomorrow, in the measured orange — (Dark theme)", () => {
+  it("due tomorrow reads 'Tomorrow', toned tomorrow, in the measured orange (Dark theme)", () => {
     const display = formatTaskDate("2026-09-11", { now: NOW });
     expect(display.text).toBe("Tomorrow");
     expect(display.tone).toBe("tomorrow");

@@ -1,19 +1,3 @@
-/**
- * The React half of the `#`/`@` autocomplete popup — `quick-add-
- * autocomplete.ts`'s own header comment carries the full Todoist reference
- * and the calls this module makes where nothing was measured. Purely
- * presentational: every piece of state (which options, which is active) is
- * computed by that file's plugin and handed down as props, so this
- * component owns no state of its own and needs no test beyond what it
- * renders for a given prop set — `task-title-editor.test.tsx` covers the
- * behaviour end to end, through a real `EditorView`.
- *
- * `role="listbox"`/`role="option"`/`aria-selected` match Todoist's own
- * captured markup (`quick-add.md` § "Autocomplete popups",
- * `data-testid="content-editor-suggestions-dropdown"` — reproduced here as
- * `data-testid` too, so a caller looking for Todoist's own selector finds
- * this component's markup as well).
- */
 import type { AutocompleteOptionRow, AutocompleteSigil } from "@/lib/quick-add-autocomplete";
 import { cn } from "@/lib/utils";
 

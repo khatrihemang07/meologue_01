@@ -258,7 +258,7 @@ describe("ActivityFeed", () => {
     expect(row.textContent).not.toContain("○");
   });
 
-  it("still shows a Project subject's own glyph — never measured that one live", () => {
+  it("still shows a Project subject's own glyph", () => {
     render(
       <ActivityFeed
         events={[

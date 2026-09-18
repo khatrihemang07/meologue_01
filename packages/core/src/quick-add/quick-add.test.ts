@@ -63,7 +63,7 @@ describe("dates", () => {
     });
   });
 
-  it("'next week' resolves to the next Monday, matching the live-audit measurement", () => {
+  it("'next week' resolves to the next Monday", () => {
     expect(parseQuickAdd("buy milk next week", { now: dayKey("2026-09-12") }).date).toBe(
       "2026-09-14",
     );
@@ -75,7 +75,7 @@ describe("dates", () => {
     );
   });
 
-  it("does not read 25/12 as day=12 month=25 — the numeric form the fix reads month-first", () => {
+  it("does not read 25/12 as day=12 month=25 — the numeric form is read month-first", () => {
     // Confirms the new bare two-part form is hardcoded month-first, never
     // day-first: "25/12" has no valid month=25, so this must stay
     // unrecognised rather than silently reading it the other way round.

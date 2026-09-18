@@ -485,10 +485,6 @@ export function ProjectView({
         }}
       />
 
-      {/* Verbatim (quick-add.md § "Destructive confirmation wording"):
-          "Delete project? The <name> project and all its tasks will be
-          permanently deleted. This action cannot be undone." Buttons
-          Cancel/Delete — ConfirmDialog's own fixed pair. */}
       <ConfirmDialog
         open={confirmingDeleteProject}
         onOpenChange={setConfirmingDeleteProject}

@@ -124,9 +124,6 @@ export function LabelsView({ labels, onAdd, onRename, onSetColour, onRemove }: L
         restoreFocusTo={dialogTarget ? editRestoreFocusRef : undefined}
       />
 
-      {/* Verbatim (quick-add.md § "Destructive confirmation wording"):
-          "Delete label? The <name> label will be permanently deleted."
-          Buttons Cancel/Delete — ConfirmDialog's own fixed pair. */}
       <ConfirmDialog
         open={confirmingDelete !== null}
         onOpenChange={(open) => {

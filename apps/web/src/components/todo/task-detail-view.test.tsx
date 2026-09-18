@@ -274,10 +274,6 @@ describe("TaskDetailView", () => {
     expect(title.querySelector("code")?.textContent).toBe("code");
   });
 
-  // The stored/edited value must stay the raw markdown — only the at-rest
-  // display renders it, matching Todoist's own editor (row-and-detail.md's
-  // own open question notwithstanding, the stored string is untouched
-  // either way).
   it("still opens the editor on the raw, unrendered title", async () => {
     renderView({ task: task({ content: "ZZ probe **bold** _em_ `code`" }) });
 
@@ -331,7 +327,7 @@ describe("TaskDetailView", () => {
     expect(lines[0]).toContain("call mum");
   });
 
-  it("carries the data-testid (keyboard.md §1) on the dialog content", () => {
+  it("carries the data-testid on the dialog content", () => {
     renderView({ task: task({ content: "call mum" }) });
 
     expect(screen.getByTestId("task-details-modal")).toBe(screen.getByRole("dialog"));
@@ -1000,12 +996,6 @@ describe("TaskDetailView", () => {
       expect(toast).not.toHaveBeenCalled();
     });
 
-    // "If that is not recorded, restore only the date, and say so"
-    // (this ticket's own brief): `rename-capture-2026-09-11.md` records
-    // that Todoist's own toast carries an Undo, but never drove it, so
-    // what it restores there is unmeasured. This view's own Undo restores
-    // only the Date — day and time together, as one `Task.date` string —
-    // never the title, and this test is the record of that choice.
     it("Undo restores the previous Date and time, and never the title", async () => {
       const onRename = vi.fn();
       const onSetDate = vi.fn();
@@ -1964,10 +1954,6 @@ describe("TaskDetailView", () => {
     it("carries an overflow control in the header, reachable by touch", () => {
       renderView();
 
-      // A plain <button>, not gated behind `pointer-fine`/hover the way
-      // the row's own hover-revealed actions are (`HOVER_REVEAL_CLASSES`,
-      // task-row-content.tsx) — ADET-02's own gap was a narrow, touch-only
-      // reader having no door onto Delete at all.
       expect(screen.getByRole("button", { name: "Task actions" })).toBeInTheDocument();
     });
 

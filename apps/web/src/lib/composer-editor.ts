@@ -863,59 +863,6 @@ export const liftAtStartOfListItem: Command = (state, dispatch) => {
   return outdent.run(state, dispatch);
 };
 
-/**
- * Tab/Shift-Tab indent/outdent a list item (`indent`/`outdent`, issue
- * #160's registry — composer-commands.ts, `indent.run` itself
- * `chainCommands(sinkListItem(listItemNodeType), sinkFirstListItem)` as of
- * issue #233 so the FIRST item of a list — the case `sinkListItem` alone
- * refuses, per that command's own doc comment — nests too, matching
- * UpNote (`upnote-editor-behaviour.md`'s Lists table, ADR 0071).
- *
- * Unlike every other binding in this file, Tab and Shift-Tab do NOT simply
- * fall through to `prosemirror-keymap`'s own native-key fallback when
- * nothing here applies — ADR 0070. Outside a list, `Tab` here is
- * `chainCommands(indent.run, insertEmSpace)`: `indent.run` already returns
- * `false` with no list to sink, and `insertEmSpace`
- * (composer-commands.ts) always returns `true`, inserting a literal
- * U+2003 EM SPACE and keeping focus in the Composer — UpNote's own
- * verified Tab-on-plain-prose behaviour, and this repo's too, since Tab
- * NEVER moves focus here, full stop: this Composer is an input ahead of a
- * Format toolbar and a Send button in tab order, and letting a forward Tab
- * escape it would be a keyboard trap in the forward direction (WCAG
- * 2.1.2), same reasoning the OLD "Tab outside a list still moves focus"
- * behaviour this replaces got backwards — swallowing Tab is what PREVENTS
- * the trap here, not what causes one, because Shift-Tab (below) still
- * offers a way back out.
- *
- * `Shift-Tab` is `chainCommands(outdent.run, outdentEmSpaceOrExit)`:
- * `outdent.run` (`liftListItem`) handles every in-list case unchanged —
- * outdent one level, or exit the list entirely from a level-1 item.
- * Outside a list, `outdentEmSpaceOrExit` deletes one PRECEDING U+2003 EM
- * SPACE if the caret sits right after one (undoing what Tab just
- * inserted) and otherwise returns `false` — the one place in this whole
- * keymap where reaching `prosemirror-keymap`'s native fallback is still
- * deliberate, so Shift-Tab in truly bare prose with nothing to undo is the
- * documented keyboard exit this Composer's own unconditional Tab makes
- * necessary. See composer.spec.ts's own rewritten Tab/Shift-Tab cases,
- * which replace the now-superseded "Tab outside a list still moves focus"
- * one.
- *
- * `Ctrl-]`/`Ctrl-[` are unconditional aliases for `indent.run`/
- * `outdent.run` only — deliberately NOT the em-space/exit fallbacks above,
- * which are Tab/Shift-Tab's own UpNote-matching quirk, not a general
- * property of "indent"/"outdent" as actions — bound to literal `Ctrl-`,
- * NOT `Mod-` (which `prosemirror-keymap` resolves to `Cmd-` on macOS,
- * `Ctrl-` elsewhere). `Cmd-]` is already browser-forward navigation on
- * macOS Safari/Chrome, so `Mod-]` here would either lose to the browser or
- * silently hijack a shortcut people already have muscle memory for
- * outside this app. Todoist ships indent as `Control+]`/`Control+[` on
- * EVERY platform, macOS included, for exactly this reason — one chord, not
- * a per-platform pair, at the documented cost (their own docs) that it has
- * no dedicated key on keyboard layouts without bracket keys. That tradeoff
- * is accepted here deliberately, not an oversight: it is the same chord
- * Tab/Shift-Tab already cover for anyone on a layout where it doesn't
- * work.
- */
 function listKeymap(): Plugin {
   const enterChain = chainCommands(splitListItemUnchecked, outdent.run, splitBlock);
   return keymap({

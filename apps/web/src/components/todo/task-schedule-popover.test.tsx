@@ -339,7 +339,7 @@ describe("TaskSchedulePopover", () => {
     });
   });
 
-  describe("calendar ( through, plus the six defects measured live 2026-09-15)", () => {
+  describe("calendar — the six defects measured live 2026-09-15", () => {
     it("starts the week on Monday", () => {
       renderPopover();
       open();
@@ -390,7 +390,7 @@ describe("TaskSchedulePopover", () => {
       expect(cell?.className).not.toContain("text-muted-foreground");
     });
 
-    it("today's colour utility still carries `!important` when today is itself a weekend day ( defect)", () => {
+    it("today's colour utility still carries `!important` when today is itself a weekend day", () => {
       // The measured defect: Sat 12 Sep 2026 driven as "now" through the
       // SAME injected clock every other assertion in this file uses (not
       // the real system clock, which is not this date) — react-day-picker
@@ -661,7 +661,7 @@ describe("TaskSchedulePopover", () => {
     });
   });
 
-  describe("Time dialog ( /pass2 §7 — replaces issue #249's inline 'Add a time' toggle)", () => {
+  describe("Time dialog (replaces issue #249's inline 'Add a time' toggle)", () => {
     function openTimeDialog() {
       fireEvent.click(screen.getByRole("button", { name: "Time" }));
       return screen.getByRole("dialog", { name: "Select start and end time" });
@@ -795,7 +795,7 @@ describe("TaskSchedulePopover", () => {
       expect(screen.getByPlaceholderText("Type a date")).toBeInTheDocument();
     });
 
-    it("Escape closes both the Time dialog and the scheduler, without committing a time (the follow-up)", () => {
+    it("Escape closes both the Time dialog and the scheduler, without committing a time", () => {
       const { onSetTime } = renderPopover({ dateDay: "2026-09-05", dateTime: "09:00" });
       open();
       const dialog = openTimeDialog();
@@ -1085,9 +1085,6 @@ describe("TaskSchedulePopover", () => {
       renderPopover({ dateString: "every friday" });
       open();
 
-      // Todoist's own recorded behaviour (scheduler-and-priority.md §7):
-      // "the Repeat button disappears from the panel and is replaced by
-      // the resolved preview" once a recurrence is active.
       expect(screen.getByTestId("scheduler-date-preview")).toBeInTheDocument();
       expect(screen.queryByRole("button", { name: "Repeat" })).not.toBeInTheDocument();
     });
@@ -1104,7 +1101,7 @@ describe("TaskSchedulePopover", () => {
       expect(screen.getByRole("button", { name: "Repeat" })).toBeInTheDocument();
     });
 
-    it("Escape closes both the Repeat menu and the scheduler, per the same pass2 §7 record as the Time dialog", () => {
+    it("Escape closes both the Repeat menu and the scheduler, the same way the Time dialog does", () => {
       const { onPickRecurrence, onPickDay } = renderPopover();
       open();
       const menu = openRepeatMenu();

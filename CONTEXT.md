@@ -473,7 +473,7 @@ reasons given above.
 Unlike that one, Send and History are safe: they name the *action* and the *view*, not the
 Entry itself, so they don't smuggle in the wrong properties.
 
-### "Project" — admitted, with a note
+### "Project" — kept, with a note
 
 "Project" is a heavy word for what this app holds: a personal list of Tasks, not a deliverable
 with a deadline, a budget, and other people depending on it. The honest objection is that

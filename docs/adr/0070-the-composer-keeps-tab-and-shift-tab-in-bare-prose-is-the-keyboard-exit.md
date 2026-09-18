@@ -78,7 +78,7 @@ keystroke reaches the browser's own backward focus navigation exactly the way Ta
 case before this ticket.
 
 **This is a deliberate divergence from UpNote, not an oversight, and it sits in a fourth category
-0072 does not yet name.** The three divergences 0072 already records — a multi-block Tab's own lost
+nothing had named.** The three divergences already on record — a multi-block Tab's own lost
 text, the toolbar un-list collapsing three items to one, the alternating un-nest — are all cases
 where copying UpNote would LOSE something the person typed. Nothing here is lost: the document under
 Shift-Tab's fallback is byte-for-byte the same either way, exactly as UpNote's own B3 finding already
@@ -86,7 +86,7 @@ is. What differs is not content, it is REACHABILITY. UpNote's Tab never had to d
 key because UpNote's own editor is the whole application surface — there is nothing after it in any
 tab order for a keyboard user to reach by leaving. This Composer is an `<input>`-shaped surface
 embedded in a page that has a Format toolbar and a Send button positioned after it in DOM order,
-which UpNote's own note editor was never built to be. 0072's own "UpNote is the specification, but
+which UpNote's own note editor was never built to be. The rule that UpNote is the specification "but
 only within the input modality it was captured on" already draws exactly this kind of boundary for
 macOS versus Android; this ADR draws the same kind of boundary again, one level up — between "a
 dedicated note-taking application" and "one field inside a larger page" — and finds UpNote's own

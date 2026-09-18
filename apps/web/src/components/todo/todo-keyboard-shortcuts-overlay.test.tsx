@@ -10,7 +10,7 @@ describe("TodoKeyboardShortcutsOverlay", () => {
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   });
 
-  it("titles itself 'Keyboard Shortcuts', matching keyboard.md's own overlay", () => {
+  it("titles itself 'Keyboard Shortcuts'", () => {
     render(<TodoKeyboardShortcutsOverlay open={true} onOpenChange={vi.fn()} />);
 
     expect(screen.getByRole("dialog", { name: "Keyboard Shortcuts" })).toBeInTheDocument();

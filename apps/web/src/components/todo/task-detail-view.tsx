@@ -1107,11 +1107,6 @@ function TaskDetailBody({
         >
           <ChevronRight aria-hidden="true" className="size-4" />
         </button>
-        {/* Issue #302: the overflow menu — reachable on touch, and not
-            gated on `wide` the way Close below is, since ADET-02's own gap
-            was exactly this: a narrow reader had no door onto Delete
-            except closing this whole sheet and finding the row behind
-            it. */}
         <TaskDetailOverflowMenu
           task={task}
           open={overflowOpen}

@@ -213,8 +213,6 @@ describe("TaskTitleEditor — #/@ autocomplete popup", () => {
 
     const enterEvent = pressKey(editorView, "Enter");
     expect(enterEvent.defaultPrevented).toBe(true);
-    // The recorded spacing (quick-add.md: "e.g. #Inbox ") — sigil, the
-    // canonical name (not whatever was typed), one trailing space.
     expect(editorView.state.doc.textContent).toBe("#Work ");
     expect(quickAddAutocompletePluginKey.getState(editorView.state)).toBeNull();
   });

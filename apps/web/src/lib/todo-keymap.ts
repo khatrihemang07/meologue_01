@@ -1,7 +1,3 @@
-/** Grouping only — matches `keyboard.md`'s own section headings, so a
- * reader can find a wired binding by looking for the same heading. Not
- * every section that document has appears here (see the header comment
- * above for the ones this table has nothing to put under). */
 export type TodoKeySection = "General" | "Navigate" | "Edit task" | "Add task";
 
 /**
@@ -18,7 +14,6 @@ export type TodoKeyWhen = "always" | "task-focused";
 export interface TodoKeyBinding {
   id: string;
   section: TodoKeySection;
-  /** Exactly the overlay's own wording (`keyboard.md`) where a wired row has one, so this table stays traceable back to the transcription it's built from. */
   label: string;
   when: TodoKeyWhen;
   /**
@@ -215,15 +210,6 @@ export const TODO_KEY_BINDINGS: readonly TodoKeyBinding[] = [
     when: "always",
     keys: ["g v"],
   },
-  // Corrected after the coordinator's own re-audit: `/todo/labels`
-  // (`App.tsx`) is a real route — a second (b) this table missed for the
-  // identical reason as `go-projects` above, and resolved the identical
-  // way. `keyboard.md`'s own wording, "Open label…", implies a picker for
-  // one specific label the way "Open project…" implies a picker for one
-  // specific project; `go-projects` above already resolves that same
-  // wording onto the *list* view (`/todo/projects`) rather than a picker,
-  // since no picker component exists — this follows that established
-  // precedent rather than inventing a different rule for Labels.
   {
     id: "go-labels",
     section: "Navigate",
@@ -343,7 +329,6 @@ export const OPEN_QUICK_ADD_EVENT = "todo:open-quick-add";
 
 export const FOCUS_ADD_TASK_EVENT = "todo:focus-add-task";
 
-/** The Task a keyboard action should act on — whichever row's own focusable element (`data-task-id`, `task-row.tsx`) currently holds focus, or `null` if none does. Read fresh at fire-time rather than tracked in state: the DOM's own focus is already the single source of truth every row's tab order already relies on (`keyboard.md` §2's own tab-order findings). */
 export function focusedTaskId(): string | null {
   const active = document.activeElement;
   if (!(active instanceof HTMLElement)) {

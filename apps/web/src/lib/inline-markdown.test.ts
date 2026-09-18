@@ -966,7 +966,7 @@ describe("parseCommentMarkdown", () => {
     expect(entryBlocksToText(parseCommentMarkdown(body))).toBe(body);
   });
 
-  it("still renders a real bullet list, the gap says runs the other way (only a numbered list stays literal in Todoist, not this app's)", () => {
+  it("still renders a real bullet list — the gap runs the other way (only a numbered list stays literal in Todoist, not this app's)", () => {
     expect(parseCommentMarkdown("- milk\n- eggs")).toEqual([
       {
         kind: "bulletList",
@@ -985,7 +985,7 @@ describe("parseCommentMarkdown", () => {
     ]);
   });
 
-  it("still renders a real ordered list — leaves meologue's <ol> alone", () => {
+  it("still renders a real ordered list — meologue's <ol> is left alone", () => {
     const blocks = parseCommentMarkdown("1. first\n2. second");
     expect(blocks[0]?.kind).toBe("orderedList");
   });

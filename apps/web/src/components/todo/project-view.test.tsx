@@ -157,7 +157,7 @@ describe("ProjectView — Edit project dialog", () => {
     expect(screen.getByLabelText("Project description")).toHaveValue("Weekly shop");
   });
 
-  it("shows the 120-character counter and caps the name field (the n/120 reading)", async () => {
+  it("shows the 120-character counter and caps the name field", async () => {
     renderProjectView({ project: project({ name: "Groceries" }) });
 
     openProjectMenuAndClick("Edit");

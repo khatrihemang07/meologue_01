@@ -21,9 +21,9 @@ destination further.
 ## Context
 
 Todo exists to be Todoist. `CONTEXT.md` already commits this repo to that in writing, in the one
-glossary entry admitted on a different ground than every other — *"Project" — admitted, with a
-note* — whose whole argument is that matching Todoist is a source this build will be read
-against for years.
+glossary entry kept on a different ground than every other — *"Project" — kept, with a note* —
+which holds on to the word Todoist and every other task manager already taught the reader, rather
+than coining one of its own.
 
 An audit of the shipped Todo against the real application found the divergence was not a handful
 of details. Dates render in one grey where Todoist carries a tone;
