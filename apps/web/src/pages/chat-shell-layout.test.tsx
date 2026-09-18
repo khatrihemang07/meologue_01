@@ -6,29 +6,14 @@ import { TODO_SIDEBAR_QUERY, WIDE_LAYOUT_QUERY } from "@/hooks/use-wide-layout";
 import { ChatShellLayout } from "./chat-shell-layout";
 
 /**
- * Issue #223's own seam: `data-surface="todo"` is the ENTIRE mechanism
- * index.css's `[data-surface="todo"]` scope keys off, so a route-driven test
- * here is what stands in for "Todoist's palette applies inside Todo and
- * nowhere else" — a CSS selector matching has no observable effect in jsdom
- * (no styles are ever computed), but the attribute it matches against is a
- * plain, assertable fact.
- *
- * **It is asserted on `documentElement`, not on this component's own div,
- * and that distinction is the point.** The attribute first lived on the div,
- * and this test passed for it — while every Radix overlay in Todo rendered
- * completely unthemed, because a Portal mounts into `document.body`, outside
- * that div entirely. Measured live, the task detail dialog came back
- * `insideScope: false`, painted in the app's own palette and set in Geist.
- * The test could not see it: jsdom computes no styles, so "the attribute is
- * on the element I chose" was never the same claim as "the scope reaches the
- * thing being painted".
+ * A minimal shell to render either a Todo route or a non-Todo one under
+ * `ChatShellLayout` — shared by this file's other describe blocks below.
  *
  * The default (narrow) layout is exercised deliberately: `useWideLayout`
  * reads `false` unless a test stubs `matchMedia` otherwise
  * (`src/test/setup.ts`'s own default), so `ChatListPane` never mounts here
- * and this test never has to satisfy its own dependencies (`ChatList`,
- * `SyncStatusIndicator`) just to read one attribute off an ancestor `<div>`
- * neither of them touches.
+ * and a test that doesn't need it never has to satisfy its own dependencies
+ * (`ChatList`, `SyncStatusIndicator`) just to render this shell at all.
  */
 function renderShell(initialPath: string) {
   return render(
@@ -42,29 +27,6 @@ function renderShell(initialPath: string) {
     </MemoryRouter>,
   );
 }
-
-describe("ChatShellLayout's data-surface attribute", () => {
-  it("is present on documentElement, and reads 'todo', on a /todo/* route", () => {
-    renderShell("/todo/inbox");
-
-    expect(document.documentElement).toHaveAttribute("data-surface", "todo");
-  });
-
-  it("is absent — not merely empty — on a non-Todo route", () => {
-    renderShell("/composer");
-
-    expect(document.documentElement).not.toHaveAttribute("data-surface");
-  });
-
-  it("is cleared when the shell unmounts, so it cannot outlive Todo", () => {
-    const { unmount } = renderShell("/todo/inbox");
-    expect(document.documentElement).toHaveAttribute("data-surface", "todo");
-
-    unmount();
-
-    expect(document.documentElement).not.toHaveAttribute("data-surface");
-  });
-});
 
 /** Mirrors use-wide-layout.test.ts's own stand-in ("jsdom implements no matchMedia at all"). */
 function installMatchMedia(matches: boolean) {

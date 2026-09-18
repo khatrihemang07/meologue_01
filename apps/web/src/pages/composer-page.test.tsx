@@ -1807,42 +1807,6 @@ describe("ComposerPage", () => {
       stillOnComposer();
     });
 
-    // The overlay is the real `TaskDetailView`, and every `--td-*` token it
-    // paints with lives in `index.css`'s `[data-surface="todo"]` block. That
-    // attribute used to be claimed by the route alone, which is false on
-    // `/composer` — so this overlay rendered with the tokens unresolved.
-    // Measured on the device before the fix: `--td-recognition-background`,
-    // `--td-priority-picker-1` and `--td-composer-background` all read unset
-    // here, which is why a recognised date painted no chip and the P1-P4
-    // swatches all came out grey.
-    //
-    // jsdom cannot see any of that — it has no layout and resolves no custom
-    // property — so this asserts the one thing it CAN see and the one thing
-    // the whole mechanism turns on: the attribute's presence on
-    // `documentElement`. That is deliberately the weakest honest assertion
-    // available here rather than a colour check that would pass either way.
-    it("claims the Todo token scope while the overlay is open, and releases it on close", async () => {
-      renderComposerPage({ ...readyContext, tasks: [taskFixture()] }, `/?task=${taskId}`);
-
-      expect(screen.getByRole("dialog")).toBeInTheDocument();
-      expect(document.documentElement.dataset.surface).toBe("todo");
-
-      // The same close gesture the sibling test above uses.
-      fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" });
-
-      await waitFor(() => {
-        expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
-      });
-      expect(document.documentElement.dataset.surface).toBeUndefined();
-    });
-
-    it("does not claim the Todo token scope with no overlay open", () => {
-      renderComposerPage(readyContext, "/");
-
-      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
-      expect(document.documentElement.dataset.surface).toBeUndefined();
-    });
-
     it("closing the overlay (Escape — task-detail-view.test.tsx's own established close gesture) removes ?task= and returns to the Composer", () => {
       renderComposerPage({
         ...readyContext,

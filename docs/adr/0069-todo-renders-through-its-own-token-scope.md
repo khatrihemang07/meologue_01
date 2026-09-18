@@ -2,11 +2,20 @@
 
 ## Status
 
-Accepted. Narrows the palette rule stated in `index.css`'s own `--entry-accent` comment — grayscale
-plus one reserved accent — to everywhere *except* `/todo/*`. Depends on
+**Superseded by [0085](0085-todoists-palette-and-font-are-meologues-own-globally.md)** (issue #351).
+The scope this ADR built — `[data-surface="todo"]`, claimed and released as Todo opened and closed
+— is deleted outright, on the finding that the switch itself, not Todoist's palette, was what made
+opening a Task recolour and re-font the screen behind it for a frame. 0085 reverses this ADR's own
+rejected alternative #1 ("repaint the whole application in Todoist's palette") deliberately, with
+its cost — meologue's own visual identity, and the four-value completed-style Settings option — now
+accepted rather than refused. Everything below is history: it explains why the scope existed and
+what it cost to build, not what the code does today.
+
+Originally accepted. Narrowed the palette rule stated in `index.css`'s own `--entry-accent` comment
+— grayscale plus one reserved accent — to everywhere *except* `/todo/*`. Depended on
 [0005](0005-one-vite-application-build-time-platform-seam.md), since one Vite application means one
 stylesheet and therefore one place this carve-out can live. Read alongside
-[0076](0076-todos-navigation-is-what-the-shells-existing-pane-renders.md), which takes the same
+[0076](0076-todos-navigation-is-what-the-shells-existing-pane-renders.md), which took the same
 destination further.
 
 ## Context
@@ -73,10 +82,13 @@ Todoist red in this codebase can see where it is allowed to apply and where it i
 not true of the four literals this replaces.
 
 **Light theme is unverified.** Todoist was only ever observed in dark theme, so every measured value
-here is a dark value. The light block is a derivation, commented as such, and recorded as `THEME-01`
-in the parity ledger with status `blocked`. It will stay that way until either a light-theme capture
-pass happens or the product decides Todo is dark-accurate and light-approximate. Shipping a guess
-that reads as a measurement is the one outcome this ADR refuses.
+here is a dark value. The light block is a derivation, commented as such, and was recorded as
+`THEME-01` in the parity ledger with status `blocked`, pending either a light-theme capture pass or
+a product decision that Todo is dark-accurate and light-approximate. *(Corrected: the owner made
+that decision on 2026-09-11 — "meologue's light theme is its own design, not a replica, and
+light-mode parity rows are no longer tracked." `THEME-01` is closed `divergent`, not `blocked`; no
+capture pass is coming, and none was needed.)* Shipping a guess that reads as a measurement is the
+one outcome this ADR refuses.
 
 **Two reds stay two reds.** The priority picker's swatch and the row's checkbox ring were measured
 as genuinely different values. They are two tokens, and `task-priority-colors.ts` carries a comment

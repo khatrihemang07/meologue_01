@@ -1,7 +1,6 @@
 @import "tailwindcss";
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
-@import "@fontsource-variable/geist";
 
 @custom-variant dark (&:is(.dark *));
 
@@ -55,7 +54,25 @@
 
 @theme inline {
   --font-heading: var(--font-sans);
-  --font-sans: "Geist Variable", sans-serif;
+  /*
+   * Todoist's own stack (issue #351), not a re-pointable custom property —
+   * this is `@theme inline`'s literal, and Tailwind bakes it straight into
+   * the `font-sans` utility at build time (see `html { @apply font-sans }`
+   * near the bottom of this file). There used to be a second copy of this
+   * declaration inside a `[data-surface="todo"]` scope, PLUS a bare
+   * `font-family: var(--font-sans)` right beside it, because overriding the
+   * custom property alone was silently inert once Tailwind had already
+   * substituted its build-time value into the compiled utility — caught
+   * only by measuring the rendered page, with the whole suite green.
+   * Deleting the scope and changing the value at its one real source,
+   * here, removes that workaround entirely: there is now only one
+   * `--font-sans` this app ever paints, so there is nothing left to
+   * re-point, and nothing that can drift between a build-time value and a
+   * runtime one again.
+   */
+  --font-sans:
+    -apple-system, "system-ui", "Segoe UI", "Noto Sans", system-ui, sans-serif, "Apple Color Emoji",
+    "Segoe UI Emoji", "Segoe UI Symbol", "Noto Color Emoji";
   --color-sidebar-ring: var(--sidebar-ring);
   --color-sidebar-border: var(--sidebar-border);
   --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
@@ -314,149 +331,94 @@
 }
 
 /*
- * A completed checklist item's own look (issue #163) — display only, and
- * driven from one attribute so History and the Composer cannot draw a
- * checked item two different ways. `lib/theme.ts`'s `applyCompletedStyle`
- * writes `data-completed-style` onto <html>, exactly like `data-accent`/
- * `data-text-size` above; each of the four values it can hold
- * (`lib/settings.ts`'s `CompletedStyleId`) resolves to these same two
- * custom properties, which the one consuming rule near the Composer's own
- * list styling (further down this file) is the only place that reads.
+ * Todoist's own palette, type and density (issue #223's first half; made
+ * global and unconditional by issue #351, ADR 0085) — meologue's own
+ * `:root`/`.dark` now, not a token scope. This used to be keyed off
+ * `data-surface="todo"`, applying only under `/todo/*` and while a Task
+ * detail overlay was open elsewhere; ADR 0085 (superseding ADR 0069)
+ * deletes that switch outright, on the finding that the switch itself —
+ * not Todoist's palette — was what made opening a Task recolour and
+ * re-font the screen behind it for a frame. With nothing left to toggle,
+ * there is nothing left to reflow. Every measured value below is captured
+ * live, dark theme only, and committed at
+ * meologue-reference/todoist/parity-ledger.md and the sibling reference
+ * docs it points at — nothing here is recalled from memory.
  *
- * Deliberately NOT scoped to `:root` the way `[data-accent]`/
- * `[data-text-size]` are above. Those two only ever apply to <html>, but a
- * completed style also has to be demonstrable in Settings — each of the
- * four stacked rows on that page (settings-page.tsx's `CompletedStyleRow`)
- * renders a real sample checked item wearing this exact same attribute on
- * a small wrapper around itself, showing what that row's OWN option looks
- * like regardless of which one is actually selected right now. An
- * attribute selector with no `:root` in front of it resolves the two
- * properties from whichever ancestor carries the attribute nearest to a
- * given checked item — <html> for a real one, that row's own wrapper for a
- * preview — with no second, hand-maintained copy of "style id -> colour and
- * decoration" living in TypeScript to keep in step with this file by hand.
- *
- * The bare `:root` default below matches `gray` (grayed out, no
- * strikethrough) — `lib/settings.ts`'s `DEFAULT_COMPLETED_STYLE`, UpNote's
- * own default — so a Device that has never opened Settings, or whose
- * `data-completed-style` write hasn't landed yet for any reason, still
- * renders the intended look rather than a fifth, undeclared one.
- *
- * `--checked-list-text-color` is the CSS-wide keyword `initial` for
- * `strike` and `none` rather than a literal colour — that's what makes it
- * a "guaranteed-invalid value" (CSS Custom Properties §Guaranteed-Invalid
- * Value), so the consuming rule's own `var(--checked-list-text-color,
- * var(--foreground))` falls through to the ordinary foreground colour
- * instead of the literal keyword `inherit`, which would walk up to
- * whatever the NEAREST ancestor's own `data-completed-style` happens to be
- * (a real risk here specifically because a preview row can nest a local
- * override inside the page's own, different, global choice) rather than
- * cancelling the override outright.
- */
-:root {
-  --checked-list-text-decoration: none;
-  --checked-list-text-color: var(--muted-foreground);
-}
-[data-completed-style="grayAndStrike"] {
-  --checked-list-text-decoration: line-through;
-  --checked-list-text-color: var(--muted-foreground);
-}
-[data-completed-style="gray"] {
-  --checked-list-text-decoration: none;
-  --checked-list-text-color: var(--muted-foreground);
-}
-[data-completed-style="strike"] {
-  --checked-list-text-decoration: line-through;
-  --checked-list-text-color: initial;
-}
-[data-completed-style="none"] {
-  --checked-list-text-decoration: none;
-  --checked-list-text-color: initial;
-}
-
-/*
- * Todoist's own palette, type and density (issue #223's first half) — a
- * token scope keyed off `data-surface="todo"`, which `chat-shell-layout.tsx`
- * sets on the one element every `/todo/*` route AND its left pane both sit
- * under (see that file's own comment for why one attribute has to reach
- * both). Every measured value below is captured live, dark theme only, and
- * committed at meologue-reference/todoist/parity-ledger.md and the sibling
- * reference docs it points at — nothing here is recalled from memory.
- *
- * Two rules are the whole design, and both exist to make this scope safe to
- * add without auditing every `shadcn` component that already exists:
+ * Two rules were the whole design when this was a scope, and the first
+ * still matters now it is not:
  *
  * 1. RE-POINT, DON'T RENAME. `--background`, `--foreground`, `--border`,
- *    `--muted`, `--muted-foreground`, `--radius` and `--font-sans` are the
- *    exact names `Button`/`Input`/`Dialog`/etc already read (the `@theme
- *    inline` block at the top of this file). Overriding the VALUE inside
- *    this attribute selector repaints every existing control with no
- *    component edit at all — the identical mechanism `[data-accent]` and
- *    `[data-completed-style]` above already use for a narrower question.
- * 2. New `--td-*` names for what Todoist has and this app's palette has no
+ *    `--muted`, `--muted-foreground` and `--font-sans` are the exact names
+ *    `Button`/`Input`/`Dialog`/etc already read (the `@theme inline` block
+ *    at the top of this file). Overriding the VALUE here repaints every
+ *    existing control with no component edit at all — the identical
+ *    mechanism `[data-accent]` above already uses for a narrower question.
+ *    `--radius` is deliberately NOT among these: `0.625rem` is exactly
+ *    `10px` at the default root font-size, which this app never overrides,
+ *    and `10px` is also Todoist's own measured popover radius — so
+ *    re-pointing it changed nothing and the override is dropped rather
+ *    than carried across.
+ * 2. New `--td-*` names for what Todoist has and this app's palette had no
  *    token for at all: a second, deliberately different Priority red; the
  *    Date family's tones; the recognition-match highlight; calendar and
  *    composer/popover chrome. A new prefix, rather than reusing an existing
- *    family like `--accent-*`, is what stops one of these leaking outside
- *    the scope by accident — custom properties inherit down the tree, and
- *    nothing outside `[data-surface="todo"]` ever sets a `--td-*` name, so
- *    a component that reads one anywhere else gets nothing rather than a
- *    silently-leaked Todoist colour.
+ *    family like `--accent-*`, is what stops one of these leaking into an
+ *    unrelated rule by accident — nothing outside this file ever sets a
+ *    `--td-*` name, so a component reading one it never declared gets
+ *    nothing rather than a silently-borrowed value.
  *
  * `--entry-accent` is untouched on purpose — CONTEXT.md's "parity with
  * Todoist" mandate has never extended to this app's own one reserved
  * accent (index.css's own comment on it, above), and the five choices in
- * Settings keep applying to Todo's own entry points into a Session exactly
- * as they do everywhere else; only Todo's OWN surface repaints. Likewise
- * the three `--quick-add-*` tokens defined earlier in this file are
- * RE-POINTED below, never redefined — `quick-add-highlight.ts`'s callers
- * outside Todo (the Composer) read the identical values they always did.
+ * Settings keep applying to every Session entry point exactly as they
+ * always did; this decision repaints the neutrals and the type, not the
+ * one hue a reader chose. Likewise the three `--quick-add-*` tokens
+ * defined earlier in this file are RE-POINTED below, never redefined —
+ * `quick-add-highlight.ts` is shared with the Composer's own checklist
+ * rendering, which nothing here asked to look like Todoist.
  *
  * Values that do not change between the two blocks below (radii, type
  * scale, and every accent-style hue that is not a background or a body
  * text colour) are declared once, in the base block, and simply inherited
  * by the dark override — the same economy `:root`/`.dark` already practise
- * for `--radius` and the chart tokens.
+ * for the chart tokens.
  *
- * LIGHT THEME IS AN UNVERIFIED APPROXIMATION. Todoist was only ever
- * observed in dark theme (meologue-reference/todoist/README.md's own "How it
- * was captured") — there is no light-mode evidence to match against, for
- * any value below. `--background`/`--foreground`/`--border`/`--muted`/
- * `--muted-foreground` in the base block are derived to be legible on a
- * light ground, not measured; the ledger row this concedes is
- * parity-ledger.md's `THEME-01`, `blocked`. The colour-bearing `--td-*`
- * accents (priority, date, calendar, recognition, focus) are carried
- * forward unchanged into light rather than re-invented a second time —
- * hue-bearing accents ordinarily survive a light/dark flip in a way
- * backgrounds and body text cannot, and inventing a second, equally
- * unverified set of them would not be more honest than reusing the one
- * set that was actually seen.
+ * LIGHT THEME IS AN UNVERIFIED APPROXIMATION, AND NO LONGER TRACKED AS A
+ * GAP TO CLOSE. Todoist was only ever observed in dark theme
+ * (meologue-reference/todoist/README.md's own "How it was captured") —
+ * there is no light-mode evidence to match against, for any value below.
+ * `--background`/`--foreground`/`--border`/`--muted`/`--muted-foreground`
+ * in the base block are derived to be legible on a light ground, not
+ * measured. The parity ledger recorded that gap as `THEME-01`; it is
+ * closed `divergent`, not `blocked`, by decision on 2026-09-11 —
+ * "meologue's light theme is its own design, not a replica, and
+ * light-mode parity rows are no longer tracked" — so this is a standing
+ * choice, not an open question waiting on a capture pass that was never
+ * going to happen. The colour-bearing `--td-*` accents (priority, date,
+ * calendar, recognition, focus) are carried forward unchanged into light
+ * rather than re-invented a second time — hue-bearing accents ordinarily
+ * survive a light/dark flip in a way backgrounds and body text cannot,
+ * and inventing a second, equally unverified set of them would not be
+ * more honest than reusing the one set that was actually seen.
  */
-[data-surface="todo"] {
+:root {
   --background: rgb(255, 255, 255);
   --foreground: rgb(32, 32, 32);
   --border: rgb(224, 224, 224);
   --muted: rgb(246, 246, 246);
   --muted-foreground: rgb(110, 110, 110);
   /*
-   * A completed row's own look (issue #250, ROW-15) — re-pointing the
-   * identical pair `[data-completed-style]` above resolves
-   * (`--checked-list-text-decoration`/`-color`), the same "RE-POINT,
-   * DON'T RENAME" move this scope already makes for `--background` et al.
-   * Todo's own completed rows are NOT one of the four Settings-driven
-   * looks that pair otherwise names: pass2-2026-09-11.md §1 measured
-   * Todoist always striking a completed title through, in its own grey
+   * A completed row's own look (issue #250, ROW-15; made every completed
+   * checklist item's only look, everywhere, by issue #351 — this used to
+   * be one of four Settings-driven choices, see the `.completed-task-text`
+   * rule near the bottom of this file for the one place that reads these
+   * two properties). pass2-2026-09-11.md §1 measured Todoist always
+   * striking a completed title through, in its own grey
    * `rgb(128,128,128)` — distinct from `--muted-foreground` above, which
-   * is Todoist's DATE colour, not its title colour — regardless of any
-   * app preference, so this scope overrides both custom properties
-   * unconditionally rather than reading whichever of the four
-   * `data-completed-style` resolved on `<html>`. Doing it here, on the
-   * nearer ancestor, is what wins over `<html>`'s own value without
-   * touching `data-completed-style` itself: History and the Composer,
-   * outside this scope, keep obeying the Settings option exactly as
-   * before — only Todo's own completed rows (`completed-tasks.tsx`,
-   * `task-detail-view.tsx`, `filter-view.tsx`, `task-search-page.tsx`, all
-   * consumers of `.completed-task-text`) always render struck-through.
+   * is Todoist's DATE colour, not its title colour. ROW-15 is what pins
+   * Todo's OWN completed rows to exactly this, and issue #351 is the
+   * decision that History and the Composer render it identically now
+   * rather than obeying a Settings option that no longer exists.
    */
   --checked-list-text-decoration: line-through;
   --checked-list-text-color: rgb(128, 128, 128);
@@ -479,32 +441,13 @@
   --card-foreground: var(--foreground);
   --popover: var(--background);
   --popover-foreground: var(--foreground);
-  /* Matches the measured popover radius (10px) below — shadcn's Dialog and
-     Popover are the closest existing primitives to Todoist's own scheduler
-     popover, so this is the one shared `--radius` value worth re-pointing
-     to; the Composer card's own 12px is a bespoke, non-shadcn surface and
-     gets its own `--td-composer-radius` instead of bending this token to
-     fit two different numbers. */
-  --radius: 10px;
-  /*
-   * The token AND the property, because re-pointing the token alone is
-   * inert here and silently so. `@theme inline` at the top of this file
-   * means Tailwind substitutes `--font-sans`'s literal value into the
-   * `font-sans` utility at build time rather than emitting a `var()`, and
-   * `html { @apply font-sans }` in `@layer base` below is what actually
-   * sets the family — so no rule reads `--font-sans` at runtime and
-   * overriding it changes nothing at all. Caught only by measuring the
-   * rendered page: the whole suite, the linter and the typechecker were
-   * all green while Todo still rendered in Geist.
-   *
-   * The token is re-pointed anyway so anything that *does* read it inside
-   * this scope agrees with what is actually painted, and so this block
-   * stops being a lie if `@theme inline` ever becomes `@theme`.
-   */
-  --font-sans:
-    -apple-system, "system-ui", "Segoe UI", "Noto Sans", system-ui, sans-serif, "Apple Color Emoji",
-    "Segoe UI Emoji", "Segoe UI Symbol", "Noto Color Emoji";
-  font-family: var(--font-sans);
+  /* `--radius` is not re-pointed here — see this block's own header
+     comment for why `0.625rem` (already the default) and Todoist's
+     measured 10px popover radius are the identical value. `--font-sans`
+     is not re-pointed here either: it is set once, globally, at its one
+     real source in `@theme inline` at the top of this file — see that
+     declaration's own comment for why a second copy here would be
+     exactly the workaround this file no longer needs. */
 
   /* The row/checkbox ring's own default (no priority highlighted) — distinct
      from `--td-priority-picker-4` below (PRI-05/PRI-06's own point: a row's
@@ -515,9 +458,11 @@
   /* The measured tint (dark block below) is a WHITE wash — correct on
      Todoist's dark ground, invisible on this block's white one. Todoist's
      light theme was never reachable on the captured account
-     (parity-ledger.md's THEME-01, blocked), so there is no light tint to
-     carry forward; `transparent` invents nothing, and the inset ring above
-     is still clearly visible against white on its own. */
+     (parity-ledger.md's THEME-01, closed `divergent` — light theme is
+     this app's own design and is not tracked against Todoist), so there
+     is no light tint to carry forward; `transparent` invents nothing, and
+     the inset ring above is still clearly visible against white on its
+     own. */
   --td-focus-tint: transparent;
 
   /* Priority picker swatches (PRI-01), all four independently measured. */
@@ -710,32 +655,23 @@
 }
 
 /*
- * BOTH forms, and the compound one is not redundant. `data-surface` is set on
- * `documentElement`, which is the same element `.dark` is set on — so the
- * descendant selector `.dark [data-surface="todo"]` cannot match it, and Todo
- * silently fell back to the light block while the rest of the app stayed dark.
- * Caught by measuring an overlay's background and reading white where the
- * page around it was `rgb(31,31,31)`.
+ * The dark half of the same values — plain `.dark` now, not
+ * `.dark[data-surface="todo"], .dark [data-surface="todo"]`. That compound
+ * selector existed only because `data-surface` used to be set on
+ * `documentElement`, the same element `.dark` is set on, so the descendant
+ * form alone could never match it; with the attribute gone there is only
+ * one selector left to write.
  *
- * The descendant form is kept alongside it so the scope still works if it is
- * ever re-declared lower down — `PopoverContent` does exactly that today, to
- * cover the window between a portal mounting and this attribute existing.
+ * `--muted` is NOT re-pointed here, unlike in the scope this replaces:
+ * Todoist's own dark sidebar/body ground measures `rgb(38,38,38)`, which is
+ * exactly `oklch(0.269 0 0)` — the value the base dark block already
+ * carries — so the override changed nothing and is dropped rather than
+ * carried across.
  */
-.dark[data-surface="todo"],
-.dark [data-surface="todo"] {
+.dark {
   --background: rgb(31, 31, 31);
   --foreground: rgb(255, 255, 255);
   --border: rgb(61, 61, 61);
-  /* The sidebar/body ground (rgb(38,38,38)) — measured as visibly LIGHTER
-     than `--background` above, which is the content pane's own, darker
-     ground; that inversion (a "muted" surface reading brighter than the
-     page, not dimmer) is Todoist's own choice, not a mistake carried over
-     from this app's usual dark/light convention. `--muted` is the correct
-     token to re-point to it anyway: it is still "the secondary surface,"
-     the sidebar/pane background rather than the primary content one — the
-     shape shadcn's own token already names, just with the two ends of the
-     usual light/dark spread swapped. */
-  --muted: rgb(38, 38, 38);
   --muted-foreground: rgb(204, 204, 204);
   --td-composer-background: rgb(40, 40, 40);
   /* KBD-05/THEME-03: the measured keyboard-focus tint
@@ -1034,23 +970,29 @@
  * needing to reach inside `renderNodes`' own output to restyle any of them
  * individually.
  *
- * `.completed-task-text` (issue #237) is this rule's other consumer,
- * alongside `.completed-sample` — the day-tasks widget (`history.tsx`'s
- * `DayTasksRow`) and Todo's own surfaces (`completed-tasks.tsx`,
- * `filter-view.tsx`, `task-search-page.tsx`, `task-detail-view.tsx`) render
- * a completed Task's own words outside the checkbox-plus-sibling-`<div>`
- * shape the structural selector above matches — a `<button>` or `<span>`,
- * not a `<div>` beside a checked `<input>` — so each puts this one class on
- * whichever element wraps the Task's own text instead of hand-writing
- * `line-through`/`text-muted-foreground` a fifth, sixth, seventh time. It
- * resolves the exact same two custom properties from the exact same
- * nearest `data-completed-style` ancestor (`<html>` in the running app),
- * so these surfaces cannot drift from History/Composer, or from each
- * other, the way hardcoding independently let them.
+ * `.completed-task-text` (issue #237) is this rule's other consumer — the
+ * day-tasks widget (`history.tsx`'s `DayTasksRow`) and Todo's own surfaces
+ * (`completed-tasks.tsx`, `filter-view.tsx`, `task-search-page.tsx`,
+ * `task-detail-view.tsx`) render a completed Task's own words outside the
+ * checkbox-plus-sibling-`<div>` shape the structural selector above
+ * matches — a `<button>` or `<span>`, not a `<div>` beside a checked
+ * `<input>` — so each puts this one class on whichever element wraps the
+ * Task's own text instead of hand-writing `line-through`/
+ * `text-muted-foreground` a fifth, sixth, seventh time. It resolves the
+ * exact same two custom properties every other consumer of this rule
+ * does, both of which are now plain `:root` values (issue #351) rather
+ * than resolved per-ancestor, so these surfaces cannot drift from
+ * History/Composer, or from each other, the way hardcoding independently
+ * let them.
+ *
+ * `.completed-sample` used to be a third consumer — `CompletedStyleRow`'s
+ * own preview swatch, one per Settings option — and is retired along with
+ * that control (issue #351): with only one completed-item look left,
+ * demonstrating four of them side by side in Settings is not a thing this
+ * app does any more.
  */
 @layer base {
   li.list-none input[type="checkbox"]:checked ~ div,
-  .completed-sample,
   .completed-task-text {
     text-decoration: var(--checked-list-text-decoration);
     color: var(--checked-list-text-color, var(--foreground));
@@ -1097,7 +1039,7 @@
  * see where each is set for why.
  */
 @layer base {
-  [data-surface="todo"] :focus-visible {
+  :focus-visible {
     outline: none;
     box-shadow: 0 0 0 1px var(--td-focus-ring) inset;
     background-color: var(--td-focus-tint);
@@ -1105,8 +1047,8 @@
 }
 
 /*
- * Three kinds of element inside this scope keep their own focus styling, and
- * in each case that is correct rather than a shortfall:
+ * Three kinds of element keep their own focus styling instead of this rule,
+ * and in each case that is correct rather than a shortfall:
  *
  *  - The completion checkbox. Its `box-shadow` is set as an INLINE style
  *    (task-row-content.tsx), so no stylesheet rule can reach it — but that
@@ -1137,7 +1079,7 @@
  * Todoist does not make Todo unusable under forced colors.
  */
 @media (forced-colors: active) {
-  [data-surface="todo"] :focus-visible {
+  :focus-visible {
     outline: 2px solid;
   }
 }

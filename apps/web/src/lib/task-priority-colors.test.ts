@@ -2,11 +2,11 @@ import { describe, expect, it } from "vitest";
 import { priorityColour, priorityPickerColour } from "./task-priority-colors";
 
 // Both functions here return `var(--td-*)` references, not literal `rgb()`
-// strings — index.css's `[data-surface="todo"]` scope (issue #223) is what
-// resolves them, and only inside that scope. Asserting the exact token name
-// (not merely "is a string") is what catches a future edit renaming a token
-// in one file without the other, the same failure mode the pre-#223 tests
-// caught for a literal value drifting.
+// strings — index.css's plain `:root`/`.dark` (issue #223, made global and
+// unconditional by issue #351) is what resolves them now, everywhere in the
+// app. Asserting the exact token name (not merely "is a string") is what
+// catches a future edit renaming a token in one file without the other, the
+// same failure mode the pre-#223 tests caught for a literal value drifting.
 describe("priorityColour (the row/checkbox ring)", () => {
   it("p1 reads the measured row-ring token, --td-priority-row-1", () => {
     expect(priorityColour(1)).toBe("var(--td-priority-row-1)");

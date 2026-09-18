@@ -36,7 +36,17 @@ const SERVER_URL_KEY = "meologue.server-url";
 const LIST_WIDTH_KEY = "meologue.list-width";
 const ACCENT_KEY = "meologue.accent";
 const TEXT_SIZE_KEY = "meologue.text-size";
-const COMPLETED_STYLE_KEY = "meologue.completed-style";
+// `meologue.completed-style` (issue #163) is retired by issue #351: the
+// four-value "Completed checklist item" Settings option it drove is gone,
+// and nothing below reads that key by name any more. A Device that still
+// has it, or a Restore that reinjects an old Device's settings
+// (`applyDeviceSettings` below writes any `meologue.*` key through
+// unconditionally, with no per-key allowlist), just leaves it sitting
+// inertly in `localStorage`. That silence IS the tolerance this ticket
+// asks for — there is no reader left to validate the value or throw on
+// one it doesn't recognise, so there is nothing here to guard, and no
+// migration deletes the key either, since a value nothing reads can never
+// go stale.
 const FORMAT_BAR_VISIBLE_KEY = "meologue.format-bar-visible";
 const SMART_DATES_ENABLED_KEY = "meologue.smart-dates-enabled";
 const DEFAULT_REFLECT_MODEL_KEY = "meologue.default-reflect-model";
@@ -206,42 +216,15 @@ export const TEXT_SIZES: { id: TextSizeId; label: string }[] = [
 
 export const DEFAULT_TEXT_SIZE: TextSizeId = "default";
 
-/**
- * How a checked checklist item's own text is drawn once it's ticked (issue
- * #163) — a Device-local display preference, exactly like `AccentId`/
- * `TextSizeId` above: it is a property of how this Device *paints* a task
- * item, not of the task item itself, so ADR 0008 puts it here rather than
- * touching an Entry's own stored text. Ticking a checkbox already flips one
- * character (`toggle-task.ts`'s `- [ ]` becomes `- [x]`, or the reverse);
- * this setting changes nothing about what gets written, Synced, or fed to
- * Digest — it only changes how an already-checked line is rendered once it
- * gets to screen, in both the Composer and History.
- *
- * Four values rather than two independent booleans ("gray" x "strike" as
- * separate switches): UpNote — which this app is explicitly matching here,
- * defaults included — offers exactly this set as one choice, not a pair of
- * toggles a reader would have to combine themselves to reach the same four
- * outcomes. UpNote's own companion setting, "move completed items to the
- * bottom," is deliberately not among them: that one reorders list items,
- * which is not display-only, and ADR 0043 gives the Composer alone the
- * right to normalize an Entry's body.
- */
-export type CompletedStyleId = "grayAndStrike" | "gray" | "strike" | "none";
-
-export const COMPLETED_STYLES: { id: CompletedStyleId; label: string }[] = [
-  { id: "grayAndStrike", label: "Grayed out and strikethrough" },
-  { id: "gray", label: "Grayed out" },
-  { id: "strike", label: "Strikethrough" },
-  { id: "none", label: "None" },
-];
-
-/**
- * Grayed out, with no strikethrough — UpNote's own default, verified in its
- * shipped bundle, not a guess at what "feels right" here. Matching it means
- * a reader who already knows UpNote sees the same shape a checked item
- * takes the first time they tick one, with no trip to Settings first.
- */
-export const DEFAULT_COMPLETED_STYLE: CompletedStyleId = "gray";
+// A checked checklist item's own text used to be one of four Device-local
+// looks here (issue #163, matching UpNote) — `CompletedStyleId`,
+// `COMPLETED_STYLES`, `DEFAULT_COMPLETED_STYLE` ("gray", UpNote's own
+// default). Issue #351 retires the choice: Todoist's own always-struck-through
+// grey (ROW-15) is now the one look this app ever renders, in History, the
+// Composer and Todo alike, so there is no id list left to validate a stored
+// value against. See the `meologue.completed-style` comment near the top
+// of this file for how a value from before this change is tolerated, not
+// migrated.
 
 /**
  * The Destinations a reader can hide from the root screen's list (issue
@@ -281,10 +264,6 @@ function isTextSizeId(value: unknown): value is TextSizeId {
   return TEXT_SIZES.some((size) => size.id === value);
 }
 
-function isCompletedStyleId(value: unknown): value is CompletedStyleId {
-  return COMPLETED_STYLES.some((style) => style.id === value);
-}
-
 function readStoredAccent(): AccentId {
   try {
     const stored = localStorage.getItem(ACCENT_KEY);
@@ -320,31 +299,13 @@ function writeStoredTextSize(size: TextSizeId): void {
   }
 }
 
-function readStoredCompletedStyle(): CompletedStyleId {
-  try {
-    const stored = localStorage.getItem(COMPLETED_STYLE_KEY);
-    return isCompletedStyleId(stored) ? stored : DEFAULT_COMPLETED_STYLE;
-  } catch {
-    return DEFAULT_COMPLETED_STYLE;
-  }
-}
-
-function writeStoredCompletedStyle(style: CompletedStyleId): void {
-  try {
-    localStorage.setItem(COMPLETED_STYLE_KEY, style);
-  } catch {
-    // As above.
-  }
-}
-
 /**
  * Whether the Composer's format toolbar (issue #164 — bold/italic/code, the
  * three list toggles, indent/outdent, Reference, undo/redo, in a row above
  * the input) is switched on at all — a Device-local view preference,
- * exactly like `AccentId`/`TextSizeId`/`CompletedStyleId` above: it is a
- * property of how this Device draws the Composer's own chrome, never
- * Synced, and never entering the glossary for the same reason those three
- * don't.
+ * exactly like `AccentId`/`TextSizeId` above: it is a property of how this
+ * Device draws the Composer's own chrome, never Synced, and never entering
+ * the glossary for the same reason those two don't.
  *
  * The "toolbar means always" rework drops the focus gate composer.tsx used
  * to pair this with — the row now stays on screen for as long as this
@@ -420,7 +381,7 @@ function writeStoredFormatBarVisible(visible: boolean): void {
  *
  * Stored as the literal strings `"true"`/`"false"`, mirroring
  * `readStoredFormatBarVisible`'s own reasoning above: a boolean has no
- * finite id list `isCompletedStyleId`-style validation could check
+ * finite id list `isTextSizeId`-style validation could check
  * against, so a missing key, a hand-edited value, or a stray `"1"` from
  * some other convention all read the same way — `true`, since that's also
  * this setting's own default, so corruption and "never touched this
@@ -465,7 +426,7 @@ function writeStoredSmartDatesEnabled(enabled: boolean): void {
  * one would have started on.
  *
  * Not validated against a known model list on read, unlike `AccentId`/
- * `TextSizeId`/`CompletedStyleId` above: the Server's own model list is
+ * `TextSizeId` above: the Server's own model list is
  * fetched at runtime and can change between launches (`models-transport.ts`),
  * so there is no fixed set this module could check a stored value against
  * without a network call `readStoredDefaultReflectModel` — synchronous, at
@@ -702,7 +663,6 @@ interface SettingsState {
   theme: Theme;
   accent: AccentId;
   textSize: TextSizeId;
-  completedStyle: CompletedStyleId;
   /** Issue #164: whether the Composer's format toolbar is switched on. See `defaultFormatBarVisible`'s own doc comment above. */
   formatBarVisible: boolean;
   /** Issue #170: whether Todo's add field runs its quick-add parser's eager/natural-language family. See `DEFAULT_SMART_DATES_ENABLED`'s own doc comment above. */
@@ -737,7 +697,6 @@ interface SettingsState {
   setTheme: (theme: Theme) => void;
   setAccent: (accent: AccentId) => void;
   setTextSize: (size: TextSizeId) => void;
-  setCompletedStyle: (style: CompletedStyleId) => void;
   setFormatBarVisible: (visible: boolean) => void;
   setSmartDatesEnabled: (enabled: boolean) => void;
   setDefaultReflectModel: (model: string) => void;
@@ -760,7 +719,6 @@ export const useSettingsStore = create<SettingsState>()((set) => ({
   theme: readStoredTheme(),
   accent: readStoredAccent(),
   textSize: readStoredTextSize(),
-  completedStyle: readStoredCompletedStyle(),
   formatBarVisible: readStoredFormatBarVisible(),
   smartDatesEnabled: readStoredSmartDatesEnabled(),
   defaultReflectModel: readStoredDefaultReflectModel(),
@@ -780,10 +738,6 @@ export const useSettingsStore = create<SettingsState>()((set) => ({
   setTextSize: (textSize) => {
     writeStoredTextSize(textSize);
     set({ textSize });
-  },
-  setCompletedStyle: (completedStyle) => {
-    writeStoredCompletedStyle(completedStyle);
-    set({ completedStyle });
   },
   setFormatBarVisible: (formatBarVisible) => {
     writeStoredFormatBarVisible(formatBarVisible);

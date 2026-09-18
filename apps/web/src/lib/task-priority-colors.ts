@@ -9,8 +9,9 @@
  * already did that conversion before reaching in here.
  *
  * Issue #223 replaced this file's original four literal `rgb()` strings
- * with the tokens `index.css`'s `[data-surface="todo"]` scope defines —
- * see that block's own comment for the full evidence trail. Two DIFFERENT
+ * with the tokens `index.css` defines (issue #351 folded those into the
+ * app's own plain `:root`/`.dark`, global and unconditional) — see that
+ * block's own comment for the full evidence trail. Two DIFFERENT
  * mappings live here, not one, because the evidence itself is two
  * surfaces, not one:
  *

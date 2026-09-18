@@ -8,7 +8,6 @@ import { useKeyboardInset } from "@/hooks/use-keyboard-inset";
 import { useWideLayout } from "@/hooks/use-wide-layout";
 import { writeLastDestination } from "@/lib/last-destination";
 import { useSettingsStore } from "@/lib/settings";
-import { useTodoSurface } from "@/lib/todo-surface";
 
 /**
  * The window, and the two-level shape every page renders inside (ADR 0036).
@@ -30,78 +29,27 @@ import { useTodoSurface } from "@/lib/todo-surface";
  * is corrected on every render instead of being silently rewritten in
  * storage the first time the app opens somewhere narrower.
  *
- * `data-surface="todo"` (issue #223) is written onto **`documentElement`**,
- * not onto this component's own div, and that placement is the whole of what
- * makes the token scope actually hold. The write itself now lives in
- * `lib/todo-surface.ts`; this file holds the *route's* claim on it, and is no
- * longer the only claimant — see that module's header for why they are counted.
+ * There used to be a second whole-document switch here: `data-surface="todo"`
+ * (issue #223), claimed by this layout while on a `/todo/*` route and by
+ * `composer-page.tsx` while its Task detail overlay was open, ref-counted
+ * because those two claimants share no ancestor. ADR 0085 (superseding ADR
+ * 0069) deletes it — Todoist's palette and font are meologue's own now,
+ * unconditionally, in `index.css`'s plain `:root`/`.dark`, so there is
+ * nothing left to claim or release here. Entering or leaving Todo repaints
+ * nothing behind it any more, which was the whole point: the switch itself,
+ * not Todoist's palette, was what made opening a Task recolour and re-font
+ * the screen behind it for a frame.
  *
- * It began on the div, which is the ancestor both the left pane and the open
- * Destination share, and that looked sufficient. It was not. Radix renders
- * every overlay through a Portal into `document.body` — the task detail
- * dialog, the command menu, quick-find, the sheets, the confirm dialogs and
- * the scheduler popover all land **outside** this subtree. A scope on the
- * div therefore never reached any of them: measured live, the detail dialog
- * came back `insideScope: false`, painted `oklch(0.205 0 0)` from the app's
- * own palette instead of Todoist's ground, and still set in Geist. It had
- * rendered unthemed since the scope landed, and no test could see it,
- * because jsdom has no layout and the class names were all present and
- * correct.
- *
- * Patching each overlay to re-declare the attribute would work exactly until
- * the next overlay someone adds forgets to. `documentElement` is above every
- * portal by construction, so nothing can escape it, and it is where this app
- * already keeps its other whole-document switches — `lib/theme.ts` writes
- * `data-accent`, `data-text-size` and `data-completed-style` onto the same
- * element for the same reason.
- *
- * **The route is not the same question as "is a Todo surface on screen", and
- * conflating the two was a real defect.** The Composer's Task detail overlay
- * (ADR 0074, `composer-page.tsx`) is the real `TaskDetailView` rendered over
- * `/composer`, where `isTodo` below is correctly false — so every `--td-*`
- * token resolved to nothing underneath it. Measured on the device: on
- * `/composer`, `--td-recognition-background`, `--td-priority-picker-1` and
- * `--td-composer-background` all read `(UNSET)`. That is why a recognised date
- * painted no chip there and the priority swatches all rendered grey. The
- * overlay now holds its own claim.
- *
- * Scoping the whole document was safe under ADR 0076 because of what a
- * `/todo/*` route rendered: the pane showed Todo's own sidebar and the
- * Outlet showed Todo, so there was no non-Todo surface on screen to repaint
- * by accident. **That is no longer true.** The owner overruled ADR 0076: this
- * pane is always `ChatListPane`, `/todo/*` included, so `ChatListPane` now
- * renders inside the `data-surface="todo"` scope and repaints in Todoist's
- * palette while Todo is open, alongside the app's own — an accepted visual
- * consequence of the amendment, not one this file tries to undo; scoping the
- * token write itself is `todo-surface.ts`'s concern, unchanged here. The
- * overlay's own claim is still safe for the narrower reason it always was:
- * it is modal, so while it is open it *is* the surface the reader is
- * looking at.
- *
- * `useLocation` rather than reading `window.location` keeps this reacting to
- * every route change rather than only to a remount — this layout persists
- * across navigation, so a plain read at mount would freeze the attribute at
- * whichever Destination happened to mount it first.
+ * `useLocation` rather than reading `window.location` keeps `writeLastDestination`
+ * below reacting to every route change rather than only to a remount — this
+ * layout persists across navigation, so a plain read at mount would freeze
+ * it at whichever Destination happened to mount it first.
  */
 export function ChatShellLayout() {
   const keyboard = useKeyboardInset();
   const wide = useWideLayout();
   const listWidth = useSettingsStore((state) => state.listWidth);
   const location = useLocation();
-  // The exact-or-slash test rather than a bare prefix: `startsWith("/todo")`
-  // would also scope a future `/todoist` or `/todo-archive` route, and a
-  // Destination silently repainting itself in another Destination's palette
-  // is the kind of defect nobody looks for because nobody caused it.
-  const isTodo = location.pathname === "/todo" || location.pathname.startsWith("/todo/");
-
-  // The route's own claim on the Todo token scope. It is no longer the only
-  // one: `composer-page.tsx` holds a second while its Task detail overlay is
-  // open, because that overlay is the real `TaskDetailView` rendered over
-  // `/composer`, where this test correctly says "not Todo" and would otherwise
-  // strip every `--td-*` token out from under it. `todo-surface.ts`'s own
-  // header comment has the measurement and the reason the claims are counted
-  // rather than written directly.
-  useTodoSurface(isTodo);
 
   // ADR 0080: remembers which Destination the reader is standing on, for
   // `/`'s own Continue card at the wide breakpoint — mounted here, rather
@@ -134,7 +82,7 @@ export function ChatShellLayout() {
             {/*
               The owner overruled ADR 0076: this pane is always
               `ChatListPane` now, `/todo/*` included, rather than swapping
-              in `TodoSidebar` while `isTodo` is true. `TodoSidebar` still
+              in `TodoSidebar` on a Todo route. `TodoSidebar` still
               renders on `/todo/*`, but as a second column inside Todo's own
               subtree above 1200px (`todo-page.tsx`'s own header comment)
               rather than replacing the pane that already exists — entering

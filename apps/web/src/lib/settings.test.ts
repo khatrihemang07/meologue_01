@@ -2,9 +2,7 @@ import { PROTOCOL_VERSION } from "@meologue/core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   ACCENTS,
-  COMPLETED_STYLES,
   DEFAULT_ACCENT,
-  DEFAULT_COMPLETED_STYLE,
   DEFAULT_HIDDEN_DESTINATIONS,
   DEFAULT_REFLECT_MODEL,
   DEFAULT_SMART_DATES_ENABLED,
@@ -44,7 +42,6 @@ describe("settings store", () => {
       serverUrl: "",
       accent: DEFAULT_ACCENT,
       textSize: DEFAULT_TEXT_SIZE,
-      completedStyle: DEFAULT_COMPLETED_STYLE,
       capabilities: null,
       serverReachable: true,
       hiddenDestinations: DEFAULT_HIDDEN_DESTINATIONS,
@@ -158,62 +155,20 @@ describe("settings store", () => {
     });
   });
 
-  // Issue #163. Display only — the acceptance criteria this whole block
-  // proves are "persists across a restart, per-key" and "defaults to
-  // grayed out"; "changes no Entry, Syncs nothing" needs no test here
-  // because setCompletedStyle never touches the Entry store or a sync
-  // transport at all — there's nothing wired up for it to call.
-  describe("completed checklist item style", () => {
-    it("round-trips a written style, in the store and in storage", () => {
-      useSettingsStore.getState().setCompletedStyle("grayAndStrike");
+  // Issue #351: the four-value "completed checklist item" option (issue
+  // #163) is retired, but a Device — or a Restore, which reinjects an old
+  // Device's settings wholesale — can still carry
+  // `meologue.completed-style` from before this change. `lib/settings.ts`'s
+  // own comment on that key is explicit that the tolerance is silence: no
+  // reader left to validate or throw on it. This proves that rather than
+  // assuming it.
+  it("tolerates a legacy meologue.completed-style value without throwing, and exposes no property for it", async () => {
+    localStorage.setItem("meologue.completed-style", "grayAndStrike");
 
-      expect(useSettingsStore.getState().completedStyle).toBe("grayAndStrike");
-      expect(localStorage.getItem("meologue.completed-style")).toBe("grayAndStrike");
-    });
+    vi.resetModules();
+    const fresh = await import("./settings");
 
-    it("does not throw when localStorage refuses the write, and still updates the store", () => {
-      vi.spyOn(localStorage, "setItem").mockImplementation(() => {
-        throw new Error("storage unavailable");
-      });
-
-      expect(() => useSettingsStore.getState().setCompletedStyle("none")).not.toThrow();
-      expect(useSettingsStore.getState().completedStyle).toBe("none");
-    });
-
-    it("offers four styles, with the default among them", () => {
-      expect(COMPLETED_STYLES.map((style) => style.id)).toEqual([
-        "grayAndStrike",
-        "gray",
-        "strike",
-        "none",
-      ]);
-      expect(COMPLETED_STYLES.map((style) => style.id)).toContain(DEFAULT_COMPLETED_STYLE);
-    });
-
-    // UpNote's own default, per the ticket this setting was built for.
-    it("defaults to grayed out, matching UpNote", () => {
-      expect(DEFAULT_COMPLETED_STYLE).toBe("gray");
-    });
-
-    it("ignores a stored id it does not recognise, rather than applying it", () => {
-      localStorage.setItem("meologue.completed-style", "highlighted");
-
-      vi.resetModules();
-      return import("./settings").then((fresh) => {
-        expect(fresh.useSettingsStore.getState().completedStyle).toBe(
-          fresh.DEFAULT_COMPLETED_STYLE,
-        );
-      });
-    });
-
-    it("reads a stored id back at load", () => {
-      localStorage.setItem("meologue.completed-style", "strike");
-
-      vi.resetModules();
-      return import("./settings").then((fresh) => {
-        expect(fresh.useSettingsStore.getState().completedStyle).toBe("strike");
-      });
-    });
+    expect(fresh.useSettingsStore.getState()).not.toHaveProperty("completedStyle");
   });
 
   // Issue #170.
@@ -280,9 +235,9 @@ describe("settings store", () => {
   // focus-gated, so issue #213's device split (hidden by default on a
   // hover-capable device, visible by default on a touch one) is retired;
   // every device gets the same default. Each case here re-imports the
-  // module fresh (`vi.resetModules()`), the same pattern
-  // `completedStyle`/`smartDatesEnabled` above use, because the default is
-  // read once at store construction (module load), not per render.
+  // module fresh (`vi.resetModules()`), the same pattern `smartDatesEnabled`
+  // below uses, because the default is read once at store construction
+  // (module load), not per render.
   describe("format bar visibility", () => {
     it.each([
       ["hover-capable", true],
@@ -790,24 +745,5 @@ describe("settings store cold start", () => {
   it("defaults serverReachable to true (optimistic)", async () => {
     const { useSettingsStore: fresh } = await import("./settings");
     expect(fresh.getState().serverReachable).toBe(true);
-  });
-
-  it("defaults the completed checklist item style to grayed out when nothing is stored", async () => {
-    const { useSettingsStore: fresh } = await import("./settings");
-    expect(fresh.getState().completedStyle).toBe("gray");
-  });
-
-  it("defaults the completed checklist item style to grayed out when localStorage throws on read", async () => {
-    vi.spyOn(localStorage, "getItem").mockImplementation(() => {
-      throw new Error("storage unavailable");
-    });
-    const { useSettingsStore: fresh } = await import("./settings");
-    expect(fresh.getState().completedStyle).toBe("gray");
-  });
-
-  it("picks up an already-stored completed checklist item style", async () => {
-    localStorage.setItem("meologue.completed-style", "none");
-    const { useSettingsStore: fresh } = await import("./settings");
-    expect(fresh.getState().completedStyle).toBe("none");
   });
 });

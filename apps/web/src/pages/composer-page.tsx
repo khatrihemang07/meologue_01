@@ -15,7 +15,6 @@ import type { ComposerPromotionContext } from "@/lib/promote-tasks";
 import { useSettingsStore, useSyncEnabled } from "@/lib/settings";
 import { taskDetailPath } from "@/lib/task-detail-route";
 import { commitTaskTitle } from "@/lib/task-title-commit";
-import { useTodoSurface } from "@/lib/todo-surface";
 import { useEntryStore } from "@/pages/entry-store-layout";
 
 // A date Reference's own destination (issue #142): `?d=YYYY-MM-DD`, a query
@@ -294,17 +293,17 @@ export function ComposerPage() {
       : null;
 
   // The Task detail overlay below is the real `TaskDetailView`, and every
-  // `--td-*` token it paints with lives in `index.css`'s `[data-surface="todo"]`
-  // block. That attribute used to be claimed by the route alone
-  // (`chat-shell-layout.tsx`), which is correctly false here — so this overlay
-  // rendered with the tokens unresolved: measured on the device, on `/composer`
-  // `--td-recognition-background`, `--td-priority-picker-1` and
-  // `--td-composer-background` all read `(UNSET)`. A recognised date painted no
-  // chip and the P1-P4 swatches all came out grey, because an unresolved
-  // `var(--td-…)` is an invalid value rather than a near-miss. Claiming the
-  // scope while the overlay is open is the fix; `todo-surface.ts`'s own header
-  // has the reason the claims are counted rather than written directly.
-  useTodoSurface(openTask !== null);
+  // `--td-*` token it paints with used to live inside `index.css`'s
+  // `[data-surface="todo"]` scope, claimed here for as long as this overlay
+  // was open (`chat-shell-layout.tsx` alone was not enough: it only knows
+  // the route, which is correctly "not Todo" on `/composer`, and an
+  // unresolved `var(--td-…)` is an invalid value rather than a near-miss —
+  // measured on the device, `--td-recognition-background`,
+  // `--td-priority-picker-1` and `--td-composer-background` all read
+  // `(UNSET)` before that claim existed). ADR 0085 (superseding ADR 0069)
+  // deletes the scope: every `--td-*` token is a plain `:root`/`.dark`
+  // value now, so it resolves here — or anywhere else — with no claim to
+  // hold or release.
 
   // Mirrors todo-page.tsx's own identical `datesWithTasks` — see that
   // file's doc comment for the full reasoning (TaskSchedulePopover's own

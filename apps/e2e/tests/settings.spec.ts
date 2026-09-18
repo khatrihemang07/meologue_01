@@ -3,12 +3,10 @@ import { SERVER_A_DATABASE } from "../servers";
 import { expect, test } from "./fixtures";
 import {
   clearServerSettings,
-  entrySeq,
   entrySwipeTarget,
   seedServerSetting,
   sendEntry,
   uniqueEntryBody,
-  waitForEntryIdContaining,
 } from "./helpers";
 
 /**
@@ -254,59 +252,6 @@ test("an Entry's fill carries the hue of the Accent the reader chose", async ({ 
       `${accent} bubbles are ${Math.round(separation)}deg away from ${accent}`,
     ).toBeLessThan(40);
   }
-});
-
-/**
- * Issue #163's own acceptance criterion, asserted rather than argued:
- * "Changing the setting rewrites no Entry, triggers no Sync, and marks no
- * Digest stale."
- *
- * It is true by construction — `applyCompletedStyle` writes one attribute on
- * `<html>` and `setCompletedStyle` writes one localStorage key, and neither
- * path can reach the Entry store — but "true by construction" is exactly the
- * kind of claim that stops being true after an innocent refactor, silently,
- * with nothing failing. So it gets a test.
- *
- * `seq` is the strongest available signal, and for the reason `entrySeq`'s
- * own comment gives: ADR 0028 reassigns it on every write, insert or edit,
- * and never on a read. An unchanged `seq` therefore means no UPDATE reached
- * the Server at all — which is simultaneously the "no Entry rewritten" and
- * the "nothing to Sync" halves of the criterion, and the "no Digest stale"
- * half follows from ADR 0039, where staleness is triggered BY an Entry edit.
- *
- * All four values are exercised, not just one: the default is `gray`, so a
- * test that only tried `gray` could pass while writing nothing simply
- * because nothing changed.
- *
- * The Entry has to actually carry a completed checklist to exercise the
- * setting at all — but Promotion (issue #173, ADR 0048) means the body Send
- * commits is not the literal string typed: a bare `- [ ] <label>` mints a
- * Task and gets rewritten to `- [ ] [[task:id|label]]` the instant it
- * reaches the Server, so looking the row up by the full typed string never
- * finds it. `waitForEntryIdContaining` matches on `label` alone — the part
- * Promotion leaves untouched — rather than on the checkbox line as typed.
- */
-test("changing the completed-checklist style rewrites no Entry (#163, ADR 0028)", async ({
-  page,
-}) => {
-  const checklistLabel = uniqueEntryBody("call mum");
-  await page.goto("/composer");
-  await sendEntry(page, `- [ ] ${checklistLabel}`);
-  const id = await waitForEntryIdContaining(checklistLabel, SERVER_A_DATABASE);
-  expect(id).toBeDefined();
-  const before = entrySeq(id as string, SERVER_A_DATABASE);
-  expect(before).toBeDefined();
-
-  await openSettings(page);
-  for (const label of ["Grayed out and strikethrough", "Strikethrough", "None", "Grayed out"]) {
-    await page.getByRole("button", { name: label, exact: true }).click();
-    await expect(page.getByRole("button", { name: label, exact: true })).toHaveAttribute(
-      "aria-pressed",
-      "true",
-    );
-  }
-
-  expect(entrySeq(id as string, SERVER_A_DATABASE)).toBe(before);
 });
 
 /**
