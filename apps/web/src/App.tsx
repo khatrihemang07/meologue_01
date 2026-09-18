@@ -94,6 +94,17 @@ function BackButtonHandler() {
   return null;
 }
 
+/**
+ * `/todo`'s redirect target, read at the moment the route matches rather
+ * than when `App`'s JSX is built. See the `/todo` route's own comment below
+ * for why this must stay a component: `lastTodoPath()` called inline froze
+ * the target for the lifetime of the tab, so Todo's remembered view only
+ * survived a full reload and never a live session.
+ */
+function TodoEntryRedirect() {
+  return <Navigate to={lastTodoPath()} replace />;
+}
+
 function App() {
   return (
     <BrowserRouter>
@@ -184,8 +195,20 @@ function App() {
               Todo's data here), so a stale remembered address still lands
               on that address's own route — `todo-page.tsx`'s own
               `backgroundView` is what falls the reader back to Inbox once
-              it can tell the two apart. */}
-              <Route path="/todo" element={<Navigate to={lastTodoPath()} replace />} />
+              it can tell the two apart.
+
+              `TodoEntryRedirect` is a component rather than a bare
+              `<Navigate to={lastTodoPath()} />` for a reason a browser
+              found and 3,992 passing tests did not: the `element` prop's
+              JSX is constructed once, when *this* file renders, and `App`
+              sits above `Routes` and does not re-render on navigation. So
+              calling `lastTodoPath()` inline froze the target at whatever
+              was remembered when the tab first loaded — the redirect then
+              worked across a full reload and never within a live session,
+              which is the one case the feature exists for. Reading it
+              inside a component moves the call to when the route actually
+              matches. Keep it a component. */}
+              <Route path="/todo" element={<TodoEntryRedirect />} />
               <Route path="/todo/inbox" element={<TodoPage />} />
               <Route path="/todo/today" element={<TodoPage view="today" />} />
               {/* Upcoming (issue #223's second half) — the sibling ADR 0049
