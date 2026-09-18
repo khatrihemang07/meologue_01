@@ -1,8 +1,8 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter, Outlet, Route, Routes, useLocation } from "react-router";
-import { toast } from "sonner";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { toast } from "@/components/ui/toast";
 import { readLastSessionId, writeLastSessionId } from "@/lib/last-session";
 import { useSettingsStore } from "@/lib/settings";
 import type { EntryStoreOutletContext } from "@/pages/entry-store-layout";

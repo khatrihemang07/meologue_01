@@ -2,15 +2,13 @@ import type { Filter, Project, Section, Task } from "@meologue/core";
 import { today, upcoming } from "@meologue/core";
 import { useQuery } from "@tanstack/react-query";
 import { Search } from "lucide-react";
-import { Suspense, useEffect, useMemo, useRef, useState } from "react";
+import { Suspense, useEffect, useMemo, useState } from "react";
 import { Link, useLocation, useNavigate, useParams, useSearchParams } from "react-router";
-import { toast } from "sonner";
 import { BackToChats } from "@/components/back-to-chats";
 import { inlineProse } from "@/components/inline-prose";
 import { Shell } from "@/components/shell";
 import { AddTaskForm } from "@/components/todo/add-task-form";
 import { BrowseView } from "@/components/todo/browse-view";
-import { CompletionToastBody } from "@/components/todo/completion-toast";
 import { FilterView } from "@/components/todo/filter-view";
 import { FiltersView } from "@/components/todo/filters-view";
 import { LabelsView } from "@/components/todo/labels-view";
@@ -31,9 +29,12 @@ import { TodoKeyboardShortcutsOverlay } from "@/components/todo/todo-keyboard-sh
 import { TodoNav } from "@/components/todo/todo-nav";
 import { UpcomingView } from "@/components/todo/upcoming-view";
 import { ConfirmDialog } from "@/components/ui/alert-dialog";
+import { toast } from "@/components/ui/toast";
+import { useCompletionToast } from "@/hooks/use-completion-toast";
 import { useTodoKeymap } from "@/hooks/use-todo-keymap";
 import { useTodoSidebarLayout } from "@/hooks/use-wide-layout";
 import { commentCountForTask, commentsForTask } from "@/lib/comment-counts";
+import { writeLastTodoView } from "@/lib/last-todo-view";
 import { localDayKey } from "@/lib/local-day-key";
 import { sectionsQueryKey, tasksInProjectQueryKey } from "@/lib/query-keys";
 import type { QuickAddTaskFields } from "@/lib/quick-add-task";
@@ -108,6 +109,63 @@ function backgroundPath(background: TodoBackgroundView): string {
 }
 
 /**
+ * The one Inbox `TodoBackgroundView` literal every fallback below shares —
+ * originally just the taskSlugId branch's own "no `location.state.from`
+ * to recover" case (see `backgroundView` below), extended by issue #352
+ * to also cover a remembered Project or Filter id that no longer resolves
+ * (`resolveBackgroundView` below). One shared object, not a second literal
+ * written at the new call site, is what keeps both cases reading as the
+ * identical "nothing to show here, Inbox is the deliberate default"
+ * answer `App.tsx`'s own `/todo` redirect already gives when nothing was
+ * remembered at all.
+ */
+const INBOX_BACKGROUND_VIEW: TodoBackgroundView = { view: "inbox", projectId: null };
+
+/**
+ * The non-Task-detail half of `backgroundView` below — a bare `view` prop
+ * plus whichever route param names *which* Project/Filter, resolved
+ * against the live `projects`/`filters` lists so a stale remembered
+ * address (a since-deleted Project or Filter — issue #352's own
+ * acceptance criterion) reads as `INBOX_BACKGROUND_VIEW` rather than a
+ * `currentProject`/`currentFilter` that stays `null` forever. A directly
+ * bookmarked or reloaded address for a Project/Filter that simply hasn't
+ * finished loading yet hits this same check — `projects`/`filters` come
+ * back as one atomic array (`use-projects.ts`'s/`use-filters.ts`'s own
+ * doc comments: a personal list, never paginated), so by the time either is
+ * non-empty the fetch has already settled, the same "can't tell loading
+ * from missing" ambiguity `currentProject === null`'s own render branch
+ * below already accepted for a still-empty list. `/todo/filters/new` (no
+ * `routeFilterId` at all) is not this case — an unsaved query has nothing
+ * to have gone stale — so only a *present* id gets checked against the
+ * live list.
+ */
+function resolveBackgroundView(
+  view: TodoBackgroundView["view"],
+  routeProjectId: string | undefined,
+  routeFilterId: string | undefined,
+  search: string,
+  projects: readonly Project[],
+  filters: readonly Filter[],
+): TodoBackgroundView {
+  if (view === "project" && routeProjectId !== undefined) {
+    return projects.some((project) => project.id === routeProjectId)
+      ? { view: "project", projectId: routeProjectId }
+      : INBOX_BACKGROUND_VIEW;
+  }
+  if (view === "filter" && routeFilterId !== undefined) {
+    return filters.some((filter) => filter.id === routeFilterId)
+      ? { view: "filter", projectId: null, filterId: routeFilterId }
+      : INBOX_BACKGROUND_VIEW;
+  }
+  return {
+    view,
+    projectId: null,
+    filterId: view === "filter" ? null : undefined,
+    search: view === "search" || view === "activity" ? search : undefined,
+  };
+}
+
+/**
  * Issue #254: the in-column heading's text for every `TodoBackgroundView`
  * that isn't a Project's or a Filter's own (those two read their resolved
  * `name` instead — see `todoHeading` below). Covers every view Shell's
@@ -135,33 +193,10 @@ const VIEW_HEADINGS: Record<Exclude<TodoBackgroundView["view"], "project" | "fil
   browse: "Browse",
 };
 
-/**
- * CMT-05 (parity ledger) — how long a completion toast stays up, measured
- * live rather than trusted from `meologue-reference/todoist/lifecycle.md`'s own
- * once-coarse estimate. That doc's "6-8 seconds" came from 2-second polling
- * and doesn't reproduce; a 300ms re-poll (flow 5,
- * `meologue-reference/todoist/live-audit-dom/flow5-CMT-05-todoist.json`) found
- * Todoist's own toast still present at 10,775ms and gone by 11,081ms.
- * meologue's matching toast (`flow5-CMT-05-meologue.json`) was gone between
- * 4,346ms and 4,651ms — sonner's own unconfigured default, not a value
- * anyone chose. ADR 0077 makes the live reading the reference over the
- * dated capture, so this targets Todoist's measured ~11s rather than the
- * ledger row's own nuance text.
- *
- * **Corrected to 10s by flow 11 R3 (Sun 13 Sep).** Measured from when the
- * toast *appears*, both Todoist readings are about 10s plus an exit animation:
- * flow 5 first saw it at 360ms, gone 10,775–11,081ms; R3 at 388ms, gone
- * 10,469–10,774ms, so "~11s" folded the appearance delay and the exit into
- * the duration. R3 read meologue at 11s as gone 11,068–11,372ms, about
- * 600ms late. Todoist's "Date updated" toast (DET-16) reads the same ~10s, and meologue's 10s copy
- * of it landed within 50ms of Todoist's in the same session.
- *
- * Applied to the two completion toasts below only (`handleComplete`,
- * `handleCompleteForever`) — every other toast on this page (`copyTaskLink`'s
- * "Link copied", the error toasts) keeps sonner's default, unmeasured and
- * unaffected by this ticket.
- */
-const COMPLETION_TOAST_DURATION_MS = 10_000;
+// CMT-05 (parity ledger) — how long a completion toast stays up, and CMT-04
+// (`role="alert"`) — both measured live against Todoist and now shared with
+// `composer-page.tsx` (issue #355) rather than kept as this page's own copy;
+// `use-completion-toast.tsx`'s own header comment has the full measurement.
 
 /**
  * A Project's or a Filter's own resolved name (acceptance criterion: "The
@@ -321,6 +356,13 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
   // it, threaded down to `TaskDetailView`.
   const [searchParams] = useSearchParams();
 
+  // Pulled out of the big `useEntryStore()` destructure below (which still
+  // pulls everything else) so `backgroundView` — computed next — has
+  // `projects`/`filters` in scope for `resolveBackgroundView`'s own
+  // existence check (issue #352). Two bindings, not the whole context, so
+  // it stays obvious this early call exists for that one dependency.
+  const { projects, filters } = useEntryStore();
+
   // Which background view renders *behind* the Task detail modal/sheet —
   // this file's own header comment on `TodoBackgroundView`/`backgroundPath`
   // explains why `/todo/task/:taskSlugId` (App.tsx) passes no `view` prop
@@ -328,22 +370,58 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
   // link or a reload of a Task's own address carries no such state (there
   // was no "opened from" navigation to remember), so it falls back to
   // Inbox — the identical fallback `/todo` itself redirects to
-  // (App.tsx's own `<Navigate to="/todo/inbox" />`), rather than this
-  // page inventing a second "nothing chosen" default.
+  // (App.tsx's own `<Navigate to={lastTodoPath()} />`, issue #352), rather
+  // than this page inventing a second "nothing chosen" default.
+  //
+  // The non-Task-detail branch runs every route `App.tsx` points at this
+  // page through `resolveBackgroundView` (above), not just the address
+  // issue #352's own remembered-view redirect can land on — a directly
+  // bookmarked or reloaded `/todo/projects/:projectId` for a Project that
+  // no longer exists gets the identical Inbox fallback, which is a strict
+  // improvement over what this branch used to do (silently build a
+  // `TodoBackgroundView` `currentProject`/`currentFilter` could never
+  // resolve, rendering the "Loading…" paragraph below forever) rather
+  // than a second, narrower behaviour written just for the redirect case.
   const backgroundView: TodoBackgroundView =
     taskSlugId !== undefined
-      ? ((location.state as { from?: TodoBackgroundView } | null)?.from ?? {
-          view: "inbox",
-          projectId: null,
-        })
-      : {
+      ? ((location.state as { from?: TodoBackgroundView } | null)?.from ?? INBOX_BACKGROUND_VIEW)
+      : resolveBackgroundView(
           view,
-          projectId: view === "project" ? (routeProjectId ?? null) : null,
-          filterId: view === "filter" ? (routeFilterId ?? null) : null,
-          search: view === "search" || view === "activity" ? location.search : undefined,
-        };
+          routeProjectId,
+          routeFilterId,
+          location.search,
+          projects,
+          filters,
+        );
   const currentProjectId = backgroundView.projectId;
   const currentFilterId = backgroundView.filterId ?? null;
+
+  // Issue #352: records `backgroundView` as the view a bare `/todo`
+  // should resolve to next — `lastTodoPath()`'s own header comment names
+  // this effect as the write half of that redirect. Skipped for Search
+  // (never a landing view — `TodoBackgroundView.search`'s own doc comment)
+  // and for a Task detail address (`taskSlugId !== undefined`): opening
+  // Todo must land on a view, never reopen someone's modal, so a Task's
+  // own address is never the thing remembered even though the background
+  // view behind it is a perfectly real one. `backgroundView.view` already
+  // narrows out `"search"` before the final branch below, matching
+  // `LastTodoView`'s own narrower union without a separate cast.
+  useEffect(() => {
+    if (taskSlugId !== undefined || backgroundView.view === "search") {
+      return;
+    }
+    if (backgroundView.view === "project") {
+      if (backgroundView.projectId !== null) {
+        writeLastTodoView({ view: "project", projectId: backgroundView.projectId });
+      }
+      return;
+    }
+    if (backgroundView.view === "filter") {
+      writeLastTodoView({ view: "filter", filterId: backgroundView.filterId ?? null });
+      return;
+    }
+    writeLastTodoView({ view: backgroundView.view });
+  }, [taskSlugId, backgroundView]);
 
   const {
     tasks,
@@ -383,7 +461,6 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
     addComment,
     editComment,
     removeComment,
-    projects,
     addProject,
     renameProject,
     setProjectColour,
@@ -401,7 +478,6 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
     archiveSection,
     unarchiveSection,
     events,
-    filters,
     addFilter,
     renameFilter,
     setFilterColour,
@@ -482,69 +558,13 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
     return () => document.removeEventListener(OPEN_QUICK_ADD_EVENT, handleOpenQuickAdd);
   }, []);
 
-  // CMT-05 (parity ledger) — the one thing `Z`/`⌘Z` (`use-todo-keymap.ts`'s
-  // `undo-complete` binding) has to act on: the most recent completion's
-  // own `uncompleteTask` call, live only while its toast is still showing.
-  // A `ref`, not `useState`, deliberately — this never drives a render,
-  // only `fire()`'s later, out-of-band read of it, the same reason
-  // `document.activeElement` (`focusedTaskId()`, todo-keymap.ts) is read
-  // fresh rather than tracked in state. `toastId` guards against a stale
-  // write: if a second completion happens before the first toast's
-  // `onAutoClose`/`onDismiss` fires, that older callback must not clear
-  // the ref out from under the newer completion it no longer describes.
-  const pendingUndoRef = useRef<{ toastId: string | number; undo: () => void } | null>(null);
-
-  /** The one place a completion toast is raised (`handleComplete`,
-   * `handleCompleteForever` below share it) — the toast's own "Undo"
-   * button and the `undo-complete` keyboard binding both end up calling
-   * the identical `undo` callback, so there is exactly one way a
-   * completion gets reversed, not two implementations that could drift.
-   * `duration`/`onAutoClose`/`onDismiss` are the CMT-05 pieces: a 10s
-   * lifetime (`COMPLETION_TOAST_DURATION_MS`'s own doc comment has the
-   * measurement) and clearing `pendingUndoRef` the moment this exact toast
-   * stops being on screen, by either path sonner offers for "it's gone."
-   *
-   * CMT-04 (parity ledger): `toast.custom()` in place of the plain
-   * `toast(message, {...})` this used before — `completion-toast.tsx`'s
-   * own header comment has the full reasoning (sonner exposes no `role`
-   * option; `toast.custom()` is its documented escape hatch). The Undo
-   * button now lives inside that custom body rather than being sonner's
-   * own `action`, so its `onClick` has to do both things `action.onClick`
-   * used to get for free: run `undo`, then dismiss the toast itself
-   * (`toast.dismiss(id)`, the same id `toast.custom` handed the jsx
-   * callback and returned here) — sonner's own action button dismissed
-   * automatically after `onClick`; a bare custom button does not. */
-  function raiseCompletionToast(taskId: string, message: string) {
-    const undo = () => {
-      uncompleteTask(taskId);
-      pendingUndoRef.current = null;
-    };
-    const toastId = toast.custom(
-      (id) => (
-        <CompletionToastBody
-          message={message}
-          onUndo={() => {
-            undo();
-            toast.dismiss(id);
-          }}
-        />
-      ),
-      {
-        duration: COMPLETION_TOAST_DURATION_MS,
-        onAutoClose: () => {
-          if (pendingUndoRef.current?.toastId === toastId) {
-            pendingUndoRef.current = null;
-          }
-        },
-        onDismiss: () => {
-          if (pendingUndoRef.current?.toastId === toastId) {
-            pendingUndoRef.current = null;
-          }
-        },
-      },
-    );
-    pendingUndoRef.current = { toastId, undo };
-  }
+  // Issue #355: the one completion-toast implementation for the app,
+  // shared with `composer-page.tsx` (`use-completion-toast.tsx`'s own
+  // header comment) rather than this page keeping its own
+  // `toast.custom()`/pending-undo-ref pair — which is how this page's
+  // toast and the Composer's plain `toast(...)` one drifted apart before
+  // this ticket.
+  const completionToast = useCompletionToast();
 
   // Issue #184: "completed work is reached by narrowing the log to
   // completions, not from a separate destination of its own" — a plain
@@ -620,7 +640,7 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
       return;
     }
     completeTask(taskId);
-    raiseCompletionToast(taskId, "1 task completed");
+    completionToast.raise("1 task completed", () => uncompleteTask(taskId));
   }
 
   // Ends a recurring Task's series (TaskStore.completeForever's own doc
@@ -644,7 +664,9 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
   // `handleComplete`'s own comment above.
   function handleCompleteForever(taskId: string, _content: string) {
     completeForeverTask(taskId);
-    raiseCompletionToast(taskId, "1 task completed — the recurrence has ended");
+    completionToast.raise("1 task completed — the recurrence has ended", () =>
+      uncompleteTask(taskId),
+    );
   }
 
   function handleRequestDelete(taskId: string) {
@@ -796,15 +818,26 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
     navigate(taskDetailPath(task), { replace: true, state: { from: backgroundView } });
   }
 
-  // Closes the detail view back onto whichever background it opened over
-  // — a real navigation to `backgroundPath(backgroundView)`, not
-  // `navigate(-1)`: `back-to-chats.tsx`'s own header comment gives the
-  // identical reasoning for why a real link beats history navigation
-  // here — a reader who opened this Task's address directly (a bookmark,
-  // a shared link, a reload) has no in-app history entry to go back to,
-  // and closing has to land somewhere sensible regardless.
+  // Closes the detail view back onto whichever background it opened over.
+  // `openTaskDetail` is a real push (the Task's own address is a departure
+  // a reader dismisses, ADR 0079/ADR 0086's exception for a modal), so
+  // closing is the mirror of `digest-reader-page.tsx`'s and
+  // `sessions-page.tsx`'s own `goBack()`: `navigate(-1)` pops that entry
+  // when one exists, landing exactly back on whatever was open before —
+  // no need to compute `backgroundPath` at all in the common case, since
+  // popping restores the real prior URL. `location.key === "default"`
+  // means there is nothing behind us to pop — a reader who opened this
+  // Task's address directly (a bookmark, a shared link, a reload) has no
+  // in-app history entry to go back to — so that case falls back to a
+  // `replace` onto `backgroundPath(backgroundView)` instead: a real
+  // navigation, landing sensibly, but not a push that would leave the
+  // dead Task address behind for a second Back to return to.
   function closeTaskDetail() {
-    navigate(backgroundPath(backgroundView));
+    if (location.key === "default") {
+      navigate(backgroundPath(backgroundView), { replace: true });
+    } else {
+      navigate(-1);
+    }
   }
 
   // "Copy link to task" (the command menu's own item) — the same address
@@ -854,13 +887,11 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
     onOpenQuickFind: () => setQuickFindOpen(true),
     onShowShortcuts: () => setShortcutsOpen(true),
     onNavigate: navigate,
-    // CMT-05 — the pending-undo ref's one door (`pendingUndoRef`'s own doc
-    // comment above has the full reasoning). Nothing pending is this
-    // callback's own no-op to make, not a `null` `use-todo-keymap.ts` has
-    // to branch on.
-    onUndoComplete: () => {
-      pendingUndoRef.current?.undo();
-    },
+    // CMT-05 — `completionToast`'s own one door onto the pending undo
+    // (`use-completion-toast.tsx`'s own doc comment has the full
+    // reasoning). Nothing pending is `fireUndo`'s own no-op to make, not a
+    // `null` `use-todo-keymap.ts` has to branch on.
+    onUndoComplete: completionToast.fireUndo,
   });
 
   // Issue #247: both rename surfaces resolve a typed phrase through this
@@ -1120,7 +1151,11 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
             }
             onDeleteProject={() => {
               removeProject(currentProject.id);
-              navigate("/todo/projects");
+              // `replace` (ADR 0079's follow-up, ADR 0086): the deleted
+              // Project's own address is now dead — a plain `navigate`
+              // left it behind for Back to land back on, the identical
+              // gap `filter-view.tsx`'s own delete path had.
+              navigate("/todo/projects", { replace: true });
             }}
             onAddSection={handleAddSection}
             onRenameSection={renameSection}
@@ -1179,6 +1214,7 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
           <FilterView
             filter={currentFilter}
             tasks={tasks}
+            completedTasks={completedTasks}
             projects={projects}
             labels={labels}
             listSections={listSections}
@@ -1457,7 +1493,14 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
         projects={projects}
         onOpenTask={openTaskDetail}
         onOpenProject={(projectId) =>
-          navigate(projectId === null ? "/todo/inbox" : `/todo/projects/${projectId}`)
+          // `replace` (ADR 0079's follow-up, ADR 0086): Quick-find opening
+          // a Project is still moving between Todo's own views — the same
+          // reasoning as `openTaskDetail`'s sibling row-click, except a
+          // Project's own screen isn't a modal a reader dismisses, so
+          // unlike `openTaskDetail` this doesn't earn a history entry.
+          navigate(projectId === null ? "/todo/inbox" : `/todo/projects/${projectId}`, {
+            replace: true,
+          })
         }
         onShowMoreResults={openFullSearch}
       />

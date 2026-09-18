@@ -1,7 +1,8 @@
 import type { Project, Section, Task } from "@meologue/core";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useSettingsStore } from "@/lib/settings";
 import { ProjectView } from "./project-view";
 
 /** Opens the project's own "Project options menu" (STR-02) and clicks the named item. */
@@ -547,15 +548,29 @@ describe("ProjectView — Sections cap", () => {
   });
 });
 
-// ROW-14 (parity-ledger.md), the user's 2026-09-13 decision to match
-// Todoist: a Project's own view had NO completed-Task display at all
-// before this ticket (`todo-page.tsx`'s own pre-existing comment named
-// that gap explicitly) — `completedTasks`/`onUncomplete` are this file's
-// own new door onto `TaskList`'s identical props (that component's own
-// doc comment covers the interleaving itself; this only proves the
-// pass-through).
-describe("ProjectView — completed Tasks interleave inline (ROW-14)", () => {
-  it("renders a completed Task inline, even with no active Tasks in the Project", () => {
+// ROW-14 (parity-ledger.md): a Project's own view had NO completed-Task
+// display at all before ROW-14's own ticket (`todo-page.tsx`'s own
+// pre-existing comment named that gap explicitly) — `completedTasks`/
+// `onUncomplete` are this file's own door onto `TaskList`'s identical
+// props (that component's own doc comment, and `task-tree.test.tsx`,
+// cover what a completed row itself looks like and where it renders; this
+// only proves the pass-through and the scoping).
+//
+// Issue #358: `completedTasksVisible` (lib/settings.ts) defaults to off,
+// so every test below that expects a completed Task to actually render
+// turns it on explicitly and turns it back off afterward — the identical
+// gate `task-list.tsx` itself reads before ever narrowing `completedTasks`
+// down to this Project's own rows.
+describe("ProjectView — completed Tasks (ROW-14, issue #358)", () => {
+  beforeEach(() => {
+    useSettingsStore.getState().setCompletedTasksVisible(true);
+  });
+
+  afterEach(() => {
+    useSettingsStore.getState().setCompletedTasksVisible(false);
+  });
+
+  it("renders a completed Task, even with no active Tasks in the Project", () => {
     renderProjectView({
       tasks: [],
       completedTasks: [
@@ -583,7 +598,7 @@ describe("ProjectView — completed Tasks interleave inline (ROW-14)", () => {
     expect(onUncomplete).toHaveBeenCalledWith(completed);
   });
 
-  it("only interleaves completed Tasks that belong to this Project", () => {
+  it("only shows completed Tasks that belong to this Project", () => {
     renderProjectView({
       tasks: [],
       completedTasks: [
@@ -597,6 +612,21 @@ describe("ProjectView — completed Tasks interleave inline (ROW-14)", () => {
     });
 
     expect(screen.queryByText("in another Project")).not.toBeInTheDocument();
+    expect(screen.getByText(/Nothing in this Project yet/)).toBeInTheDocument();
+  });
+
+  it("hides completed Tasks entirely when the setting is off — Todoist's own measured default", () => {
+    useSettingsStore.getState().setCompletedTasksVisible(false);
+    renderProjectView({
+      tasks: [],
+      completedTasks: [
+        task({ id: "done", content: "done already", completedAt: "2026-01-01T00:00:00.000Z" }),
+      ],
+    });
+
+    expect(screen.queryByText("done already")).not.toBeInTheDocument();
+    // A scope with only (hidden) completed Tasks reads as empty again,
+    // matching Todoist's own off-state (task-list.tsx's own doc comment).
     expect(screen.getByText(/Nothing in this Project yet/)).toBeInTheDocument();
   });
 });

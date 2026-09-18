@@ -1,13 +1,13 @@
 import type { BackupKind, EntryStore, ProjectStore, SqliteDriver, TaskStore } from "@meologue/core";
 import { exportEntriesToZip } from "@meologue/core";
 import { Suspense, useState } from "react";
-import { toast } from "sonner";
 import { DeviceGroup } from "@/components/settings/device-group";
 import { LazyDestructiveConfirmDialog as DestructiveConfirmDialog } from "@/components/settings/lazy-destructive-confirm-dialog";
 import { ServerDataGroup } from "@/components/settings/server-data-group";
 import { SettingsSection } from "@/components/settings/settings-section";
 import { SwitchRow } from "@/components/settings/switch-row";
 import { Button } from "@/components/ui/button";
+import { toast } from "@/components/ui/toast";
 import { applyDeviceSettings, readAllDeviceSettings, useSettingsStore } from "@/lib/settings";
 import { loadFile } from "@/platform/load-file";
 import { saveFile } from "@/platform/save-file";

@@ -1,10 +1,10 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowLeft, ChevronLeft, ChevronRight, RefreshCw } from "lucide-react";
 import { Link, useLocation, useNavigate, useParams } from "react-router";
-import { toast } from "sonner";
 import { inlineProse } from "@/components/inline-prose";
 import { ServerUnreachableBanner } from "@/components/server-unreachable-banner";
 import { Shell } from "@/components/shell";
+import { toast } from "@/components/ui/toast";
 import { formatDigestProvenance, formatDigestRange, formatStaleCopy } from "@/lib/digest-format";
 import { digestAtTransport, digestRegenerateTransport } from "@/lib/digest-transport";
 import { digestAtQueryKey, digestQueryKey } from "@/lib/query-keys";

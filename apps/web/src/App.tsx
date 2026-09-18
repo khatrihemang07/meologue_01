@@ -1,7 +1,8 @@
 import { lazy, Suspense } from "react";
 import { BrowserRouter, Navigate, Route, Routes } from "react-router";
-import { Toaster } from "@/components/ui/sonner";
+import { Toaster } from "@/components/ui/toast";
 import { useBackButton } from "@/hooks/use-back-button";
+import { lastTodoPath } from "@/lib/last-todo-view";
 import { ChatListPage } from "@/pages/chat-list-page";
 import { ChatShellLayout } from "@/pages/chat-shell-layout";
 
@@ -93,6 +94,17 @@ function BackButtonHandler() {
   return null;
 }
 
+/**
+ * `/todo`'s redirect target, read at the moment the route matches rather
+ * than when `App`'s JSX is built. See the `/todo` route's own comment below
+ * for why this must stay a component: `lastTodoPath()` called inline froze
+ * the target for the lifetime of the tab, so Todo's remembered view only
+ * survived a full reload and never a live session.
+ */
+function TodoEntryRedirect() {
+  return <Navigate to={lastTodoPath()} replace />;
+}
+
 function App() {
   return (
     <BrowserRouter>
@@ -167,8 +179,36 @@ function App() {
               containing a "." for the identical reason a Session id or a
               Digest `date` never does — flagged here for the same reason
               those two routes' own comments flag it, so nobody later routes
-              something dotted into this segment. */}
-              <Route path="/todo" element={<Navigate to="/todo/inbox" replace />} />
+              something dotted into this segment.
+
+              Issue #352: the redirect target itself is no longer the bare
+              literal `"/todo/inbox"` — `lastTodoPath()` (`lib/last-todo-
+              view.ts`) resolves to whichever view Todo was last on, and
+              only falls back to Inbox when nothing (yet) is remembered.
+              "Todo has no fresh, undirected view" (above) is still exactly
+              why a fallback is needed at all — it's just no longer the
+              *only* thing this route can resolve to. `lastTodoPath()` is a
+              plain, synchronous, non-lazy function precisely so this route
+              can call it directly without pulling `TodoPage`'s own lazy
+              chunk into this file; it cannot itself tell a since-deleted
+              Project or Filter from a live one (it has no access to
+              Todo's data here), so a stale remembered address still lands
+              on that address's own route — `todo-page.tsx`'s own
+              `backgroundView` is what falls the reader back to Inbox once
+              it can tell the two apart.
+
+              `TodoEntryRedirect` is a component rather than a bare
+              `<Navigate to={lastTodoPath()} />` for a reason a browser
+              found and 3,992 passing tests did not: the `element` prop's
+              JSX is constructed once, when *this* file renders, and `App`
+              sits above `Routes` and does not re-render on navigation. So
+              calling `lastTodoPath()` inline froze the target at whatever
+              was remembered when the tab first loaded — the redirect then
+              worked across a full reload and never within a live session,
+              which is the one case the feature exists for. Reading it
+              inside a component moves the call to when the route actually
+              matches. Keep it a component. */}
+              <Route path="/todo" element={<TodoEntryRedirect />} />
               <Route path="/todo/inbox" element={<TodoPage />} />
               <Route path="/todo/today" element={<TodoPage view="today" />} />
               {/* Upcoming (issue #223's second half) — the sibling ADR 0049

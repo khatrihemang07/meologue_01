@@ -343,16 +343,20 @@ test("a mid-stream failure leaves Reflection usable afterwards", async ({ page }
   await expect(composer).toHaveValue(question);
   await expect(page).toHaveURL("/reflect");
 
-  // sonner's own toast sits over the Ask button (both bottom-anchored) and
-  // intercepts pointer events until it dismisses itself. It also pauses
-  // its own dismiss timer while the pointer rests over it — exactly where
-  // clicking Ask just left the cursor — so a real user's next move here
-  // (reading the message, then looking back at the composer to retype)
-  // is also what releases sonner's own pause; this moves the mouse there
-  // for the same reason. Waiting it out from there, rather than forcing a
-  // click through it, is closer to the actual recovery this scenario is about.
+  // The toast (`components/ui/toast.tsx`, issue #357 — a Radix `Toast`
+  // wrapper, replacing sonner) sits over the Ask button (both bottom-
+  // anchored) and intercepts pointer events until it dismisses itself.
+  // Radix's own `Toast.Viewport` also pauses every toast's dismiss timer
+  // while the pointer rests over it — exactly where clicking Ask just
+  // left the cursor — so a real user's next move here (reading the
+  // message, then looking back at the composer to retype) is also what
+  // releases that pause; this moves the mouse there for the same reason.
+  // Waiting it out from there, rather than forcing a click through it, is
+  // closer to the actual recovery this scenario is about.
   await composer.hover();
-  await expect(page.locator("[data-sonner-toast]")).toHaveCount(0, { timeout: 10_000 });
+  await expect(page.locator('[data-slot="toast-viewport"] li')).toHaveCount(0, {
+    timeout: 10_000,
+  });
 
   // The strongest form of "recoverable": asking again actually works. A
   // fresh Question rather than a resubmit of the restored one — llm-stub.ts's

@@ -1,16 +1,18 @@
-import { CompletedStyleRow } from "@/components/settings/completed-style-row";
 import { DeviceGroup } from "@/components/settings/device-group";
 import { SettingsSection } from "@/components/settings/settings-section";
 import { SwitchRow } from "@/components/settings/switch-row";
-import { COMPLETED_STYLES, type CompletedStyleId, useSettingsStore } from "@/lib/settings";
-import { applyCompletedStyle } from "@/lib/theme";
+import { useSettingsStore } from "@/lib/settings";
 
 /**
  * What the Composer looks and behaves like while a reader is writing —
- * whether its format toolbar shows, how a completed checklist item is
- * painted, and whether Todo's own add field (opened from the same
- * writing surface) reads eager natural-language dates — the second of five
- * topic sections `settings-page.tsx` composes (issue #202).
+ * whether its format toolbar shows, and whether Todo's own add field
+ * (opened from the same writing surface) reads eager natural-language
+ * dates — one of the topic sections `settings-page.tsx` composes (issue
+ * #202). The "Completed checklist item" section this page used to carry
+ * alongside these two is gone: issue #351 retired the four-value option it
+ * offered, so there is no longer a display choice to make here at all
+ * (`lib/settings.ts`'s own comment on `meologue.completed-style` has the
+ * full reasoning).
  *
  * "Smart date recognition" lives here rather than in a `Todo` topic of its
  * own: it governs the add field's own parser, and the add field is a
@@ -18,41 +20,48 @@ import { applyCompletedStyle } from "@/lib/theme";
  * page (issue #170) well before Todo's other settings existed to weigh it
  * against.
  *
+ * Issue #358's "Completed tasks" toggle below has no such Composer-shaped
+ * reason — it governs how Todo's own lists render, not anything about
+ * writing — but there is still no dedicated `Todo` topic section on this
+ * page (five exist: Appearance, Composer, AI, Sync, Data), and `AiSection`'s
+ * own "Chat list" row already sets the precedent that a Device-local Todo
+ * setting with nowhere else to go lands wherever is least wrong rather than
+ * growing a sixth section for one row. This one keeps "Smart date
+ * recognition" company here because both are Todo-only settings this page
+ * has nowhere better to put, not because either belongs to the Composer.
+ *
  * Every setting here is Device-local (ADR 0008), read and written straight
  * off `useSettingsStore` with no props threaded down from the page.
  */
 export function ComposerSection() {
   const formatBarVisible = useSettingsStore((state) => state.formatBarVisible);
   const setStoredFormatBarVisible = useSettingsStore((state) => state.setFormatBarVisible);
-  const completedStyle = useSettingsStore((state) => state.completedStyle);
-  const setStoredCompletedStyle = useSettingsStore((state) => state.setCompletedStyle);
   const smartDatesEnabled = useSettingsStore((state) => state.smartDatesEnabled);
   const setStoredSmartDatesEnabled = useSettingsStore((state) => state.setSmartDatesEnabled);
+  const completedTasksVisible = useSettingsStore((state) => state.completedTasksVisible);
+  const setStoredCompletedTasksVisible = useSettingsStore(
+    (state) => state.setCompletedTasksVisible,
+  );
 
-  // No `applyX` step, unlike `selectCompletedStyle` below: there is no
-  // on-screen paint for a `localStorage` write to drive immediately from
-  // here — `composer.tsx` reads this setting itself, the next time it
-  // renders this row.
+  // No `applyX` step: there is no on-screen paint for a `localStorage`
+  // write to drive immediately from here — `composer.tsx` reads this
+  // setting itself, the next time it renders this row.
   function toggleFormatBarVisible() {
     setStoredFormatBarVisible(!formatBarVisible);
   }
 
-  // Apply first, then persist — same order as every other visible choice on
-  // this page. "Apply" here is one attribute write (`applyCompletedStyle`);
-  // it rewrites no Entry, starts no Sync, and marks no Digest stale, per
-  // ADR 0008 and this setting's own doc comment in settings.ts.
-  function selectCompletedStyle(next: CompletedStyleId) {
-    applyCompletedStyle(next);
-    setStoredCompletedStyle(next);
-  }
-
-  // No `applyX` step, unlike `selectCompletedStyle` above: there is no
-  // on-screen paint for a `localStorage` write to drive immediately
-  // (add-task-form.tsx reads this setting itself, the next time it
-  // renders), the same reasoning `toggleFormatBarVisible`'s own comment
-  // gives for its identical one-line body.
+  // No `applyX` step, for the identical reason `toggleFormatBarVisible`'s
+  // own comment gives: `add-task-form.tsx` reads this setting itself, the
+  // next time it renders.
   function toggleSmartDatesEnabled() {
     setStoredSmartDatesEnabled(!smartDatesEnabled);
+  }
+
+  // No `applyX` step, for the identical reason above: `task-list.tsx`
+  // reads this setting itself, the next time Inbox, a Project, a Filter or
+  // Search renders its own list.
+  function toggleCompletedTasksVisible() {
+    setStoredCompletedTasksVisible(!completedTasksVisible);
   }
 
   return (
@@ -80,29 +89,6 @@ export function ComposerSection() {
         </SettingsSection>
 
         {/*
-          Issue #163. Display only, exactly like Appearance's own controls:
-          the four stacked rows below change how a checked item is PAINTED
-          in both the Composer and History, and nothing about what's
-          stored, Synced, or fed to a Digest. UpNote's companion "move
-          completed items to the bottom" is deliberately not offered here —
-          see `CompletedStyleId`'s own doc comment (settings.ts) for why
-          that one doesn't belong beside a display-only choice.
-        */}
-        <SettingsSection
-          label="Completed checklist item"
-          hint="Changes how a ticked checkbox's own words look. Nothing about what you wrote, Synced, or already summarised into a Digest changes."
-        >
-          {COMPLETED_STYLES.map((option) => (
-            <CompletedStyleRow
-              key={option.id}
-              option={option}
-              selected={completedStyle === option.id}
-              onSelect={() => selectCompletedStyle(option.id)}
-            />
-          ))}
-        </SettingsSection>
-
-        {/*
           Issue #170. Off stops only the eager/natural-language family the
           add field's quick-add parser runs on ordinary words with no
           marker typed on purpose — `monday`, `5pm`, `monthly`, Todoist's
@@ -123,6 +109,25 @@ export function ComposerSection() {
             label="Smart date recognition"
             checked={smartDatesEnabled}
             onToggle={toggleSmartDatesEnabled}
+          />
+        </SettingsSection>
+
+        {/*
+          Issue #358. Off (the default) matches Todoist's own measured
+          default (ROW-14, parity-ledger.md): completing a Task removes its
+          row from Inbox, a Project's own view, a Filter's own matches and
+          Search's own matches immediately, with nothing left behind. On
+          relocates it below the active rows instead, with a control to
+          load older ones.
+        */}
+        <SettingsSection
+          label="Completed tasks"
+          hint="Off hides a completed Task everywhere in Todo, the instant it's completed. On keeps it visible, below the active Tasks, with a control to load older ones."
+        >
+          <SwitchRow
+            label="Show completed Tasks"
+            checked={completedTasksVisible}
+            onToggle={toggleCompletedTasksVisible}
           />
         </SettingsSection>
       </DeviceGroup>

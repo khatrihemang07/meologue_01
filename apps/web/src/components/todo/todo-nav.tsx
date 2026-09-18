@@ -101,6 +101,14 @@ export function TodoNav() {
         <NavLink
           key={to}
           to={to}
+          // `replace` (ADR 0079's follow-up, ADR 0086 — "Todo's own views
+          // are interior state, not departures"): moving between Todo's
+          // own rows is interior state, not a departure from Todo, so it
+          // must not push a history entry the way a plain `NavLink` would
+          // by default. A reader who taps through several of these and
+          // then presses Back leaves Todo in one press, exactly as if
+          // they had opened only the last one.
+          replace
           // `min-w-0` is load-bearing, not tidying. A flex item defaults to
           // `min-width: auto`, so `flex-1` cannot shrink it below its own
           // content: the longest label ("Upcoming") held every tab at a

@@ -2,12 +2,28 @@ import type { Comment, Event, Task } from "@meologue/core";
 import { QueryClient, QueryClientProvider, queryOptions } from "@tanstack/react-query";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { useState } from "react";
-import { Link, MemoryRouter, Outlet, Route, Routes, useNavigate } from "react-router";
-import { toast } from "sonner";
+import {
+  Link,
+  MemoryRouter,
+  Navigate,
+  Outlet,
+  Route,
+  Routes,
+  useLocation,
+  useNavigate,
+} from "react-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { toast } from "@/components/ui/toast";
 import { TODO_SIDEBAR_QUERY, WIDE_LAYOUT_QUERY } from "@/hooks/use-wide-layout";
+import {
+  clearLastTodoView,
+  lastTodoPath,
+  readLastTodoView,
+  writeLastTodoView,
+} from "@/lib/last-todo-view";
 import { localDayKey } from "@/lib/local-day-key";
 import { ENTRY_STORE_QUERY_KEY } from "@/lib/query-keys";
+import { useSettingsStore } from "@/lib/settings";
 import type { EntryStoreOutletContext } from "@/pages/entry-store-layout";
 import { TodoPage } from "./todo-page";
 
@@ -52,17 +68,21 @@ vi.mock("@/pages/entry-store-layout", async (importOriginal) => {
 
 // `toast` is callable (task-tree.tsx's reparent-refused toast, issue #171,
 // via `.error`) and, since CMT-04, also carries a `.custom` and a
-// `.dismiss` — `raiseCompletionToast` (todo-page.tsx) switched its Undo
-// toast from plain `toast(message, {...})` to `toast.custom(jsx, {...})`
-// so the toast's own JSX can carry `role="alert"`/`aria-live="polite"`
-// (completion-toast.tsx's own header comment has the full reasoning; no
-// `role` option exists anywhere in sonner 2.0.8). `.custom`'s mock returns
-// an incrementing id — the same id `toast.custom` hands its `jsx`
-// callback in production — so a test can call the captured `jsx` factory
-// itself to get the real `CompletionToastBody` element and render it, and
-// `.dismiss` records the id `raiseCompletionToast`'s Undo handler closes.
-vi.mock("sonner", () => {
-  const toast = vi.fn() as unknown as typeof import("sonner").toast;
+// `.dismiss` — the shared `useCompletionToast` hook's own `raise`
+// (`use-completion-toast.tsx`, issue #355; `todo-page.tsx` calls it
+// directly rather than through a local wrapper of its own) switched the
+// completion Undo toast from plain `toast(message, {...})` to
+// `toast.custom(jsx, {...})` so the toast's own JSX can carry
+// `role="alert"`/`aria-live="polite"` (completion-toast.tsx's own header
+// comment has the full reasoning; no `role` option exists anywhere in
+// sonner 2.0.8). `.custom`'s mock returns an incrementing id — the same id
+// `toast.custom` hands its `jsx` callback in production — so a test can
+// call the captured `jsx` factory itself to get the real
+// `CompletionToastBody` element and render it, and `.dismiss` records the
+// id either `raise`'s own Undo handler or a later completion replacing it
+// closes.
+vi.mock("@/components/ui/toast", () => {
+  const toast = vi.fn() as unknown as typeof import("@/components/ui/toast").toast;
   // biome-ignore lint/suspicious/noExplicitAny: attaching mock methods to a mock function, the same shape sonner's own `toast` carries in production (a callable object with `.error`/`.custom`/`.dismiss` etc as properties).
   (toast as any).error = vi.fn();
   let nextCustomToastId = 1;
@@ -216,19 +236,44 @@ function GoBackProbe() {
   );
 }
 
-function renderTodoPage(context: EntryStoreOutletContext, initialPath = "/todo/inbox") {
+// Issue #353 (ADR 0086): renders the current pathname so a test can assert
+// exactly where a navigation landed, mirroring digest-reader-page.test.tsx's
+// own identical `LocationProbe`.
+function LocationProbe() {
+  const location = useLocation();
+  return <p data-testid="location-path">{location.pathname}</p>;
+}
+
+// `initialEntries` defaults to just the reader's own path — the same single
+// -entry stack (so `location.key === "default"`, the cold-load/deep-link
+// case) every pre-existing test in this file already renders against.
+// Issue #353's own tests, which need Todo actually *entered* (so there's a
+// real entry behind it for Back to pop to), pass their own multi-entry
+// stack instead.
+function renderTodoPage(
+  context: EntryStoreOutletContext,
+  initialPath = "/todo/inbox",
+  initialEntries: string[] = [initialPath],
+) {
   const queryClient = new QueryClient();
   return render(
     <QueryClientProvider client={queryClient}>
-      <MemoryRouter initialEntries={[initialPath]}>
+      <MemoryRouter initialEntries={initialEntries} initialIndex={initialEntries.length - 1}>
         {/* A real link to a non-`/todo/*` route (ADR 0049's own suggested
             test shape: "navigate to `/composer` ... through the router") —
             TodoPage itself has no reason to link to Composer, so this is the
             test's own way out, not a control this ticket adds to the page. */}
         <Link to="/composer">Leave Todo</Link>
         <GoBackProbe />
+        <LocationProbe />
         <Routes>
           <Route element={<Outlet context={context} />}>
+            {/* Issue #352: mirrors App.tsx's own bare `/todo` redirect —
+                `lastTodoPath()` resolves to the remembered view instead of
+                the literal `"/todo/inbox"` this route used to carry, so a
+                test can drive the same redirect this helper's callers rely
+                on rather than a second, hand-rolled one. */}
+            <Route path="/todo" element={<Navigate to={lastTodoPath()} replace />} />
             <Route path="/todo/inbox" element={<TodoPage />} />
             <Route path="/todo/today" element={<TodoPage view="today" />} />
             {/* Issue #254: added for the in-column heading's own tests
@@ -241,6 +286,10 @@ function renderTodoPage(context: EntryStoreOutletContext, initialPath = "/todo/i
             <Route path="/todo/filters" element={<TodoPage view="filters" />} />
             <Route path="/todo/filters/new" element={<TodoPage view="filter" />} />
             <Route path="/todo/filters/:filterId" element={<TodoPage view="filter" />} />
+            {/* Issue #352's own "specific ... Label" acceptance criterion
+                — mirrors App.tsx's real `/todo/labels`, not otherwise
+                needed by this helper's earlier callers. */}
+            <Route path="/todo/labels" element={<TodoPage view="labels" />} />
             {/* Issue #307: Search's own route, mirroring App.tsx's real
                 `/todo/search` — needed for the header search door's own
                 tests below. */}
@@ -696,6 +745,11 @@ describe("TodoPage", () => {
   // "Completed (n)" disclosure lived below `TaskList`'s own empty-state
   // paragraph regardless of what was inside it.
   it("does not read Inbox as empty when it holds only a completed Task", () => {
+    // Issue #358: this scope only falls through to render a completed-only
+    // list once `completedTasksVisible` is on — off (the default) reads
+    // Inbox as empty here, correctly, since Todoist's own off-state hides
+    // the row entirely (task-list.tsx's own doc comment).
+    useSettingsStore.getState().setCompletedTasksVisible(true);
     renderTodoPage(
       inboxContext([], {
         completedTasks: [
@@ -706,6 +760,7 @@ describe("TodoPage", () => {
 
     expect(screen.queryByText(/Nothing in your Inbox/)).not.toBeInTheDocument();
     expect(screen.getByText("done already")).toBeInTheDocument();
+    useSettingsStore.getState().setCompletedTasksVisible(false);
   });
 
   it("lists active Tasks", async () => {
@@ -788,12 +843,18 @@ describe("TodoPage", () => {
   });
 
   // CMT-04 (parity ledger): the completion toast is raised through
-  // `toast.custom()` (`raiseCompletionToast`, todo-page.tsx —
-  // completion-toast.tsx's own header comment has the full reasoning), so
-  // this asserts against the real `CompletionToastBody` element the `jsx`
-  // callback produces — a `role="alert"` element containing the message
-  // and a real "Undo" `<button>` — rather than against `toast`'s call
-  // args the way the old plain-`toast()` shape allowed.
+  // `toast.custom()` (the shared `useCompletionToast` hook's own `raise`,
+  // `use-completion-toast.tsx` — completion-toast.tsx's own header comment
+  // has the full reasoning), so this asserts against the real
+  // `CompletionToastBody` element the `jsx` callback produces — the
+  // message and a real "Undo" `<button>` — rather than against `toast`'s
+  // call args the way the old plain-`toast()` shape allowed. Issue #357
+  // moved the `role`/`aria-live` announcement off this body and onto
+  // `components/ui/toast.tsx`'s own `Toaster` (Radix's native accessible
+  // announcer), so rendering the bare `jsx` factory standalone here — with
+  // no `Toaster` above it — no longer exposes a `role="alert"` element to
+  // query by; `toast.test.tsx` covers that announcement against the real
+  // `Toaster` instead.
   it("completes a Task and offers an Undo toast wired to uncompleteTask", async () => {
     const completeTask = vi.fn();
     const uncompleteTask = vi.fn();
@@ -819,12 +880,11 @@ describe("TodoPage", () => {
     const [jsxFactory] = customCall;
     render(jsxFactory("toast-a"));
 
-    const alertToast = screen.getByRole("alert");
     // CMT-04: Todoist's own task-agnostic, count-based wording, not the
     // task-specific `Completed "<name>"` this replaced.
-    expect(alertToast).toHaveTextContent("1 task completed");
+    expect(screen.getByText("1 task completed")).toBeInTheDocument();
 
-    fireEvent.click(within(alertToast).getByRole("button", { name: "Undo" }));
+    fireEvent.click(screen.getByRole("button", { name: "Undo" }));
     expect(uncompleteTask).toHaveBeenCalledWith("a");
     // The Undo click has to dismiss the toast itself now (completion-toast.tsx's
     // own header comment) — sonner's own `action` button did this for free;
@@ -920,6 +980,9 @@ describe("TodoPage", () => {
   // not a pending-undo ref (`pendingUndoRef`, todo-page.tsx) that a toast
   // could have long since cleared.
   it("restores a completed Task inline, through its own checkbox, independent of any toast", () => {
+    // Issue #358: this row only renders at all once `completedTasksVisible`
+    // is on — see the identical note on the empty-state test above.
+    useSettingsStore.getState().setCompletedTasksVisible(true);
     const uncompleteTask = vi.fn();
     renderTodoPage(
       readyContext({
@@ -933,6 +996,7 @@ describe("TodoPage", () => {
     fireEvent.click(screen.getByRole("checkbox", { name: "Mark task as incomplete" }));
 
     expect(uncompleteTask).toHaveBeenCalledWith("a");
+    useSettingsStore.getState().setCompletedTasksVisible(false);
   });
 
   // Issue #178 moved Delete off the row's own hover actions into the
@@ -1962,6 +2026,104 @@ describe("TodoPage — Search door (issue #307)", () => {
   });
 });
 
+// Issue #353, ADR 0086 ("Todo's own views are interior state, not
+// departures") — the follow-up ADR 0079 named explicitly and left undone:
+// moving between Todo's own views must not push a history entry, and the
+// Task detail's own address is the one deliberate exception (a modal is
+// something a reader dismisses, not a screen they leave). These prove the
+// three shapes ADR 0079's own Consequences section named — a real Back
+// press after visiting several interior views, a real Back press
+// dismissing the one interior navigation that still earns a history
+// entry, and closing that same navigation with nothing behind it to pop.
+describe("TodoPage — Back leaves Todo, not walks its views (issue #353, ADR 0086)", () => {
+  afterEach(removeMatchMedia);
+
+  // A real uuid, mirroring the main describe block's own `DETAIL_TASK_ID`
+  // — `taskIdFromParam`'s regex (lib/task-detail-route.ts) only ever reads
+  // the trailing uuid, so a plain `"a"` id wouldn't resolve to anything,
+  // whether reached by a row click or a direct link.
+  const DETAIL_TASK_ID = "22222222-2222-7222-8222-222222222222";
+
+  it("visiting several Todo views then pressing Back once leaves Todo", () => {
+    installNarrowMatchMedia();
+    // Entering Todo from the root screen is itself a real push — the one
+    // entry a Back press has to pop past to actually leave Todo.
+    // `["/composer", "/todo/inbox"]` puts it there, the same "opened from
+    // the cards" shape digest-reader-page.test.tsx's own stepping test
+    // uses to prove the identical rule for Digest.
+    renderTodoPage(readyContext(), "/todo/inbox", ["/composer", "/todo/inbox"]);
+    expect(screen.getByRole("heading", { name: "Inbox" })).toBeInTheDocument();
+
+    const nav = screen.getByRole("navigation", { name: "Todo" });
+    fireEvent.click(within(nav).getByRole("link", { name: "Today" }));
+    expect(screen.getByRole("heading", { name: "Today" })).toBeInTheDocument();
+
+    fireEvent.click(within(nav).getByRole("link", { name: "Upcoming" }));
+    expect(screen.getByRole("heading", { name: "Upcoming" })).toBeInTheDocument();
+
+    // A single Back, after visiting three of Todo's own views (Inbox,
+    // Today, Upcoming), leaves Todo outright — each row's `replace`
+    // (`todo-nav.tsx`) means none of the moves between them grew the
+    // history stack, so the only real entry to pop is the one that
+    // entered Todo in the first place.
+    fireEvent.click(screen.getByRole("button", { name: "Simulate Back" }));
+
+    expect(screen.getByText("Composer")).toBeInTheDocument();
+    expect(screen.queryByRole("navigation", { name: "Todo" })).not.toBeInTheDocument();
+  });
+
+  it("Back with a Task detail open closes it and reveals the list underneath; a second Back leaves Todo", async () => {
+    renderTodoPage(
+      inboxContext([task({ id: DETAIL_TASK_ID, content: "call mum" })]),
+      "/todo/inbox",
+      ["/composer", "/todo/inbox"],
+    );
+    await waitFor(() => expect(screen.getByText("call mum")).toBeInTheDocument());
+
+    // Opening the Task from its row is `openTaskDetail`'s real push (kept
+    // exactly as it was — ADR 0086's deliberate exception), so there is a
+    // real entry for Back to pop.
+    fireEvent.click(screen.getByText("call mum"));
+    expect(await screen.findByRole("dialog")).toBeInTheDocument();
+
+    // First Back closes the Task detail rather than leaving Todo — a
+    // modal is dismissed, not walked out of, and popping its own entry
+    // lands exactly back on the list it opened over. `hidden: true` —
+    // Radix's own Dialog marks this background button `aria-hidden` while
+    // open (composer-page.test.tsx's own identical comment on the same
+    // gap); the click still fires on the real DOM node regardless of what
+    // the accessibility tree currently exposes.
+    fireEvent.click(screen.getByRole("button", { name: "Simulate Back", hidden: true }));
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(screen.getByRole("navigation", { name: "Todo" })).toBeInTheDocument();
+    expect(screen.getByText("call mum")).toBeInTheDocument();
+
+    // Second Back leaves Todo for the root screen.
+    fireEvent.click(screen.getByRole("button", { name: "Simulate Back" }));
+    expect(screen.getByText("Composer")).toBeInTheDocument();
+    expect(screen.queryByRole("navigation", { name: "Todo" })).not.toBeInTheDocument();
+  });
+
+  it("closing a Task detail opened by direct link, with no history behind it, still lands on the background rather than doing nothing", async () => {
+    renderTodoPage(
+      inboxContext([task({ id: DETAIL_TASK_ID, content: "call mum" })]),
+      `/todo/task/call-mum-${DETAIL_TASK_ID}`,
+    );
+
+    await waitFor(() => expect(screen.getByRole("dialog")).toBeInTheDocument());
+    // A single-entry stack — `location.key === "default"` — the same
+    // "bookmark, shared link, or reload" case `closeTaskDetail`'s own
+    // comment names. `navigate(-1)` has nothing to pop here, so a Back
+    // press aimed at this dialog has to fall back to a real `replace`
+    // navigation instead of doing nothing.
+    fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" });
+
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(screen.getByTestId("location-path")).toHaveTextContent("/todo/inbox");
+    expect(screen.getByRole("heading", { name: "Inbox" })).toBeInTheDocument();
+  });
+});
+
 /**
  * ANAV-01 (fork ADR 0082, resolved): `TodoNav`'s bottom bar shrank from
  * six rows to Todoist Android's own four (Inbox, Today, Upcoming,
@@ -2099,5 +2261,152 @@ describe("TodoPage — sidebar column (owner's amendment to ADR 0076)", () => {
     expect(
       await screen.findByRole("link", { name: "Reporting" }, { timeout: 5000 }),
     ).toHaveAttribute("href", "/todo/activity");
+  });
+});
+
+// Issue #352: opening Todo returns the reader to the view they were last
+// on rather than always Inbox — `lib/last-todo-view.ts`'s own header
+// comment has the storage-choice reasoning; this describe block covers
+// the two halves that live on this page: recording `backgroundView`
+// (below) and, via `renderTodoPage`'s own bare `/todo` route (added for
+// this ticket, mirroring App.tsx's real one), resolving it back.
+describe("TodoPage — remembers the last view (issue #352)", () => {
+  beforeEach(() => {
+    clearLastTodoView();
+  });
+
+  afterEach(() => {
+    clearLastTodoView();
+  });
+
+  const project = {
+    id: "p1",
+    deviceId: "device-a",
+    name: "Groceries",
+    colour: "#DC4C3E",
+    favourite: false,
+    archived: false,
+    parentId: null,
+    description: null,
+    orderKey: "A",
+    createdAt: "2026-01-01T00:00:00.000Z",
+    updatedAt: "2026-01-01T00:00:00.000Z",
+    seq: 1,
+    syncedAt: "2026-01-01T00:00:00.000Z",
+    deletedAt: null,
+  };
+
+  const filter = {
+    id: "f1",
+    deviceId: "device-a",
+    name: "Due today",
+    colour: "#DC4C3E",
+    query: "today",
+    createdAt: "2026-01-01T00:00:00.000Z",
+    updatedAt: "2026-01-01T00:00:00.000Z",
+    seq: 1,
+    syncedAt: "2026-01-01T00:00:00.000Z",
+    deletedAt: null,
+  };
+
+  it.each([
+    ["/todo/inbox", { view: "inbox" }],
+    ["/todo/today", { view: "today" }],
+    ["/todo/upcoming", { view: "upcoming" }],
+    ["/todo/projects", { view: "projects" }],
+    ["/todo/filters", { view: "filters" }],
+    ["/todo/labels", { view: "labels" }],
+    ["/todo/activity", { view: "activity" }],
+    ["/todo/browse", { view: "browse" }],
+  ] as const)("records %s as the last view", (path, expected) => {
+    renderTodoPage(readyContext(), path);
+
+    expect(readLastTodoView()).toEqual(expected);
+  });
+
+  it("records a specific Project, by id", () => {
+    renderTodoPage(readyContext({ projects: [project] }), "/todo/projects/p1");
+
+    expect(readLastTodoView()).toEqual({ view: "project", projectId: "p1" });
+  });
+
+  it("records a specific Filter, by id", () => {
+    renderTodoPage(readyContext({ filters: [filter] }), "/todo/filters/f1");
+
+    expect(readLastTodoView()).toEqual({ view: "filter", filterId: "f1" });
+  });
+
+  it("never records Todo's Search screen", () => {
+    writeLastTodoView({ view: "today" });
+
+    renderTodoPage(readyContext(), "/todo/search");
+
+    expect(readLastTodoView()).toEqual({ view: "today" });
+  });
+
+  it("never records a Task detail address, even though a real view renders behind it", () => {
+    writeLastTodoView({ view: "today" });
+
+    renderTodoPage(inboxContext([task({ id: "a", content: "call mum" })]), "/todo/task/call-mum-a");
+
+    expect(readLastTodoView()).toEqual({ view: "today" });
+  });
+
+  it("resolves a bare /todo to nothing remembered as Inbox", () => {
+    renderTodoPage(readyContext(), "/todo");
+
+    expect(screen.getByRole("heading", { name: "Inbox" })).toBeInTheDocument();
+  });
+
+  it("resolves a bare /todo to a remembered Today", () => {
+    writeLastTodoView({ view: "today" });
+
+    renderTodoPage(readyContext(), "/todo");
+
+    expect(screen.getByRole("heading", { name: "Today" })).toBeInTheDocument();
+  });
+
+  it("resolves a bare /todo to a remembered Upcoming", () => {
+    writeLastTodoView({ view: "upcoming" });
+
+    renderTodoPage(readyContext(), "/todo");
+
+    expect(screen.getByRole("heading", { name: "Upcoming" })).toBeInTheDocument();
+  });
+
+  it("returns to a specific Project after leaving Todo and coming back", () => {
+    const away = renderTodoPage(readyContext({ projects: [project] }), "/todo/projects/p1");
+    expect(readLastTodoView()).toEqual({ view: "project", projectId: "p1" });
+    away.unmount();
+
+    renderTodoPage(readyContext({ projects: [project] }), "/todo");
+
+    expect(screen.getByRole("heading", { name: "Groceries" })).toBeInTheDocument();
+  });
+
+  it("returns to a specific Filter after leaving Todo and coming back", () => {
+    const away = renderTodoPage(readyContext({ filters: [filter] }), "/todo/filters/f1");
+    expect(readLastTodoView()).toEqual({ view: "filter", filterId: "f1" });
+    away.unmount();
+
+    renderTodoPage(readyContext({ filters: [filter] }), "/todo");
+
+    expect(screen.getByRole("heading", { name: "Due today" })).toBeInTheDocument();
+  });
+
+  it("falls back to Inbox when the remembered Project has since been deleted", () => {
+    writeLastTodoView({ view: "project", projectId: "gone" });
+
+    renderTodoPage(readyContext({ projects: [] }), "/todo");
+
+    expect(screen.getByRole("heading", { name: "Inbox" })).toBeInTheDocument();
+  });
+
+  it("falls back to Inbox when the remembered Filter has since been deleted", () => {
+    writeLastTodoView({ view: "filter", filterId: "gone" });
+
+    renderTodoPage(readyContext({ filters: [] }), "/todo");
+
+    expect(screen.getByRole("heading", { name: "Inbox" })).toBeInTheDocument();
   });
 });

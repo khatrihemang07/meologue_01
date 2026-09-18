@@ -105,13 +105,15 @@ export function TaskScheduleChips({
     <span
       className={cn("flex flex-wrap items-center gap-x-2 text-muted-foreground text-xs", className)}
     >
-      {/* `.text` only — this chip sits outside `[data-surface="todo"]`
-          (it renders inside an Entry/History row, not Todo itself), so it
-          never applies `describeTaskDate`'s own `--td-date-*` colour: that
-          token family only exists inside the Todo scope (index.css's own
-          header comment on `--td-*`), and painting Todoist's palette onto
-          a journal row here would be exactly the "leaked colour" that
-          scoping was built to prevent. The wording (issue #224) still
+      {/* `.text` only, deliberately — not `formatTaskDate`'s own
+          `describeTaskDate`-derived `colour` (a `--td-date-*` var()).
+          Issue #351 made every `--td-*` token a plain, global `:root`/
+          `.dark` value, so this chip COULD paint it now; it doesn't,
+          because overdue/today/upcoming colour-coding is a Todo list-
+          triage device, not something a checkbox reference inside an
+          Entry or a History day-block has ever shown, and picking it up
+          here would recolour a Task's mention in a Session for no reason
+          tied to reading that Session. The wording (issue #224) still
           flows through, since `formatTaskDate` is the one place either
           surface reads a Task's date words from. */}
       {showDate && task.date !== null && <span>{formatTaskDate(task.date).text}</span>}

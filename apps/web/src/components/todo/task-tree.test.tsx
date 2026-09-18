@@ -1,15 +1,15 @@
 import type { Task } from "@meologue/core";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { toast } from "sonner";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { toast } from "@/components/ui/toast";
 import { LONG_PRESS_MS } from "@/lib/swipe-recognizer";
 import { OPEN_SCHEDULE_EVENT } from "@/lib/todo-keymap";
 import { mouseDragLeft, swipeDown, swipeLeft } from "@/test/swipe";
 import { TaskTree } from "./task-tree";
 
-vi.mock("sonner", () => {
-  const toast = vi.fn() as unknown as typeof import("sonner").toast;
+vi.mock("@/components/ui/toast", () => {
+  const toast = vi.fn() as unknown as typeof import("@/components/ui/toast").toast;
   // biome-ignore lint/suspicious/noExplicitAny: attaching a mock method to a mock function — see todo-page.test.tsx's identical comment.
   (toast as any).error = vi.fn();
   return { toast };
@@ -632,8 +632,8 @@ describe("TaskTree", () => {
   // ROW-14 (parity-ledger.md), the user's 2026-09-13 decision to match
   // Todoist: a completed Task interleaves inline, at its own `orderKey`
   // position, in this same list — not in a separate collapsed disclosure.
-  describe("completed Tasks interleave inline (ROW-14)", () => {
-    it("renders between its own active neighbours, by orderKey, with aria-checked", async () => {
+  describe("completed Tasks render in a trailing block below the active list (issue #358)", () => {
+    it("renders after every active row, in a block of its own, with aria-checked", async () => {
       const a = task({ id: "a", content: "first", orderKey: "A" });
       const done = task({
         id: "mid",
@@ -647,15 +647,74 @@ describe("TaskTree", () => {
       await waitFor(() => expect(screen.getByText("last")).toBeInTheDocument());
       const rows = screen.getAllByRole("listitem");
       // The trailing drop zone (an `aria-hidden` `<li>`) carries no
-      // `listitem` role, so this reads as exactly the three real rows,
-      // in DOM order.
+      // `listitem` role, so this reads as exactly the three real rows —
+      // both active rows in `tasks`' own order, THEN the completed row,
+      // not interleaved among them by `orderKey` the way a pre-#358 build
+      // would have (`orderKey` "B" would have sorted it between "A" and
+      // "C").
       expect(rows.map((row) => row.textContent)).toEqual([
         expect.stringContaining("first"),
-        expect.stringContaining("middle, done"),
         expect.stringContaining("last"),
+        expect.stringContaining("middle, done"),
       ]);
       const checkbox = screen.getByRole("checkbox", { name: "Mark task as incomplete" });
       expect(checkbox).toHaveAttribute("aria-checked", "true");
+    });
+
+    it("renders in a separate <ul> from the active list, entirely outside measureRows' own container", async () => {
+      const a = task({ id: "a", content: "a", orderKey: "A" });
+      const done = task({
+        id: "mid",
+        content: "done",
+        orderKey: "B",
+        completedAt: "2026-01-01T00:00:00.000Z",
+      });
+      renderTree({ tasks: [a], completedTasks: [done] });
+
+      await waitFor(() => expect(screen.getByText("done")).toBeInTheDocument());
+      const activeRow = screen.getByText("a").closest("li");
+      const completedRow = screen.getByText("done").closest("li");
+      expect(completedRow?.parentElement).not.toBe(activeRow?.parentElement);
+
+      // The identical selector `measureRows` itself runs, scoped to the
+      // active list's own container — it can never find the completed row
+      // at all now, because that row isn't a child of this `<ul>` to begin
+      // with (task-tree.tsx's own `measureRows` doc comment).
+      const activeList = activeRow?.parentElement;
+      const measured = activeList
+        ? Array.from(activeList.querySelectorAll(":scope > li[data-task-id]"))
+        : [];
+      expect(measured.map((el) => el.getAttribute("data-task-id"))).toEqual(["a"]);
+    });
+
+    it("shows a Load-more control only once completed Tasks exceed one page, and loading more reveals the rest", async () => {
+      const completed = Array.from({ length: 11 }, (_, index) =>
+        task({
+          id: `done-${index}`,
+          content: `done ${index}`,
+          completedAt: "2026-01-01T00:00:00.000Z",
+        }),
+      );
+      renderTree({ tasks: [], completedTasks: completed });
+
+      // 10 of 11 on screen (COMPLETED_TASKS_PAGE_SIZE), one remaining.
+      await waitFor(() => expect(screen.getByText("done 0")).toBeInTheDocument());
+      expect(screen.queryAllByText(/^done \d+$/)).toHaveLength(10);
+      const loadMore = screen.getByRole("button", { name: "+1 completed task" });
+
+      fireEvent.click(loadMore);
+
+      expect(await screen.findByText("done 10")).toBeInTheDocument();
+      expect(screen.queryAllByText(/^done \d+$/)).toHaveLength(11);
+      expect(screen.queryByRole("button", { name: /completed task/ })).toBeNull();
+    });
+
+    it("shows no Load-more control at all when every completed Task already fits on one page", async () => {
+      const done = task({ id: "a", content: "done", completedAt: "2026-01-01T00:00:00.000Z" });
+      renderTree({ tasks: [], completedTasks: [done] });
+
+      await waitFor(() => expect(screen.getByText("done")).toBeInTheDocument());
+      expect(screen.queryByRole("button", { name: /completed task/ })).toBeNull();
     });
 
     it("renders even when every active Task is gone — a merely-completed list is not empty", async () => {
@@ -715,41 +774,20 @@ describe("TaskTree", () => {
       expect(screen.getByRole("button", { name: "done" })).toHaveClass("completed-task-text");
     });
 
-    it("carries no drag handle and is excluded from measureRows' own selector", async () => {
-      // `task-tree.tsx`'s own `measureRows` reads
-      // `:scope > li[data-task-id]:not([data-completed-task])` — a
-      // completed row has to fail that selector, or an active drag's own
-      // index space (computed against the active-only `tasks` array)
-      // desyncs from the rects it's measured against (this file's own
-      // header comment on `TaskTreeProps.completedTasks`). Asserted
-      // directly against the attribute contract rather than through a
-      // simulated drag: `dropIndexForPointer`'s own banding can land on
-      // the same target rect whether or not the exclusion holds whenever
-      // a completed row's neighbour is what a drag would have hit anyway,
-      // which makes a black-box drag a weak proof of this specific
-      // exclusion — the attribute itself is what the selector actually
-      // reads.
-      const a = task({ id: "a", content: "a", orderKey: "A" });
-      const done = task({
-        id: "mid",
-        content: "done",
-        orderKey: "B",
-        completedAt: "2026-01-01T00:00:00.000Z",
-      });
-      renderTree({ tasks: [a], completedTasks: [done] });
+    it("carries no drag handle", async () => {
+      // A completed row is not draggable at all (this file's own header
+      // comment on `TaskTreeProps.completedTasks`) — asserted directly
+      // against the markup rather than through a simulated drag, the same
+      // "the attribute itself is what matters" reasoning the preceding
+      // test uses for `measureRows`' own selector.
+      const done = task({ id: "a", content: "done", completedAt: "2026-01-01T00:00:00.000Z" });
+      renderTree({ tasks: [], completedTasks: [done] });
 
       await waitFor(() => expect(screen.getByText("done")).toBeInTheDocument());
       const completedRow = screen.getByText("done").closest("li");
       expect(completedRow).toHaveAttribute("data-completed-task", "true");
-      expect(completedRow).toHaveAttribute("data-task-id", "mid");
+      expect(completedRow).toHaveAttribute("data-task-id", "a");
       expect(completedRow?.querySelector('[data-testid="task-drag-handle"]')).toBeNull();
-      // The identical selector `measureRows` itself runs, scoped to the
-      // shared `<ul>` both rows are direct children of.
-      const list = completedRow?.parentElement;
-      const measured = list
-        ? Array.from(list.querySelectorAll(":scope > li[data-task-id]:not([data-completed-task])"))
-        : [];
-      expect(measured.map((el) => el.getAttribute("data-task-id"))).toEqual(["a"]);
     });
   });
 

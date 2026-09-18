@@ -1,5 +1,5 @@
 import { registerSW } from "virtual:pwa-register";
-import { toast } from "sonner";
+import { toast } from "@/components/ui/toast";
 
 /**
  * The web implementation of the register-service-worker seam (ticket 45).

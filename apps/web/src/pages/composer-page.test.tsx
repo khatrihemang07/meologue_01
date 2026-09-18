@@ -4,11 +4,34 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { useState } from "react";
 import { MemoryRouter, Outlet, Route, Routes, useNavigate, useSearchParams } from "react-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { toast } from "@/components/ui/toast";
 import { formatTaskReference } from "@/lib/inline-markdown";
 import { useSettingsStore } from "@/lib/settings";
 import type { EntryStoreOutletContext } from "@/pages/entry-store-layout";
 import { swipeLeft } from "@/test/swipe";
 import { ComposerPage } from "./composer-page";
+
+// Issue #355: the Composer's own completion toast now goes through the
+// identical shared `use-completion-toast.tsx` machinery `todo-page.tsx`
+// uses — `toast.custom()`, not the plain `toast(message, {...})` this page
+// used before — so this file's own mock mirrors `todo-page.test.tsx`'s
+// mock verbatim (that file's own header comment on it has the full
+// reasoning: sonner 2.0.8 exposes no `role` option, `.custom`'s mock
+// returns an incrementing id so a test can call the captured `jsx` factory
+// itself to render the real `CompletionToastBody`, and `.dismiss` records
+// the id closed either by the toast's own Undo button or by a later
+// completion replacing it).
+vi.mock("@/components/ui/toast", () => {
+  const toast = vi.fn() as unknown as typeof import("@/components/ui/toast").toast;
+  // biome-ignore lint/suspicious/noExplicitAny: attaching mock methods to a mock function, the same shape sonner's own `toast` carries in production (a callable object with `.error`/`.custom`/`.dismiss` etc as properties).
+  (toast as any).error = vi.fn();
+  let nextCustomToastId = 1;
+  // biome-ignore lint/suspicious/noExplicitAny: see above.
+  (toast as any).custom = vi.fn(() => `custom-toast-${nextCustomToastId++}`);
+  // biome-ignore lint/suspicious/noExplicitAny: see above.
+  (toast as any).dismiss = vi.fn();
+  return { toast };
+});
 
 /**
  * Stands in for the real `TaskTitleEditor` — mirrors todo-page.test.tsx's
@@ -181,6 +204,10 @@ describe("ComposerPage", () => {
     localStorage.clear();
     sessionStorage.clear();
     useSettingsStore.setState({ theme: "system", serverUrl: "" });
+    vi.mocked(toast).mockReset();
+    vi.mocked(toast.error).mockReset();
+    vi.mocked(toast.custom).mockClear();
+    vi.mocked(toast.dismiss).mockClear();
   });
 
   afterEach(() => {
@@ -1807,42 +1834,6 @@ describe("ComposerPage", () => {
       stillOnComposer();
     });
 
-    // The overlay is the real `TaskDetailView`, and every `--td-*` token it
-    // paints with lives in `index.css`'s `[data-surface="todo"]` block. That
-    // attribute used to be claimed by the route alone, which is false on
-    // `/composer` — so this overlay rendered with the tokens unresolved.
-    // Measured on the device before the fix: `--td-recognition-background`,
-    // `--td-priority-picker-1` and `--td-composer-background` all read unset
-    // here, which is why a recognised date painted no chip and the P1-P4
-    // swatches all came out grey.
-    //
-    // jsdom cannot see any of that — it has no layout and resolves no custom
-    // property — so this asserts the one thing it CAN see and the one thing
-    // the whole mechanism turns on: the attribute's presence on
-    // `documentElement`. That is deliberately the weakest honest assertion
-    // available here rather than a colour check that would pass either way.
-    it("claims the Todo token scope while the overlay is open, and releases it on close", async () => {
-      renderComposerPage({ ...readyContext, tasks: [taskFixture()] }, `/?task=${taskId}`);
-
-      expect(screen.getByRole("dialog")).toBeInTheDocument();
-      expect(document.documentElement.dataset.surface).toBe("todo");
-
-      // The same close gesture the sibling test above uses.
-      fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" });
-
-      await waitFor(() => {
-        expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
-      });
-      expect(document.documentElement.dataset.surface).toBeUndefined();
-    });
-
-    it("does not claim the Todo token scope with no overlay open", () => {
-      renderComposerPage(readyContext, "/");
-
-      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
-      expect(document.documentElement.dataset.surface).toBeUndefined();
-    });
-
     it("closing the overlay (Escape — task-detail-view.test.tsx's own established close gesture) removes ?task= and returns to the Composer", () => {
       renderComposerPage({
         ...readyContext,
@@ -1902,6 +1893,142 @@ describe("ComposerPage", () => {
       fireEvent.click(screen.getByRole("checkbox", { name: 'Complete "buy milk"' }));
 
       expect(completeTask).toHaveBeenCalledWith(taskId);
+    });
+
+    // Issue #355: this page's own completion toast used to be a plain
+    // `toast(message, { action: {...} })` — no `role`, sonner's
+    // unconfigured ~4s duration, and no registration `Z`/`⌘Z` could reach.
+    // It now goes through the identical shared `use-completion-toast.tsx`
+    // machinery `todo-page.tsx` uses, asserted the same way
+    // `todo-page.test.tsx`'s own "completes a Task and offers an Undo
+    // toast wired to uncompleteTask" test asserts it there: against the
+    // real `CompletionToastBody` element the `jsx` callback produces, not
+    // against `toast`'s own call args. Issue #357 moved the announcement
+    // itself off this body and onto `components/ui/toast.tsx`'s own
+    // `Toaster` (Radix's native accessible announcer) — `toast.test.tsx`
+    // covers that against the real `Toaster`, so rendering the bare `jsx`
+    // factory standalone here no longer has a `role="alert"` element to
+    // query by.
+    it("completing a Task from the overlay raises an announced Undo toast wired to uncompleteTask", () => {
+      const completeTask = vi.fn();
+      const uncompleteTask = vi.fn();
+      renderComposerPage({
+        ...readyContext,
+        entries: entryOnTheSameDay,
+        tasks: [taskFixture({ date: "2026-08-28" })],
+        completeTask,
+        uncompleteTask,
+      });
+
+      fireEvent.click(screen.getByRole("button", { name: "buy milk" }));
+      fireEvent.click(screen.getByRole("checkbox", { name: 'Complete "buy milk"' }));
+
+      expect(completeTask).toHaveBeenCalledWith(taskId);
+      expect(toast.custom).toHaveBeenCalledWith(
+        expect.any(Function),
+        // CMT-05: the same measured 10s `todo-page.tsx`'s own completion
+        // toast carries — not sonner's unconfigured default this page's
+        // toast used before #355.
+        expect.objectContaining({ duration: 10_000 }),
+      );
+
+      const customCall = vi.mocked(toast.custom).mock.calls[0];
+      if (!customCall) throw new Error("toast.custom was not called");
+      const [jsxFactory] = customCall;
+      render(jsxFactory("toast-a"));
+
+      expect(screen.getByText('Completed "buy milk"')).toBeInTheDocument();
+
+      fireEvent.click(screen.getByRole("button", { name: "Undo" }));
+      expect(uncompleteTask).toHaveBeenCalledWith(taskId);
+      expect(toast.dismiss).toHaveBeenCalledWith("toast-a");
+    });
+
+    // Issue #355 — the defect this ticket closes: completing a second Task
+    // while the first toast is still showing used to leave two toasts on
+    // screen (neither `toast.custom()` call site ever dismissed the
+    // other), reachable by keyboard undo only for the newer one. This
+    // asserts the fix directly, against the shared helper's own call
+    // pattern: a second `raise` must dismiss whichever toast the first one
+    // is still showing before raising its own.
+    it("completing a second Task while the first toast is still showing replaces it, rather than stacking", () => {
+      const completeTask = vi.fn();
+      renderComposerPage({
+        ...readyContext,
+        entries: entryOnTheSameDay,
+        tasks: [taskFixture({ date: "2026-08-28" })],
+        completeTask,
+      });
+
+      fireEvent.click(screen.getByRole("button", { name: "buy milk" }));
+      const checkbox = screen.getByRole("checkbox", { name: 'Complete "buy milk"' });
+      fireEvent.click(checkbox);
+      fireEvent.click(checkbox);
+
+      expect(toast.custom).toHaveBeenCalledTimes(2);
+      const firstToastId = vi.mocked(toast.custom).mock.results[0]?.value;
+      expect(toast.dismiss).toHaveBeenCalledWith(firstToastId);
+    });
+
+    // Issue #355 — `Z`/`⌘Z` reach the Composer's own completion toast now
+    // too, through the identical `pendingUndoRef` mechanism
+    // `todo-page.test.tsx`'s own "keyboard undo of a completion (CMT-05)"
+    // tests cover there. This page carries no `use-todo-keymap.ts`-style
+    // table of its own (its own `useCompletionUndoShortcut` mount, above,
+    // is the standalone chord match that exists because of that), so
+    // these are the first tests of that reachability on this surface.
+    describe("keyboard undo of the completion toast (issue #355)", () => {
+      it("undoes the most recent completion on 'z'", () => {
+        const completeTask = vi.fn();
+        const uncompleteTask = vi.fn();
+        renderComposerPage({
+          ...readyContext,
+          entries: entryOnTheSameDay,
+          tasks: [taskFixture({ date: "2026-08-28" })],
+          completeTask,
+          uncompleteTask,
+        });
+
+        fireEvent.click(screen.getByRole("button", { name: "buy milk" }));
+        fireEvent.click(screen.getByRole("checkbox", { name: 'Complete "buy milk"' }));
+
+        fireEvent.keyDown(document, { key: "z" });
+
+        expect(uncompleteTask).toHaveBeenCalledWith(taskId);
+      });
+
+      it("undoes the most recent completion on Cmd+Z", () => {
+        const completeTask = vi.fn();
+        const uncompleteTask = vi.fn();
+        renderComposerPage({
+          ...readyContext,
+          entries: entryOnTheSameDay,
+          tasks: [taskFixture({ date: "2026-08-28" })],
+          completeTask,
+          uncompleteTask,
+        });
+
+        fireEvent.click(screen.getByRole("button", { name: "buy milk" }));
+        fireEvent.click(screen.getByRole("checkbox", { name: 'Complete "buy milk"' }));
+
+        fireEvent.keyDown(document, { key: "z", metaKey: true });
+
+        expect(uncompleteTask).toHaveBeenCalledWith(taskId);
+      });
+
+      it("does nothing on 'z' or Cmd+Z when nothing has been completed", () => {
+        const uncompleteTask = vi.fn();
+        renderComposerPage({
+          ...readyContext,
+          tasks: [taskFixture()],
+          uncompleteTask,
+        });
+
+        fireEvent.keyDown(document, { key: "z" });
+        fireEvent.keyDown(document, { key: "z", metaKey: true });
+
+        expect(uncompleteTask).not.toHaveBeenCalled();
+      });
     });
   });
 });

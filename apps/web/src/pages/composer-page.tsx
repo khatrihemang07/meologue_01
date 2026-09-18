@@ -1,13 +1,15 @@
 import type { Entry, Task } from "@meologue/core";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useLocation, useNavigate, useSearchParams } from "react-router";
-import { toast } from "sonner";
 import { BackToChats } from "@/components/back-to-chats";
 import { Composer, type ComposerHandle } from "@/components/composer";
 import { History, type HistorySeekTarget } from "@/components/history";
 import { Shell } from "@/components/shell";
 import { TaskDetailView } from "@/components/todo/task-detail-view";
 import { TaskScheduleSheet } from "@/components/todo/task-schedule-sheet";
+import { toast } from "@/components/ui/toast";
+import { useCompletionToast } from "@/hooks/use-completion-toast";
+import { useCompletionUndoShortcut } from "@/hooks/use-completion-undo-shortcut";
 import { useHistorySearch } from "@/hooks/use-history-search";
 import { commentsForTask } from "@/lib/comment-counts";
 import { localDayKey } from "@/lib/local-day-key";
@@ -15,7 +17,6 @@ import type { ComposerPromotionContext } from "@/lib/promote-tasks";
 import { useSettingsStore, useSyncEnabled } from "@/lib/settings";
 import { taskDetailPath } from "@/lib/task-detail-route";
 import { commitTaskTitle } from "@/lib/task-title-commit";
-import { useTodoSurface } from "@/lib/todo-surface";
 import { useEntryStore } from "@/pages/entry-store-layout";
 
 // A date Reference's own destination (issue #142): `?d=YYYY-MM-DD`, a query
@@ -294,17 +295,17 @@ export function ComposerPage() {
       : null;
 
   // The Task detail overlay below is the real `TaskDetailView`, and every
-  // `--td-*` token it paints with lives in `index.css`'s `[data-surface="todo"]`
-  // block. That attribute used to be claimed by the route alone
-  // (`chat-shell-layout.tsx`), which is correctly false here — so this overlay
-  // rendered with the tokens unresolved: measured on the device, on `/composer`
-  // `--td-recognition-background`, `--td-priority-picker-1` and
-  // `--td-composer-background` all read `(UNSET)`. A recognised date painted no
-  // chip and the P1-P4 swatches all came out grey, because an unresolved
-  // `var(--td-…)` is an invalid value rather than a near-miss. Claiming the
-  // scope while the overlay is open is the fix; `todo-surface.ts`'s own header
-  // has the reason the claims are counted rather than written directly.
-  useTodoSurface(openTask !== null);
+  // `--td-*` token it paints with used to live inside `index.css`'s
+  // `[data-surface="todo"]` scope, claimed here for as long as this overlay
+  // was open (`chat-shell-layout.tsx` alone was not enough: it only knows
+  // the route, which is correctly "not Todo" on `/composer`, and an
+  // unresolved `var(--td-…)` is an invalid value rather than a near-miss —
+  // measured on the device, `--td-recognition-background`,
+  // `--td-priority-picker-1` and `--td-composer-background` all read
+  // `(UNSET)` before that claim existed). ADR 0085 (superseding ADR 0069)
+  // deletes the scope: every `--td-*` token is a plain `:root`/`.dark`
+  // value now, so it resolves here — or anywhere else — with no claim to
+  // hold or release.
 
   // Mirrors todo-page.tsx's own identical `datesWithTasks` — see that
   // file's doc comment for the full reasoning (TaskSchedulePopover's own
@@ -355,6 +356,20 @@ export function ComposerPage() {
   // scheduled" is never a separate question from "which Task is open."
   const [schedulingOpen, setSchedulingOpen] = useState(false);
 
+  // Issue #355: the identical shared completion-toast machinery
+  // `todo-page.tsx` uses (`use-completion-toast.tsx`'s own header comment),
+  // not a second, page-local implementation. Before this ticket, this
+  // page's own `handleCompleteTask`/`handleCompleteForeverTask` raised a
+  // plain `toast(message, { action: {...} })` — no `role="alert"`, sonner's
+  // unconfigured ~4s duration rather than the measured 10s, and no
+  // `pendingUndoRef` registration, so `Z`/`⌘Z` could never reach it. This
+  // page carries no `use-todo-keymap.ts`-style table of its own to give
+  // that binding a home, so `useCompletionUndoShortcut` mounts the
+  // identical `Z`/`⌘Z` chord match standalone, reaching the same
+  // `fireUndo` `todo-page.tsx`'s own keymap option calls.
+  const completionToast = useCompletionToast();
+  useCompletionUndoShortcut(completionToast.fireUndo);
+
   // Completes a Task from outside Todo's own row (the Day block, or the
   // overlay's own checkbox) — the identical `dateString` branch
   // todo-page.tsx's `handleComplete` already makes, reused rather than
@@ -379,9 +394,7 @@ export function ComposerPage() {
       return;
     }
     completeTask(task.id);
-    toast(`Completed "${task.content}"`, {
-      action: { label: "Undo", onClick: () => uncompleteTask(task.id) },
-    });
+    completionToast.raise(`Completed "${task.content}"`, () => uncompleteTask(task.id));
   }
 
   // Issue #302: the Task detail overlay's own overflow menu now reaches
@@ -391,16 +404,14 @@ export function ComposerPage() {
   // below is the shared `TaskDetailView`, not a stripped-down copy of it.
   // Wording matches `todo-page.tsx`'s own `handleCompleteForever` toast
   // verbatim; the Undo action mirrors `handleCompleteTask`'s own pair just
-  // above rather than that file's own `raiseCompletionToast` machinery
-  // (`CompletionToastBody`/`pendingUndoRef`), which exists to let a second
-  // completion toast replace a still-open first one — a scenario this
-  // page's own simpler, one-toast-at-a-time surface has never needed to
-  // solve.
+  // above, through the identical shared `completionToast` (issue #355) —
+  // this page no longer keeps a separate, simpler one-toast-at-a-time
+  // implementation of its own.
   function handleCompleteForeverTask(task: Task) {
     completeForeverTask(task.id);
-    toast("1 task completed — the recurrence has ended", {
-      action: { label: "Undo", onClick: () => uncompleteTask(task.id) },
-    });
+    completionToast.raise("1 task completed — the recurrence has ended", () =>
+      uncompleteTask(task.id),
+    );
   }
 
   // Issue #302: the Task detail overlay's own overflow menu — the

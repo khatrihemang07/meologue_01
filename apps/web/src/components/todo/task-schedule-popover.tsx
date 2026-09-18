@@ -1179,15 +1179,7 @@ export function TaskSchedulePopover({
       <>
         <Sheet open={open} onOpenChange={setOpen}>
           <SheetTrigger asChild>{trigger}</SheetTrigger>
-          <SheetContent
-            data-testid="scheduler-view"
-            // Same reason as the popover's own copy below: this content is
-            // portalled to `document.body`, outside `chat-shell-layout.tsx`'s
-            // `data-surface="todo"` div, so without re-declaring it here every
-            // `--td-*` token resolves to nothing.
-            data-surface="todo"
-            className="gap-2 p-3 text-sm"
-          >
+          <SheetContent data-testid="scheduler-view" className="gap-2 p-3 text-sm">
             {/* Radix's Dialog wants a title, and Todoist Android's own Date
                 sheet has a visible one — so this is an accessibility
                 requirement and a parity row satisfied by the same element. */}
@@ -1227,19 +1219,6 @@ export function TaskSchedulePopover({
       <PopoverTrigger asChild>{trigger}</PopoverTrigger>
       <PopoverContent
         data-testid="scheduler-view"
-        // Radix's `Popover.Portal` renders to `document.body` by default —
-        // a sibling of `chat-shell-layout.tsx`'s own `data-surface="todo"`
-        // div, not a descendant of it, so every `--td-*` token (and the
-        // overridden `--muted`/`--border`/etc. base ones) this component
-        // reads would otherwise resolve to nothing: found live, in a real
-        // browser, as an entirely unstyled card (no background, no
-        // border, no radius, no shadow) sitting at the viewport's origin
-        // — none of it visible from a jsdom test, which never lays
-        // anything out or portals anywhere real. Re-declaring the
-        // attribute here re-establishes the scope directly on the
-        // portaled node itself, which is all index.css's attribute
-        // selector ever required in the first place.
-        data-surface="todo"
         className="flex flex-col gap-2 p-2 text-sm"
         style={{
           width: "var(--td-popover-width)",

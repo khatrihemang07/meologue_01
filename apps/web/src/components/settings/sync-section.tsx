@@ -1,6 +1,5 @@
 import type { WireConfigPatch, WireConfigResponse } from "@meologue/core";
 import { useEffect, useState } from "react";
-import { toast } from "sonner";
 import { DeviceGroup } from "@/components/settings/device-group";
 import {
   describeConfigFailure,
@@ -13,6 +12,7 @@ import {
 import { SettingsSection } from "@/components/settings/settings-section";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { toast } from "@/components/ui/toast";
 import type { ConfigResult } from "@/lib/config-transport";
 import { describeServerCheck } from "@/lib/describe-server-check";
 import { checkServerUrl, type ServerCheckResult } from "@/lib/server-check";

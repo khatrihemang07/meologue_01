@@ -1,6 +1,6 @@
-import type { Action } from "sonner";
-import { toast } from "sonner";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { Action } from "@/components/ui/toast";
+import { toast } from "@/components/ui/toast";
 
 const { registerSWMock, updateSWMock } = vi.hoisted(() => ({
   registerSWMock: vi.fn(),
@@ -11,7 +11,7 @@ const { registerSWMock, updateSWMock } = vi.hoisted(() => ({
 // resolve for real, so this test exercises only the prompt-on-update
 // behaviour this file adds, not the plugin's own registration mechanics.
 vi.mock("virtual:pwa-register", () => ({ registerSW: registerSWMock }));
-vi.mock("sonner", () => ({ toast: vi.fn() }));
+vi.mock("@/components/ui/toast", () => ({ toast: vi.fn() }));
 
 /** The `onNeedRefresh` callback registerServiceWorker() passed to registerSW. */
 function onNeedRefreshFromLastCall(): () => void {

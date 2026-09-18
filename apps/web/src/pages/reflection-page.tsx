@@ -3,7 +3,6 @@ import { PROTOCOL_VERSION } from "@meologue/core";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useLocation, useNavigate, useParams } from "react-router";
-import { toast } from "sonner";
 import { BackToChats } from "@/components/back-to-chats";
 import { Bubble } from "@/components/entry-bubble";
 import { GroundingDisclosure } from "@/components/grounding-disclosure";
@@ -12,6 +11,7 @@ import { QuestionComposer } from "@/components/question-composer";
 import { NewSessionLink, SessionsLink } from "@/components/reflect-actions";
 import { ServerUnreachableBanner } from "@/components/server-unreachable-banner";
 import { Shell } from "@/components/shell";
+import { toast } from "@/components/ui/toast";
 import {
   type ConversationTurn,
   conversationTurnFromWire,
