@@ -7,19 +7,19 @@ its very first binding in this Composer (`indent.run`, `sinkListItem`) and, in t
 recorded the reasoning this ADR now revisits: "a Composer that swallowed Tab unconditionally would
 be a keyboard trap (WCAG 2.1.2), unable to hand focus back to the rest of the page at all from
 inside a list." That reasoning is not wrong here — it is exactly why Shift-Tab, not Tab, is where
-this ADR puts the exit. Depends on [0072](0072-upnote-is-the-specification-per-input-modality.md),
-which names UpNote's own observed behaviour the specification "only within the input modality it
-was captured on" and reserves a category for a behaviour this repo diverges from on the record
-rather than copies: this ADR is the first divergence in that category that is not about UpNote
-losing content, and it extends 0072's own reasoning to say why a modality difference — not a
-destructiveness difference — is grounds enough on its own. Issue #233 is the ticket; the other half
+this ADR puts the exit. Builds on a since-retired ADR's distinction, which named UpNote's own
+observed behaviour the specification "only within the input modality it was captured on" and
+reserved a category for a behaviour this repo diverges from on the record rather than copies: this
+ADR is the first divergence in that category that is not about UpNote losing content, and it
+extends that reasoning to say why a modality difference — not a destructiveness difference — is
+grounds enough on its own. Issue #233 is the ticket; the other half
 of the same ticket is [0071](0071-a-lone-first-item-indents-under-an-empty-parent-item.md), which
 fixes indenting itself rather than what happens once indenting has nothing left to do.
 
 ## Context
 
-`meologue-reference/upnote-macos-detail.md`'s Gap sweep Group B6 and `meologue-reference/upnote-editor-behaviour.md`'s
-own pre-existing Tab/Shift-Tab table agree on what UpNote's Tab does outside a list: it inserts a
+A recorded macOS Gap sweep (Group B6) and a pre-existing Tab/Shift-Tab table agree
+on what UpNote's Tab does outside a list: it inserts a
 literal U+2003 EM SPACE at the caret and keeps focus inside the note — confirmed live, via a
 `System Events` frontmost-process check taken immediately after the keypress, that focus never once
 left UpNote's own window. Group B3 confirms the mirror image for Shift-Tab on the same plain prose:
@@ -78,7 +78,7 @@ keystroke reaches the browser's own backward focus navigation exactly the way Ta
 case before this ticket.
 
 **This is a deliberate divergence from UpNote, not an oversight, and it sits in a fourth category
-0072 does not yet name.** The three divergences 0072 already records — a multi-block Tab's own lost
+nothing had named.** The three divergences already on record — a multi-block Tab's own lost
 text, the toolbar un-list collapsing three items to one, the alternating un-nest — are all cases
 where copying UpNote would LOSE something the person typed. Nothing here is lost: the document under
 Shift-Tab's fallback is byte-for-byte the same either way, exactly as UpNote's own B3 finding already
@@ -86,7 +86,7 @@ is. What differs is not content, it is REACHABILITY. UpNote's Tab never had to d
 key because UpNote's own editor is the whole application surface — there is nothing after it in any
 tab order for a keyboard user to reach by leaving. This Composer is an `<input>`-shaped surface
 embedded in a page that has a Format toolbar and a Send button positioned after it in DOM order,
-which UpNote's own note editor was never built to be. 0072's own "UpNote is the specification, but
+which UpNote's own note editor was never built to be. The rule that UpNote is the specification "but
 only within the input modality it was captured on" already draws exactly this kind of boundary for
 macOS versus Android; this ADR draws the same kind of boundary again, one level up — between "a
 dedicated note-taking application" and "one field inside a larger page" — and finds UpNote's own
@@ -136,7 +136,7 @@ bare prose, and this ADR removes that path in favour of matching UpNote's own Ta
 about reaching the REST of the page's own navigation is harder than before — Shift-Tab still reaches
 it in one press from a caret with no em space to undo, the overwhelmingly common case for anyone who
 has not yet pressed Tab in that session — but a reader who deliberately wants the OLD one-press
-forward path no longer has it, traded for parity with UpNote's own keystroke.
+forward path no longer has it, traded for agreement with UpNote's own keystroke.
 
 **`insertEmSpace`/`outdentEmSpaceOrExit` are the second and third commands in this codebase, after
 `insertSoftBreak` (0066), that dispatch a plain document-editing transaction specifically so a

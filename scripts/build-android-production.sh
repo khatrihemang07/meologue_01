@@ -31,7 +31,11 @@ cd "$(dirname "$0")/.."
 APK=apps/android/app/build/outputs/apk/release/app-release.apk
 APP_ID=com.meologue.app
 OUT_DIR=build/production
-COLLECTED=build/production/meologue.apk
+# Named for the version so the newest build is identifiable at a glance and
+# superseded ones can be archived (nb_archive_superseded). Same source as
+# scripts/publish-release.sh's versionName check.
+VERSION_NAME=$(sed -n 's/.*versionName "\([^"]*\)".*/\1/p' apps/android/app/build.gradle | head -1 || true)
+COLLECTED=build/production/meologue_${VERSION_NAME}.apk
 SERVER_PORT=41207
 
 _usage() {
@@ -66,6 +70,10 @@ pnpm --filter @meologue/web build:android
 nb_say "cap sync android"
 pnpm --filter @meologue/web exec cap sync android
 
+# Gradle's daemon (-Xmx1536m) otherwise outlives the build and sits on RAM this
+# machine does not have. The trap fires on failure too, not just success.
+trap '(cd apps/android && ./gradlew --stop) >/dev/null 2>&1 || true' EXIT
+
 nb_say "gradlew assembleRelease"
 (cd apps/android && ./gradlew assembleRelease)
 
@@ -74,8 +82,9 @@ nb_report_artifact "$APK" applicationId "$APP_ID"
 nb_say "collecting into $OUT_DIR/"
 # Gradle names every APK after its build type (app-release.apk,
 # app-sandbox.apk), which says nothing about the app once the file is
-# out of its build directory. Rename on the way out.
-nb_publish "$APK" "$OUT_DIR" "meologue.apk"
+# out of its build directory. Rename on the way out, to the versionName.
+nb_publish "$APK" "$OUT_DIR" "$(basename "$COLLECTED")"
+nb_archive_superseded "$OUT_DIR" "$COLLECTED" 'meologue_*.apk'
 
 cat <<NEXT
 

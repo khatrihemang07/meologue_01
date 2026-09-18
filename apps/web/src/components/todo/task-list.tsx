@@ -49,7 +49,6 @@ export interface TaskListProps {
   sections: Section[];
   /** The Project this list belongs to, or `null` for Inbox — task-tree.tsx's own `TaskTree.projectId` doc comment on why keyboard outdent needs it. */
   projectId: Project["id"] | null;
-  /** Shown in place of every row when both `tasks` AND every top-level completed Task in this scope are empty — the caller's own words, since Inbox's and a Project's empty states read differently (todo-page.tsx). ROW-14 widened this from "`tasks` alone" so a list holding only completed rows doesn't read as empty (this ticket's own report). */
   emptyMessage: string;
   /** Passed straight through to every `TaskTree`/`TaskRow` this list renders — see `TaskDetailActions`'s own doc comment (task-row.tsx). */
   detailActions: TaskDetailActions;
@@ -86,12 +85,6 @@ export function TaskList({
   countTaskChildren,
   listTasksInProject,
 }: TaskListProps) {
-  // Issue #358: off (the default, matching Todoist's own measured default —
-  // ROW-14, parity-ledger.md) means a completed Task never reaches
-  // `TaskTree` at all, from this level down — the same posture Todoist
-  // itself takes ("the row disappears entirely and immediately," not
-  // merely styled differently), rather than fetching/filtering the list
-  // and then hiding the result with CSS.
   const completedTasksVisible = useSettingsStore((state) => state.completedTasksVisible);
 
   // Narrowed to THIS scope's own top-level rows — `completedTasks` itself
@@ -107,14 +100,6 @@ export function TaskList({
     : [];
 
   if (tasks.length === 0 && topLevelCompletedTasks.length === 0) {
-    // A real state, not a blank panel — todo-page.tsx's own pre-#171
-    // Inbox comment on this exact rule, extended by ROW-14's original fix
-    // to cover a Project with Sections but nothing filed in any of them
-    // yet: a scope holding only completed Tasks falls through to render
-    // them, rather than reading as empty — but only once
-    // `completedTasksVisible` is on; off, `topLevelCompletedTasks` is
-    // already empty above, so a scope with only (hidden) completed Tasks
-    // correctly reads as empty again, matching Todoist's own off-state.
     return <p className="px-3 py-6 text-center text-muted-foreground text-sm">{emptyMessage}</p>;
   }
 

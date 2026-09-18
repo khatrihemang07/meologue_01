@@ -103,34 +103,6 @@ describe("buildTitlePlugins — history()", () => {
   });
 });
 
-// The `#`/`@` autocomplete popup (issue #226's own second half,
-// `quick-add-autocomplete.ts`'s header comment carries the full Todoist
-// reference). Mounts a real `EditorView` with the REAL `buildTitlePlugins`
-// list — the identical "build the actual thing, not a hand-rolled stand-in"
-// posture `todo-quick-add-recognition.test.ts`'s own QA-06 suite already
-// takes, and for the identical reason: this suite needs `commitKeymap` and
-// the autocomplete plugin fighting over the same `Enter`/`Escape` keys to
-// prove the ORDERING in `buildTitlePlugins` (this file's own comment on
-// why the autocomplete plugin sits ahead of `commitKeymap`), not just that
-// the plugin's own `handleKeyDown` works in isolation.
-//
-// Typing itself is simulated with a plain `insertText` transaction (the
-// identical technique this file's own "history()" suite above already
-// uses for "a bare `insertText` transaction standing in for a keystroke")
-// — nothing about detecting a live `#`/`@` trigger depends on how the text
-// arrived. Only the KEY events (arrows, Enter, Tab, Escape) need a real
-// `dispatchEvent` on `view.dom`, the same reason `todo-quick-add-
-// recognition.test.ts`'s own `backspace()` helper dispatches one for
-// Backspace.
-//
-// **What this suite cannot prove — said here rather than left implicit:**
-// jsdom implements no layout at all, so `EditorView.coordsAtPos` and
-// `getBoundingClientRect` both return an all-zero rect; the popup's own
-// on-screen anchoring (this file's own `popupStyle` in `task-title-
-// editor.tsx`) is therefore untested here and can only be verified in a
-// real browser (`apps/e2e`). This suite proves the STATE machine — which
-// options, which is active, what gets inserted, which keys are consumed —
-// never where the box is drawn.
 describe("TaskTitleEditor — #/@ autocomplete popup", () => {
   let view: EditorView | undefined;
   let host: HTMLDivElement | undefined;
@@ -241,8 +213,6 @@ describe("TaskTitleEditor — #/@ autocomplete popup", () => {
 
     const enterEvent = pressKey(editorView, "Enter");
     expect(enterEvent.defaultPrevented).toBe(true);
-    // The recorded spacing (quick-add.md: "e.g. #Inbox ") — sigil, the
-    // canonical name (not whatever was typed), one trailing space.
     expect(editorView.state.doc.textContent).toBe("#Work ");
     expect(quickAddAutocompletePluginKey.getState(editorView.state)).toBeNull();
   });

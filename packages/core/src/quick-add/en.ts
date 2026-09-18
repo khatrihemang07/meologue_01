@@ -63,9 +63,6 @@ export const englishQuickAddLanguage: QuickAddLanguage = {
     tod: 0,
     tomorrow: 1,
     tom: 1,
-    // `tmr` — meologue-reference/todoist/quick-add.md § Recognised vocabulary
-    // verifies this abbreviation alongside `tom`; both resolve identically
-    // and neither is preferred over the other.
     tmr: 1,
   },
 

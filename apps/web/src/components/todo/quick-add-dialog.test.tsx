@@ -4,14 +4,6 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useSettingsStore } from "@/lib/settings";
 import { QuickAddDialog } from "./quick-add-dialog";
 
-/**
- * Stands in for the real `TaskTitleEditor` — the identical reason
- * `add-task-form.test.tsx`'s own header comment gives (jsdom cannot
- * usefully mount a real ProseMirror `EditorView`). `onAutocompleteOpenChange`
- * is wired to a fake "toggle popup" button so the Escape-vs-popup guard
- * (QA-13/QA-14, the Radix trap `quick-add-dialog.tsx`'s own header comment
- * documents) can be exercised without a real autocomplete plugin.
- */
 function StubTaskTitleEditor({
   value,
   onChange,
@@ -76,9 +68,6 @@ describe("QuickAddDialog", () => {
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   });
 
-  // QA-13/QA-15/QA-16/NAV-07 (parity ledger): the real Quick Add dialog,
-  // identity-asserted the same way the live capture was
-  // (`role="dialog"`/`aria-label="Quick Add"`).
   it("opens as role=dialog aria-label=Quick Add, with the Task name editor, at rest", async () => {
     render(<QuickAddDialog open={true} onOpenChange={vi.fn()} onAdd={vi.fn()} />);
 
@@ -87,12 +76,6 @@ describe("QuickAddDialog", () => {
     expect(await getInput()).toBeInTheDocument();
   });
 
-  // Issue #264: at rest (empty composer) the footer toolbar row is absent
-  // entirely — meologue now matches Todoist's 66px "single compact row"
-  // rather than always rendering the footer. A plain dismiss (X) affordance
-  // replaces Todoist's red Ramble/dictate button, which meologue has no
-  // feature behind (QA-15 — this file's own header comment records that
-  // divergence as a known open item, not something papered over).
   it("at rest, renders the compact single row with no footer toolbar", async () => {
     render(<QuickAddDialog open={true} onOpenChange={vi.fn()} onAdd={vi.fn()} />);
 
@@ -104,10 +87,6 @@ describe("QuickAddDialog", () => {
     expect(screen.queryByRole("button", { name: "Remove date" })).not.toBeInTheDocument();
   });
 
-  // Issue #264: typing anything grows the dialog and reveals the footer —
-  // the recorded subset of controls (More actions, Cancel, Add task; QA-15
-  // "Remove date" is additionally conditional on a recognised date, covered
-  // separately below).
   it("typing text reveals the footer toolbar row", async () => {
     render(<QuickAddDialog open={true} onOpenChange={vi.fn()} onAdd={vi.fn()} />);
 
@@ -145,8 +124,6 @@ describe("QuickAddDialog", () => {
     expect(onAdd).toHaveBeenCalledWith(
       expect.objectContaining({ content: "buy milk", date: null, priority: 1 }),
     );
-    // QA-19 (matched, live-driven): Shift+Enter closed/cleared Quick Add
-    // on both sides — a real Add closes the whole dialog here too.
     expect(onOpenChange).toHaveBeenCalledWith(false);
   });
 
@@ -194,28 +171,6 @@ describe("QuickAddDialog", () => {
     expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
   });
 
-  // Issue #265 — the discard confirmation. Live Todoist capture
-  // (2026-09-15, this ticket's own report): heading "Discard unsaved
-  // changes?", body "Your unsaved changes will be discarded.", buttons
-  // Cancel then Discard in DOM order — matched verbatim below so a future
-  // paraphrase fails a test rather than just a review. `role="alertdialog"`
-  // is `ConfirmDialog`'s own standing choice (STR-01/STR-03/DET-15), kept
-  // here rather than Todoist's own measured `role="dialog"` — see this
-  // file's header comment.
-  //
-  // jsdom caveat, honestly: these exercise the CONTRACT (the right state
-  // flips, `onOpenChange`/`onConfirm` fire, focus is requested against the
-  // right node) — not real portalled dismiss ordering between two stacked
-  // Radix layers, and not real focus movement between them. jsdom has no
-  // compositor and Radix's own layer-stacking/FocusScope behaviour is only
-  // really proven in a browser; the live pass is what actually verifies
-  // "Escape while the confirm is open only closes the confirm" and "focus
-  // visibly lands back in the field." The outside-click door below IS
-  // exercised for real (`clickOutside`, `task-detail-view.test.tsx`'s own
-  // helper, reused verbatim) — that proves THIS app's guard treats an
-  // outside click correctly, not that a real browser's Radix pointerdown-
-  // outside detection reaches it before deciding to close on its own (that
-  // file's own comment on the identical caveat).
   describe("discard confirmation (issue #265)", () => {
     async function typeText(text: string) {
       fireEvent.change(await getInput(), { target: { value: text } });
@@ -328,10 +283,6 @@ describe("QuickAddDialog", () => {
       await waitFor(() => expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument());
     });
 
-    // The third door: an outside click, real Radix pointerdown-outside
-    // detection (not the stub's own `onCancel`, not Root's `onOpenChange`
-    // called directly) — same `clickOutside(document.body)` sequence
-    // `task-detail-view.test.tsx` uses for its identical DET-15 door.
     it("text + an outside click raises the confirmation (the third door)", async () => {
       const onOpenChange = vi.fn();
       render(<QuickAddDialog open={true} onOpenChange={onOpenChange} onAdd={vi.fn()} />);
@@ -440,9 +391,6 @@ describe("QuickAddDialog", () => {
     });
   });
 
-  // PRI-04 (parity ledger): the pill's flag icon carries the priority's
-  // colour; its "P1" text stays the shared neutral grey class
-  // (`text-muted-foreground`), never a coloured span of its own.
   it("shows a priority pill, with the flag coloured and the text left neutral, once p1 is typed", async () => {
     render(<QuickAddDialog open={true} onOpenChange={vi.fn()} onAdd={vi.fn()} />);
 
@@ -457,11 +405,6 @@ describe("QuickAddDialog", () => {
     // flag icon (asserted below) carries the priority's own colour.
     expect(pillText.className).toBe("");
     expect(pillText.parentElement?.className).toContain("text-muted-foreground");
-    // `priorityPickerColour` returns the *token* (`var(--td-priority-
-    // picker-1)`), matching PRI-04's own instruction ("matching the
-    // picker") — the same P1 token `scheduler-and-priority.md` §10b
-    // resolves to `rgb(209,69,59)` at runtime, not a literal this
-    // component re-derives.
     const flag = pillText.parentElement?.querySelector("svg");
     expect(flag).not.toBeNull();
     expect(flag?.getAttribute("fill")).toBe("var(--td-priority-picker-1)");
@@ -475,8 +418,6 @@ describe("QuickAddDialog", () => {
     expect(screen.queryByText(/^P[1-4]$/)).not.toBeInTheDocument();
   });
 
-  // QA-15/QA-16: a recognised date grows the footer with a "Remove date"
-  // control.
   it("shows Remove date once a date is recognised, and removes it from the field on click", async () => {
     render(<QuickAddDialog open={true} onOpenChange={vi.fn()} onAdd={vi.fn()} />);
 
@@ -494,8 +435,6 @@ describe("QuickAddDialog", () => {
     expect(screen.queryByRole("button", { name: "Remove date" })).not.toBeInTheDocument();
   });
 
-  // QA-13/QA-14's own Radix trap, named in this file's header comment:
-  // Escape must close an open `#`/`@` popup first, not the whole dialog.
   it("does not close the dialog on Escape while the autocomplete popup is open", async () => {
     const onOpenChange = vi.fn();
     render(<QuickAddDialog open={true} onOpenChange={onOpenChange} onAdd={vi.fn()} />);

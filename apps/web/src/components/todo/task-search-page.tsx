@@ -1,36 +1,3 @@
-/**
- * The full search page (issue #183) — Quick-find's own sibling surface
- * (task-quick-find.tsx's header comment has the full split). Reached by
- * its own URL (`/todo/search?q=…`), not an app-bar narrowing field: it
- * searches Task **titles and Descriptions** (each field checked on its
- * own — @meologue/core's matchesSubstring/matchesWholeWord never span
- * title into Description or vice versa, task-search.ts's own header
- * comment has the full reasoning) in one tab, and Comments in a separate
- * tab, matching neither Project nor Section nor Label names — the mirror
- * image of Quick-find's own title-and-Project-only scope. Never renders a
- * `<mark>` — issue #183's own reference-behaviour research found a real
- * Todoist highlighting only in the dropdown, never on this page.
- *
- * Completed Tasks are excluded until "Show completed" is switched on,
- * which — faithfully, not smoothed away — also switches matching to
- * whole-word only for every Task result, active or completed alike (see
- * TaskSearchOptions.includeCompleted's own doc comment, @meologue/core).
- * A completed result renders struck through with a filled checkbox, and
- * clicking that checkbox un-completes it right from this page — issue
- * #183's own reference-behaviour research observed exactly that
- * affordance on a real Todoist's own search results.
- *
- * **Issue #358's own "the behaviour holds... in Search" criterion.** This
- * page's "Show completed" checkbox above is untouched — it stays the one
- * door that decides whether a completed Task is searched at all, exactly
- * as issue #183 built it, independent of `completedTasksVisible`
- * (lib/settings.ts). What changes is the *shape* of a result set once that
- * checkbox does let completed matches through: they used to sort into one
- * merged, interleaved list alongside active matches; now they render in
- * their own trailing block below the active matches, paginated by
- * `useCompletedTasksPage` — the identical shape Inbox/Project/Filter now
- * all use for a completed block (`ROW-14`, parity-ledger.md).
- */
 import type { Comment, Project, Task } from "@meologue/core";
 import { matchesSubstring, matchesWholeWord } from "@meologue/core";
 import { Check } from "lucide-react";

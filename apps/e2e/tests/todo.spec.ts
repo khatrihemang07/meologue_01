@@ -4,19 +4,6 @@ import { SERVER_A_DATABASE } from "../servers";
 import { expect, test } from "./fixtures";
 import { openDestination, waitForTaskOrder, waitForTaskParent } from "./helpers";
 
-// ANAV-01: the owner's ruling keeps BOTH todo-page.tsx's own narrow header
-// Search door AND Browse's own "Search" row (browse-view.tsx) on screen at
-// once below 900px while Browse is open — and, at this suite's own default
-// Desktop Chrome viewport (1280px, ≥ the 1200px sidebar breakpoint),
-// TodoSidebar's "Filters & Labels" row and Browse's own identically-worded
-// row can likewise both be on screen at once while `/todo/browse` is open.
-// A bare `page.getByRole("link", { name: "Filters" })` is a substring match
-// (Playwright's own default) against either row's accessible name and
-// throws in Playwright's strict mode the moment two elements match —
-// scoping to `TodoSidebar`'s own `aria-label="Todo"` landmark is what keeps
-// this resolving to the one row these specs actually mean, regardless of
-// whether a later spec (in this file or a new one) also happens to visit
-// Browse in the same session.
 function filtersNavLink(page: Page) {
   return page.getByRole("navigation", { name: "Todo" }).getByRole("link", { name: "Filters" });
 }
@@ -44,20 +31,6 @@ function uniqueTaskContent(label: string): string {
   return `${label} ${randomUUID()}`;
 }
 
-/**
- * Issue #260: the in-list add field is collapsed by default (NAV-12,
- * parity ledger) — a quiet "Add task" row at the end of the list that
- * expands into a real composer on click, rather than an always-open
- * field. Every step below is scoped to `[data-add-task-field]`
- * (`add-task-form.tsx`'s own wrapper, present in both its collapsed and
- * expanded states) because Playwright's name matching is substring, not
- * exact, and this page now has THREE things that can answer to "Add
- * task": the sidebar's own global-Quick-Add button (`todo-sidebar.tsx`),
- * this row's collapsed trigger, and its own expanded submit button —
- * scoping to the one wrapper that only ever contains the list's own
- * affordance (never the sidebar's) is what keeps `.click()` from ever
- * landing on the wrong one.
- */
 async function addTask(page: import("@playwright/test").Page, content: string): Promise<void> {
   const composer = page.locator("[data-add-task-field]");
   await composer.getByRole("button", { name: "Add task", exact: true }).click();
@@ -71,16 +44,6 @@ test("adding, completing (with Undo), reordering and reloading all leave Todo ex
   const first = uniqueTaskContent("todo-first");
   const second = uniqueTaskContent("todo-second");
 
-  // Issue #358: meologue's own "Completed tasks" display option now
-  // defaults OFF, matching Todoist's own measured default (ROW-14,
-  // parity-ledger.md) — completing a Task removes its row from the list
-  // entirely rather than leaving it in place. This test's own assertions
-  // just below describe the OTHER measured state (the row relocates,
-  // struck through, `aria-checked="true"`), which is what this suite
-  // already exercised before #358 existed — so this seeds the setting on,
-  // via the identical `localStorage`-before-`goto` pattern
-  // `installDateOffset` (helpers.ts) already uses, rather than rewriting
-  // every assertion below for the new default.
   await page.addInitScript(() => {
     localStorage.setItem("meologue.completed-tasks-visible", "true");
   });
@@ -107,15 +70,6 @@ test("adding, completing (with Undo), reordering and reloading all leave Todo ex
   await expect(rows.nth(0)).toContainText(first);
   await expect(rows.nth(1)).toContainText(second);
 
-  // ROW-03 (parity-ledger.md), the user's 2026-09-13 decision: the
-  // checkbox's accessible name is now Todoist's own fixed wording
-  // ("Mark task as complete"), not the Task's content — with two rows on
-  // the page both checkboxes now carry the identical name, so "the
-  // checkbox for `first`" has to be found by locating `first`'s own row
-  // first and its checkbox within it, not by name alone. Declared here,
-  // ahead of the drag section below that already scoped its own row
-  // locators the same way, so this test scopes every row lookup
-  // consistently from the point two rows coexist.
   const firstRow = page.locator("li[data-task-id]", { hasText: first });
   const secondRow = page.locator("li[data-task-id]", { hasText: second });
 
@@ -124,15 +78,8 @@ test("adding, completing (with Undo), reordering and reloading all leave Todo ex
   // through it is an ordinary uncomplete(), not a resurrection (ADR 0047),
   // so the Task lands right back where its own orderKey already puts it.
   await firstRow.getByRole("checkbox").click();
-  // ROW-14 (parity-ledger.md), the user's 2026-09-13 decision to match
-  // Todoist: the row stays exactly where it was — struck through, its own
-  // checkbox now `aria-checked="true"` — rather than leaving the DOM the
-  // way this app's own now-removed "Completed" disclosure used to require.
-  // `rows` (both `first`/`second`, by content) still counts two: nothing
-  // left this list, one row inside it changed state.
   await expect(firstRow.getByRole("checkbox")).toHaveAttribute("aria-checked", "true");
   await expect(rows).toHaveCount(2);
-  // CMT-04: Todoist's own task-agnostic, count-based wording.
   await expect(page.getByText("1 task completed")).toBeVisible();
 
   await page.getByRole("button", { name: "Undo" }).click();

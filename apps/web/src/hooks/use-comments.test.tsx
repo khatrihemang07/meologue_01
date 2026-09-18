@@ -136,10 +136,6 @@ describe("useComments", () => {
     return { fresh, eventStore, ...rendered };
   }
 
-  // CMT-06, re-driven live (flow 5): Todoist's own activity log records no
-  // Event at all for a comment edit — this is the fix at the source
-  // use-comments.ts's own header comment now describes: `editComment` no
-  // longer calls `recordCommentEvent`.
   it("records no Event when a Comment is edited", async () => {
     const store = createFakeCommentStore([comment()]);
     const { result, eventStore } = await renderUseComments(store);
@@ -152,8 +148,6 @@ describe("useComments", () => {
     expect(eventStore.record).not.toHaveBeenCalled();
   });
 
-  // The two templates CMT-06 confirms Todoist *does* record, unchanged by
-  // this fix — only the edit path stopped recording.
   it("still records an Event when a Comment is added", async () => {
     const store = createFakeCommentStore([]);
     const { result, eventStore } = await renderUseComments(store);

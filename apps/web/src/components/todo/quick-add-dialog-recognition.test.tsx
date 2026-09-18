@@ -4,24 +4,6 @@ import type { AutocompleteEntry } from "@/lib/quick-add-autocomplete";
 import { useSettingsStore } from "@/lib/settings";
 import { QuickAddDialog } from "./quick-add-dialog";
 
-/**
- * Issue #261 — the same Radix-capture-vs-`defaultPrevented` trap
- * `task-detail-view-recognition.test.tsx` was written to prove DET-15
- * closed, now proven against `QuickAddDialog` instead.
- *
- * Deliberately does NOT reuse `quick-add-dialog.test.tsx`: that file mocks
- * `TaskTitleEditor` with a plain `<input>` (its own header comment) whose
- * Escape handler calls `onCancel()` unconditionally — a stub that cannot
- * reproduce `prosemirror-view`'s `defaultPrevented` gate, which is the
- * actual mechanism this defect lives in. Its own "does not close the
- * dialog on Escape while the autocomplete popup is open" test passes today
- * against the buggy `quick-add-dialog.tsx` for exactly that reason. This
- * file mounts the REAL `TaskTitleEditor` (through the REAL `QuickAddDialog`,
- * exactly as production wires it), copying `task-detail-view-recognition
- * .test.tsx`'s own setup (real `EditorView`, `paste`-event typing, the
- * `Range.prototype` shim `popupStyle`'s `coordsAtPos` call needs in jsdom).
- */
-
 function project(overrides: Partial<AutocompleteEntry> = {}): AutocompleteEntry {
   return {
     id: "p1",

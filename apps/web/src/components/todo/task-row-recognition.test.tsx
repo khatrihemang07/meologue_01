@@ -1,18 +1,3 @@
-/**
- * QA-14's own second half, wired into the row's inline rename
- * (`task-row-content.tsx`'s own `autocomplete` prop, built from
- * `detailActions.projects`/`.labels` plus whatever `useOutletContext`
- * supplies for the create hooks). `task-row.test.tsx` deliberately does
- * NOT mount the real `TaskTitleEditor` — that file's own header comment on
- * `StubTaskTitleEditor` explains why: jsdom "cannot usefully mount" a real
- * `EditorView`, and every wiring question that suite actually asks
- * (double-click activates it, Enter commits, Escape cancels) lives in the
- * surrounding wiring, not inside the editor itself. Proving the popup
- * actually opens needs the REAL editor, exactly the same reasoning
- * `task-detail-view-recognition.test.tsx` already gives for splitting off
- * from `task-detail-view.test.tsx`'s own stub-based suite — this file is
- * that identical split, for the row.
- */
 import type { Label, Project, Task } from "@meologue/core";
 import { fireEvent, render, screen, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router";
@@ -149,7 +134,7 @@ function renderRow(overrides: Partial<Parameters<typeof TaskRow>[0]> = {}) {
   return props;
 }
 
-describe("QA-14 — #/@ autocomplete in the row's inline rename", () => {
+describe("#/@ autocomplete in the row's inline rename", () => {
   it("typing '#' opens the listbox with the supplied projects", async () => {
     renderRow({
       task: task({ content: "buy " }),

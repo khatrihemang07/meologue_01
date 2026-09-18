@@ -147,6 +147,30 @@ nb_publish() {
   return 0
 }
 
+# Keeps only the newest versioned artifact of one kind at the top of <dir>:
+# every OTHER file matching <glob> moves into <dir>/archive/. The version is
+# in the filename, so a rebuild of the same version overwrites in place and
+# only a version bump archives anything.
+#
+# Each build script passes its own glob (meologue_*.apk, meologue_*.dmg), so
+# building one platform never buries the other platform's latest artifact.
+# `mv -f` because a re-archived version replaces the older copy of itself.
+#
+# Usage: nb_archive_superseded <dir> <keep-file> <glob>
+nb_archive_superseded() {
+  local dir=$1 keep=$2 glob=$3 f moved=0
+  for f in "$dir"/$glob; do
+    [ -e "$f" ] || continue
+    [ "$f" = "$keep" ] && continue
+    mkdir -p "$dir/archive"
+    mv -f "$f" "$dir/archive/"
+    printf '  archived %s\n' "$(basename "$f")"
+    moved=1
+  done
+  [ "$moved" = 1 ] || printf '  nothing to archive in %s\n' "$dir"
+  return 0
+}
+
 # ---------------------------------------------------------------------------
 # Artifact report
 # ---------------------------------------------------------------------------

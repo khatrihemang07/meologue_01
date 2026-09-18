@@ -65,20 +65,6 @@ export function matchSection(input: string): QuickAddToken[] {
   return collectNamedMatches(input, regex, "section");
 }
 
-/**
- * `@label` — issue #170 chose `%`, retiring `@` as "unlikely to be
- * missed." Issue #226's own reference capture (meologue-reference/todoist/
- * quick-add.md § Recognised vocabulary and § Autocomplete popups) shows
- * Todoist using `@` for labels, verified, with its own autocomplete
- * popup and "Label not found. Create <text>" fallback — so this reverses
- * #170's choice rather than layering a second sigil onto it. Parity with
- * Todoist is the standing brief here (CONTEXT.md's `"Project" — admitted,
- * with a note` makes the same call for a different word), not a new
- * direction, and two sigils for one concept would be exactly the kind of
- * ambiguity a glossary-driven parser like this one exists to avoid — see
- * this file's own header comment for why an explicit marker is supposed
- * to carry no ambiguity at all. `%` is not kept as an alias.
- */
 export function matchLabel(input: string): QuickAddToken[] {
   return matchNamedSigil(input, "@", "label");
 }

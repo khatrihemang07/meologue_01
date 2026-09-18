@@ -79,29 +79,6 @@ import { OPEN_QUICK_ADD_EVENT } from "@/lib/todo-keymap";
 import { cn } from "@/lib/utils";
 import { entryStoreQueryOptions } from "@/pages/entry-store-layout";
 
-/**
- * One of the fixed count-carrying rows below `Search` — a `NavLink`, not a
- * plain `Link`, so the reader can see which of Inbox/Today/Upcoming/Filters
- * is the currently open route the same way `chat-list.tsx`'s own rows do.
- *
- * **The count lives in `aria-label`, not in the visible text — NAV-01's
- * own fix.** Real Todoist reads "Inbox, 9 tasks" to a screen reader with
- * nothing in the row's own visible text; meologue used to append a bare
- * digit straight onto the label ("Inbox4"), with no `aria-label` at all.
- * `aria-label` overrides an element's computed accessible name outright,
- * so setting it here is what actually matches Todoist rather than merely
- * adding one alongside the old digit. Zero is the ordinary steady state
- * for a fresh Task list — this isn't Inbox-zero's own achievement moment
- * (that's TodayView's job) — so an empty count reads as "nothing to say":
- * no `aria-label` at all, falling back to the plain visible label.
- *
- * **`dayOfMonth`, Today's row alone.** Real Todoist's Today entry shows
- * the day-of-month where every other row shows its icon — read live, the
- * row's flattened text comes back "12Today" rather than a calendar-check
- * glyph plus the word. This swaps the icon for that numeral when
- * `dayOfMonth` is given, `aria-hidden` like every icon here so it never
- * leaks into the row's `aria-label`-driven accessible name.
- */
 function CountRow({
   to,
   label,
@@ -162,14 +139,6 @@ function CountRow({
   );
 }
 
-// This sidebar's own wording for a shared destination, where it departs
-// from todo-nav.tsx's plain label — todo-nav-destinations.ts's own header
-// comment: the shared list forecloses drift in *reachability*, not
-// prose, so each navigation stays free to render its own words for a
-// destination they both link to. "Filters & Labels" predates this ticket
-// (issue #229/NAV-06); "Reporting" is this ticket's own fix for parity
-// ledger NAV-01/NAV-11 — Todoist's own word for the identical
-// destination, read live against the real app (flow 6).
 const SIDEBAR_LABELS: Partial<Record<string, string>> = {
   "/todo/filters": "Filters & Labels",
   "/todo/activity": "Reporting",
@@ -230,9 +199,6 @@ export function TodoSidebar() {
     queryFn: (): Promise<Filter[]> => opened?.filterStore.list() ?? Promise.resolve([]),
     enabled: opened !== undefined,
   });
-  // Issue #229: NAV-06's own fix — "Filters & Labels" now has a real
-  // Labels destination (`/todo/labels`, `labels-view.tsx`) to count
-  // against, not only Filters.
   const labelsQuery = useQuery({
     queryKey: LABELS_QUERY_KEY,
     queryFn: (): Promise<Label[]> => opened?.labelStore.list() ?? Promise.resolve([]),
@@ -261,11 +227,6 @@ export function TodoSidebar() {
     "/todo/inbox": inboxCount,
     "/todo/today": todayCount,
     "/todo/upcoming": upcomingCount,
-    // Issue #229's own fix for NAV-06: real Todoist's "Filters & Labels"
-    // opens one combined screen, and `/todo/filters` (filters-view.tsx)
-    // now actually is one — its own Filters list plus a Labels section
-    // underneath. The count is Filters *and* Labels together, matching
-    // what this one destination actually shows.
     "/todo/filters": filters.length + labels.length,
     "/todo/activity": 0,
   };
@@ -279,32 +240,10 @@ export function TodoSidebar() {
   const favouriteProjects = activeProjects.filter((project) => project.favourite);
 
   return (
-    /*
-      `bg-muted` and an explicit 13px, both measured rather than chosen.
-      Todoist paints its sidebar rgb(38,38,38) against a rgb(31,31,31)
-      content pane — the secondary surface reading *lighter* than the page,
-      which is the inversion index.css's `[data-surface="todo"]` block
-      records — and sets its chrome a pixel smaller than the row text
-      (`--td-chrome-font-size`, 13px) rather than sharing one body size.
-      Without the background this pane inherits the content colour and the
-      two columns melt into one; the parity ledger's THEME-02 is what that
-      would have quietly failed.
-    */
     <nav
       aria-label="Todo"
       className="flex h-full flex-col gap-1 overflow-y-auto bg-muted p-2 text-[length:var(--td-chrome-font-size)]"
     >
-      {/*
-        NAV-07 (parity ledger), issue #260: this used to be a `NavLink` to
-        `/todo/inbox` — "the add field is *at* Inbox" was the old model.
-        Todoist's own sidebar "Add task" opens the global Quick Add dialog
-        from wherever the reader already is, not a navigation — so this is
-        now a plain button dispatching `OPEN_QUICK_ADD_EVENT`
-        (`todo-keymap.ts`'s own doc comment on that constant has the full
-        fan-in reasoning). This component sits outside `EntryStoreLayout`'s
-        Outlet (this file's own header comment) and has no `handleAdd` of
-        its own to call — `todo-page.tsx`, which does, is the listener.
-      */}
       <button
         type="button"
         className="flex items-center gap-2.5 rounded-md px-2 py-1.5 text-left hover:bg-muted"
@@ -359,17 +298,6 @@ export function TodoSidebar() {
       )}
 
       <div className="mt-2 flex flex-col gap-0.5">
-        {/*
-          Parity ledger NAV-01/defect 33: real Todoist's "My Projects" is a
-          link to its own projects page, not a bare heading — meologue's
-          "Projects" heading here was the desktop-only instance of defect
-          33 (no `/todo/projects` link anywhere ≥900px, since todo-nav.tsx
-          hides itself at that width), on top of the wording gap NAV-01
-          measured live. A plain `to="/todo/projects"` rather than reading
-          TODO_NAV_DESTINATIONS: the shared list exists to keep both
-          navigations' *sets* of destinations from drifting, not to source
-          every literal href in either component.
-        */}
         <NavLink
           to="/todo/projects"
           className={({ isActive }) =>

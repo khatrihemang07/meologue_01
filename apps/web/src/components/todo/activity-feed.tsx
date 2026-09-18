@@ -28,23 +28,6 @@ export interface ActivityFeedProps {
   emptyMessage?: string;
 }
 
-/**
- * One resolved subject, rendered as a live link when it has one and inert
- * text when it doesn't — `entry-row.tsx`'s own Task Reference rule ("render
- * the cached words, and stay inert") applied to an activity chip.
- *
- * CMT-06 (re-driven live, flow 5): Todoist shows a Task subject as its bare
- * name, with no leading glyph — `You commented … on ZZ probe comments`, not
- * "… on ○ ZZ probe comments." A Task subject is the only one CMT-06 ever
- * measured this way live, so only its own `"○"` glyph is dropped here;
- * `EventSubject.glyph`'s other two values (`"▭"` a Section, `"#"` a
- * Project) are untouched — nothing observed live says whether Todoist
- * drops those too, so this stays scoped to what was actually measured.
- * `format-event.ts`'s own `EventSubject` type is local to this Activity
- * feed (not shared with any journal-side task-reference rendering — a
- * grep of the app turned up no other consumer of `EventSubject`/`glyph`),
- * so this change reaches nothing else.
- */
 function SubjectChip({ subject }: { subject: EventSubject }) {
   const label =
     subject.glyph === "○" ? (
@@ -64,16 +47,6 @@ function SubjectChip({ subject }: { subject: EventSubject }) {
   );
 }
 
-/**
- * CMT-06's `{content}` (a comment's own text, or a description's own text)
- * — Todoist's own DOM, re-driven live (flow 5), shows this unquoted as a
- * clickable content-preview chip; the artifacts that measured it captured
- * only its rendered text, never its markup or click target, so this chip
- * stays a plain, non-interactive `<span>` rather than guessing at a
- * destination to link to. `truncate` bounds it to one line the same way
- * `entry-row.tsx`'s own `EntryReferenceLink` chip does — CSS ellipsis,
- * not a hand-picked character count this ticket has no artifact to justify.
- */
 function ContentPreviewChip({ text }: { text: string }) {
   return (
     <span

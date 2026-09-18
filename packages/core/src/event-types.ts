@@ -1,35 +1,3 @@
-/**
- * A record of something that happened to a Task, a Comment, a Project or
- * a Section (issue #184, CONTEXT.md's Event entry, ADR 0056) — Todo's own
- * activity log. A third kind of root noun beside Entry and Task (ADR
- * 0047's move made a fifth time, after Project/Section/Label/Comment),
- * but a structurally different one: every other root noun in this
- * codebase is *mutable* (ADR 0028's compacted change log — one row per
- * id, overwritten in place, `seq` reassigned on every write). An Event is
- * not. It is written once, by the act it records, and never touched
- * again — there is no `edit()`, no `remove()`, and therefore no
- * `deletedAt` for either of those to set. See ./event-store.ts's own
- * header comment for what that costs this store (nothing) and what it
- * saves (the `is distinct from` replay guard every mutable store needs).
- *
- * **Stamped with the acting Device's own clock, never the time it
- * reaches a Server.** This is ADR 0056's entire reason for existing, and
- * it's worth restating here because it's the one property a future
- * "cleanup" is likeliest to "fix": the reference implementation this app
- * tracks parity against holds its own activity log on its server and
- * stamps each row when it *arrives* there, which silently rewrites an
- * offline action's own time to whenever the Device that recorded it next
- * had a connection. Measured directly against a real one: an action
- * performed offline at 23:24 was logged at 23:25, the moment the Device
- * reconnected. That is wrong here twice over — Sync is opt-in (ADR
- * 0011), so a Device with no Server URL would have no log at all if the
- * log lived there; and work done offline would read as having happened
- * whenever the network came back rather than when it was actually done.
- * `occurredAt` is `createdAt`'s own precedent (../types.ts's Entry,
- * ../task-types.ts's Task) applied a third time: every other timestamp
- * this app records that means "when something happened" already trusts
- * the Device that was there, never a server's clock.
- */
 export type Event = {
   id: string;
   deviceId: string;

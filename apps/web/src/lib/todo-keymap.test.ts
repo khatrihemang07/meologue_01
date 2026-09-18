@@ -128,8 +128,7 @@ describe("bindingById", () => {
     expect(bindingById("nope")).toBeUndefined();
   });
 
-  // KBD-01/KBD-06 (parity ledger) — the missed (b)s this ticket added.
-  it("finds every binding added for KBD-01/KBD-06", () => {
+  it("finds every binding added by the keyboard audit", () => {
     expect(bindingById("complete-task")?.keys).toEqual(["e"]);
     expect(bindingById("comment-task")?.keys).toEqual(["c"]);
     expect(bindingById("copy-link")?.keys).toEqual(["mod+shift+c"]);

@@ -1,28 +1,3 @@
-/**
- * Issue #342 — `DialogContent`'s own focus-restore contract, isolated
- * from any real dialog surface. Every test here drains a real
- * `setTimeout(0)` tick after closing before asserting (`flush` below) —
- * `@radix-ui/react-focus-scope`'s own unmount effect defers its
- * `AUTOFOCUS_ON_UNMOUNT` dispatch by exactly that (`task-detail-view.tsx`'s
- * own DET-15 comment already documents this as a real async gap in Radix,
- * not a jsdom quirk to paper over) — and every test drives a REAL click on
- * a REAL `DialogClose` button (`fireEvent.click`, not a bare state flip),
- * so what's exercised is the genuine Radix `onCloseAutoFocus` dispatch
- * path, not a hand-simulated stand-in for it.
- *
- * These tests do not, and cannot, stand in for the two-Dialog-inside-a-
- * Popover shape `task-schedule-popover.tsx` builds around `TaskTimeDialog`/
- * `TaskCustomRepeatDialog` (jsdom lays out no popover and reproduces
- * neither `FocusScope` nor pointer dismissal — this repo's own established
- * limit, `task-command-menu.tsx`'s own header comment). What the "stands
- * aside" tests below DO prove, in isolation, is the specific property that
- * live-browser verification found missing from this file's first version:
- * when this wrapper has no good target, it must not call `.focus()` on
- * anything at all — not `#root`, not `document.body` — because a
- * synchronous focus move made by *something else* (standing in for a
- * sibling Popover's own real restore) must survive this wrapper's own
- * later, deferred dispatch untouched.
- */
 import { fireEvent, render, screen } from "@testing-library/react";
 import type { ReactElement } from "react";
 import { useRef, useState } from "react";

@@ -1,50 +1,3 @@
-/**
- * Positional recognition with two-step withdrawal — issue #226's own
- * second half, and the behaviour the whole programme exists to fix
- * (meologue-reference/todoist/quick-add.md § "The one fact that decides the
- * implementation" and § "Recognition and withdrawal"). This is Todo's OWN
- * recognition module — a sibling of `quick-add-highlight.ts`, not a
- * replacement for it: that file stays untouched because it is shared with
- * the Composer's checklist highlighting (`composer-editor.ts`'s
- * `checklistHighlightPlugin`), and this module's own withdrawal semantics
- * (below) are deliberately different from `parseWithDemotions`'
- * signature-keyed demotion, so folding the two together would either
- * change the Composer's behaviour or force this module to inherit a model
- * it doesn't want.
- *
- * **Why positional, not signature-keyed.** `quick-add-highlight.ts`'s own
- * header comment explains why the Composer tracks a demotion by the
- * token's TEXT ("this literal word, wherever it appears") rather than its
- * offset — a demotion there is meant to survive indefinitely, reapplied
- * fresh on every keystroke via `parseWithDemotions`' signature lookup.
- * Withdrawal here is the opposite on purpose (QA-07, "withdrawal is not
- * sticky... not remembered against the word"): it names one exact `[start,
- * end)` occurrence, and a caller never needs to re-find it by text because
- * `QuickAddOptions.demoted` (../../packages/core/src/quick-add/types.ts)
- * already speaks in exactly those coordinates — `demoteQuickAddToken`'s
- * own doc comment is the "usual way" this seam is meant to be driven. This
- * module builds on it directly rather than reshaping it.
- *
- * **Remapping across edits.** `remapWithdrawnSpans` below re-derives every
- * withdrawn span's position after a text change by a common-prefix /
- * common-suffix diff between the previous and next text — exact for a
- * single keystroke, which is every keystroke a real editor ever applies in
- * one transaction. A span entirely outside the edited region shifts by the
- * edit's own length delta and survives; a span that OVERLAPS the edited
- * region — including a span whose boundary sits immediately against the
- * edit, not only one whose interior characters changed — is dropped, so
- * recognition returns. The boundary-inclusive rule (a `<`/`>` comparison,
- * not `<=`/`>=`) is deliberate and pinned by
- * `meologue-reference/todoist/quick-add-dom/retype-04-back-to-tod-after-x.json`:
- * typing `x` right after a withdrawn `tod` (making `todx`, itself
- * unrecognised) and then backspacing that `x` away again lands back on
- * `tod` fully re-highlighted, not still-withdrawn, even though `tod`'s own
- * three characters were never themselves touched by either edit. A
- * same-or-past-the-boundary edit reads as "this occurrence has moved on,"
- * matching that capture; a span with real untouched distance on both
- * sides of the edit (the common case of typing elsewhere in a longer
- * line) is left alone.
- */
 import type {
   QuickAddOptions,
   QuickAddSpan,
@@ -110,31 +63,6 @@ export function remapWithdrawnSpans(
   return remapped;
 }
 
-/**
- * `data-match-id`'s value (meologue-reference/todoist/quick-add.md § "The
- * recognised-match span": "carries the resolved value, not the typed
- * text"). Only the date/time family was ever actually measured against
- * the live application; every other kind's rendering here is a direct,
- * honest read of the one resolved field `QuickAddToken` already carries
- * for it, not a second normalisation pass — `recurrence` in particular
- * does NOT reproduce quick-add-task.ts's own `RECURRENCE_WORD_TO_PHRASE`
- * (`daily` -> "every day"): that table is private to field resolution at
- * submit time, and duplicating it here for a decorative attribute would
- * be a second place it could drift from the first. A recurring word's
- * `matchId` is therefore its own raw text, lower-cased for the same
- * case-insensitivity every other rule in this app already applies.
- *
- * `resolvedDateTime` is `QuickAddResult.date` from the very same parse —
- * the merged date-and-time value ../../packages/core/src/quick-add/
- * parse-quick-add.ts's `mergeDateAndTime` already computes for the whole
- * input, including its "a lone time with no date word attaches to
- * today" rule. QA-10's own measured gap: a `"time"` token's `matchId`
- * used to be the bare `token.time` (`"17:00"`), where Todoist's bundles
- * the resolved day in (`"12 Sep 5:00 PM"`) — a time-only phrase implies
- * a day in Todoist, and now does here too. Only the `"time"` case reads
- * this parameter; every other kind ignores it, so passing it through
- * unconditionally from `computeQuickAddMatches` costs nothing.
- */
 export function matchIdForToken(token: QuickAddToken, resolvedDateTime: string | null): string {
   switch (token.kind) {
     case "date":
@@ -178,31 +106,6 @@ export interface QuickAddRecognitionMatch extends QuickAddSpan {
   readonly withdrawn: boolean;
 }
 
-/**
- * Every span the parser recognises in `text` right now, each marked
- * `withdrawn` if its exact `[start, end)` is in `withdrawnSpans` — always
- * derived from the NATURAL parse (no `demoted` option passed to
- * `parseQuickAdd`), never from a demotion-aware reparse.
- *
- * **Deliberately not `parseQuickAdd(text, { ...options, demoted:
- * withdrawnSpans })`.** Demoting a span the ordinary way removes it from
- * `result.tokens` entirely — right for the Composer's checklist highlight,
- * which has nothing left to render once a token is demoted, but wrong
- * here: meologue-reference/todoist/quick-add.md's own measurement is that a
- * withdrawn match is "one element in two visual states," the span STAYS
- * in the document, restyled — not removed and then, confusingly, not
- * re-created either. Reading matches off the natural parse and checking
- * `withdrawnSpans` membership separately is what keeps the withdrawn
- * span's own identity (kind, matchId, position) available to render, and
- * it sidesteps `resolveOverlaps`' own documented cascade concern
- * (../../packages/core/src/quick-add/parse-quick-add.ts: "a demoted span
- * simply stops competing") entirely — nothing here ever asks the parser to
- * treat a withdrawn span as competable content, so no shorter, previously
- * shadowed candidate can spring up in its place. That cascade is real for
- * `quick-add-task.ts`'s own field resolution at submit time (which DOES
- * pass `demoted` through in the ordinary way, deliberately), just not for
- * what gets drawn on screen.
- */
 export function computeQuickAddMatches(
   text: string,
   options: QuickAddOptions,
@@ -237,58 +140,6 @@ export const quickAddRecognitionPluginKey = new PluginKey<readonly QuickAddSpan[
   "todo-quick-add-recognition",
 );
 
-/**
- * `Decoration.inline`'s own DOM attributes for one match. Highlighted and
- * withdrawn deliberately differ by more than a class: Todoist's own
- * captured DOM (meologue-reference/todoist/quick-add-dom/tod-04-bksp1.json)
- * drops `data-highlighted-match` AND the styling class outright once
- * withdrawn, leaving a bare, unstyled `<span>` — which is exactly what an
- * ordinary `<span>` with no class already renders as (`display: inline`,
- * no padding, no background, inherited colour — the withdrawn row of that
- * file's own property table), so no withdrawn-specific CSS is needed at
- * all here, only the absence of the highlighted one.
- *
- * **`nodeName` — QA-06's tiebreak, strict DOM parity (decided
- * 2026-09-12).** A recognised span is a `Decoration.inline` wrapping a
- * plain text node, not an atom node of its own — for exactly that shape,
- * `prosemirror-view` decides whether to reuse or recreate the wrapping
- * `<span>` in `patchOuterDeco`
- * (node_modules/prosemirror-view/dist/index.js:1699-1723), by walking
- * `computeOuterDeco`'s per-level `OuterDecoLevel.nodeName` STRINGS
- * (index.js:1673-1698) and reusing the existing element whenever level i's
- * label is `===` between renders (the `prev.nodeName == deco.nodeName`
- * check at index.js:1708). That check runs whether or not the decoration
- * even changed — `updateOuterDeco` only skips it when `sameOuterDeco`
- * finds the two decoration arrays' own `InlineType.eq` equal
- * (index.js:1486-1491, `sameOuterDeco` at 1756-1763, `InlineType.eq` at
- * 3999-4004 comparing `attrs`/`spec` via `compareObjs`) — attrs already
- * differ here (the two keys above), so that check does NOT short-circuit;
- * `patchOuterDeco` still runs and still reuses the span, because leaving
- * `nodeName` unset makes BOTH states fall through to the identical
- * implicit "span" fallback (`computeOuterDeco`'s `needsWrap &&
- * result.length == 1` branch, index.js:1687-1688) — the two label strings
- * are equal, so the existing wrapper is kept and only patched
- * (`patchAttributes`, index.js:1724-1751). That is exactly QA-06's
- * measured divergence: Todoist replaces the node on withdrawal (a
- * `childList` mutation swaps in a fresh `SPAN[data-testid=
- * natural-language-match]`), meologue restyled the same one (`attributes`
- * mutations only) — see meologue-reference/todoist/parity-ledger.md's QA-06
- * row and its tiebreak artifacts.
- *
- * Setting `nodeName` explicitly, to a STRING that differs between the two
- * states, is what breaks the label match and forces `patchOuterDeco` to
- * build a fresh element — `document.createElement(deco.nodeName)`
- * (index.js:1713) — instead of reusing the held one. Using `"span"` for
- * highlighted and `"SPAN"` for withdrawn keeps the actual rendered
- * element identical: an HTML document ASCII-lowercases whatever tag name
- * `createElement` is given (confirmed against this repo's own jsdom), so
- * both produce a real, indistinguishable `<span>` — only the JS string
- * ProseMirror diffs differs. `nodeName` itself is never emitted as a DOM
- * attribute (`computeOuterDeco`'s `else if (name != "nodeName")` guard,
- * index.js:1693; `patchAttributes`'s own `name != "nodeName"` guard,
- * index.js:1726/1729), so this is invisible to anything reading the
- * rendered markup.
- */
 function decorationAttrs(match: QuickAddRecognitionMatch): Record<string, string> {
   const attrs: Record<string, string> = {
     nodeName: match.withdrawn ? "SPAN" : "span",
@@ -346,24 +197,6 @@ export function quickAddRecognitionPlugin(
         );
         return DecorationSet.create(state.doc, decorations);
       },
-      /**
-       * The two-step withdrawal itself (QA-04/QA-05). On the FIRST
-       * Backspace after a match — collapsed selection, caret exactly at a
-       * currently-highlighted (not already withdrawn) match's own `end` —
-       * this consumes the keystroke, records that span as withdrawn via a
-       * no-op transaction (`tr.setMeta`, carrying no document change: `tr`
-       * is never told to delete anything), and calls `preventDefault()`:
-       * no character is deleted, matching the measured 32.31px ->
-       * 24.31px width change with the text itself unchanged. On the
-       * SECOND press `computeQuickAddMatches` no longer reports a
-       * non-withdrawn match ending at the caret (this module's own
-       * `computeQuickAddMatches` doc comment: matches are keyed off the
-       * NATURAL parse, but a span already in `withdrawn` never matches
-       * the `!match.withdrawn` check below), so this returns `false`
-       * without calling `preventDefault()` and `keymap(baseKeymap)`
-       * — registered AFTER this plugin, task-title-editor.tsx's own
-       * `buildTitlePlugins` — deletes the character normally.
-       */
       handleKeyDown(view, event) {
         if (event.key !== "Backspace") {
           return false;

@@ -40,26 +40,6 @@ export interface TaskTitleCommitSetters {
   resolveLabelIds: (names: string[]) => Promise<string[]>;
 }
 
-/**
- * Resolves `content` through the identical Quick Add grammar `addTask`
- * already uses, then applies only what actually resolved — a rename must
- * never silently clear a Date, Deadline, Priority, recurrence or Label the
- * reader didn't touch.
- *
- * **That resolution itself is measured, the guard around it is not**, and
- * the two should not be confused by a later reader.
- * `meologue-reference/todoist/rename-capture-2026-09-11.md` drove
- * the real Todoist and found that BOTH its rename surfaces resolve a
- * recognised phrase, set the field, and strip the phrase from the stored
- * title — so resolving on rename at all is parity, not an invention, and
- * the older "the reference is silent on this" comment this module was
- * written under (task-detail-view.tsx's own, now rewritten) no longer
- * holds. What that capture did NOT exercise is the conservative rule
- * below: whether a phrase that fails to resolve clears an existing Date,
- * and whether a rename carrying no phrase at all leaves the other fields
- * untouched. Neither was driven, so "only ever set, never clear" stays a
- * chosen safe default rather than a matched behaviour.
- */
 export async function commitTaskTitle(
   task: Task,
   content: string,

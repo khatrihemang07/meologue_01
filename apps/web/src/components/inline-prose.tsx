@@ -46,22 +46,6 @@ function renderTextRun(text: string, query: string, keyPrefix: string): ReactNod
   );
 }
 
-/**
- * `renderTextRun`'s own caller, with one more thing to do first: in
- * "comment" mode (CMT-08, `breakNewlines` — `entry-prose.tsx`'s own
- * `renderBlocks` is the only caller that ever passes `true`), a bare `\n`
- * `pushProseRuns` (inline-markdown.ts) left embedded in this text run —
- * because `parseCommentMarkdown`, unlike `parseEntryMarkdown`, no longer
- * splits a paragraph into a separate block for one — becomes a real
- * `<br>`, matching Todoist's own rendering of consecutive comment lines as
- * one paragraph. `breakNewlines` defaults to `false`, so every OTHER
- * caller of `renderNodes`/`inlineProse` — every one of ADR 0041's seven
- * original prose surfaces, entry mode included — takes the untouched
- * branch below and renders exactly as it always has: a `\n` there only
- * ever comes from an explicit soft break (`walkEntryInline`'s "HardBreak"
- * case), which those surfaces already show correctly via an ancestor's
- * `white-space: pre-wrap`, with no `<br>` element needed or wanted.
- */
 function renderText(
   text: string,
   query: string,
@@ -83,21 +67,6 @@ function renderText(
   return rendered;
 }
 
-/**
- * `renderNodes`'s two comment-mode-only knobs (CMT-08), both defaulted so
- * every existing caller — every one of ADR 0041's seven original prose
- * surfaces, `inlineProse` below included — renders exactly as it always
- * has when it omits this parameter entirely.
- *
- * `strikeTag` — Todoist renders `~~struck~~` as `<del>`; this app has
- * always rendered `<s>` (issue #211), which stays the entry-mode default
- * (`"s"`) since ADR 0041's original surfaces are unaffected by CMT-08 and
- * nothing pins one tag over the other for them. Only `entry-prose.tsx`'s
- * `"comment"` mode passes `"del"`.
- *
- * `breakNewlines` — see `renderText`'s own comment above for what this
- * does and why it is safe.
- */
 export interface InlineRenderOptions {
   readonly strikeTag?: "s" | "del";
   readonly breakNewlines?: boolean;
@@ -178,13 +147,6 @@ export function renderNodes(
         );
         break;
       case "link":
-        // CMT-02 — only ever produced by `parseCommentMarkdown`
-        // (inline-markdown.ts), whose own `isSafeAutolinkUrl` gate already
-        // guarantees `node.url` is `http`/`https` before this node exists
-        // at all, so there is nothing left for this renderer to re-check.
-        // `target="_blank"` always pairs with `rel="noopener noreferrer"` —
-        // an opened tab gets no `window.opener` back into this app, and no
-        // `Referer` header naming it either.
         rendered.push(
           <a
             key={key}

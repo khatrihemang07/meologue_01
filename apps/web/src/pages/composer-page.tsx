@@ -307,9 +307,6 @@ export function ComposerPage() {
   // value now, so it resolves here — or anywhere else — with no claim to
   // hold or release.
 
-  // Mirrors todo-page.tsx's own identical `datesWithTasks` — see that
-  // file's doc comment for the full reasoning (TaskSchedulePopover's own
-  // SCHED-09/SCHED-04 dot-and-subline source).
   const datesWithTasks = useMemo(() => {
     const counts = new Map<string, number>();
     for (const task of tasks) {

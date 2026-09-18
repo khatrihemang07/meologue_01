@@ -124,37 +124,8 @@ export interface TaskReferenceProps {
  */
 export type TaskReferenceRenderer = (props: TaskReferenceProps, key: string) => ReactNode;
 
-/**
- * Vertical rhythm shared by every top-level block this file renders —
- * `<p>`, `<ul>`, `<ol>` alike. Zero margin, on every block, not only the
- * first (ADR 0069) — UpNote's own block separator is a bare `<div>` with no
- * margin of its own (`meologue-reference/upnote-editor-behaviour.md`, "The one
- * fact that explains the reported defect"), so the gap between two blocks
- * is exactly one line-height and nothing more: one Enter looks like one new
- * line, the same as it would have looked inside a single `pre-wrap` `<p>`
- * before `collectBlocks` (inline-markdown.ts) started splitting a body into
- * real blocks at every bare `\n`. Before this ticket this was `"first:mt-0
- * mt-1"` — `mt-1` was the extra gap a block boundary used to add, which is
- * exactly the blank line ADR 0066 was written to stop and ADR 0069 removes
- * for good; `"mt-0"` is written out explicitly rather than left to
- * Tailwind's own preflight reset (which already zeroes `<p>`/`<ul>`/`<ol>`
- * margins) so that zero is this file's own stated intent, not an
- * accident of what the reset happens to do.
- */
 const BLOCK_SPACING = "mt-0";
 
-/**
- * CMT-08's heading form — "comment" mode only (`entryProse`'s own `mode`
- * param, below); `parseEntryMarkdown` never produces a `"heading"` block,
- * so this table is dead weight for every other caller. No existing prose
- * style covers a heading anywhere in this app (grep of index.css turned up
- * nothing — this app has no `@tailwindcss/typography` and no `.prose`
- * rule of its own), so these are plain Tailwind utilities, the same way
- * every other size/weight choice in this file already is
- * (`bulletListStyleClass`, above). Only level 1 is exercised live (CMT-08's
- * own reading was `# heading`); levels 2-6 scale down from it rather than
- * inventing a look nothing observed asks for.
- */
 const HEADING_CLASS: Record<number, string> = {
   1: "text-lg font-semibold",
   2: "text-base font-semibold",
@@ -214,50 +185,6 @@ function bulletListStyleClass(depth: number): string {
   return "list-[square]";
 }
 
-/**
- * A block's own React output, recursively — the same function renders
- * `Document`-level blocks and a `ListItem`'s own nested `content`, since
- * both are just `EntryBlockNode[]`. `first:mt-0` therefore resets per
- * container: the first block inside a list item gets no top margin of its
- * own, exactly like the first block of the Entry as a whole.
- *
- * `depth` (issue #162) counts list nesting, not recursion in general —
- * `entryProse` starts it at `0` (no list yet), and it only advances, by
- * exactly 1, at the point a `bulletList`/`orderedList` block is actually
- * rendered; the two recursive calls below hand each new list's items that
- * incremented value, so a further-nested list found inside one of them
- * advances again from there rather than from `0`. `orderedList` computes
- * and threads the same incremented depth as `bulletList` even though
- * `list-decimal` never varies with it (index.css's own comment on why an
- * `ol` needs no depth cascade of its own) — an `ol` still has to advance
- * the counter for whatever list-of-either-kind nests INSIDE it to see the
- * right depth, exactly what index.css's `:is(ul, ol)` selectors count on
- * the CSS side.
- *
- * `mode` (CMT-08) picks two things `renderNodes` needs and cannot infer
- * from an `InlineNode` on its own — `strikeTag` (`<del>` in "comment" mode,
- * matching Todoist; `<s>` everywhere else, unchanged) and `breakNewlines`
- * (a bare `\n` a "comment"-mode "prose" block still carries — see
- * `pushProseRuns`'s own comment, inline-markdown.ts, for why it is still
- * there — becomes a real `<br>` instead of relying on an ancestor's
- * `white-space: pre-wrap`). Both stay at their entry-mode default the
- * instant `mode` is `"entry"`, which is every existing caller of this
- * function before CMT-08 and every recursive call this function itself
- * makes with an unchanged `mode`.
- *
- * `suppressPara` (CMT-08) is CommonMark 5.3's own "a tight list's items
- * render their text directly inside `<li>`, with no wrapping `<p>`" —
- * `true` only for the "prose" blocks directly inside a "comment"-mode
- * tight list's own item content (`renderListItem`'s own call into this
- * function, below, is the only place that ever computes it as `true`);
- * every other call — the top-level `entryProse` call, a blockquote's own
- * content, a NESTED list's own items (which get a freshly recomputed value
- * from THEIR OWN `tight` flag, not this one) — passes `false`, so a
- * suppressed wrapper never leaks past the one container it was computed
- * for. Entry mode never sets this at all (`EntryBlockNode`'s own comment on
- * why `tight` is `undefined` there), so this parameter has no effect on it
- * regardless of whether it is passed.
- */
 function renderBlocks(
   blocks: readonly EntryBlockNode[],
   query: string,
@@ -289,9 +216,6 @@ function renderBlocks(
         // still exactly what the author typed.
         const inline = renderNodes(block.children, query, refs, `${key}-`, inlineOptions);
         if (suppressPara) {
-          // CMT-08 — a tight list item's own paragraph, unwrapped. `Fragment`
-          // rather than an array so `renderBlocks`' own `ReactNode[]` return
-          // type stays uniform across every case.
           return <Fragment key={key}>{inline}</Fragment>;
         }
         return (
@@ -326,11 +250,6 @@ function renderBlocks(
       case "orderedList": {
         const listDepth = depth + 1;
         const tight = mode === "comment" && block.tight === true;
-        // CMT-08: Todoist omits `start` entirely when it's the default 1;
-        // entry mode always renders it, even at 1 (a pinned behaviour —
-        // `entry-prose.test.tsx`'s own "defaults an ordered list's start to
-        // 1" comment — that this must not disturb), so the omission is
-        // scoped to "comment" mode only.
         const start = mode === "comment" && block.start === 1 ? undefined : block.start;
         return (
           <ol
@@ -354,11 +273,6 @@ function renderBlocks(
         );
       }
       case "heading": {
-        // CMT-08 — only ever reached in "comment" mode (`entryProse`'s own
-        // `mode` param): `parseEntryMarkdown` never produces a `"heading"`
-        // block (ADR 0041, `entryParser`'s own `remove` list), so this
-        // branch is unreachable from any of ADR 0041's original seven prose
-        // surfaces.
         const Tag = headingTag(block.level);
         return (
           <Tag
@@ -370,13 +284,6 @@ function renderBlocks(
         );
       }
       case "blockquote":
-        // CMT-08 — same "comment" mode-only reachability as "heading" above.
-        // `suppressPara` always resets to `false` here: a blockquote's own
-        // paragraphs are not part of any enclosing tight list's item
-        // content, so they always get their own `<p>`, matching Todoist's
-        // own `<blockquote><p>quote</p></blockquote>` (CMT-08's own
-        // reading) — a simplification for a quote that is itself a tight
-        // list, which nothing observed live needs.
         return (
           <blockquote
             key={key}
@@ -389,13 +296,6 @@ function renderBlocks(
           </blockquote>
         );
       case "codeBlock":
-        // CMT-08 — same "comment" mode-only reachability. `<code>` nested in
-        // `<pre>` is what preserves the block's own line breaks and
-        // whitespace without a second `whitespace-pre-wrap` class — `<pre>`
-        // already sets `white-space: pre` by user-agent default, unlike the
-        // "prose" case above, which relies on an ancestor for it. `block.text`
-        // already carries Todoist's own trailing newline (`fencedCodeBlock`'s
-        // own comment, inline-markdown.ts).
         return (
           <pre
             key={key}
@@ -498,57 +398,6 @@ function isMarkerlessParentItem(item: EntryListItem): boolean {
   return first !== undefined && (first.kind === "bulletList" || first.kind === "orderedList");
 }
 
-/**
- * One `<li>`. A task item drops the marker entirely — no bullet, no literal
- * `[ ]`/`[x]` — in favour of a real `<input type="checkbox">` carrying the
- * same checked state. The checkbox sits beside its content in a flex row
- * rather than nested inside the `<li>`'s own marker box, which is what
- * `list-none` and the negative left margin below undo — a task item earns
- * its own indicator instead of competing with a bullet for the same space.
- *
- * Permanently `disabled` (issue #231, ADR 0074) — see this file's own
- * module comment on why a bare checkbox has no Task to open and,
- * therefore, nothing left for a click to do: it used to splice
- * `[ ]`/`[x]` in place (`toggleTaskAt`, toggle-task.ts) and now does
- * nothing at all rather than take over Todo's own job of completion.
- * `entry-row.tsx`'s `EntryBody` (Reflection's Grounding disclosure) and
- * History's own thread (`entry-bubble.tsx`) render this identically now —
- * before this ticket only Grounding disabled it, which is the read-only
- * rule `EntryRowProps.actions`'s own comment already states for
- * Edit/Delete/Refer, applied here for the same reason.
- *
- * The accessible name is the item's own words (issue #153's own
- * requirement), not a generic "Checked"/"Unchecked" — `entryBlocksToText`
- * flattens exactly the way `entrySnippet` (entry-row.tsx) already does for
- * an Entry Reference's own chip, dropping list/task markers and inline
- * formatting so the name reads as prose. The checked/unchecked state
- * itself does not need to be spelled out here: `role="checkbox"`'s native
- * semantics already announce that from the element's own `checked`
- * property. Falls back to the old "Checked"/"Unchecked" wording whenever
- * `entryBlocksToText` flattens to `""` — defensive rather than reachable
- * through today's dialect (every input tried while writing this — `- [ ]`
- * alone included — either grows real text or stops being a `Task` at all,
- * per `taskMarkerOf`'s own contract), kept because a checkbox with a blank
- * accessible name is a worse failure than this fallback ever costs.
- *
- * A *referenced* task item (issue #173, ADR 0048) never reaches any of the
- * above — `referencedTaskOf` (inline-markdown.ts) is checked first, and
- * when it finds one this function hands off to `renderTaskReference`
- * entirely instead, with the item's own checkbox marker as the cached
- * fallback `checked` and everything AFTER the reference's own line (a
- * nested list, most likely) still rendered through the ordinary path below
- * and passed through as `content`. A referenced line's own interactivity —
- * ticking it, or opening its Task (ADR 0074) — is entirely
- * `renderTaskReference`'s own business; this file has no Task store to act
- * through (this file's own module comment) for either gesture.
- *
- * `mode`/`tight` (CMT-08) are threaded straight through to every
- * `renderBlocks` call this function makes for the item's OWN content —
- * `tight` is the enclosing list's own tightness (`renderBlocks`' own
- * `bulletList`/`orderedList` cases compute it fresh per list, above), never
- * recomputed here, so a nested list inside this item gets its own fresh
- * value from ITS tight flag instead of inheriting this one.
- */
 function renderListItem(
   item: EntryListItem,
   query: string,
@@ -618,27 +467,6 @@ function renderListItem(
   );
 }
 
-/**
- * Which dialect `entryProse` reads `body` through (CMT-02/CMT-08,
- * `meologue-reference/todoist/parity-ledger.md`). "entry" — the default, and
- * every caller's behaviour before this mode existed — is `parseEntryMarkdown`:
- * ADR 0041's seven original prose surfaces, where a heading, a blockquote,
- * a fenced code block and a bare URL all stay exactly the literal
- * characters typed, by construction. "comment" is `parseCommentMarkdown`
- * instead, which reverses exactly those four for a Task comment — CMT-02's
- * own live reading found Todoist renders a comment "like the
- * description's," and ADR 0041's own reasons for removing them (the Entry
- * bubble's floated clock, the Digest clamp's line-counting arithmetic,
- * `CONTEXT.md`'s "an Entry stays untitled and unorganized") are about
- * those seven surfaces specifically, none of which is a Task comment or
- * description.
- *
- * Only a caller that passes `"comment"` explicitly gets the new rendering
- * — every existing call (`entry-row.tsx`, `entry-bubble.tsx`, and
- * `task-detail-view.tsx`'s own two Task-description reads) omits this
- * parameter entirely and keeps rendering exactly as before this mode was
- * added.
- */
 export type EntryProseMode = "entry" | "comment";
 
 /**

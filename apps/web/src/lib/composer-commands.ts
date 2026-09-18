@@ -1069,33 +1069,6 @@ export const softBreak: ComposerCommand = {
   run: insertSoftBreak,
 };
 
-// ---------------------------------------------------------------------------
-// Indent / outdent — registered here per issue #160; Tab/Shift-Tab/
-// Ctrl-]/Ctrl-[/Backspace are bound to these through composer-editor.ts's
-// `listKeymap()`, per issue #162.
-//
-// Issue #233 / ADR 0071 add `sinkFirstListItem` below as a second command
-// `indentRun` tries: `sinkListItem` (`prosemirror-schema-list`) refuses the
-// FIRST item of a list outright — its own source reads `if (startIndex ==
-// 0) return false` — because there is no PRECEDING sibling item for it to
-// become a child of. UpNote itself has no such gap
-// (`upnote-editor-behaviour.md`'s own Lists table: "Tab on the first item
-// of a list | also nests"), because UpNote emits a nested list as a
-// SIBLING `<ul>` of the `<li>` it follows, never a child of one — nesting a
-// lone item needs no preceding sibling to attach to when the attachment
-// point is the list tag itself. `entrySchema`'s `list_item` content is
-// `"paragraph block*"` (entry-schema.ts): a nested `bullet_list`/
-// `ordered_list` can only ever live INSIDE a `list_item`, never directly
-// beside one inside a `bullet_list`/`ordered_list` (whose own content is
-// `"list_item+"`), so this schema cannot reproduce UpNote's sibling shape
-// at all. `sinkFirstListItem` is the schema-legal equivalent: it wraps the
-// first item in a freshly created, otherwise-empty PARENT `list_item` (its
-// own leading paragraph has no text, `checked: null`) whose only other
-// content is a new nested list holding the original item, now one level
-// deeper. That empty parent is rendered markerless in the Composer
-// (`index.css`'s own `.ProseMirror li` rules) — ADR 0071's own name for it.
-// ---------------------------------------------------------------------------
-
 /**
  * The schema-legal stand-in for UpNote's sibling-`<ul>` nesting (see this
  * section's own module comment above and ADR 0071) — reached only when
@@ -1194,69 +1167,6 @@ export const outdent: ComposerCommand = {
 // Tab / Shift-Tab outside any list — issue #233, ADR 0070.
 // ---------------------------------------------------------------------------
 
-/**
- * Tab with no list to indent: insert a literal U+2003 EM SPACE at the
- * caret and keep focus inside the Composer, rather than letting the
- * keystroke fall through to the browser's own native focus navigation.
- * This is UpNote's own verified behaviour for Tab on plain prose
- * (`upnote-macos-detail.md` Gap sweep Group B6; `upnote-editor-behaviour.md`'s
- * own pre-existing "Tab on plain (non-list) text inserts a literal U+2003
- * EM SPACE" finding) — copied deliberately here, unlike the three UpNote
- * behaviours ADR 0072 refuses to copy, because there is nothing
- * destructive about it. ADR 0070 records why Tab is swallowed
- * UNCONDITIONALLY — never falling through to native focus movement the
- * way this repo's OWN Shift-Tab still can (`outdentEmSpaceOrExit`, right
- * below) — rather than mirroring UpNote's own Tab exactly everywhere: a
- * Composer that let a forward Tab escape would strand a keyboard user
- * inside the Format toolbar and Send button that follow it in tab order,
- * with no equally-unconditional Shift+Tab of its own to back out of the
- * SAME way (`outdentEmSpaceOrExit`'s own comment explains why that one
- * keystroke does still get an exit).
- *
- * **A non-empty selection never has its own text deleted here — issue
- * #235, ADR 0072.** Before this ticket, this function's own
- * `state.tr.insertText(EM_SPACE, from, to)` — the ordinary
- * "replace the range `[from, to)`" shape `insertText` always has —
- * meant pressing Tab across a real selection REPLACED whatever it covered
- * with one em space, silently deleting it. For a selection spanning more
- * than one plain block, that is not hypothetical: it is UpNote's own
- * verified multi-block Tab defect, reproduced 2/2 on both platforms
- * (`upnote-macos-detail.md`/`upnote-android-detail.md` Gap sweep #2 Group
- * K1 — a two-block selection collapses to a single U+2003 em space on
- * macOS, and empties the earlier block outright on Android), and this
- * Composer's own pre-#235 `chainCommands(indent.run, insertEmSpace)`
- * reproduced the IDENTICAL destruction — confirmed directly against this
- * function before this comment was written, not assumed. ADR 0072 already
- * refuses to copy exactly this class of UpNote behaviour ("where UpNote
- * loses content, this Composer diverges on the record rather than copying
- * the loss"), and unlike the three divergences that ADR records as having
- * no code path here to even attempt, THIS one now does — `indent.run`
- * reaches this exact fallback for a real, buildable multi-block
- * plain-prose selection, so the divergence has to be real code, not only a
- * fixture row.
- *
- * The chosen replacement — "indenting every selected block is the
- * obvious reading of intent" — inserts ONE em space at the START of
- * every top-level plain block (a `paragraph` whose own parent is the
- * document root, not a `list_item`) the selection touches, leaving each
- * block's own text completely untouched: two blocks Tab'd together come
- * out as two INDENTED blocks, the multi-block generalisation of what Tab
- * already does to a single block, rather than one block's worth of
- * destroyed text. `list_item`s reached the same way `indent.run`'s own
- * `sinkListItem`/`sinkFirstListItem` already refused are deliberately left
- * alone here — genuinely indenting them is that command's own job, not
- * this fallback's, and this function has no schema-legal way to sink a
- * whole selected RANGE of items that `sinkListItem` itself already
- * declined (most commonly: the range starts at a list's first item, with
- * no preceding sibling for the WHOLE range to nest under —
- * `sinkFirstListItem`'s own guard only ever moves a single collapsed
- * caret's item, never a multi-item range). If the selection touches NO
- * top-level plain block at all — every block it spans is inside a list,
- * and indenting genuinely failed — this still never deletes anything: it
- * falls back to inserting one collapsed em space at the selection's own
- * start, the same single-character insertion a collapsed caret already
- * gets, rather than replacing the range.
- */
 export const insertEmSpace: Command = (state, dispatch) => {
   const { $from, empty, from, to } = state.selection;
   if (empty) {
@@ -1324,25 +1234,6 @@ export const insertEmSpace: Command = (state, dispatch) => {
   return true;
 };
 
-/**
- * Shift-Tab with no list to outdent: delete ONE preceding U+2003 EM SPACE
- * if the caret sits immediately after one — undoing exactly what
- * `insertEmSpace` above just inserted — and otherwise return `false`,
- * letting focus move BACKWARD out of the Composer. ADR 0070 names this the
- * one deliberate divergence from copying UpNote exactly: UpNote's own
- * Shift+Tab on plain prose is a pure content no-op that never moves focus
- * either (`upnote-macos-detail.md` Gap sweep Group B3), because UpNote is
- * never downstream of anything else a keyboard user might need to tab
- * onward to. This Composer sits ahead of a Format toolbar and a Send
- * button, and Tab (above) is swallowed unconditionally — so without SOME
- * way out, a reader who tabs INTO the field and never touches a list at
- * all would have no keyboard path back to the rest of the page. Shift-Tab
- * in bare prose with nothing to undo is that path: the one gesture this
- * repo lets fall through to the browser's own native backward focus
- * navigation, confined to exactly the case UpNote itself already treats as
- * a no-op, so nothing this repo's own document ever needed to keep is at
- * stake either way.
- */
 export const outdentEmSpaceOrExit: Command = (state, dispatch) => {
   const { $from, empty } = state.selection;
   if (!empty) {

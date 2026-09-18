@@ -4,11 +4,11 @@
 
 Accepted. Ratified by the owner 2026-09-16.
 
-**Resolves `ANAV-01`**, which [0082](0082-todoist-is-the-specification-per-platform.md) named as an
+**Resolves the phone-bar fork**, which a since-retired ADR named as an
 open fork and explicitly assigned to the owner rather than to whoever drove next: *"whether
 meologue's phone adopts a `Browse` hub and drops from six destinations to four — is the largest of
-these and has no issue of its own yet."* It is applied under 0082's own per-platform rule, and takes
-nothing from it.
+these and has no issue of its own yet."* It is applied under that ADR's own per-platform rule, and
+takes nothing from it.
 
 Amends the destination set of [0049](0049-todo-is-the-first-destination-with-internal-navigation.md)
 without touching its argument, and depends on
@@ -22,13 +22,13 @@ into one bar. Todoist Android carries four: Inbox, Today, Upcoming, and **Browse
 Filters & Labels, Reporting and Projects consolidated behind that fourth tab. Read live on the device
 2026-09-16 against Todoist v12278.
 
-**Two independent arguments point the same way, and only one of them is about parity.**
+**Two independent arguments point the same way, and only one of them is about Todoist.**
 
-The parity argument is 0082's: meologue's Android build follows Todoist Android, and this is the
-largest structural disagreement between them.
+The first argument is that meologue's Android build follows Todoist Android, and this is the largest
+structural disagreement between them.
 
-The second argument is accessibility, and it would hold even if Todoist did not exist. Ledger row
-`ANAV-05` measures meologue's tab target at 68.1 x 46 CSS px against Todoist's 100.6 x 80.0, and
+The second argument is accessibility, and it would hold even if Todoist did not exist. A live
+measurement puts meologue's tab target at 68.1 x 46 CSS px against Todoist's 100.6 x 80.0, and
 names the cause: *"meologue's tab target is 46 CSS px — under the 48dp minimum, and 34px shorter than
 Todoist's. Six tabs in 426px is what forces it."* Six tabs across a 426px phone cannot be given a
 48dp target; four can. `todo-nav.tsx`'s own `min-w-0` comment already records the earlier stage of
@@ -58,8 +58,8 @@ Browse. A weaker claim, and the strongest one still true — an invariant that m
 code would not have caught either original defect.
 
 **Width-gated, not platform-branched.** The bar renders below 1200px on every target, so a narrow
-desktop window gets Browse too. 0082 records that no Todo component is branched by build target and
-treats that as load-bearing evidence — `vite.config.ts` resolves six aliases per target and every one
+desktop window gets Browse too. No Todo component is branched by build target, and that is
+load-bearing evidence here — `vite.config.ts` resolves six aliases per target and every one
 is a platform shim, never a UI component. Branching here to keep six tabs on narrow web would have
 been the first exception, bought for a shell nobody has measured against either reference.
 
@@ -111,15 +111,11 @@ existing `--td-*` tokens.
 
 ## Consequences
 
-**Two ledger rows that read `matched` sit next to a changed bar and must be re-driven, not assumed.**
-`ANAV-02` (the Quick Add FAB, 56 CSS px, 16 CSS px above the bar) and `ANAV-07` (the status-bar
-inset). Reading the source says `floatingAction` is anchored to a wrapper whose bottom edge is
-`TodoNav`'s top edge regardless of the bar's height, so neither should move — but that is a source
-fact, not a reading, and 0082 is explicit that those are different claims with different failure
-modes.
-
-**`ANAV-03`, `ANAV-04` and `ANAV-05` all change status together**, and `ANAV-04` becomes
-`divergent — by decision` rather than an open gap, on the strength of the Search ruling above.
+**Two measurements sit next to a changed bar and must be re-driven, not assumed.** The Quick Add
+FAB (56 CSS px, 16 CSS px above the bar) and the status-bar inset. Reading the source says
+`floatingAction` is anchored to a wrapper whose bottom edge is `TodoNav`'s top edge regardless of
+the bar's height, so neither should move — but that is a source fact, not a reading, and those are
+different claims with different failure modes.
 
 **The 900-1199px band gains its load-bearing role from this ADR.** 0083 created a band where the
 chat list and the bar are both on screen and `TodoSidebar` is not. In that band Browse is the *only*

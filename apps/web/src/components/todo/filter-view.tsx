@@ -382,7 +382,6 @@ function FilterResultGroup({
   );
 }
 
-/** One matching Task's own row — active or completed alike, told apart only by `completed-task-text` (`task.completedAt !== null`), the same "same row, distinguished only by an added class" shape `ROW-14` (parity-ledger.md) established for the Inbox/Project row. This screen never used `TaskRow` for either, so there is no fuller row to preserve here — this is the lightweight preview row issue #185 built, unchanged by issue #358 beyond now also rendering a completed Task's row. */
 function FilterResultRow({
   task,
   projects,

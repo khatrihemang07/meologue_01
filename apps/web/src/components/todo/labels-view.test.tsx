@@ -31,7 +31,6 @@ function renderLabelsView(overrides: Partial<Parameters<typeof LabelsView>[0]> =
   return { ...render(<LabelsView {...props} />), props };
 }
 
-/** Opens the given row's "Label options menu" (STR-05) and clicks the named item. */
 function openRowMenuAndClick(rowIndex: number, itemName: string) {
   // Radix's `DropdownMenu.Trigger` opens on `pointerdown`, not `click`
   // (task-schedule-popover.test.tsx's own identical "Repeat menu"
@@ -44,7 +43,7 @@ function openRowMenuAndClick(rowIndex: number, itemName: string) {
   fireEvent.click(screen.getByRole("menuitem", { name: itemName }));
 }
 
-describe("LabelsView — Add label dialog (STR-04)", () => {
+describe("LabelsView — Add label dialog", () => {
   it("shows an empty message with no Labels yet", () => {
     renderLabelsView();
 
@@ -128,7 +127,7 @@ describe("LabelsView — Add label dialog (STR-04)", () => {
   });
 });
 
-describe("LabelsView — options menu (STR-05)", () => {
+describe("LabelsView — options menu", () => {
   it("offers exactly Edit and Delete, in that order", () => {
     renderLabelsView({ labels: [label()] });
 
@@ -139,7 +138,7 @@ describe("LabelsView — options menu (STR-05)", () => {
   });
 });
 
-describe("LabelsView — Edit label dialog (STR-04)", () => {
+describe("LabelsView — Edit label dialog", () => {
   it("Edit opens the dialog prefilled with the Label's current name and colour", async () => {
     renderLabelsView({ labels: [label({ name: "Work", colour: "#DC4C3E" })] });
 
@@ -230,10 +229,7 @@ describe("LabelsView — Edit label dialog (STR-04)", () => {
   });
 });
 
-describe("LabelsView — delete (STR-03, unchanged wording)", () => {
-  // Verbatim (meologue-reference/todoist/quick-add.md § "Destructive
-  // confirmation wording"): "Delete label? The <name> label will be
-  // permanently deleted." Buttons Cancel/Delete.
+describe("LabelsView — delete (unchanged wording)", () => {
   it("Delete in the options menu shows Todoist's own verbatim delete wording", async () => {
     renderLabelsView({ labels: [label({ name: "Work" })] });
 

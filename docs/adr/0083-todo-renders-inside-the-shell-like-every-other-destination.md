@@ -16,7 +16,7 @@ renders changes.
 ## Context
 
 0076 decided that inside `/todo/*` at 900px and up, the shell's one pane renders `TodoSidebar`
-instead of `ChatListPane`. Its argument was parity: Todoist's web application is a persistent left
+instead of `ChatListPane`. Its argument was mimicry: Todoist's web application is a persistent left
 sidebar beside a content column, and "make it exactly like Todoist" was the instruction the work
 existed to satisfy.
 
@@ -58,13 +58,13 @@ because the premise the carve-out existed for — a pane that does not show the 
 
 ### What this takes
 
-**0076's parity argument is dropped at desktop width, deliberately.** Todoist's web shell is one
+**0076's mimicry argument is dropped at desktop width, deliberately.** Todoist's web shell is one
 sidebar beside one column; meologue at 1200px is now two navigations beside one column, which
 Todoist is not. That is a real loss and it is the price of the decision, not an oversight. The
 owner's framing — Todo should render "like composer or reflect" — is a claim about *this* app's
 internal consistency, and it was taken as outranking per-Destination mimicry of the reference.
-ADR 0082 already establishes that Todoist is the specification per platform; this ADR adds that
-specification does not extend to dissolving meologue's own shell.
+A since-retired ADR held that Todoist was the specification per platform; this ADR adds that
+specification never extended to dissolving meologue's own shell.
 
 **The chat list now repaints under Todo's palette.** ADR 0069 scopes Todo's tokens by setting
 `data-surface="todo"` on `documentElement`, and `ChatListPane` is now on screen while that attribute

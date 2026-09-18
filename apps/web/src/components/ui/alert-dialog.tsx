@@ -81,18 +81,6 @@ export interface ConfirmDialogProps {
    * run the delete itself.
    */
   onConfirm: () => void;
-  /**
-   * An optional passthrough to `DialogContent`'s own `onCloseAutoFocus`
-   * (`@/components/ui/dialog`, issue #342's focus-restore wrapper;
-   * task-detail-view.tsx's DET-15 discard-confirm is why this prop
-   * exists at all). Omitting it — every caller but that one — gets that
-   * wrapper's own generic default: restore focus to whatever was focused
-   * right before this dialog opened. DET-15's own confirm is opened
-   * programmatically, with no such "before" that means anything, so it
-   * supplies its own handler here (`event.preventDefault()`, then focus
-   * the field the reader was actually typing in) instead of taking that
-   * default.
-   */
   onCloseAutoFocus?: (event: Event) => void;
 }
 

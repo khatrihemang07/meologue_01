@@ -1,114 +1,3 @@
-/**
- * Todoist's own dedicated Custom repeat dialog (issue #292, blocked-by
- * #291 which this ticket's own instructions say already landed — the bang
- * alone decides the anchor now, `../../../../packages/core/src/recurrence/
- * parser.ts`'s `resolveAnchor`). Captured live 2026-09-15
- * (`meologue-reference/todoist/live-audit-dom/
- * custom-repeat-dialog-todoist-2026-09-15.json`, with the four
- * `screenshots/custom-repeat-*-2026-09-15.png` beside it — that capture is
- * the one that opened the unit dropdown and the "On date" reveal, which
- * the earlier `recurrence-reschedule-todoist-2026-09-14.json` never did):
- * `role="dialog"`, named
- * "Custom repeat", 480×403, `rgb(31,31,31)` background, 10px radius,
- * `rgba(0,0,0,.16) 0 2px 8px` shadow — a `<form>` with three groups
- * ("Based on", "Every", "Ends") plus Cancel/Save.
- *
- * **A thin phrase-builder over the existing recurrence grammar, not a
- * second one.** Issue #292's acceptance criterion is "a rule built here
- * commits through the same `onPickRecurrence` path the typed phrase uses —
- * one representation, not two," exactly like `task-schedule-popover.tsx`'s
- * own Repeat menu (SCHED-14) already does for its five named cadences. So
- * this component's whole job is turning four controls into a phrase string
- * — the same string a reader could have typed into "Type a date" — and
- * handing it to `onSave`. It never computes a date, never touches a Task,
- * and never invents a second `RecurrenceRule`-shaped value: seeding reads
- * one (via `parseRecurrence`), and saving only ever produces text.
- *
- * **The unit dropdown is Todoist's own captured shape, hand-rolled rather
- * than Radix `Select`.** The capture recorded `div[role="combobox"]
- * [aria-haspopup="listbox"]` opening `div[role="listbox"]` of
- * `div[role="option"]` — Radix's `Select.Trigger` gives the identical
- * `role="combobox"`/`role="listbox"`/`role="option"` triad (verified
- * against `@radix-ui/react-select`'s own source) but renders the trigger
- * as a `<button>`, not a `<div>`, and its listbox positioning code calls
- * `scrollIntoView`/pointer-capture APIs jsdom doesn't implement — a known
- * "works in a browser, throws in every jsdom suite" trap. This file
- * instead follows this repo's own existing house pattern for exactly this
- * shape (`quick-add-autocomplete-listbox.tsx`'s `role="listbox"`/
- * `role="option"` div tree, driven by local component state) rather than
- * either alternative.
- *
- * **"Every N Weekday(s)" cannot be expressed, so the stepper is disabled,
- * not hidden.** meologue's grammar gives `workdays` (Todoist's captured
- * "Weekday" label; the grammar's own accepted word is "workday" —
- * `parser.ts`'s `/^workdays?$/`, the same divergence
- * `task-schedule-popover.tsx`'s own Repeat-menu comment already names for
- * this identical word) a fixed interval of 1 unconditionally
- * (`parser.ts:234`): there is no phrase this dialog could emit for "every
- * 2 workdays," because the parser would just as unconditionally reinterpret
- * it. Selecting Weekday disables the interval input (with a visible
- * caption, not a silent ignore) rather than emitting a phrase the parser
- * would refuse or reinterpret. Whether Todoist itself allows N>1 for its
- * own "Weekday" option was never captured — this file makes no parity claim
- * either way, only the honest local constraint.
- *
- * **The Unit dropdown can't represent every frequency `parseRecurrence`
- * can produce, and seeding says so rather than guessing.** The dropdown
- * only offers Day/Week/Weekday/Month/Year (Todoist's own captured option
- * list) — a rule whose frequency is a specific weekday list ("every
- * friday", the Repeat menu's own "Week" quick option, SCHED-14) or an
- * ordinal weekday ("every 3rd friday") has no dropdown value that means it.
- * `deriveDraft` below falls back to the captured Day/1 default for the
- * *frequency* half of the draft in that case, while still seeding
- * "Based on" and "Ends" correctly (those never depended on the frequency
- * at all) — so opening this dialog on such a rule and clicking Save without
- * touching anything else would replace it with a plain daily rule.
- *
- * That is a real way to lose a rule, so the dialog **says so on screen**
- * (`unrepresentablePhrase` below, and the warning at the top of the form)
- * rather than only in this comment: a reader who opens Custom… on a Task
- * that repeats "every friday" is told, in the phrase's own words, that
- * saving replaces it. A comment cannot warn the person it happens to, and
- * the failure is otherwise invisible until the next occurrence lands on the
- * wrong day. What Todoist shows in the same situation was never captured —
- * its unit list is identical, so it has the same problem — so this line is
- * meologue's own, and the ledger records it as a divergence rather than a
- * match.
- *
- * **The "On date" field's default is this dialog's own choice, not
- * Todoist's.** The reference capture recorded Todoist's own default as
- * `13/10/2026` when the scheduled date was 15 Sep 2026 — a single
- * observation, with no formula behind it ever derived (this ticket's own
- * instruction: do not invent a +28-day rule or any other guess from one
- * data point). This file does not attempt to reproduce it. Instead the
- * "On date" field defaults to `now`'s own day — a deliberately simple,
- * non-guessed default with no arithmetic to get wrong, mirroring
- * `task-time-dialog.tsx`'s own `DEFAULT_TIME` reasoning ("reads as a
- * sane default without guessing a reader's actual schedule").
- *
- * Every other structural decision below mirrors `task-time-dialog.tsx`
- * deliberately, not by coincidence — it solved the identical problems
- * first: Radix `Dialog`, `modal={false}`, no `Overlay`, portalled,
- * `z-[70]`; re-seed the local draft on every open via the identical
- * `useEffect`-on-`open` pattern (a dismiss — Cancel, Escape, an outside
- * click, all left as Radix's own ordinary behaviour — never commits, so
- * the next open must reflect the Task's real recurrence, not an abandoned
- * draft); an `onEscape` prop fired alongside Radix's own default Escape
- * handling (not `preventDefault()`-ed) so the host can close the scheduler
- * beneath it; `sr-only` `Dialog.Title`/`Description`.
- *
- * The dialog's own height is fixed (403px, not `minHeight`), not merely
- * copied from the capture — Todoist's own dialog is recorded as *not*
- * resizing when the "On date" row appears, and a fixed height (rather than
- * a `minHeight` that would let the tree grow) is what keeps that true
- * regardless of which "Ends" branch is showing. That fixed height is still
- * the whole story at the captured 480px width; once the width itself can
- * shrink below that (see the `className` on `DialogContent` (`@/components/ui/dialog`)
- * below), content can need more than 403px, and the `<form>`'s own
- * `overflow-auto`/`min-h-0` is what makes that scroll inside the fixed
- * frame instead of clipping — see that style block's own comment for the
- * preserved/relaxed split.
- */
 import type { MonthDay, RecurrenceFrequency } from "@meologue/core";
 import { parseRecurrence } from "@meologue/core";
 import { format } from "date-fns";
@@ -456,24 +345,7 @@ export function TaskCustomRepeatDialog({
           open={open}
           restoreFocusTo={restoreFocusTo}
           data-testid="custom-repeat-dialog"
-          // See this file's own header comment (task-time-dialog.tsx's
-          // identical SCHED-11 follow-up) — not preventDefault()-ed, so
-          // Radix's own default Escape handling (close this dialog) still
-          // runs alongside it.
           onEscapeKeyDown={onEscape}
-          // `w-[480px]` is the captured desktop width (this file's own
-          // header comment) — kept as-is, not shrunk, since it's a parity
-          // value, not a guess. `max-w-[calc(100%-2rem)]` is the clamp: for
-          // `position: fixed`, `%` resolves against the viewport, so this
-          // caps the dialog at "viewport width minus a 1rem gutter on each
-          // side" once the viewport is narrower than 480px, the same
-          // `w-[N] max-w-[calc(100%-2rem)]` shape `quick-add-dialog.tsx`
-          // already uses for its own centered dialog. Without it, measured
-          // live at a ~400px viewport: the dialog stayed hard 480px wide,
-          // rendered at `x: -40` overhanging both edges by 40px with no
-          // clamping and no scroll — left-edge labels truncated ("Based on"
-          // -> "ed on"), the calendar-icon button and most of "Save" cut off
-          // the right edge.
           className="-translate-x-1/2 -translate-y-1/2 fixed top-1/2 left-1/2 z-[70] flex w-[480px] max-w-[calc(100%-2rem)] flex-col gap-3 p-4 text-sm outline-hidden"
           style={{
             // PRESERVED: fixed, not `minHeight`. Todoist's own captured
@@ -515,37 +387,8 @@ export function TaskCustomRepeatDialog({
 
           <form
             onSubmit={handleSave}
-            // `justify-between` (not the default `justify-start` +
-            // `mt-auto` on just the button row) spreads the default
-            // "Ends: Never" state's ~150px of slack (measured, 480x403)
-            // across the gaps between every group instead of leaving it as
-            // one block of empty space sitting right above Cancel/Save —
-            // which is what read as a layout bug on inspection, even though
-            // the total dialog height (the thing that's actually parity-
-            // measured) is unchanged either way. `min-h-0` overrides this
-            // flex item's default `min-height: auto`, which is what lets
-            // `overflow-auto` below actually scroll instead of forcing the
-            // fixed-height dialog above to grow — see that style's own
-            // comment for why this half is a deliberate relaxation, not an
-            // oversight.
             className="flex flex-1 min-h-0 flex-col justify-between gap-4 overflow-auto"
           >
-            {/*
-              The dropdown's five units cannot express every frequency the
-              grammar parses (this file's own header comment) — a named
-              weekday ("every friday", the Repeat menu's own "Week" item) or
-              an ordinal weekday ("every 3rd friday") seeds `deriveDraft`'s
-              Day/1 fallback. Without this line, opening the dialog on such a
-              Task and pressing Save — changing nothing — would replace the
-              rule with a plain daily one, and the reader would have no way
-              to know that had happened until the next occurrence landed on
-              the wrong day. Saying so is not a parity claim: what Todoist
-              shows in the same situation was never captured (its own unit
-              list is identical, so it has the same problem to solve), and
-              inventing its wording would be guessing. This is meologue's
-              own disclosure, recorded as a divergence rather than dressed
-              up as a match.
-            */}
             {unrepresentable !== null && (
               <p
                 data-testid="custom-repeat-unrepresentable"

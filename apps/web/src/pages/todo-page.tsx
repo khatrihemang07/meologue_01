@@ -187,16 +187,8 @@ const VIEW_HEADINGS: Record<Exclude<TodoBackgroundView["view"], "project" | "fil
   activity: "Activity",
   filters: "Filters & Labels",
   labels: "Labels",
-  // ANAV-01: Todoist's own name for this screen (measured live, v12278) —
-  // not "Menu" or "More", which is what a generic hub might otherwise be
-  // called.
   browse: "Browse",
 };
-
-// CMT-05 (parity ledger) — how long a completion toast stays up, and CMT-04
-// (`role="alert"`) — both measured live against Todoist and now shared with
-// `composer-page.tsx` (issue #355) rather than kept as this page's own copy;
-// `use-completion-toast.tsx`'s own header comment has the full measurement.
 
 /**
  * A Project's or a Filter's own resolved name (acceptance criterion: "The
@@ -253,74 +245,6 @@ export interface TodoPageProps {
     | "browse";
 }
 
-/**
- * Todo's four views (issue #168's Inbox, issue #169's Today, issue #171's
- * Projects list and one Project's own screen) — ADR 0049 names every
- * `/todo/*` route as rendered through this one lazy chunk, and this
- * component is the seam that picks between them via `view` rather than
- * each view owning its own page module.
- *
- * Inbox and a Project's own view **share one list component**
- * (`components/todo/task-list.tsx`) — issue #171's own acceptance
- * criterion, "opening a Project lists its Tasks, reusing the list Inbox
- * already uses" — rather than either being a second implementation of
- * drag/keyboard reorder. Both read `TaskStore.listByProject` (via
- * `listTasksInProject`, use-tasks.ts), `projectId: null` meaning Inbox:
- * before this ticket Inbox read the flat, cross-Project `tasks` array
- * (TaskStore.list()), which now means "every Task everywhere," not
- * "Inbox" — see that field's own doc comment (entry-store-layout.tsx) for
- * why its meaning stays global rather than narrowing. Today keeps reading
- * the flat `tasks` array, unchanged: it is a cross-Project view by design
- * (a dated Task shows up there regardless of which Project or Inbox it
- * lives in), and it still has no drag-to-reorder of its own — task-views.ts's
- * `today()` computes its order.
- *
- * Renders through `Shell` the same way every other Destination does,
- * `composerSlot={<TodoNav />}` docking Todo's own internal navigation at
- * the pane's bottom edge, regardless of which view is open.
- * `floatingAction={<TodoCreateFab />}` (issue #304) rides alongside it —
- * both unconditional here, per-view scoping (narrow-only, "wide" hides
- * both) lives in `TodoNav`/`TodoCreateFab` themselves, the same "Add task"
- * door `todo-sidebar.tsx`'s own reaches from anywhere in Todo, not a
- * per-view one.
- *
- * The Add form, the delete confirmation, and the schedule sheet are all
- * owned here, once, and shared by every view that needs them rather than
- * each growing its own copy — deleting or scheduling a Task is the
- * identical act regardless of which view's row a reader tapped it from,
- * and `confirmingTask`/`schedulingTask` below are looked up against the
- * flat `tasks` array precisely because that array still holds every Task
- * anywhere (its own doc comment, above), so one lookup works for a row
- * from any view without this component needing to know which scope it
- * came from.
- *
- * ROW-14 (parity-ledger.md), the user's 2026-09-13 decision to match
- * Todoist: there is no Completed disclosure here any more.
- * `completed-tasks.tsx` used to be exactly that — a separate, collapsed
- * `<details>` this page rendered once, below Inbox's own list — and this
- * page's own `completedTasks` (from `useEntryStore()`) now instead flows
- * straight into `TaskList`/`ProjectView`, which interleave each completed
- * Task inline, in place, alongside the active siblings it belongs among
- * (`task-tree.tsx`'s own doc comment on the merge). `handleUncompleteTask`
- * below is the one new door this page adds — the task-shaped callback
- * `TaskList`'s own `onUncomplete` prop calls, adapting the store's
- * id-based `uncompleteTask` the identical way `handleCompleteTask` already
- * adapts `handleComplete`.
- *
- * The Add form is shared too, but it is **not** context-free — see
- * `captureDate`/`captureProjectId` below. It renders once, but not first:
- * issue #252 moved its render to just before the Completed disclosure that
- * used to sit here (near the bottom of the JSX below) so it lands after
- * whichever list is on screen rather than above it, matching Todoist's own
- * end-of-list "+ Add task" row (NAV-10, parity ledger) — position only,
- * and unaffected by that disclosure's own later removal: the list itself
- * is still whatever's on screen, now just interleaved rather than
- * followed by a second block. The elements themselves are unchanged: the
- * field stays always-mounted and the Add button stays rendered-but-
- * disabled rather than either unmounting until a click, the click-to-
- * reveal composer with its own pickers being a deliberately deferred,
- * separate ticket (NAV-12, parity ledger).
- */
 export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
   const {
     projectId: routeProjectId,
@@ -540,15 +464,6 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
   const [quickFindOpen, setQuickFindOpen] = useState(false);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
 
-  // Issue #260 (NAV-07, parity ledger): the global Quick Add dialog's own
-  // `open` state, the identical "controlled from the page" shape
-  // `quickFindOpen`/`shortcutsOpen` above already use. Two different
-  // triggers ask for it — `Q` via `useTodoKeymap` below (dispatched as
-  // `OPEN_QUICK_ADD_EVENT`, `use-todo-keymap.ts`'s own `quick-add` case)
-  // and `todo-sidebar.tsx`'s "Add task" button, which dispatches the
-  // identical event directly since that component sits outside this
-  // page's own Outlet and has no other door in. One listener here answers
-  // both.
   const [quickAddOpen, setQuickAddOpen] = useState(false);
   useEffect(() => {
     function handleOpenQuickAdd() {
@@ -584,14 +499,6 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
     setSchedulingId(taskId);
   }
 
-  // Day-keys carrying at least one active Task, mapped to how many —
-  // TaskSchedulePopover's own doc comment on why SCHED-09's calendar dot
-  // and SCHED-04's preview subline share this one source rather than two
-  // independently-computed counts. Recomputed only when `tasks` itself
-  // changes, not on every render the schedule sheet happens to be open
-  // for — every Task in the list counts, including the one currently
-  // being scheduled, matching how a real calendar dot would read "how
-  // many Tasks land here" regardless of which one opened the picker.
   const datesWithTasks = useMemo(() => {
     const counts = new Map<string, number>();
     for (const task of tasks) {
@@ -604,36 +511,6 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
     return counts;
   }, [tasks]);
 
-  // Completing raises the same Undo-toast affordance
-  // register-service-worker.web.ts's own update prompt uses
-  // (`toast(..., { action: { label, onClick } })`), mirroring that shape
-  // rather than inventing a second one for this app to carry.
-  //
-  // This does not reopen issue #82's removal of undo-on-delete. That
-  // removal exists because an Entry delete is terminal at the id level —
-  // use-history.ts's own long comment on `removeEntry` explains that the
-  // Server's `on conflict ... where entries.deleted_at is null` guard makes
-  // reviving a deleted id impossible, so a "restore" would have to mint a
-  // fresh id and diverge permanently from what every other Device already
-  // converged on. Completing a Task is a different act entirely: the row
-  // is not deleted, not tombstoned, not even touched at the id level —
-  // `uncomplete()` just clears `completedAt` and clears `seq` the same way
-  // any other edit does, and it Syncs like any other write. There is
-  // nothing here for "permanently diverges" to mean.
-  // `dateString` decides which mutation "completing" actually means
-  // (issue #170): a recurring Task (`dateString !== null`) never enters
-  // the completed list at all (TaskStore.advanceRecurring's own doc
-  // comment — "the checkbox does not un-tick itself"), so there is
-  // nothing here for the Undo toast to reverse and none is offered; the
-  // row itself already shows the next occurrence the moment this
-  // component re-renders.
-  // CMT-04 (parity ledger) — Todoist's own wording is task-agnostic and
-  // count-based ("1 task completed"), not `Completed "<name>"`; matched
-  // verbatim rather than kept as the more informative original. `content`
-  // stays in the signature even though this branch no longer reads it:
-  // `onComplete` below is bound directly to this function, and its shared
-  // type (task-row-content.tsx/task-row.tsx, outside this ticket) still
-  // passes it.
   function handleComplete(taskId: string, _content: string, dateString: string | null) {
     if (dateString !== null) {
       advanceRecurringTask(taskId);
@@ -643,25 +520,6 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
     completionToast.raise("1 task completed", () => uncompleteTask(taskId));
   }
 
-  // Ends a recurring Task's series (TaskStore.completeForever's own doc
-  // comment) — reached via Shift+Click on the checkbox or the touch-
-  // reachable button (task-row.tsx). Undo is still offered — `uncomplete()`
-  // clears `completedAt` unconditionally — but it only restores an
-  // ordinary, non-recurring active Task: `completeForever` also clears
-  // `dateString` for good, and undoing a completion has never been this
-  // programme's mechanism for restoring a rule that was deliberately
-  // ended (`uncomplete`'s own doc comment never claims otherwise). The
-  // toast's own wording says so, rather than promising more than Undo
-  // actually gives back.
-  //
-  // CMT-04 (parity ledger): "1 task completed" replaces this row's own
-  // `Completed "<name>"`, matching `handleComplete` above — Todoist's own
-  // wording, verbatim. Todoist has no equivalent "series ended" variant to
-  // match against, so " — the recurrence has ended" is kept, appended to
-  // the same base, rather than dropped: losing it would silently hide the
-  // one piece of information this toast alone carries. `content` stays
-  // in the signature for the same shared-callback reason as
-  // `handleComplete`'s own comment above.
   function handleCompleteForever(taskId: string, _content: string) {
     completeForeverTask(taskId);
     completionToast.raise("1 task completed — the recurrence has ended", () =>
@@ -691,15 +549,6 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
     handleRequestDelete(task.id);
   }
 
-  // ROW-14 (parity-ledger.md), the user's 2026-09-13 decision to match
-  // Todoist: a completed row's own checkbox click reaches this — not
-  // `handleCompleteTask` again — through `TaskList`/`TaskTree`'s own
-  // `onUncomplete` prop (task-tree.tsx's own doc comment on why it's a
-  // second callback, not a branch inside `onComplete`). The task-shaped
-  // signature matches every other TaskList/TaskTree callback on this page
-  // (`handleCompleteTask` et al., just above) rather than the store's own
-  // id-based `uncompleteTask` — this page is the one place that adapts
-  // between the two shapes, not every caller several layers down.
   function handleUncompleteTask(task: Task) {
     uncompleteTask(task.id);
   }
@@ -880,17 +729,11 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
     onSetTaskDate: setTaskDate,
     onSetTaskDeadline: setTaskDeadline,
     onRequestDelete: handleRequestDelete,
-    // KBD-01: E completes the focused task, and Cmd/Ctrl+Shift+C copies its
-    // link — both reuse the handlers the row's own controls already call.
     onCompleteTask: handleCompleteTask,
     onCopyLink: copyTaskLink,
     onOpenQuickFind: () => setQuickFindOpen(true),
     onShowShortcuts: () => setShortcutsOpen(true),
     onNavigate: navigate,
-    // CMT-05 — `completionToast`'s own one door onto the pending undo
-    // (`use-completion-toast.tsx`'s own doc comment has the full
-    // reasoning). Nothing pending is `fireUndo`'s own no-op to make, not a
-    // `null` `use-todo-keymap.ts` has to branch on.
     onUndoComplete: completionToast.fireUndo,
   });
 
@@ -1190,10 +1033,6 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
 
       {backgroundView.view === "filters" && <FiltersView filters={filters} labels={labels} />}
 
-      {/* Issue #229's own gap: a real destination for the sidebar's
-          "Filters & Labels" row (ledger row NAV-06) — full Label
-          create/rename/recolour/delete, previously wired to no UI at
-          all. */}
       {backgroundView.view === "labels" && (
         <LabelsView
           labels={labels}
@@ -1229,10 +1068,6 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
           />
         ))}
 
-      {/* ANAV-01: the bar's fourth row (`todo-nav.tsx`) opens this —
-          `browse-view.tsx`'s own header comment has the full reasoning for
-          which of real Todoist's eleven rows this rebuilds and which it
-          deliberately skips. */}
       {backgroundView.view === "browse" && <BrowseView />}
 
       {backgroundView.view === "search" && (
@@ -1246,10 +1081,6 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
         />
       )}
 
-      {/* Issue #184: the view across everything, or one Project's own
-          history when opened with `?projectId=`. CMT-07: no "Completed
-          only" toggle, by the user's decision on 2026-09-13 to match
-          Todoist, which has none. */}
       {backgroundView.view === "activity" && (
         <div className="flex flex-col gap-2">
           {/* This whole block already only renders once `view === "activity"`
@@ -1283,20 +1114,6 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
         </div>
       )}
 
-      {/* Issue #252: moved here, from before the view switch above, so it
-          renders *after* whichever list is showing rather than above every
-          one of them — Todoist's own "+ Add task" affordance sits at the
-          end of the list (NAV-10, parity ledger), not above it. Inbox,
-          Today and a Project's own view are mutually exclusive branches
-          (only one of the blocks above ever actually renders something),
-          so one render, placed once here, lands after the list in all
-          three with no per-view duplication — the identical trick this
-          file's own header comment already relies on for `AddTaskForm`
-          being "shared... once." Guard condition is unchanged from
-          before the move: the Projects list, full search, Activity,
-          Filters, a saved Filter, Labels and Upcoming still get none (this
-          component's own next paragraph explains why each one specifically
-          has no "current view" for a captured Task to inherit). */}
       {backgroundView.view !== "projects" &&
         backgroundView.view !== "search" &&
         backgroundView.view !== "activity" &&
@@ -1304,10 +1121,6 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
         backgroundView.view !== "filter" &&
         backgroundView.view !== "labels" &&
         backgroundView.view !== "upcoming" &&
-        // ANAV-01: Browse is a hub of links, not a Task list — it has no
-        // "current view" for a captured Task to inherit, the identical
-        // reason every other non-list view above is already excluded (this
-        // block's own doc comment, further up).
         backgroundView.view !== "browse" && (
           <AddTaskForm
             onAdd={handleAdd}
@@ -1319,15 +1132,6 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
           />
         )}
 
-      {/* NAV-07 (parity ledger): the global Quick Add dialog, reachable
-          from anywhere in Todo — the sidebar's "Add task" button and the
-          `Q` key both open it (this file's own `quickAddOpen` state doc
-          comment above). Shares `handleAdd` verbatim with the inline
-          composer above: `captureProjectId`/`captureDate`'s own doc
-          comment already resolves "the current view's Project, or Inbox"
-          for whichever view is on screen, exactly what this dialog needs
-          too, and there is no separate view-inheritance rule for it to
-          duplicate. */}
       <QuickAddDialog
         open={quickAddOpen}
         onOpenChange={setQuickAddOpen}
@@ -1368,32 +1172,7 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
             setConfirmingId(null);
           }
         }}
-        /*
-         * Todoist's own captured wording (quick-add.md § "Destructive
-         * confirmation wording"), matching the Project and Label dialogs
-         * this branch already aligned.
-         *
-         * It is worth being clear about what that costs, because the copy
-         * this replaces was not worse by accident. It said the row "stays
-         * gone on every Device, and there is no Undo (unlike completing,
-         * which you can always reverse)" — two things Todoist never has to
-         * say and this app arguably does: that deletion propagates through
-         * Sync, and that it is the one destructive act here with no undo,
-         * where completion always has one. Parity was the instruction, so
-         * parity wins; the loss is recorded in the ledger rather than
-         * quietly absorbed, so it can be reversed on purpose if the
-         * clearer copy turns out to matter more than the match.
-         */
         title="Delete task?"
-        // ROW-06 (parity-ledger.md): Todoist's own delete-confirmation
-        // dialog also renders a title's markdown — flow 10's decisive test
-        // quoted it as "The ZZ probe bold em code task will be permanently
-        // deleted." for a title verified to hold only literal `**bold**
-        // _em_ `code`` characters (`live-audit-dom/flow10-ROW-06-both.
-        // json`), where meologue's own dialog used to quote the raw
-        // markdown verbatim. Only the interpolated name gets `inlineProse`
-        // — the surrounding sentence ("The … task will be permanently
-        // deleted.") is this app's own copy, not part of the Task's title.
         description={
           confirmingTask && (
             <>The {inlineProse(confirmingTask.content)} task will be permanently deleted.</>

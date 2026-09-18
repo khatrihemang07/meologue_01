@@ -73,35 +73,11 @@ export type InlineNode =
    * (`entryBlocksToText`'s callers, a test) that wants the mark as typed.
    */
   | { kind: "taskReference"; taskId: string; label: string; raw: string }
-  /**
-   * A bare `http(s)://` URL (CMT-02), recognised only in "comment" mode
-   * (`parseCommentMarkdown`, below) — `parseInlineMarkdown`/`parseEntryMarkdown`
-   * never produce this node at all, since neither configures the
-   * `Autolink` extension that is this node's only source. `url` is
-   * guaranteed `http`/`https` by construction — `isSafeAutolinkUrl` below
-   * is checked before this node is ever built, not after — so a renderer
-   * needs no second check to hand it straight to an `<a href>`. `text` is
-   * always the same characters as `url`: a bare autolink has no separate
-   * label the way an explicit `[label](url)` would (that syntax stays out
-   * of the dialect entirely, ADR 0041), so there is nothing else for a
-   * reader to show.
-   */
   | { kind: "link"; url: string; text: string };
 
 const OPEN_BRACKET = 91; // [
 const CLOSE_BRACKET = 93; // ]
 
-/**
- * `Autolink`'s own `URL` node recognises `www.`, `http://`, `https://`,
- * `mailto:` and `xmpp:` (its own doc comment in `@lezer/markdown`) — more
- * than CMT-02 ever asked this app to linkify. Anything this returns
- * `false` for renders as the plain text it already was (`walkEntryInline`'s
- * own "URL" case, below) rather than becoming a link, which is also what
- * keeps a `javascript:` URL — not that `Autolink` ever recognises that
- * scheme as one of its own triggers, verified directly against the parser
- * — unreachable by a second, independent gate rather than by relying on
- * the upstream parser alone never changing its mind about what it accepts.
- */
 function isSafeAutolinkUrl(url: string): boolean {
   return /^https?:\/\//i.test(url);
 }
@@ -498,61 +474,10 @@ export function inlineNodesToText(nodes: readonly InlineNode[]): string {
  */
 export type EntryBlockNode =
   | { kind: "prose"; children: InlineNode[] }
-  /**
-   * `tight` (CMT-08, comment mode only) is CommonMark 5.3's own tightness
-   * bit — `listIsTight` (below) computes it directly off the raw source
-   * a list's items span, since a tight and a loose single-paragraph item
-   * parse to an identical `EntryListItem[]` shape and the distinction is a
-   * fact about the SOURCE (was there a blank line here), not about
-   * anything `collectBlocks` otherwise records. Left `undefined` by
-   * `parseEntryMarkdown` — `listToBlock` only computes it when its own
-   * `isComment` flag is set — so every existing `EntryBlockNode` an Entry's
-   * own tests already pin stays byte-for-byte unchanged: an absent key and
-   * an `undefined`-valued one compare equal to `toEqual`, but this function
-   * omits the key entirely for an Entry's own lists rather than relying on
-   * that. `entry-prose.tsx`'s renderer only ever reads it in `"comment"`
-   * mode, matching Todoist's own behaviour of dropping a tight item's `<p>`
-   * wrapper (`renderBlocks`'s own comment there has the render-side half).
-   */
   | { kind: "bulletList"; items: readonly EntryListItem[]; tight?: boolean }
   | { kind: "orderedList"; start: number; items: readonly EntryListItem[]; tight?: boolean }
-  /**
-   * `# heading` through `###### heading` (CMT-08) — `parseCommentMarkdown`
-   * only. `parseEntryMarkdown`'s own parser removes `ATXHeading` (and
-   * `SetextHeading`) entirely (ADR 0041, `entryParser`'s own `remove`
-   * list below), so `collectBlocks` never actually produces one from an
-   * Entry's tree even though this case exists in the shared type — the
-   * three new kinds here are reachable only from the tree
-   * `commentParser` builds. `level` is 1-6, read off `ATXHeading<n>`'s own
-   * node name (`atxHeadingLevel`, below).
-   */
   | { kind: "heading"; level: number; children: InlineNode[] }
-  /**
-   * `> quote` (CMT-08) — `parseCommentMarkdown` only, same non-production
-   * from an Entry's tree as `heading` above. `content` recurses through
-   * `collectBlocks` again, the same way a list item's own `content` does,
-   * so a quote can hold whatever a Document's top level can, one level
-   * down — a paragraph, a list, even a further nested quote.
-   *
-   * Only a single-line `> quote` is exercised (CMT-08's own live reading);
-   * a multi-line quote (`> line one\n> line two`) is parsed but not
-   * specially cleaned up — CommonMark's own continuation `>` on the
-   * second line is not a sibling node under this implementation's walk,
-   * it is `Paragraph` text that still carries its own literal `> `,
-   * exactly as `pushProseRuns` would already read it for any other
-   * lazy-continuation line. Nothing observed live needs more than that.
-   */
   | { kind: "blockquote"; content: readonly EntryBlockNode[] }
-  /**
-   * A fenced code block (CMT-08) — `parseCommentMarkdown` only, same
-   * non-production from an Entry's tree. `text` is the block's own inner
-   * text verbatim, with no escaping applied on the way in because there is
-   * no way back out: a comment is a plain string end to end (unlike an
-   * Entry's body, which round-trips through `entryMarkdownToDocument`/
-   * `entryDocumentToMarkdown` for the Composer), so nothing here ever
-   * reserializes this text into Markdown again. `lang` is the fence's own
-   * info string (```js`), when the author wrote one.
-   */
   | { kind: "codeBlock"; text: string; lang?: string };
 
 /**
@@ -775,13 +700,6 @@ function walkEntryInline(
         break;
       }
       case "URL": {
-        // Only ever seen when `commentParser` (below) produced this tree —
-        // `entryParser` never configures the `Autolink` extension that is
-        // this node's only source, so this case is dead code for an
-        // Entry's own body. `isSafeAutolinkUrl` is the CMT-02 safety gate:
-        // `Autolink` also recognises `www.`/`mailto:`/`xmpp:`, none of
-        // which this app asked to linkify, and those fall through to
-        // plain text exactly like any other unrecognised construct.
         const raw = body.slice(node.from, node.to);
         if (isSafeAutolinkUrl(raw)) {
           result.push({ kind: "link", url: raw, text: raw });
@@ -900,21 +818,6 @@ function blockquoteContentStart(quote: SyntaxNode, body: string): number {
   return nextChar === " " || nextChar === "\t" ? mark.to + 1 : mark.to;
 }
 
-/**
- * A `FencedCode` node's own info string and inner text — `undefined`/`""`
- * respectively when either is missing (an unlabelled fence, or a fence
- * with nothing between its two `` ``` `` lines). Verified directly against
- * a real parse (see this file's own module comment for the general
- * discipline): `@lezer/markdown` already coalesces a fence's own lines
- * into a single `CodeText` node spanning every line between the fences,
- * `\n` characters included between them — but NOT a trailing one after the
- * last content line, which `CodeText.to` stops short of. Todoist's own
- * rendered `<pre><code>` keeps that trailing newline (CMT-08's own reading:
- * `code block\n`), so it is appended back here rather than left to whatever
- * `CodeText`'s own span happens to include — cheap to match, and there is
- * no writer for this dialect to stay symmetric with either way (this
- * file's own module comment on `commentParser`, below).
- */
 function fencedCodeBlock(node: SyntaxNode, body: string): EntryBlockNode {
   const children = childNodes(node);
   const info = children.find((c) => c.type.name === "CodeInfo");
@@ -968,18 +871,6 @@ function hasBlankLine(body: string, from: number, to: number): boolean {
   return /\n[ \t]*\n/.test(body.slice(from, to));
 }
 
-/**
- * CommonMark 5.3's tightness bit (CMT-08, comment mode only —
- * `listToBlock`'s own `isComment` guard is what keeps this uncalled, and
- * therefore this field unset, for `parseEntryMarkdown`'s own lists; see
- * `EntryBlockNode`'s own comment on why that matters for a `toEqual` pin).
- * A list is loose when any two of its items are separated by a blank
- * line, or when one item's own content spans a blank line internally —
- * checked directly against the raw source each item spans, because a
- * tight and a loose single-paragraph item parse to an identical
- * `EntryListItem[]` shape and looseness is a fact about the SOURCE, not
- * about anything `collectBlocks` otherwise records.
- */
 function listIsTight(itemNodes: readonly SyntaxNode[], body: string): boolean {
   for (let index = 0; index < itemNodes.length; index += 1) {
     const item = itemNodes[index];
@@ -1022,57 +913,6 @@ function listToBlock(
     : { kind: "bulletList", items, ...tight };
 }
 
-/**
- * Splits one `Paragraph`/`Task` node's own content into one or more
- * `"prose"` blocks at every **block break** (ADR 0069) — a bare `\n`
- * character, tolerated forever rather than migrated: it is exactly what
- * ADR 0066's model wrote into storage for a single Enter, and ADR 0067's
- * one-time halving pass never reached every row (clock skew, a stale
- * pre-0066 client past its own cutoff, per that ADR's own Consequences),
- * so this reader has to keep rendering whatever is actually on disk, not
- * what it should say. `\` immediately followed by `\n` is not a bare `\n`
- * at all — it is a `HardBreak` node (`entryParser`'s own comment on why it
- * now stays enabled), which `walkEntryInline`'s own case turns into a soft
- * break that stays inside the block it sits in — so this function only
- * ever looks for a literal `\n` sitting in the GAP between `children` (or
- * before the first / after the last), never inside one of them: a `\n`
- * that happens to fall inside a mark's own span (a nested emphasis
- * spanning a lazy-continuation line, say) is left exactly where CommonMark
- * put it rather than torn in half by a split that has no markdown able to
- * close the mark on either side of it.
- *
- * `from`/`to` are handed in rather than read off `children` directly because
- * `collectBlocks` always passes its own running `cursor` — wherever the
- * PREVIOUS block actually ended — as `from`, never this node's own `.from`.
- * That is deliberate, not incidental: a `Paragraph`'s own `.from` skips
- * leading whitespace on its first line (`itemContentStart`'s own comment
- * names the identical swallowing for a list item's marker), so anchoring on
- * it here would silently drop real, typed indentation on a paragraph that
- * follows a blank line. Anchoring on `cursor` instead means this function's
- * own scan crosses the gap ahead of `children` too — every `\n` in a `\n\n`
- * (or longer) run between two `Paragraph` siblings gets `flush`ed exactly
- * like any other bare `\n`, and each of those flushes lands on an empty
- * range and is dropped by the `nodes.length > 0` check below, so the run
- * collapses to nothing rather than an empty block per newline. That
- * collapse is what makes a blank line and a single `\n` render identically
- * — the change this ADR makes visible without touching a single stored
- * body — and it is also what recovers the real leading whitespace
- * `Paragraph.from` would have swallowed: the actual content is simply
- * whatever text survives after every empty flush, spaces included.
- *
- * `isComment` (CMT-08) reverses the split entirely rather than configuring
- * it: a Task comment renders like Todoist's own — CommonMark's ordinary
- * "a bare `\n` is a soft break inside one paragraph" — so this whole
- * function collapses to a single `walkEntryInline` call over `[from, to)`
- * with no scan for `\n` at all. The character survives regardless, since
- * `walkEntryInline` already fills every gap between children verbatim
- * (`pushText`, that function's own logic) — it just never gets torn into a
- * second block for it. `entry-prose.tsx`'s renderer is what turns the
- * embedded `\n` this leaves behind into a real `<br>`, and only in
- * `"comment"` mode, so an Entry's own soft break (which reaches this same
- * function with `isComment` false) still renders through `white-space:
- * pre-wrap` exactly as it always has.
- */
 function pushProseRuns(
   blocks: EntryBlockNode[],
   children: readonly SyntaxNode[],
@@ -1231,39 +1071,6 @@ export function parseEntryMarkdown(body: string): EntryBlockNode[] {
   return collectBlocks(childNodes(tree.topNode), body, 0, false);
 }
 
-/**
- * `entryParser`'s block removals reversed for exactly the three forms
- * CMT-08 (`meologue-reference/todoist/parity-ledger.md`) found live Todoist
- * rendering in a Task comment that this app didn't — a heading, a
- * blockquote, a fenced code block — plus `Autolink` (CMT-02's
- * linkification), added rather than merely un-removed, since neither
- * `entryParser` nor `inlineParser` ever configured it.
- *
- * ADR 0041's reasons for removing all of this in the first place are
- * about `entryProse`'s seven ORIGINAL prose surfaces specifically — the
- * Entry bubble's floated clock needing one line box, the Digest card's
- * `scrollHeight`/`lineHeight` division, `CONTEXT.md`'s "an Entry stays
- * untitled and unorganized." None of the three applies to a Task comment:
- * `CommentRow` (`task-detail-view.tsx`) shares no line box with a floated
- * clock, a comment is never handed to the Digest clamp, and Todoist's own
- * comment surface already renders this way — CMT-02's own reading found
- * it renders "like the description's," not like an Entry's. That is the
- * live evidence this dialect exists at all, not a rule this file states
- * on its own authority.
- *
- * `SetextHeading`, `IndentedCode`, `HorizontalRule`, `HTMLBlock` and
- * `LinkReference` stay removed — nothing live observed needs them, and
- * `IndentedCode` in particular stays gone for `entryParser`'s own reason
- * (its own comment above): without it, accidental leading whitespace on
- * an ordinary line stays literal text instead of silently becoming a code
- * block.
- *
- * Never `entryMarkdownToDocument`'s parser, and never should be: a Task
- * comment is a plain string end to end — `CommentComposer`'s own
- * `<textarea>` (`task-detail-view.tsx`), no ProseMirror document behind it
- * — so there is no writer for this dialect to stay symmetric with, unlike
- * `entryParser`/`entryDocumentToMarkdown`'s matched reader/writer pair.
- */
 const commentParser = commonmark.configure([
   {
     defineNodes: ["DateReference", "EntryReference", "TaskReference"],
@@ -1285,15 +1092,6 @@ const commentParser = commonmark.configure([
   Autolink,
 ]);
 
-/**
- * A Task comment's body into block nodes (CMT-02/CMT-08) — `entryProse`'s
- * "comment" mode (`entry-prose.tsx`) reader, and `commentParser`'s only
- * caller. Shares `collectBlocks`/`walkEntryInline` with `parseEntryMarkdown`
- * above — the recursive walk itself is agnostic to which parser produced
- * its tree, and reuses `parseEntryMarkdown`'s exact list/checkbox/Reference
- * handling rather than a second copy of it — but never touches
- * `entryParser` itself. Same empty-body contract as `parseEntryMarkdown`.
- */
 export function parseCommentMarkdown(body: string): EntryBlockNode[] {
   if (body === "") {
     return [];
@@ -1339,37 +1137,6 @@ export function entryBlocksToText(blocks: readonly EntryBlockNode[]): string {
 /** A line that opens or closes a fenced code block — dropped entirely by `flattenCommentPreview`, below. */
 const FENCE_LINE = /^\s*```/;
 
-/**
- * CMT-06's content-preview chip flattening — Activity's own `You commented
- * {content} on {task}` (`format-event.ts`'s `describeEventLine`) shows
- * `{content}` as Todoist's own plain-text preview, not raw markdown source.
- * Reproduces both of CMT-06's own live-measured strings exactly (this
- * function's own test file pins both):
- *
- *   `**bold** and https://example.com` -> `bold and https://example.com`
- *   `*italic*\n~~strike~~\n# heading\n> quote\n\`\`\`\ncode block\n\`\`\`\n1. first`
- *     -> `italic strike # heading > quote code block 1. first`
- *
- * Deliberately NOT built on `parseCommentMarkdown`/`entryBlocksToText`
- * (unlike a bare checkbox's own accessible name, which reuses that pair):
- * `collectBlocks`' own heading/blockquote handling
- * (`headingContentStart`/`blockquoteContentStart`, above) strips a `#`/`>`
- * marker at PARSE time, before a walker ever sees it, but Todoist's own
- * second measured string keeps both verbatim — and so does the ordered
- * list's own `1.`, left alone for the identical reason: neither measured
- * string asks for it to go. Working off `body`'s own raw lines instead
- * keeps exactly what was measured: a fenced block's own two fence lines
- * dropped, its inner content kept, and only the three INLINE marks CMT-06
- * actually measured stripped (`**`, `*`, `~~`) — inline code's own
- * backticks are not among either measured string and are therefore
- * deliberately left alone.
- *
- * `format-event.ts` is this function's only caller — the comment templates'
- * own `{content}` and every description template's own (`You added a
- * description`/`You changed the description of`/`You removed the
- * description`), which read the identical raw text CMT-06 measured a chip
- * for.
- */
 export function flattenCommentPreview(body: string): string {
   return body
     .split("\n")

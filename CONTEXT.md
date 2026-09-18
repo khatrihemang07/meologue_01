@@ -473,7 +473,7 @@ reasons given above.
 Unlike that one, Send and History are safe: they name the *action* and the *view*, not the
 Entry itself, so they don't smuggle in the wrong properties.
 
-### "Project" — admitted, with a note
+### "Project" — kept, with a note
 
 "Project" is a heavy word for what this app holds: a personal list of Tasks, not a deliverable
 with a deadline, a budget, and other people depending on it. The honest objection is that
@@ -481,24 +481,23 @@ meologue has no projects in the sense the word usually carries — nothing here 
 across a calendar, or judged done against a scope someone signed off on. A plainer word would
 describe the thing more honestly, the way this glossary asks every other term to.
 
-It is admitted anyway, on a different ground than the rest of this glossary is chosen on. Every
-other term earns its place by describing this domain correctly. "Project" earns its place by
-matching a source this build will be read against for years: parity with Todoist means every
-design question meologue answers gets checked against Todoist's own help center and developer
-docs, over and over, for as long as the feature keeps growing. In that specific and recurring
-situation, a term that matches the source you are reading is worth more than a term that matches
-the app you are building — because the cost of a slightly wrong word is a note like this one,
-paid once, while the cost of a coined word is translating between two vocabularies every time the
-two are compared, paid forever. So "Project" stays "Project," not because it is the right word for
-a personal list, but because it is the wrong word that saves the most future work.
+It is kept anyway, on a different ground than the rest of this glossary is chosen on. Every other
+term earns its place by describing this domain correctly. "Project" earns its place by being a
+settled naming choice: it is the word every task-management app already taught its users, for a
+folder of Tasks gathered under one name, with no calendar or staffing implied by using it here. In
+that specific situation, the word a person already carries into the app is worth more than a word
+this domain would coin from scratch — because the cost of a slightly wrong word is a note like
+this one, paid once, while the cost of a coined word is re-teaching a habit the user did not
+choose to unlearn, paid every time they open the feature. So "Project" stays "Project," not
+because it is the right word for a personal list, but because it is the settled word that costs
+the least to keep.
 
 ### "composer" — not for Todoist's Quick Add
 
 "Composer" names one thing in this app: the Destination where the user writes an Entry (see
 above). Todoist's own task-creation dialog is a different product entirely, and it is called
 "Quick Add" — that name is Todoist's own, not a coinage here. Referring to it as "the composer"
-cost a full round of confusion in a real session, once the Todoist reference docs
-(`meologue-reference/todoist/`) had reused meologue's own term for a Todoist surface that shares none
-of its properties. Write "Quick Add" for Todoist's
+cost a full round of confusion in a real session, once a note about Todoist reused meologue's own
+term for a Todoist surface that shares none of its properties. Write "Quick Add" for Todoist's
 dialog, "Composer" only for meologue's own Destination, and name the product explicitly wherever
 a sentence could be read either way.

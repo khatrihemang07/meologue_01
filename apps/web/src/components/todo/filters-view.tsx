@@ -1,29 +1,3 @@
-/**
- * Every saved Filter (issue #185, CONTEXT.md's Filter entry: "a saved
- * query over Tasks") — the Filter-shaped sibling of projects-view.tsx,
- * reached from `TodoNav`'s own fifth row (`todo-nav.tsx`), the same "one
- * more row" extension ADR 0049 already predicted.
- *
- * Deliberately no inline "type a name, pick a colour, hit Add" form the
- * way `ProjectsView` has one: a Filter's whole point is its query, and a
- * one-line quick-add control has nowhere to put the live preview
- * criterion 7 asks for. "New Filter" instead opens `/todo/filters/new`
- * — `FilterView` (filter-view.tsx) in its create mode, the one editor
- * this ticket builds for both creating and refining a query.
- *
- * **The sidebar's "Filters & Labels" row real destination (issue #229,
- * ledger row NAV-06).** Real Todoist's own combined screen is one page
- * with two sections; `labels` below is optional (every existing caller
- * that only cares about Filters keeps working unchanged) and, when
- * given, renders a compact "Labels" section under the Filters list —
- * name and colour only, no inline edit here, since full Label management
- * (create/rename/recolour/delete) is `/todo/labels`'s own job
- * (`labels-view.tsx`). This keeps `/todo/filters` the one destination
- * that visibly covers both nouns the row promises, while a reader who
- * actually wants to *edit* a Label follows "Manage Labels" to the
- * dedicated screen rather than this page growing a second inline-edit
- * surface next to Filters' own read-only rows.
- */
 import type { Filter, Label } from "@meologue/core";
 import { Link } from "react-router";
 
@@ -43,11 +17,6 @@ export function FiltersView({ filters, labels = [] }: FiltersViewProps) {
         New Filter
       </Link>
 
-      {/* Ledger row NAV-06: Todoist's own combined page carries an `h2`
-          "My Filters" above its filters list (live-audit-dom/flow6-NAV-06-
-          todoist.json, re-confirmed flow10-NAV-06-both.json), styled
-          identically to this page's own "Labels" `h2` below — no count or
-          link accompanies it on Todoist's side, so neither does this one. */}
       <h2 className="font-medium text-sm">My Filters</h2>
 
       {filters.length === 0 ? (

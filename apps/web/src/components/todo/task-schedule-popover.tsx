@@ -1,40 +1,3 @@
-/**
- * Todoist's own scheduler (issue #227, `meologue-reference/todoist/
- * scheduler-and-priority.md` §§1-4) — an anchored popover, not the
- * centred/bottom-sheet shape every other picker in this app uses
- * (`ui/popover.tsx`'s own header comment explains why that primitive
- * exists at all). Replaces task-schedule-sheet.tsx's own former "Today /
- * Tomorrow / Pick a date / Clear date" button row for the Date field
- * specifically — Deadline keeps that older row untouched (this ticket's
- * own scope: Deadline is Pro-gated on the captured account, SCHED-13/
- * DATE-08 are `blocked`, and CLAUDE.md's brief is explicit that nothing
- * here should guess at its picker).
- *
- * **One parser, not two (this ticket's own "finding that shrinks it").**
- * The "Type a date" input below resolves through the identical
- * `@meologue/core` `parseQuickAdd` engine `../../lib/todo-quick-add-
- * recognition.ts` already wraps for the Composer's inline highlighting,
- * and the identical `firstOccurrence`/`resolveRecurrencePhrase` pair
- * `../../lib/quick-add-task.ts` already uses to turn a recognised
- * recurrence token into a Task's `dateString` at creation time. This file
- * builds no second grammar — it only re-runs that one, keyed off this
- * popover's own typed text instead of a title being composed.
- *
- * **A deliberate, disclosed design decision this reference corpus never
- * measured:** picking a quick option or a calendar day always commits a
- * plain, non-recurring date and clears any Recurrence the Task already
- * had (`onPickDay`'s own doc comment). Todoist's own capture never
- * exercised "pick a plain date on a Task that's already recurring" (its
- * own §7 table marks the dedicated Repeat dialog's contents a `GAP`), so
- * there is nothing to replicate here — this is the one coherent rule
- * consistent with CONTEXT.md's Recurrence entry ("what the user typed…
- * is what is stored") and with SCHED-04/05 being the only *observed*
- * door onto setting a Recurrence at all: the typed input is that door,
- * both for giving a Task its first Recurrence and for changing or
- * clearing one it already has (issue #227's own "editable Recurrence"
- * ask), and it is seeded with the Task's current `dateString` on every
- * open so editing one reads as editing, not retyping from scratch.
- */
 import type { LocalDayKey, QuickAddToken } from "@meologue/core";
 import { firstOccurrence, parseQuickAdd, parseRecurrence } from "@meologue/core";
 import { addDays, format, nextMonday, nextSaturday } from "date-fns";
@@ -66,25 +29,9 @@ import { TaskTimeDialog } from "./task-time-dialog";
 interface SchedulePreview {
   readonly day: string;
   readonly dateString: string | null;
-  /** Only meaningful when `dateString` isn't null — whether the phrase has no `starting`/`ending`/`for` bound at all (SCHED-04's own captured "→ Forever"). A bounded phrase renders "→ Ends" here rather than the exact resolved end date: that would mean re-deriving `../recurrence/engine.ts`'s own private `resolveBoundDate` a second time outside the engine, for a detail this ticket's own reference capture never measured beyond the unbounded case. */
   readonly forever: boolean;
 }
 
-/**
- * Resolves `text` against `now`/`dueDate` exactly as described in this
- * file's own header comment. `null` for empty or unrecognised input — the
- * caller renders nothing above the quick options in that case, matching
- * SCHED-04's "preview appears once text resolves."
- *
- * `now: LocalDayKey` (issue #314, the follow-up to #300's own `Recurrence
- * Reference.now`/`QuickAddOptions.now` gap): this function's one call site
- * already hands it `nowKey` (`localDayKey(now)`, below) — a real
- * `LocalDayKey`, not a cast — so branding the parameter here costs this
- * file nothing and lets the two object literals below (`{ now }` for
- * `parseQuickAdd`, `{ dueDate, now }` for `firstOccurrence`) produce the
- * branded value through the parameter instead of casting to it at either
- * call.
- */
 function resolveSchedulePreview(
   text: string,
   now: LocalDayKey,
@@ -120,7 +67,6 @@ function resolveSchedulePreview(
   return null;
 }
 
-/** "1st"/"2nd"/"3rd"/"4th"… — the Repeat menu's own "Every month on the 13th"/"Every year on September 13th" wording (SCHED-14's captured strings), spelled out because `date-fns`'s own `format` has no ordinal-day token that produces "13th" on its own. */
 function ordinal(day: number): string {
   const mod100 = day % 100;
   if (mod100 >= 11 && mod100 <= 13) {
@@ -138,22 +84,6 @@ function ordinal(day: number): string {
   }
 }
 
-/**
- * Shared by every Repeat-menu item — deliberately not `task-command-
- * menu.tsx`'s own identical-looking `itemClassName` (that file is out of
- * scope here; this is its own copy, not an import, so the two are free to
- * diverge). The highlight itself, though, is the SAME `data-highlighted:
- * bg-muted data-highlighted:text-foreground` pair every other
- * `DropdownMenu.Item` in this app already uses (`project-view.tsx`,
- * `labels-view.tsx`, `task-command-menu.tsx`'s own `itemClassName`) — an
- * earlier version of this menu hardcoded Todoist's own captured
- * `bg-white/10` wash instead, which is exactly the "matching paint, not
- * structure" this ticket's brief warns against (THEME-01: meologue paints
- * its own palette). `--muted`/`--foreground` under this file's own
- * `data-surface="todo"` dark scope (index.css) already resolve close
- * enough to Todoist's own hover tint for this to look right on screen
- * without repeating its literal.
- */
 const repeatItemClassName =
   "flex cursor-pointer items-center rounded-md px-2 py-1.5 text-sm outline-none data-highlighted:bg-muted data-highlighted:text-foreground";
 
@@ -296,7 +226,6 @@ export interface TaskSchedulePopoverProps {
   onSetTime: (time: string | null) => void;
   /** `Task.dateString` — the Recurrence phrase currently on the Task, or `null`. Seeds the "Type a date" input on every open (this file's own header comment: the one editable surface). */
   dateString: string | null;
-  /** Day-keys carrying at least one active Task, each mapped to how many — SCHED-09's calendar dot and SCHED-04's preview subline read the identical source rather than two independently-computed counts. */
   datesWithTasks: ReadonlyMap<string, number>;
   /**
    * Commits a plain day, or `null` to clear the date entirely (the "No
@@ -307,7 +236,6 @@ export interface TaskSchedulePopoverProps {
    * `null` or a day) — `task-schedule-sheet.tsx`'s own wiring does this.
    */
   onPickDay: (day: string | null) => void;
-  /** Commits a Recurrence phrase already validated as a live "occurrence" outcome, alongside its own resolved first date — SCHED-04/05's typed preview, clicked or committed via Enter. */
   onPickRecurrence: (dateString: string, day: string) => void;
   /** Read once per popover open, not per render — every quick option and the typed preview need the identical "today," and a fresh `new Date()` on each keystroke risks "Today" itself rolling over mid-interaction. Defaults to `new Date()` for callers (tests) that don't need to pin it. */
   now?: Date;
@@ -436,10 +364,6 @@ export function TaskSchedulePopover({
     setOpen(false);
   }
 
-  // Every Repeat-menu option (SCHED-14) commits through this exact same
-  // `onPickRecurrence` — the one recurrence door this file's own header
-  // comment already established for the typed phrase above. No second
-  // representation, no direct Task mutation from here.
   function commitRepeatPhrase(phrase: string, day: string) {
     onPickRecurrence(phrase, day);
     setOpen(false);
@@ -490,25 +414,6 @@ export function TaskSchedulePopover({
     typedInputRef.current?.focus();
   }
 
-  // SCHED-14's five named cadences, each resolved through the identical
-  // `firstOccurrence` the typed input already uses — not reconstructed by
-  // hand from `dateDay`/`now`. That distinction is load-bearing, not
-  // stylistic: every phrase's anchor is now `bang ? "completion" : "due"`
-  // (issue #291, commit 6968bf4), so an unbanged rule resolves against
-  // `dateDay` when the Task has one and against `now` when it does not —
-  // and a hand-written label would have to reimplement that (and could
-  // drift from it) to describe correctly. Reading each option's own
-  // weekday/day-of-month/month-and-day off its own real outcome can't.
-  //
-  // This comment used to say bare "every day" was completion-anchored
-  // regardless of `dateDay`, which was true and deliberate — issue #170
-  // stated it twice as an acceptance criterion — until #291 removed the
-  // carve-out. Driven evidence overturned it: Todoist Android advances a
-  // postponed daily Task to `max(due, today) + 1`, six days from where
-  // completion-anchoring lands it (parity-ledger-android.md AREC-01), and
-  // Todoist web agrees. The two rules are indistinguishable for a Task
-  // completed on time, which is presumably why the documentation the
-  // criterion came from reads the way it does.
   const repeatAnchor = parseDayKey(dateDay) ?? now;
   const repeatCandidates: ReadonlyArray<{
     key: string;
@@ -626,26 +531,8 @@ export function TaskSchedulePopover({
 
   const tomorrow = addDays(now, 1);
   const nextWeek = nextMonday(now);
-  // SCHED-02: date-fns's `nextSaturday` is already "the next Saturday
-  // strictly after `now`" — the exact rule Todoist's own "Next weekend"
-  // needs, verified against both captured data points (scheduler-and-
-  // priority.md §2 / parity-ledger.md SCHED-02): from Sat 12 Sep it lands
-  // a full week out, Sat 19 Sep (never "today" even though today IS a
-  // Saturday), and from the original Thu 10 Sep capture it lands two days
-  // out, Sat 12 Sep. Renamed from `thisWeekend` — this was Todoist's own
-  // slot 3 label until it (and the hint format below) changed between 10
-  // and 11 Sep 2026 (SCHED-02's "Earlier note"); the underlying date math
-  // never needed to change, only the label, its position (now slot 4,
-  // after Next week), and the hint format (full date, not bare weekday).
   const nextWeekend = nextSaturday(now);
 
-  // SCHED-02/03: Today/Tomorrow/Next week/Next weekend, in Todoist's own
-  // order, each carrying the day-key it would commit — used both to render
-  // the button and, per SCHED-03, to drop whichever one already matches
-  // the Task's current date ("the quick option matching the task's current
-  // date disappears," parity-ledger.md SCHED-03). `No Date` is handled
-  // separately below: it isn't keyed to a day at all, and its own gate
-  // (`dateDay !== null`) predates and is independent of this one.
   const quickOptionDefs = [
     {
       key: "today",
@@ -675,15 +562,10 @@ export function TaskSchedulePopover({
       hint: format(nextWeekend, "EEE d MMM"),
       day: localDayKey(nextWeekend),
     },
-  ]
-    // SCHED-03: the option matching the task's current date is dropped.
-    // SCHED-02 (flow 11, Sunday 13 Sep): a slot landing on the same day as an
-    // earlier one is dropped too. On a Sunday, Tomorrow and Next week are
-    // both Monday, and Todoist showed three options, not four.
-    .filter(
-      (option, index, all) =>
-        option.day !== dateDay && all.findIndex((other) => other.day === option.day) === index,
-    );
+  ].filter(
+    (option, index, all) =>
+      option.day !== dateDay && all.findIndex((other) => other.day === option.day) === index,
+  );
 
   // One body, two shells. Everything below renders identically whichever
   // shell wraps it, so the anchored and bottom-sheet variants cannot drift
@@ -765,7 +647,6 @@ export function TaskSchedulePopover({
             onClick={() => commitDay(option.day)}
           />
         ))}
-        {/* SCHED-03: only offered once a date already exists. */}
         {dateDay !== null && (
           <QuickOption
             icon={CircleSlash}
@@ -779,23 +660,7 @@ export function TaskSchedulePopover({
       <Calendar
         mode="single"
         weekStartsOn={1}
-        // `today` follows this component's own injected `now`, not
-        // react-day-picker's reading of the system clock. Everything else
-        // here already derives from `now` — SCHED-02's Today/Tomorrow
-        // hints, the preview line above — so leaving DayPicker on its own
-        // clock let the calendar's "today" cell disagree with every other
-        // date in the same popover. It also made SCHED-07's own test pass
-        // on exactly one day in history: it asserts `data-today="true"` on
-        // 2026-09-10, the reference capture instant, through an attribute
-        // DayPicker derived from the real date, so the suite went red the
-        // morning after and would have stayed red for good.
         today={now}
-        // SCHED-06's own captured header reads "M T W T F S S" — a
-        // single letter per weekday — where react-day-picker's own
-        // default formatter ("cccccc", date-fns's 2-letter standalone
-        // form) renders "Mo Tu We Th Fr Sa Su" instead. Overridden here
-        // rather than left at the default, which this ticket's own
-        // reference measurement would otherwise silently diverge from.
         formatters={{
           formatWeekdayName: (day) => format(day, "EEEEE"),
           // Defect 6 (measured 2026-09-15): Todoist's own caption reads
@@ -820,65 +685,12 @@ export function TaskSchedulePopover({
           busy: (day) => datesWithTasks.has(localDayKey(day)),
         }}
         modifiersClassNames={{
-          // SCHED-10: dimmed independently of today/busy — `--muted-
-          // foreground` already resolves to the measured rgb(204,204,204)
-          // under this surface's dark theme (index.css's own `.dark
-          // [data-surface="todo"]` block), so this reuses that token
-          // rather than adding a second literal for the identical colour.
           weekend: "[&>button]:text-muted-foreground",
-          // SCHED-09: a 3×3px dot drawn with `::before`, no extra DOM
-          // node — the `day` cell below is already `position: relative`
-          // (Calendar's own base `day` classNames), which is what lets
-          // this dot position against the cell rather than the page.
           busy: "before:absolute before:bottom-0.5 before:left-1/2 before:size-[3px] before:-translate-x-1/2 before:rounded-full before:bg-[color:var(--td-calendar-busy-dot)] before:content-['']",
         }}
         classNames={{
-          // SCHED-07: bold + coloured text ONLY — deliberately no
-          // background/ring. react-day-picker v10 sets no `aria-current`
-          // of its own (verified against its own DayButton/DayPicker
-          // source before this was written) so there's nothing to
-          // suppress here beyond not adding a visual ring — do not
-          // "fix" this back in.
-          //
-          // The trailing `!` (Tailwind v4's important modifier) is load-
-          // bearing, not decoration: on a weekend, this same cell also
-          // carries `modifiersClassNames.weekend`'s
-          // `[&>button]:text-muted-foreground` below, and both compile to
-          // an equal-specificity `.<modifier> > button { color: … }` rule
-          // — which one wins is decided by Tailwind's generated-CSS
-          // source order, not by the order these two class strings are
-          // concatenated onto the cell's `class` attribute, so reordering
-          // the JSX alone would not have been a real fix. Without `!`,
-          // today-on-a-weekend rendered grey instead of today-red
-          // (SCHED-07); `!important` here forces today's colour to win
-          // regardless of stylesheet order, without touching index.css or
-          // any `--td-*` token.
-          //
-          // Defect 1 (measured 2026-09-15, meologue-only — Todoist's own
-          // today+selected resolution was never captured, so this is NOT
-          // a parity claim): that same unconditional `!important` used to
-          // also beat `selected`'s `text-white` whenever a cell was both
-          // today and selected — text rgb(226,106,96) on fill
-          // rgb(222,76,74), contrast ratio 1.23:1, barely readable. The
-          // `!` still has to force today-red to beat `weekend`'s grey; it
-          // must not also beat `selected`'s white. Scoped with
-          // `:not([data-selected=true])` on the cell itself — both
-          // `data-today` and `data-selected` land on this same `<td>`,
-          // never the `<button>` — so the rule doesn't match the element
-          // at all once it's selected, and `selected`'s own
-          // (uncontested, non-`!important`) white applies with nothing
-          // left to fight. This is meologue's own choice for legibility;
-          // do not read it as replicating Todoist, which this reference
-          // capture never exercised.
           today:
             "[&>button]:font-bold [&:not([data-selected=true])>button]:text-[color:var(--td-calendar-today)]!",
-          // SCHED-08: the coral fill + bold white text. Deliberately no
-          // `!important` here — defect 1's note on `today` above is what
-          // keeps this from having to fight `today`'s red for a
-          // today-and-selected cell, so this stays the plain,
-          // uncontested rule it always was. The 12px corner radius
-          // SCHED-08 measured is pinned on `day_button` below, not here —
-          // this key only ever set fill/text, never the box shape.
           selected:
             "[&>button]:bg-[color:var(--td-calendar-selected)] [&>button]:text-white [&>button]:font-bold [&>button]:hover:bg-[color:var(--td-calendar-selected)]",
           // Defect 4 (measured 2026-09-15): Todoist gave next-month days
@@ -897,17 +709,6 @@ export function TaskSchedulePopover({
           day_button: cn(
             buttonVariants({ variant: "ghost" }),
             "p-0 font-normal aria-selected:opacity-100",
-            // Defect 5 (measured 2026-09-15): Todoist's own cell is
-            // 30.4×28px, not the square 24×24 (`size-6 w-6`) this used to
-            // be. `h-7` (28px) `w-[30px]` moves toward that. The 12px
-            // selected-pill radius SCHED-08 measured stays pinned via an
-            // explicit `rounded-[12px]` rather than `rounded-full`:
-            // `rounded-full` only produced 12px as a side effect of the
-            // old box being square (24px ÷ 2 = 12px) — on a non-square
-            // 30×28 box it would instead draw a stadium shape with a
-            // ~14px radius (half the shorter side), silently breaking the
-            // very figure it used to get right only by accident of shape.
-            // Pin the radius directly; don't let the box decide it.
             "h-7 w-[30px] rounded-[12px]",
             // Defect 3 (measured 2026-09-15): Todoist's hover is an
             // OPAQUE rgb(77,77,77) pill, not `ghost`'s translucent
@@ -951,17 +752,6 @@ export function TaskSchedulePopover({
         className="mx-auto"
       />
 
-      {/*
-          Todoist's own bottom row (pass2-2026-09-11.md §5: "A Time button
-          and a Repeat button sit at the bottom, below the calendar" —
-          Time first, Repeat second, exactly this row's own order). The
-          former inline "Add a time" checkbox and `<input type="time">`
-          (issue #249) no longer render here directly — this ticket's own
-          follow-up builds the dedicated `TaskTimeDialog` Todoist itself
-          uses (SCHED-11/pass2 §7) behind this Time button instead, with
-          that same checkbox and input relocated inside it verbatim (see
-          that file's own header comment).
-        */}
       <div className="flex items-center gap-2">
         {/*
             Gated on `dateDay !== null` for the identical reason the
@@ -980,14 +770,6 @@ export function TaskSchedulePopover({
           </Button>
         )}
 
-        {/*
-            Todoist's own Repeat control (issue #227, SCHED-14 — never
-            previously built here). Unlike Time (gated on
-            `dateDay !== null`), this is never gated: a recurrence's own
-            anchor falls back to `now` for an undated Task exactly as
-            SCHED-04's typed input already does, so there is no missing
-            precondition here the way there is for a time-of-day.
-          */}
         {showRepeatControl && (
           <div className="flex w-fit items-center gap-0.5">
             <DropdownMenu.Root>
@@ -1010,31 +792,6 @@ export function TaskSchedulePopover({
                 <DropdownMenu.Content
                   data-testid="repeat-menu"
                   align="start"
-                  // SCHED-14 measured Todoist's own dark-theme PAINT here —
-                  // 282px wide, radius 10px, `rgb(40,40,40)` background,
-                  // `1px solid rgb(61,61,61)` border, a `rgba(0,0,0,.12) 0 0
-                  // 8px` shadow, white text — but this file's own header
-                  // comment (and the issue's own brief) is explicit that
-                  // what's being matched is structure/items/wording, not
-                  // paint: THEME-01 already ratifies meologue keeping its
-                  // own palette over Todoist's literals. So this reuses the
-                  // ordinary `bg-popover`/`border-border`/`shadow-lg`/
-                  // `rounded-lg` classes every other `DropdownMenu.Content`
-                  // in this app already carries (`project-view.tsx`,
-                  // `labels-view.tsx`, `task-command-menu.tsx`), only the
-                  // 282px width kept as measured structure. Under this
-                  // file's own `data-surface="todo"` dark scope (index.css)
-                  // those tokens resolve to `--radius: 10px`,
-                  // `--popover: rgb(31,31,31)` and `--popover-foreground:
-                  // rgb(255,255,255)` — close enough to Todoist's own
-                  // literals that nothing here looks different on screen,
-                  // only the surface it draws from changed. `z-[70]` (not
-                  // Tailwind's usual `z-50` those sibling menus use)
-                  // mirrors `task-time-dialog.tsx`'s own identical reason:
-                  // this menu is portalled as a *descendant of* this
-                  // popover's own `z-[60]` content (`ui/popover.tsx`), so it
-                  // needs a higher index to paint above it, not Todoist's
-                  // unrelated captured `z-index: 1000`.
                   className="z-[70] flex w-[282px] flex-col gap-0.5 rounded-lg border border-border bg-popover p-1 text-popover-foreground text-sm shadow-lg"
                   // The identical hand-off task-command-menu.tsx's own
                   // "Date…" item needed for issue #255: focusing
@@ -1062,14 +819,6 @@ export function TaskSchedulePopover({
                     event.preventDefault();
                     typedInputRef.current?.focus();
                   }}
-                  // SCHED-11's own follow-up (pass2-2026-09-11.md §7):
-                  // "One Escape closes the Repeat/Time layer and the
-                  // scheduler beneath it simultaneously" — recorded for
-                  // both layers this popover opens, not just
-                  // `TaskTimeDialog` (that file's own header comment).
-                  // Radix's own default `Escape` handling still closes
-                  // this menu alone; not preventDefault()-ed, so that
-                  // keeps happening alongside `setOpen(false)` here.
                   onEscapeKeyDown={() => setOpen(false)}
                 >
                   {repeatOptions.map((option) => (
@@ -1091,24 +840,6 @@ export function TaskSchedulePopover({
                       )}
                     </DropdownMenu.Item>
                   ))}
-                  {/*
-                    Issue #292: this now opens Todoist's own dedicated
-                    Custom repeat dialog (`task-custom-repeat-dialog.tsx`,
-                    captured 2026-09-15 in `live-audit-dom/custom-repeat-
-                    dialog-todoist-2026-09-15.json`) rather than focusing
-                    the "Type a date" input, which was #227's disclosed
-                    scope cut and read as a dead end: the menu closed and
-                    nothing appeared.
-
-                    It opens through the SAME two-step hand-off the focus
-                    case above needed, and for the same reason — setting a
-                    ref here and acting in `onCloseAutoFocus` — because a
-                    Radix `Dialog` opened straight from `onSelect` fights
-                    this menu's own `FocusScope` while it is still tearing
-                    down (issue #255's root cause). A dialog losing that
-                    race doesn't error; it opens and is immediately
-                    dismissed, which looks exactly like a dead menu item.
-                  */}
                   <DropdownMenu.Item
                     className={repeatItemClassName}
                     onSelect={() => {
@@ -1158,31 +889,12 @@ export function TaskSchedulePopover({
     </>
   );
 
-  // Anchored popover at wide widths, bottom sheet below — the same
-  // `useWideLayout()` split `todo-nav.tsx` and `task-detail-view.tsx` already
-  // make, and for the same reason. Issue #253 moved Date off
-  // `TaskScheduleSheet` onto this component on every surface, and this
-  // component had no narrow variant, so on a 426px Android viewport the Date
-  // picker rendered as a 250px (`--td-popover-width`) card pinned to the
-  // viewport's top-left with its own input clipped under the status bar —
-  // measured on device, issue #282. Deadline and Priority, which still open
-  // `TaskScheduleSheet`, were a correct bottom sheet on the same row in the
-  // same session, so the app was inconsistent with itself.
-  //
-  // The sheet is also what Todoist *Android* does: its Date picker is a
-  // full-width bottom sheet with a drag handle and a `Date` title, where
-  // Todoist web's is the anchored popover this file was built from. Parity is
-  // per platform (ratified 2026-09-14), so both shells are correct — each for
-  // its own reference.
   if (!wide) {
     return (
       <>
         <Sheet open={open} onOpenChange={setOpen}>
           <SheetTrigger asChild>{trigger}</SheetTrigger>
           <SheetContent data-testid="scheduler-view" className="gap-2 p-3 text-sm">
-            {/* Radix's Dialog wants a title, and Todoist Android's own Date
-                sheet has a visible one — so this is an accessibility
-                requirement and a parity row satisfied by the same element. */}
             <SheetTitle className="px-1 pb-1 font-medium text-base">Date</SheetTitle>
             {scheduleFields}
           </SheetContent>
@@ -1244,10 +956,6 @@ export function TaskSchedulePopover({
         // `handleTimeSave`'s own comment above — deliberate, not the
         // accidental route issue #326 fixed.
         onSave={handleTimeSave}
-        // SCHED-11's own follow-up — see task-time-dialog.tsx's own
-        // header comment: fired on Escape only, alongside that dialog's
-        // own default close, so this popover closes with it rather than
-        // being left open behind a now-closed Time dialog.
         onEscape={() => setOpen(false)}
       />
       <TaskCustomRepeatDialog
@@ -1269,8 +977,6 @@ export function TaskSchedulePopover({
         // its own accidental-dismiss race exactly like Cancel's — no
         // branch-specific handling needed, or wanted.
         onSave={handleCustomRepeatSave}
-        // Same SCHED-11 follow-up as the Time dialog above: Escape closes
-        // this layer and the scheduler beneath it together.
         onEscape={() => setOpen(false)}
         now={now}
         restoreFocusTo={repeatTriggerRef}

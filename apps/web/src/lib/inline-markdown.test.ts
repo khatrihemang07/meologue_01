@@ -874,13 +874,6 @@ describe("refreshTaskReferenceLabel finds a task reference nested inside a mark"
   });
 });
 
-// CMT-02/CMT-08 (meologue-reference/todoist/parity-ledger.md) — a Task
-// comment's own dialect. `parseCommentMarkdown` reverses exactly the three
-// block removals `parseEntryMarkdown`'s own suite (entry-prose.test.tsx)
-// pins as literal text for an Entry, plus linkifies a bare `http`/`https`
-// URL — `parseEntryMarkdown` on the same inputs is asserted unchanged
-// alongside each one, so a regression in an Entry's own rendering would
-// fail right beside the comment behaviour it must never affect.
 describe("parseCommentMarkdown", () => {
   it("returns an empty list for an empty body, same contract as parseEntryMarkdown", () => {
     expect(parseCommentMarkdown("")).toEqual([]);
@@ -907,10 +900,6 @@ describe("parseCommentMarkdown", () => {
     ]);
   });
 
-  // Trailing `\n`: Todoist's own rendered `<pre><code>` keeps it (CMT-08's
-  // own reading, `code block\n`) even though `CodeText`'s own span stops
-  // short of it — `fencedCodeBlock`'s own comment (inline-markdown.ts) has
-  // the full account.
   it("renders a fenced block as a codeBlock, carrying its info string, unlike parseEntryMarkdown's literal prose", () => {
     expect(parseCommentMarkdown("```js\nconsole.log(1)\n```")).toEqual([
       { kind: "codeBlock", text: "console.log(1)\n", lang: "js" },
@@ -953,9 +942,6 @@ describe("parseCommentMarkdown", () => {
     ]);
   });
 
-  // CMT-02's own safety requirement: only http/https. `Autolink` also
-  // recognises `www.`/`mailto:`/`xmpp:` — none of which this app asked to
-  // linkify — so those fall back to the plain text they already were.
   it("does not linkify a www./mailto: URL missing an http(s) scheme", () => {
     expect(parseCommentMarkdown("www.example.com")).toEqual([
       { kind: "prose", children: [{ kind: "text", text: "www.example.com" }] },
@@ -980,11 +966,7 @@ describe("parseCommentMarkdown", () => {
     expect(entryBlocksToText(parseCommentMarkdown(body))).toBe(body);
   });
 
-  // `tight: true` (CMT-08, comment mode only — `listIsTight`'s own comment,
-  // inline-markdown.ts) — no blank line separates the two items, so Todoist's
-  // own tight-list rendering applies: `entry-prose.tsx` renders each item's
-  // text directly inside its `<li>`, no wrapping `<p>`.
-  it("still renders a real bullet list, the gap CMT-08 says runs the other way (only a numbered list stays literal in Todoist, not this app's)", () => {
+  it("still renders a real bullet list — the gap runs the other way (only a numbered list stays literal in Todoist, not this app's)", () => {
     expect(parseCommentMarkdown("- milk\n- eggs")).toEqual([
       {
         kind: "bulletList",
@@ -1003,7 +985,7 @@ describe("parseCommentMarkdown", () => {
     ]);
   });
 
-  it("still renders a real ordered list — CMT-08 leaves meologue's <ol> alone", () => {
+  it("still renders a real ordered list — meologue's <ol> is left alone", () => {
     const blocks = parseCommentMarkdown("1. first\n2. second");
     expect(blocks[0]?.kind).toBe("orderedList");
   });
@@ -1020,12 +1002,6 @@ describe("parseCommentMarkdown", () => {
   });
 });
 
-// CMT-06 (meologue-reference/todoist/parity-ledger.md) — Activity's own
-// content-preview chip (`format-event.ts`'s `describeEventLine`) shows a
-// plain-text flattening of a comment's/description's raw markdown, not the
-// source itself. Both cases here are Todoist's own live-measured strings,
-// reproduced exactly — not invented shapes this function merely happens to
-// produce.
 describe("flattenCommentPreview", () => {
   it("reproduces Todoist's own measured single-line flattening — marks stripped, a bare URL kept", () => {
     expect(flattenCommentPreview("**bold** and https://example.com")).toBe(

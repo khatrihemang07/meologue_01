@@ -66,21 +66,6 @@ vi.mock("@/pages/entry-store-layout", async (importOriginal) => {
   };
 });
 
-// `toast` is callable (task-tree.tsx's reparent-refused toast, issue #171,
-// via `.error`) and, since CMT-04, also carries a `.custom` and a
-// `.dismiss` — the shared `useCompletionToast` hook's own `raise`
-// (`use-completion-toast.tsx`, issue #355; `todo-page.tsx` calls it
-// directly rather than through a local wrapper of its own) switched the
-// completion Undo toast from plain `toast(message, {...})` to
-// `toast.custom(jsx, {...})` so the toast's own JSX can carry
-// `role="alert"`/`aria-live="polite"` (completion-toast.tsx's own header
-// comment has the full reasoning; no `role` option exists anywhere in
-// sonner 2.0.8). `.custom`'s mock returns an incrementing id — the same id
-// `toast.custom` hands its `jsx` callback in production — so a test can
-// call the captured `jsx` factory itself to get the real
-// `CompletionToastBody` element and render it, and `.dismiss` records the
-// id either `raise`'s own Undo handler or a later completion replacing it
-// closes.
 vi.mock("@/components/ui/toast", () => {
   const toast = vi.fn() as unknown as typeof import("@/components/ui/toast").toast;
   // biome-ignore lint/suspicious/noExplicitAny: attaching mock methods to a mock function, the same shape sonner's own `toast` carries in production (a callable object with `.error`/`.custom`/`.dismiss` etc as properties).
@@ -142,15 +127,6 @@ function StubTaskTitleEditor({
   );
 }
 
-/**
- * Issue #260: `AddTaskForm` is collapsed by default (NAV-12, parity
- * ledger) — every test that used to type straight into an always-open
- * field now has to click the quiet "Add task" trigger row first. Scoped
- * to nothing in particular because `QuickAddDialog` (also rendered by
- * `TodoPage`, unconditionally) stays unmounted by Radix while `open` is
- * false, so there is exactly one "Add task"-named button in the tree
- * until this click reveals the editor.
- */
 async function revealAddTaskField(): Promise<void> {
   fireEvent.click(await screen.findByRole("button", { name: "Add task" }));
 }
@@ -294,10 +270,6 @@ function renderTodoPage(
                 `/todo/search` — needed for the header search door's own
                 tests below. */}
             <Route path="/todo/search" element={<TodoPage view="search" />} />
-            {/* ANAV-01: Browse's own route, mirroring App.tsx's real
-                `/todo/browse` — needed for the Browse view's own tests
-                below, and for the Search-reachability regression test in
-                the 900-1199px band. */}
             <Route path="/todo/browse" element={<TodoPage view="browse" />} />
             {/* Issue #178's Task detail route — no `view` prop, mirroring
                 App.tsx's own identical route exactly (that file's own
@@ -550,10 +522,6 @@ describe("TodoPage", () => {
     // scopes to the breadcrumb's own `<header>` specifically rather than
     // an unscoped match that would resolve to both.
     expect(dialog.querySelector("header")).toHaveTextContent("Inbox");
-    // Issue #225: the title is a non-editable display element at rest
-    // (DET-02) — a plain `<div>`, as Todoist's is, not a labelled textbox —
-    // until a reader activates it (task-detail-view.test.tsx's own suite
-    // covers that activation and the shared editor it swaps in).
     expect(within(dialog).getByTestId("task-detail-title")).toHaveTextContent("call mum");
   });
 
@@ -579,10 +547,6 @@ describe("TodoPage", () => {
     await waitFor(() => expect(screen.getByRole("dialog")).toBeInTheDocument());
     const dialog = screen.getByRole("dialog");
     expect(within(dialog).getByLabelText('Mark "call mum" not done')).toBeChecked();
-    // Issue #237: `.completed-task-text` is the shared class the
-    // completed-style setting drives (index.css) — `line-through` was the
-    // bug this surface used to hardcode regardless of that setting. The
-    // at-rest title is a plain display `<div>` (DET-02), found by its testid.
     const title = within(dialog).getByTestId("task-detail-title");
     expect(title).toHaveClass("completed-task-text");
     expect(title).not.toHaveClass("line-through");
@@ -656,10 +620,6 @@ describe("TodoPage", () => {
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   });
 
-  // Issue #306: a Task row's comment badge now links with `?intent=reply`
-  // (ROW-08, task-row-content.tsx) so activating it lands the reader "in
-  // the thread, ready to reply" rather than merely on the Task — the
-  // acceptance criteria this describe block works through one at a time.
   describe("issue #306 — a comment badge opens the thread ready to reply", () => {
     function commentedTask(overrides: Partial<Task> = {}): Task {
       return task({ id: DETAIL_TASK_ID, content: "call mum", ...overrides });
@@ -739,11 +699,6 @@ describe("TodoPage", () => {
     expect(screen.getByText(/Nothing in your Inbox/)).toBeInTheDocument();
   });
 
-  // ROW-14 (parity-ledger.md), the user's 2026-09-13 decision to match
-  // Todoist: an Inbox holding only a completed Task is not the same thing
-  // as an empty one — this used to be indistinguishable, since the old
-  // "Completed (n)" disclosure lived below `TaskList`'s own empty-state
-  // paragraph regardless of what was inside it.
   it("does not read Inbox as empty when it holds only a completed Task", () => {
     // Issue #358: this scope only falls through to render a completed-only
     // list once `completedTasksVisible` is on — off (the default) reads
@@ -842,19 +797,6 @@ describe("TodoPage", () => {
     expect(screen.getByRole("button", { name: "Add task" })).toBeDisabled();
   });
 
-  // CMT-04 (parity ledger): the completion toast is raised through
-  // `toast.custom()` (the shared `useCompletionToast` hook's own `raise`,
-  // `use-completion-toast.tsx` — completion-toast.tsx's own header comment
-  // has the full reasoning), so this asserts against the real
-  // `CompletionToastBody` element the `jsx` callback produces — the
-  // message and a real "Undo" `<button>` — rather than against `toast`'s
-  // call args the way the old plain-`toast()` shape allowed. Issue #357
-  // moved the `role`/`aria-live` announcement off this body and onto
-  // `components/ui/toast.tsx`'s own `Toaster` (Radix's native accessible
-  // announcer), so rendering the bare `jsx` factory standalone here — with
-  // no `Toaster` above it — no longer exposes a `role="alert"` element to
-  // query by; `toast.test.tsx` covers that announcement against the real
-  // `Toaster` instead.
   it("completes a Task and offers an Undo toast wired to uncompleteTask", async () => {
     const completeTask = vi.fn();
     const uncompleteTask = vi.fn();
@@ -869,8 +811,6 @@ describe("TodoPage", () => {
     expect(toast.custom).toHaveBeenCalledWith(
       expect.any(Function),
       expect.objectContaining({
-        // CMT-05: 10s, measured live (`COMPLETION_TOAST_DURATION_MS`'s own
-        // doc comment, todo-page.tsx) — not sonner's unconfigured default.
         duration: 10_000,
       }),
     );
@@ -880,8 +820,6 @@ describe("TodoPage", () => {
     const [jsxFactory] = customCall;
     render(jsxFactory("toast-a"));
 
-    // CMT-04: Todoist's own task-agnostic, count-based wording, not the
-    // task-specific `Completed "<name>"` this replaced.
     expect(screen.getByText("1 task completed")).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "Undo" }));
@@ -892,14 +830,7 @@ describe("TodoPage", () => {
     expect(toast.dismiss).toHaveBeenCalledWith("toast-a");
   });
 
-  // CMT-05 (parity ledger) — `Z`/`⌘Z` reach the identical `uncompleteTask`
-  // call the toast's own "Undo" button already used above, through
-  // `todo-page.tsx`'s pending-undo ref rather than a second undo
-  // mechanism. `toast` is mocked (this file's own header comment), so
-  // there is no real toast to auto-close mid-test — these three cover the
-  // ref's own lifecycle: set on completion, fired once by either key, and
-  // silent when nothing is pending.
-  describe("keyboard undo of a completion (CMT-05)", () => {
+  describe("keyboard undo of a completion", () => {
     it("undoes the most recent completion on 'z'", async () => {
       const completeTask = vi.fn();
       const uncompleteTask = vi.fn();
@@ -941,15 +872,6 @@ describe("TodoPage", () => {
       expect(uncompleteTask).not.toHaveBeenCalled();
     });
 
-    // The highest-risk part of CMT-05: Cmd+Z inside a text field must stay
-    // native text-undo, not reach through to an unrelated completion. The
-    // Add-task field stubs to a plain `<input>` in this suite
-    // (`StubTaskTitleEditor`'s own header comment on why — jsdom can't
-    // usefully mount the real ProseMirror editor), which is also exactly
-    // the surface `use-todo-keymap.test.tsx`'s own CMT-05 tests note: a
-    // jsdom `<input>`/`<textarea>` exercises `isTypingTarget`'s tag-check
-    // arm; its `isContentEditable` arm (the real composer) is verified on
-    // screen only, jsdom not implementing that property at all.
     it("does not undo a completion when Cmd+Z is pressed while typing in the Add task field", async () => {
       const completeTask = vi.fn();
       const uncompleteTask = vi.fn();
@@ -970,15 +892,6 @@ describe("TodoPage", () => {
     });
   });
 
-  // ROW-14 (parity-ledger.md), the user's 2026-09-13 decision to match
-  // Todoist: a completed Task no longer lives behind a separate, durable
-  // "Completed" disclosure with its own Restore button — it renders
-  // inline, in place, and its own checkbox (already `aria-checked="true"`,
-  // `aria-label="Mark task as incomplete"`) is what un-completes it, the
-  // same control an active row's checkbox already is. Independent of any
-  // toast still holds: this Task's own `completedAt` is what puts it here,
-  // not a pending-undo ref (`pendingUndoRef`, todo-page.tsx) that a toast
-  // could have long since cleared.
   it("restores a completed Task inline, through its own checkbox, independent of any toast", () => {
     // Issue #358: this row only renders at all once `completedTasksVisible`
     // is on — see the identical note on the empty-state test above.
@@ -1017,15 +930,7 @@ describe("TodoPage", () => {
     expect(removeTask).toHaveBeenCalledWith("a");
   });
 
-  // ROW-06 (parity-ledger.md): flow 10's decisive test quoted Todoist's
-  // own delete-confirmation dialog as "The ZZ probe bold em code task
-  // will be permanently deleted." for a title verified to hold only
-  // literal `**bold** _em_ `code`` characters
-  // (`live-audit-dom/flow10-ROW-06-both.json`) — meologue's own dialog
-  // used to quote the raw markdown verbatim instead. Only the
-  // interpolated name renders through `inlineProse`; the surrounding
-  // sentence is this app's own copy, not part of the Task.
-  it("renders markdown in the delete confirmation's quoted title — ROW-06", async () => {
+  it("renders markdown in the delete confirmation's quoted title", async () => {
     renderTodoPage(inboxContext([task({ id: "a", content: "ZZ probe **bold** _em_ `code`" })]));
 
     await waitFor(() =>
@@ -1387,9 +1292,6 @@ describe("TodoPage — Today", () => {
     fireEvent.click(screen.getByRole("checkbox", { name: "Mark task as complete" }));
 
     expect(completeTask).toHaveBeenCalledWith("a");
-    // CMT-04: same `toast.custom()` path as Inbox's own test above —
-    // rendering the produced element here would only re-check what that
-    // test already covers, so this just confirms the same call shape.
     expect(toast.custom).toHaveBeenCalledWith(
       expect.any(Function),
       expect.objectContaining({ duration: 10_000 }),
@@ -1536,9 +1438,6 @@ describe("TodoPage — Projects", () => {
     );
 
     await waitFor(() => expect(screen.getByText("buy milk")).toBeInTheDocument());
-    // The identical row markup Inbox renders — a real checkbox with
-    // Todoist's own fixed wording (ROW-03), not a second, Project-specific
-    // list component.
     expect(screen.getByRole("checkbox", { name: "Mark task as complete" })).toBeInTheDocument();
   });
 
@@ -1937,23 +1836,6 @@ describe("TodoPage — Search door (issue #307)", () => {
     expect(link.className).toContain("size-12");
   });
 
-  // The reason this door hides at 900px used to be that TodoSidebar's own
-  // Search link already reached it there. The owner's amendment to ADR
-  // 0076 moved TodoSidebar's own mount point to 1200px, so between 900 and
-  // 1199px that reason no longer holds — this assertion (the door stays
-  // hidden) is unchanged and still true. ANAV-01 is what closes the gap
-  // that left open, but not by repointing this gate: `todo-page.tsx`'s own
-  // comment on `wide` above the Search `action` prop has the reasoning,
-  // and "TodoPage — Browse (ANAV-01)" below is where the closed gap is
-  // actually proven, on `/todo/browse` rather than `/todo/inbox` — this
-  // test only proves the door itself, specifically, still doesn't grow a
-  // second copy of itself in the 900-1199px band.
-  // ADR 0083 + 0084. This door hid at 900px because `TodoSidebar` reached
-  // Search from there; the sidebar moved to 1200px and the gate did not
-  // follow, so across this whole band the door hid while the link
-  // justifying the hiding was not rendered. `installWideMatchMedia` is
-  // exactly that band — `wide` true, `sidebarWide` false — which is why it
-  // is the mock this test wants.
   it("renders in the 900-1199px band, where TodoSidebar is not mounted to reach Search", () => {
     installWideMatchMedia();
     renderTodoPage(readyContext(), "/todo/inbox");
@@ -2124,20 +2006,7 @@ describe("TodoPage — Back leaves Todo, not walks its views (issue #353, ADR 00
   });
 });
 
-/**
- * ANAV-01 (fork ADR 0082, resolved): `TodoNav`'s bottom bar shrank from
- * six rows to Todoist Android's own four (Inbox, Today, Upcoming,
- * Browse) — `browse-view.tsx`'s own header comment has the full brief.
- * This describe block covers what the Search-door block above left open:
- * the 900-1199px band where, before this ticket, nothing at all linked
- * `/todo/search` (the header door hides at `wide`/900px, `TodoSidebar`
- * doesn't mount until `sidebarWide`/1200px) — Browse's own row is the
- * fix, and the owner's ruling that meologue keeps BOTH Search doors
- * (constraint #5) means a reader who opens Browse below 900px sees two
- * elements named "Search" at once, which the last test below proves and
- * scopes rather than treats as a defect to hide.
- */
-describe("TodoPage — Browse (ANAV-01)", () => {
+describe("TodoPage — Browse", () => {
   afterEach(removeMatchMedia);
 
   it("renders Browse's own hub, scoped to its own landmark, when the view is browse", () => {

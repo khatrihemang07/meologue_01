@@ -1,23 +1,3 @@
-/**
- * Today (issue #169) — a second, co-equal view over the same Tasks Inbox
- * lists (ADR 0049), built entirely on `@meologue/core`'s `today()` and
- * `compareForToday`: this component never decides the union rule or the
- * sort chain itself, only how to lay out what `today()` already decided —
- * "the web layer renders what core decides" (169-brief.md's own words).
- *
- * Two sections. **Overdue** is always flat and always chronological — no
- * grouping control reaches it, ever (see the section below for why that's
- * not an oversight). **Due today** carries the grouping control
- * (`group-today-tasks.ts`) and the bulk of what a reader interacts with,
- * since Overdue's own remedy is Todoist's own single Reschedule action —
- * read verbatim off Todoist's own reference screenshots/DOM captures
- * (a40-32-upcoming.png, a03-todoist-today.png,
- * todoist/android/android-dom/a03-todoist-today.json), which carry no
- * second action — not per-Task fiddling. Issue #299/#337: this section
- * used to carry a second, meologue-only "Postpone to tomorrow" button
- * beside Reschedule, which made "a single Reschedule action" false of
- * this file's own code; the button is gone, not just the claim.
- */
 import type { Task } from "@meologue/core";
 import { today } from "@meologue/core";
 import { CheckCircle2 } from "lucide-react";
@@ -189,13 +169,6 @@ export function TodayView({
                     onCompleteForever={() => onCompleteForever(task.id, task.content)}
                     onRequestDelete={() => onRequestDelete(task.id)}
                     onOpenSchedule={() => onOpenSchedule(task.id)}
-                    // ROW-13 (parity-ledger.md), issue #250: every row in
-                    // this section is due today by construction (`today()`,
-                    // @meologue/core) — Todoist itself omits the date
-                    // control from the DOM here entirely
-                    // (pass2-2026-09-11.md §3), not merely hides it. The
-                    // Overdue section above does NOT pass this: an overdue
-                    // row's own date is never redundant.
                     suppressDateBadge
                   />
                 ))}

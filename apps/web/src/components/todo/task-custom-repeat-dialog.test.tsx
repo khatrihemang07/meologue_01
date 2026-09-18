@@ -278,9 +278,6 @@ describe("seeding from an existing phrase", () => {
   });
 
   it("a frequency the dropdown can't represent (a named weekday list) falls back to Day/1, but Based on and Ends still seed correctly", () => {
-    // "every friday" is the Repeat menu's own "Week" quick option (SCHED-14)
-    // — a specific weekday list, not this dialog's plain "Week" (weekly)
-    // frequency. See task-custom-repeat-dialog.tsx's own header comment.
     renderDialog("every! friday ending 1 jan 2027");
 
     expect(screen.getByRole("combobox", { name: "Unit" })).toHaveTextContent("Day");
@@ -317,7 +314,7 @@ describe("seeding from an existing phrase", () => {
   });
 });
 
-describe("Escape closes this dialog and calls onEscape, without saving (task-time-dialog.tsx's own SCHED-11 follow-up)", () => {
+describe("Escape closes this dialog and calls onEscape, without saving (task-time-dialog.tsx's own follow-up)", () => {
   it("fires onEscape and never calls onSave", () => {
     const { onSave } = renderDialog();
     fireEvent.keyDown(dialog(), { key: "Escape" });

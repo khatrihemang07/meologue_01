@@ -92,11 +92,6 @@ describe("TodoNav", () => {
     expect(screen.getByRole("link", { name: "Inbox" })).not.toHaveAttribute("aria-current");
   });
 
-  // Issue #223 added Upcoming to todo-sidebar.tsx's own list (the wide
-  // breakpoint's replacement for this bar) but never to this one — the
-  // defect this test now holds shut the way chat-shell-layout.test.tsx's
-  // own NAV-03 row holds the bottom bar's reachability below 900px: by a
-  // test, not by an assertion left to whoever edits VIEWS next.
   it("offers Upcoming as a real link", () => {
     renderAt("/todo/inbox");
 
@@ -106,10 +101,6 @@ describe("TodoNav", () => {
     );
   });
 
-  // ANAV-01: Todoist Android's own fourth row (measured live, v12278),
-  // replacing Projects here — Projects moved to Browse instead (the test
-  // below this one proves it's gone from the bar, not merely that Browse
-  // was added alongside it).
   it("offers Browse as a fourth real link", () => {
     renderAt("/todo/inbox");
 
@@ -122,10 +113,6 @@ describe("TodoNav", () => {
     expect(screen.getByRole("link", { name: "Browse" })).toHaveAttribute("aria-current", "page");
   });
 
-  // ANAV-01's own point: the bar shrank from six rows to Todoist's own
-  // four. Projects and Filters no longer have a row of their own here —
-  // `browse-view.test.tsx` is what proves each is still reachable, one tap
-  // further, through Browse.
   it("no longer offers Projects or Filters as rows of their own", () => {
     renderAt("/todo/inbox");
 
@@ -133,12 +120,6 @@ describe("TodoNav", () => {
     expect(screen.queryByRole("link", { name: "Filters" })).not.toBeInTheDocument();
   });
 
-  // ANAV-05 (parity ledger): the bar's own item height, matching Todoist
-  // Android's measured 80.0 CSS px (v12278: 225 device px / 2.8125) — a
-  // source-level check that the class resolving to that height is present,
-  // like the Search door's own `size-12` check (todo-page.test.tsx); jsdom
-  // lays nothing out, so a live pixel reading is the parent's own device
-  // pass, not this file's.
   it("sizes every row to Todoist's own measured 80 CSS px item height", () => {
     renderAt("/todo/inbox");
 
@@ -147,11 +128,6 @@ describe("TodoNav", () => {
     }
   });
 
-  // ANAV-01: the active pill sits behind the icon alone, painted with the
-  // `--td-nav-active-*` tokens (index.css) rather than a hardcoded colour
-  // — this is a source-level check of which element carries the pill
-  // class and which two carry the (deliberately different) icon/label ink,
-  // not a live pixel reading.
   it("paints the active pill behind the icon only, with the label in a different ink", () => {
     renderAt("/todo/inbox");
 
@@ -215,9 +191,6 @@ describe("TodoNav", () => {
       expect(screen.getByRole("navigation")).toHaveAccessibleName("Todo");
     });
 
-    // ANAV-01: this is the band the Search door (todo-page.test.tsx) still
-    // can't reach — Browse's own row is what closes that gap, so it has to
-    // still be here, not merely somewhere below 900px.
     it("still offers Browse", () => {
       installMatchMediaAt(true, false);
 
