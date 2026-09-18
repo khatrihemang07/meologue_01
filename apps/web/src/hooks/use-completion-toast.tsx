@@ -1,39 +1,29 @@
 import { useRef } from "react";
 import { toast } from "sonner";
 import { CompletionToastBody } from "@/components/todo/completion-toast";
+import { COMPLETION_TOAST_DURATION_MS } from "@/platform/completion-toast-duration";
 
 /**
- * CMT-05 (parity ledger) — how long a completion toast stays up, measured
- * live rather than trusted from `meologue-reference/todoist/lifecycle.md`'s own
- * once-coarse estimate. That doc's "6-8 seconds" came from 2-second polling
- * and doesn't reproduce; a 300ms re-poll (flow 5,
- * `meologue-reference/todoist/live-audit-dom/flow5-CMT-05-todoist.json`) found
- * Todoist's own toast still present at 10,775ms and gone by 11,081ms.
- * meologue's matching toast (`flow5-CMT-05-meologue.json`) was gone between
- * 4,346ms and 4,651ms — sonner's own unconfigured default, not a value
- * anyone chose. ADR 0077 makes the live reading the reference over the
- * dated capture, so this targets Todoist's measured ~11s rather than the
- * ledger row's own nuance text.
- *
- * **Corrected to 10s by flow 11 R3 (Sun 13 Sep).** Measured from when the
- * toast *appears*, both Todoist readings are about 10s plus an exit animation:
- * flow 5 first saw it at 360ms, gone 10,775–11,081ms; R3 at 388ms, gone
- * 10,469–10,774ms, so "~11s" folded the appearance delay and the exit into
- * the duration. R3 read meologue at 11s as gone 11,068–11,372ms, about
- * 600ms late. Todoist's "Date updated" toast (DET-16, task-detail-view.tsx's
- * own `RENAME_DATE_TOAST_DURATION_MS`) reads the same ~10s, and meologue's
- * 10s copy of it landed within 50ms of Todoist's in the same session — the
- * two constants aren't sharing a source, they just happen to match.
+ * CMT-05 (parity ledger) — how long a completion toast stays up. This used
+ * to be a single hard-coded constant here; issue #356 moved it behind the
+ * build-time platform seam (`@/platform/completion-toast-duration`,
+ * ADR 0005) because Todoist web's and Todoist Android's own undo windows
+ * are a measured 3x apart, so one figure is wrong for at least one
+ * meologue target. See that seam's per-target files for the measurements
+ * and their provenance — `completion-toast-duration.web.ts` (web, macOS
+ * and sandbox: 10s) and `completion-toast-duration.android.ts` (Android:
+ * ~3.5s). Under vitest (mode "test", outside the seam's target list) this
+ * resolves to the web file, so existing tests asserting `duration: 10_000`
+ * are exercising the same fallback the seam gives an unqualified
+ * `vite build`.
  *
  * Issue #355 moved this out of `todo-page.tsx` (where it was first
  * measured, as that file's own `COMPLETION_TOAST_DURATION_MS`) into this
  * shared module: the Composer's Task overlay raises the identical
  * completion toast now (`useCompletionToast` below), and a duration
  * measured once for the action, not for the page, has exactly one home to
- * live in. A follow-up ticket, #356, is what makes this per-platform —
- * deliberately not attempted here.
+ * live in.
  */
-export const COMPLETION_TOAST_DURATION_MS = 10_000;
 
 export interface CompletionToastControls {
   /**

@@ -8,6 +8,7 @@
       "@/platform/save-file": ["./src/platform/save-file.web.ts"],
       "@/platform/load-file": ["./src/platform/load-file.web.ts"],
       "@/platform/register-service-worker": ["./src/platform/register-service-worker.web.ts"],
+      "@/platform/completion-toast-duration": ["./src/platform/completion-toast-duration.web.ts"],
       "@/*": ["./src/*"]
     },
     "target": "es2023",

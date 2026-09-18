@@ -176,6 +176,13 @@ export default defineConfig(({ mode }) => {
             `./src/platform/register-service-worker.${target}.ts`,
           ),
         },
+        {
+          find: "@/platform/completion-toast-duration",
+          replacement: path.resolve(
+            import.meta.dirname,
+            `./src/platform/completion-toast-duration.${target}.ts`,
+          ),
+        },
         { find: "@", replacement: path.resolve(import.meta.dirname, "./src") },
       ],
     },
