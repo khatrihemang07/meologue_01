@@ -179,15 +179,18 @@ describe("TodayView", () => {
     expect(within(row).getByText("every day")).toBeInTheDocument();
   });
 
-  // The union rule task-views.ts's own today() implements: an undated Task
-  // whose deadline has already passed still surfaces, in Overdue.
-  it("surfaces an undated Task once its deadline has arrived, in Overdue", () => {
+  // Before #375, today()'s union rule surfaced an undated Task here once
+  // its deadline passed (task-views.ts's own former union arm). Deadline
+  // is never read now (D12: Pro-gated in Todoist, 0 Tasks carry one in
+  // either live database) — an undated Task stays invisible regardless of
+  // what its deadline says, so there is nothing here for Overdue to show.
+  it("does not surface an undated Task on its deadline alone, even once the deadline has passed (#375)", () => {
     renderTodayView({
       tasks: [task({ id: "no-date", content: "no date task", deadline: "2026-09-01" })],
     });
 
-    expect(screen.getByText("Overdue")).toBeInTheDocument();
-    expect(screen.getByText("no date task")).toBeInTheDocument();
+    expect(screen.queryByText("Overdue")).not.toBeInTheDocument();
+    expect(screen.queryByText("no date task")).not.toBeInTheDocument();
   });
 
   // This ticket's own headline sort case: a p4 due earlier outranks a p1
@@ -272,7 +275,11 @@ describe("TodayView", () => {
       renderTodayView({
         tasks: [
           task({ id: "a", content: "a", date: "2026-08-30" }),
-          task({ id: "b", content: "b", deadline: "2026-08-31" }),
+          // Before #375 an undated Task with a passed deadline also counted
+          // as overdue (task-views.ts's own former union arm) — deadline is
+          // never read now, so this second overdue Task needs its own real
+          // `date` to stay in the section this test is about.
+          task({ id: "b", content: "b", date: "2026-08-31" }),
         ],
         onSetDate,
       });

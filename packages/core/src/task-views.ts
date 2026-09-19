@@ -15,34 +15,33 @@ import type { Task } from "./task-types";
  * guarantee exists to avoid by living in one place (order-key.ts's
  * compareByOrder).
  *
- * **The union.** Today is not "Tasks due today" — it's the union of three
- * independent conditions, CONTEXT.md's Date and Deadline entries read
- * together: a Task whose `date` falls on today's calendar day, a Task
- * whose `date` is in the past (overdue), and a Task whose `deadline` is
- * today or in the past — the last case explicitly *including* a Task with
- * no `date` at all, which is the entire point of a Deadline existing
- * independently of a Date (an undated Task waiting in Inbox still surfaces
- * once its hard cutoff arrives, "so it doesn't slip through the cracks").
- * A Task with neither `date` nor `deadline` satisfies none of the three
- * and is correctly invisible here.
+ * **The rule.** Today is the set of Tasks whose `date` falls on today's
+ * calendar day, plus every Task whose `date` is in the past (overdue). A
+ * Task with no `date` is correctly invisible here.
  *
- * One case this union resolves in a way worth naming: a Task whose `date`
- * is in the future but whose `deadline` has already passed (an unusual
- * combination — planning to do something *after* its hard cutoff — but
- * not one this store refuses) is placed in `overdue`, not held back for
- * its future `date`. A passed hard cutoff is what "overdue" means,
- * independent of what was separately planned.
+ * **Deadline (issue #375).** This module used to also test a Task's
+ * `deadline` — its own union arm ("or a Task whose deadline is today or in
+ * the past, even undated"), a tie-break in the sort chain, and the
+ * fallback half of the primary sort key. None of that is read anymore.
+ * D12 (`.scratch/todoist-add-todo/DECISIONS.md`) is why: Deadline is
+ * Pro-gated in Todoist and unreachable on a free account, and a measured
+ * 0 Tasks across both this app's live databases carry one. A `deadline`
+ * value can still exist on a Task — a Restore from an old backup can
+ * reinject one into a schema that no longer reads it (D12's own risk
+ * note) — so every function below has to *tolerate* that rather than
+ * assume it, which is why none of them assert `deadline === null`; they
+ * simply never look at the field, so a Restored value orders exactly as
+ * if it were absent.
  *
- * **The sort chain.** `date-and-time (or deadline, where there is no
- * date) -> priority -> deadline -> manual (dayOrder) -> created`, applied
- * by compareForToday below to every Task this module places in a section.
- * The manual step reads `dayOrder`, Today's own fractional index (issue
- * #182), not `orderKey` — `orderKey` is a Task's position inside its
- * Project or Section, and letting Today's tie-break read it would mean a
- * drag in Today silently reordering a Task inside its Project too, the
- * exact bug ADR 0050's second index exists to rule out. See task-store.ts's
- * `reorderToday` and mapping.ts's `fromWireTaskOutput` for the rest of
- * that split.
+ * **The sort chain.** `date-and-time -> priority -> manual (dayOrder) ->
+ * created`, applied by compareForToday below to every Task this module
+ * places in a section. The manual step reads `dayOrder`, Today's own
+ * fractional index (issue #182), not `orderKey` — `orderKey` is a Task's
+ * position inside its Project or Section, and letting Today's tie-break
+ * read it would mean a drag in Today silently reordering a Task inside
+ * its Project too, the exact bug ADR 0050's second index exists to rule
+ * out. See task-store.ts's `reorderToday` and mapping.ts's
+ * `fromWireTaskOutput` for the rest of that split.
  * Priority is a *tie-break inside a shared date-and-time*, not a global
  * rank — swapping the first two steps is the specific regression
  * Todoist itself shipped and then fixed twice in 2026, which is why
@@ -55,12 +54,12 @@ import type { Task } from "./task-types";
  * showing all-day items above the hour grid, because a Task with no
  * committed time reads as "sometime today" rather than as competing for a
  * position among specific hours. This isn't a special case in
- * compareForToday's code: `date` and `deadline` are both ISO-ordered
- * strings, and an all-day string is always a strict prefix of any timed
- * string sharing its day (`"2026-09-02" < "2026-09-02T09:00"` under plain
- * `<`, because a shorter string that's a prefix of a longer one sorts
- * first) — the rule falls out of comparing the two fields' own encodings
- * lexicographically rather than needing a branch to detect "no time".
+ * compareForToday's code: `date` is an ISO-ordered string, and an all-day
+ * string is always a strict prefix of any timed string sharing its day
+ * (`"2026-09-02" < "2026-09-02T09:00"` under plain `<`, because a shorter
+ * string that's a prefix of a longer one sorts first) — the rule falls
+ * out of comparing the field's own encoding lexicographically rather than
+ * needing a branch to detect "no time".
  *
  * **Overdue is its own section, always chronological.** `overdue` and
  * `dueToday` are returned separately, both sorted by the same
@@ -75,16 +74,14 @@ import type { Task } from "./task-types";
  */
 export interface TodayView {
   /**
-   * Overdue Tasks: `date` before today, or `deadline` before today
-   * (including a Task with no `date`). Sorted by compareForToday, always —
+   * Overdue Tasks: `date` before today. Sorted by compareForToday, always —
    * see this module's own doc comment for why "always" is a guarantee, not
    * an accident of the current caller.
    */
   overdue: Task[];
   /**
-   * Due today: `date` on today's calendar day, or `deadline` on today's
-   * calendar day (including a Task with no `date`), excluding anything
-   * already placed in `overdue`. Sorted by compareForToday.
+   * Due today: `date` on today's calendar day, excluding anything already
+   * placed in `overdue`. Sorted by compareForToday.
    */
   dueToday: Task[];
 }
@@ -106,23 +103,19 @@ export function today(tasks: Task[], now: string): TodayView {
   const dueToday: Task[] = [];
 
   for (const t of tasks) {
-    const { date, deadline } = t;
-    const dateDay = date === null ? null : date.slice(0, 10);
-    const dateIsOverdue = dateDay !== null && dateDay < todayDate;
-    const deadlineIsOverdue = deadline !== null && deadline < todayDate;
-    if (dateIsOverdue || deadlineIsOverdue) {
-      overdue.push(t);
+    if (t.date === null) {
+      // No `date` — absent from every day-keyed view (issue #375: a
+      // `deadline` no longer stands in here), which for an undated Task is
+      // the entire point: it stays in Inbox until the user gives it one.
       continue;
     }
-    const dateIsToday = dateDay !== null && dateDay === todayDate;
-    const deadlineIsToday = deadline !== null && deadline === todayDate;
-    if (dateIsToday || deadlineIsToday) {
+    const dateDay = t.date.slice(0, 10);
+    if (dateDay < todayDate) {
+      overdue.push(t);
+    } else if (dateDay === todayDate) {
       dueToday.push(t);
     }
-    // Neither condition: a future date/deadline, or neither field set at
-    // all — absent from every day-keyed view, which for an undated,
-    // deadline-less Task is the entire point (it stays in Inbox until the
-    // user gives it one).
+    // Neither: a future date — absent from every day-keyed view.
   }
 
   overdue.sort(compareForToday);
@@ -319,11 +312,6 @@ export function compareForToday(a: Task, b: Task): number {
     return b.priority - a.priority;
   }
 
-  const deadlineOrder = compareNullableAscending(a.deadline, b.deadline);
-  if (deadlineOrder !== 0) {
-    return deadlineOrder;
-  }
-
   // Manual: dayOrder alone (Today's own fractional index, issue #182 —
   // this module's own doc comment explains why not orderKey), not
   // order-key.ts's compareByOrder — that helper folds in an id tie-break,
@@ -349,42 +337,18 @@ export function compareForToday(a: Task, b: Task): number {
 }
 
 /**
- * A Task's primary sort key: its `date` if it has one, its `deadline`
- * otherwise — "date-and-time (or deadline, where there is no date)". Both
- * fields are ISO-ordered strings that compare correctly with plain `<`,
- * which is also what gives the all-day-before-timed rule (this module's
- * own doc comment) for free.
+ * A Task's primary sort key: its `date`, full stop — an ISO-ordered
+ * string that compares correctly with plain `<`, which is also what gives
+ * the all-day-before-timed rule (this module's own doc comment) for free.
+ * `null` for an undated Task, deliberately never falling back to
+ * `deadline` (issue #375 — see this module's own header comment).
  *
- * Exported (issue #185) for ../filter-query/evaluate.ts to reuse directly:
- * a Filter's `today`/`tomorrow`/`overdue` flags ask "what is due,
- * preferring the Date when a Task has both" (criterion 4's own wording),
- * which is exactly what this function already computes — a *narrower*
- * rule than today()'s own inclusive union of "Date matches, or Deadline
- * matches" above, not a second spelling of it. See that module's own
- * header comment for the one case the two deliberately disagree on (a
- * future Date with a passed Deadline) and why.
+ * Exported (issue #185) for ../filter-query/evaluate.ts to reuse directly
+ * for its `today`/`tomorrow`/`overdue` flags, rather than reimplementing
+ * "what is due" a second time.
  */
 export function effectiveDateKey(t: Task): string | null {
-  return t.date ?? t.deadline;
-}
-
-// A Task with no deadline sorts after one that has one: an explicit hard
-// cutoff is more urgent information than its absence, so it wins this
-// tie-break step. This only fires once date-and-time and priority have
-// already tied, which for two Tasks sharing a `deadline`-derived primary
-// key (both undated, same deadline) means this step ties too — the chain
-// falls through to manual order next either way.
-function compareNullableAscending(a: string | null, b: string | null): number {
-  if (a === b) {
-    return 0;
-  }
-  if (a === null) {
-    return 1;
-  }
-  if (b === null) {
-    return -1;
-  }
-  return a < b ? -1 : 1;
+  return t.date;
 }
 
 /**
