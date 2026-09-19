@@ -1,6 +1,6 @@
 import { ArrowDown, ArrowLeft, ArrowUp, Search as SearchIcon } from "lucide-react";
 import { createContext, type ReactNode, useCallback, useEffect, useMemo, useState } from "react";
-import { useLocation, useNavigationType } from "react-router";
+import { useLocation } from "react-router";
 import { SyncStatusIndicator } from "@/components/sync-status-indicator";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -519,14 +519,12 @@ export function Shell({
   // without either caller having to know the other exists.
   const searchLabel = `Search ${search?.label ?? "History"}`;
 
-  // Which of the four destinations this pane is, and whether we arrived by
-  // pushing rather than by loading the URL directly. Both only drive the
-  // enter animation — Shell stays ignorant of what any particular route
-  // means, the same way it does for `action` and `back`.
+  // Which Destination this pane is (CONTEXT.md lists five: Composer,
+  // Reflection, Digest, Todo, Settings). Drives the `key` below and
+  // nothing else — Shell stays ignorant of what any particular route means,
+  // the same way it does for `action` and `back`.
   const location = useLocation();
-  const navigationType = useNavigationType();
   const destination = location.pathname.split("/")[1] || "root";
-  const pushed = navigationType === "PUSH";
 
   function dismissSearch() {
     setSearchOpen(false);
@@ -576,16 +574,37 @@ export function Shell({
     // `key` on the destination rather than the whole pathname: `/reflect`
     // and `/reflect/:sessionId` are the same destination, and remounting
     // this subtree between them would throw away the thread's scroll
-    // position to replay an animation the reader did not ask for.
-    // `navigationType` gates the animation on an actual push, so a direct
-    // load or a reload lands without one.
+    // position for no reason a reader asked for.
+    //
+    // This element used to carry a motion-safe entrance that slid it in
+    // from the right by 4 (16px) over 200ms, gated on
+    // `useNavigationType() === "PUSH"`. That gate and the `key` above were
+    // measuring different things, and ADR 0086 is what pulled them apart:
+    // it made the Task detail route (and `/todo/search`, and
+    // `composer-page.tsx`'s own `?task=` overlay) a push that stays *inside*
+    // one Destination. The `key` correctly did not remount for those — but
+    // the className did change, and adding an animation class to an
+    // already-mounted element starts the animation there and then. So
+    // opening a Task modal shoved this pane 16px right and eased it back
+    // over ~200ms before the dialog appeared: `transform` measured running
+    // `translateX(16px)` -> `9.46` -> `6.79` -> `0.06` -> `none`.
+    //
+    // Removed outright rather than re-gated, on the owner's decision, after
+    // measuring Todoist with the same instrument: its background holds a
+    // single position across the whole open (one distinct `left` over 150
+    // samples, `transform: none` throughout, and `document.getAnimations()`
+    // empty), and it runs no pane entrance animation on any navigation,
+    // including switching views. `shell.test.tsx`'s own "pane entrance
+    // animation" block pins that a push cannot bring it back.
+    //
+    // The deleted utility is described in words above rather than spelled
+    // out: Tailwind v4 scans source files as plain text, so writing the
+    // class name in a comment is enough to regenerate it into the bundle.
+    // Measured — an earlier draft of this comment put it back into
+    // `dist/*/assets/index-*.css` as dead CSS that nothing rendered.
     <div
       key={destination}
-      className={cn(
-        "flex h-full min-w-0 flex-1 flex-col overflow-hidden bg-background",
-        pushed &&
-          "motion-safe:animate-in motion-safe:slide-in-from-right-4 motion-safe:duration-200",
-      )}
+      className="flex h-full min-w-0 flex-1 flex-col overflow-hidden bg-background"
     >
       {/* Fixed top app bar: title plus the Sync status dot (ticket 40),
             which loses its home in CardTitle once the Card is gone and

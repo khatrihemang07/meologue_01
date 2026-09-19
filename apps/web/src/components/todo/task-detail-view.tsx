@@ -1669,7 +1669,25 @@ export function TaskDetailView(props: TaskDetailViewProps) {
   return (
     <Dialog open={true} onOpenChange={handleOpenChange}>
       <DialogPortal>
-        <DialogOverlay className="fixed inset-0 z-50 bg-black/50 duration-150 data-open:animate-in data-open:fade-in-0 data-closed:animate-out data-closed:fade-out-0" />
+        {/* The scrim fades only on the bottom sheet. This branch is an
+            interpretation, not a decision that was handed down: the owner
+            asked for the wide modal to pop and for the narrow sheet to keep
+            its slide, and said nothing about the overlay, which until now
+            was unconditional. Read literally, "drop it from the overlay too"
+            would have stopped the scrim fading on the sheet as well — so the
+            sheet would have slid up behind a scrim that was already at full
+            strength. Keeping the fade tied to the branch that still animates
+            is the reading that preserves what the owner did ask for on each
+            side. Flagged here rather than presented as settled, because it
+            was nobody's stated choice; if the scrim should pop on both, this
+            is the line to change. */}
+        <DialogOverlay
+          className={cn(
+            "fixed inset-0 z-50 bg-black/50",
+            !wide &&
+              "duration-150 data-open:animate-in data-open:fade-in-0 data-closed:animate-out data-closed:fade-out-0",
+          )}
+        />
         <DialogContent
           open={true}
           aria-describedby={undefined}
@@ -1723,8 +1741,19 @@ export function TaskDetailView(props: TaskDetailViewProps) {
           }}
           className={cn(
             "fixed z-50 flex flex-col overflow-hidden bg-popover text-popover-foreground shadow-[var(--td-modal-shadow)] outline-hidden duration-150",
+            // The wide modal has no entrance at all: it renders at its
+            // final geometry, like Todoist's own, measured with an 8ms
+            // sampler — `transform: none`, `opacity: 1`, and
+            // `document.getAnimations()` empty at every sample including
+            // the first frame the dialog existed. The bottom sheet keeps
+            // its slide: a sheet rising from the screen edge is a
+            // different affordance from a centred dialog, and Todoist was
+            // only ever measured at 1260px, so popping it here would be
+            // extrapolating past the evidence. Note `useWideLayout()` is
+            // `(min-width: 900px)` and the Tauri window opens at 800px, so
+            // the desktop app shows the sheet branch by default.
             wide
-              ? "top-1/2 left-1/2 h-[min(48.25rem,calc(100vh-8rem))] w-[min(54rem,calc(100%-2rem))] -translate-x-1/2 -translate-y-1/2 rounded-lg data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95"
+              ? "top-1/2 left-1/2 h-[min(48.25rem,calc(100vh-8rem))] w-[min(54rem,calc(100%-2rem))] -translate-x-1/2 -translate-y-1/2 rounded-lg"
               : "inset-x-0 bottom-0 max-h-[85vh] rounded-t-xl data-open:animate-in data-open:slide-in-from-bottom data-closed:animate-out data-closed:slide-out-to-bottom",
           )}
           style={wide ? undefined : { paddingBottom: "max(0.5rem, env(safe-area-inset-bottom))" }}
