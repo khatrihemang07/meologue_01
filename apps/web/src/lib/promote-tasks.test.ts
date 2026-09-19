@@ -35,6 +35,8 @@ describe("promoteBareCheckboxes", () => {
         priority: 1,
         dateString: null,
         labelNames: [],
+        projectName: null,
+        sectionName: null,
       },
     ]);
     expect(result.body).toBe(`- [ ] ${formatTaskReference("task-1", "buy milk")}`);
@@ -133,7 +135,7 @@ describe("promoteBareCheckboxes", () => {
       expect(task?.priority).toBe(1);
     });
 
-    it("an unsupported #project token is kept as literal text, not consumed (quick-add-task.ts's own UNSUPPORTED_TOKEN_KINDS)", () => {
+    it("a #project token is stripped from content, but Promotion doesn't file the Task into it (this function's own scope, unchanged by issue #370)", () => {
       const result = promoteBareCheckboxes(
         "- [ ] buy milk tomorrow p1 #Shopping",
         sequentialMintId(),
@@ -143,12 +145,18 @@ describe("promoteBareCheckboxes", () => {
       const task = result.tasks[0];
       // #Shopping is a PROJECT token in this parser's own grammar (the
       // `%` sigil is what marks a Label — packages/core/src/quick-add/
-      // rules.ts's own matchLabel/matchProject), and Task has no `#`-typed
-      // project field to resolve it into (quick-add-task.ts's own
-      // UNSUPPORTED_TOKEN_KINDS, issue #171's own sequencing) — so it
-      // stays literal, exactly as it would typed straight into Todo's own
-      // add field.
-      expect(task?.content).toBe("buy milk #Shopping");
+      // rules.ts's own matchLabel/matchProject). Issue #370 gave Task a
+      // `#`-typed project field, so quick-add-task.ts's shared
+      // `contentKeepingUnsupported` now strips this span from `content`
+      // exactly like every other supported token (`UNSUPPORTED_TOKEN_KINDS`
+      // no longer names "project"). This function stays out of #370's own
+      // scope, though: it reads `fields.content`/`fields.labelNames` only
+      // (this file's own header comment, "applying the parse") and never
+      // resolves `fields.projectName` — a checkbox promoted with a typed
+      // `#project` loses the words but lands in Inbox regardless, the
+      // identical "recognised, not yet wired here" gap `labelNames` itself
+      // was in before this function existed.
+      expect(task?.content).toBe("buy milk");
       expect(task?.date).toBe("2026-09-03");
       expect(task?.priority).toBe(4);
     });
@@ -159,6 +167,25 @@ describe("promoteBareCheckboxes", () => {
       const task = result.tasks[0];
       expect(task?.content).toBe("buy milk");
       expect(task?.labelNames).toEqual(["Shopping"]);
+    });
+
+    // Issue #370's own Project/Section-shaped siblings of the @label test
+    // just above — `use-history.ts`'s own `upsertPromotedTasks` is what
+    // resolves these into `projectId`/`sectionId`, the identical door this
+    // function leaves open for `labelNames`, so it stays unresolved here
+    // too rather than this module reaching for a ProjectStore it has no
+    // business holding.
+    it("resolves a #project /section pair into projectName/sectionName, both stripped from content", () => {
+      const result = promoteBareCheckboxes(
+        "- [ ] buy milk #Work /Cutover",
+        sequentialMintId(),
+        OPTIONS,
+      );
+
+      const task = result.tasks[0];
+      expect(task?.content).toBe("buy milk");
+      expect(task?.projectName).toBe("Work");
+      expect(task?.sectionName).toBe("Cutover");
     });
 
     it("a line consumed entirely by recognised tokens falls back to the full text rather than an empty Task name", () => {

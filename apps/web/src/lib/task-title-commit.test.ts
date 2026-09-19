@@ -40,6 +40,10 @@ function setters(overrides: Partial<TaskTitleCommitSetters> = {}): TaskTitleComm
     setTaskDateString: vi.fn(),
     setTaskLabels: vi.fn(),
     resolveLabelIds: vi.fn(async () => []),
+    setTaskProject: vi.fn(),
+    setTaskSection: vi.fn(),
+    resolveProjectId: vi.fn(async () => "resolved-project"),
+    resolveSectionId: vi.fn(async () => "resolved-section"),
     ...overrides,
   };
 }
@@ -172,5 +176,90 @@ describe("commitTaskTitle", () => {
     await commitTaskTitle(existing, "pay rent monthly", { now: NOW }, s);
 
     expect(s.setTaskDateString).not.toHaveBeenCalled();
+  });
+
+  // Issue #370: renaming a Task runs through this exact function
+  // (taskFieldsForRename, the seam this module calls straight through
+  // to), so a typed `#project` moves it — intended, matching how a typed
+  // date or priority already overwrite an existing value on rename.
+  describe("a typed #project/section on rename (issue #370)", () => {
+    it("does not call resolveProjectId when no #project was typed", async () => {
+      const s = setters();
+      await commitTaskTitle(task({ content: "buy milk" }), "buy oat milk", { now: NOW }, s);
+
+      expect(s.resolveProjectId).not.toHaveBeenCalled();
+      expect(s.setTaskProject).not.toHaveBeenCalled();
+    });
+
+    it("moves the Task when a typed #project resolves to a different Project", async () => {
+      const existing = task({ content: "buy milk", projectId: "old-project" });
+      const s = setters({ resolveProjectId: vi.fn(async () => "new-project") });
+      await commitTaskTitle(existing, "buy milk #Work", { now: NOW }, s);
+
+      expect(s.resolveProjectId).toHaveBeenCalledWith("Work");
+      expect(s.setTaskProject).toHaveBeenCalledWith("task-1", "new-project");
+    });
+
+    it("skips setTaskProject when the resolved Project already equals the Task's own", async () => {
+      const existing = task({ content: "buy milk", projectId: "same-project" });
+      const s = setters({ resolveProjectId: vi.fn(async () => "same-project") });
+      await commitTaskTitle(existing, "buy milk #Work", { now: NOW }, s);
+
+      expect(s.setTaskProject).not.toHaveBeenCalled();
+    });
+
+    it("strips the #project sigil from the renamed content", async () => {
+      const existing = task({ content: "buy milk" });
+      const s = setters();
+      await commitTaskTitle(existing, "buy oat milk #Work", { now: NOW }, s);
+
+      expect(s.renameTask).toHaveBeenCalledWith("task-1", "buy oat milk");
+    });
+
+    it("resolves a typed /section within the typed #project, not the Task's own existing Project", async () => {
+      const existing = task({ content: "buy milk", projectId: "old-project", sectionId: null });
+      const resolveProjectId = vi.fn(async () => "new-project");
+      const resolveSectionId = vi.fn(async () => "new-section");
+      const s = setters({ resolveProjectId, resolveSectionId });
+      // A Section name is a single "word" run (letters/digits/`_`/`-`) —
+      // ../../packages/core/src/quick-add/rules.ts's own `WORD_NAME_PATTERN`
+      // doc comment, unchanged by this ticket ("packages/core needs zero
+      // parsing changes").
+      await commitTaskTitle(existing, "buy milk #Work /Cutover", { now: NOW }, s);
+
+      expect(resolveSectionId).toHaveBeenCalledWith("new-project", "Cutover");
+      expect(s.setTaskSection).toHaveBeenCalledWith("task-1", "new-section");
+    });
+
+    it("resolves a typed /section within the Task's own existing Project when no #project was typed", async () => {
+      const existing = task({ content: "buy milk", projectId: "existing-project" });
+      const resolveSectionId = vi.fn(async () => "new-section");
+      const s = setters({ resolveSectionId });
+      await commitTaskTitle(existing, "buy milk /Cutover", { now: NOW }, s);
+
+      expect(resolveSectionId).toHaveBeenCalledWith("existing-project", "Cutover");
+      expect(s.setTaskSection).toHaveBeenCalledWith("task-1", "new-section");
+    });
+
+    it("ignores a typed /section when the Task has no Project, typed or existing", async () => {
+      const existing = task({ content: "buy milk", projectId: null });
+      const s = setters();
+      await commitTaskTitle(existing, "buy milk /Cutover", { now: NOW }, s);
+
+      expect(s.resolveSectionId).not.toHaveBeenCalled();
+      expect(s.setTaskSection).not.toHaveBeenCalled();
+    });
+
+    it("skips setTaskSection when the resolved Section already equals the Task's own", async () => {
+      const existing = task({
+        content: "buy milk",
+        projectId: "existing-project",
+        sectionId: "same-section",
+      });
+      const s = setters({ resolveSectionId: vi.fn(async () => "same-section") });
+      await commitTaskTitle(existing, "buy milk /Cutover", { now: NOW }, s);
+
+      expect(s.setTaskSection).not.toHaveBeenCalled();
+    });
   });
 });

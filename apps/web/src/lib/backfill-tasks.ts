@@ -150,6 +150,17 @@ export interface BackfillTasksOptions {
    * LabelStore to resolve against passes the real thing.
    */
   resolveLabelIds?: (names: string[]) => Promise<string[]>;
+  /**
+   * Issue #370's Project/Section-shaped siblings of `resolveLabelIds`
+   * just above (`promote-tasks.ts`'s own `PromotedTask.projectName`/
+   * `sectionName`) — same "nothing resolves" default, same reasoning:
+   * old checkbox text overwhelmingly carries no `#project`/`/section`
+   * either (both sigils postdate every Entry this backfill is reaching
+   * for), and a caller with a real ProjectStore to resolve against passes
+   * the real thing.
+   */
+  resolveProjectId?: (name: string) => Promise<string | null>;
+  resolveSectionId?: (projectId: string, name: string) => Promise<string | null>;
   /** Minutes east of UTC — defaults to this Device's own, live `deviceUtcOffsetMinutes()`, matching every other place History computes a capture day (entry-day.ts, day-referrers.ts, Export's own ADR 0016). */
   offsetMinutes?: number;
   /** Defaults to `@meologue/core`'s `englishQuickAddLanguage` — the one language pack this app ships. */
@@ -199,6 +210,8 @@ export async function backfillTasksFromHistory(
     deviceId,
     mintId = mintTaskId,
     resolveLabelIds = async () => [],
+    resolveProjectId = async () => null,
+    resolveSectionId = async () => null,
     offsetMinutes = deviceUtcOffsetMinutes(),
     language = englishQuickAddLanguage,
   } = options;
@@ -274,7 +287,25 @@ export async function backfillTasksFromHistory(
     for (const task of promoted) {
       lastKey = orderKeyBetween(lastKey, null);
       const labelIds = await resolveLabelIds(task.labelNames);
-      newTasks.push(promotedTaskToTask(task, deviceId, entry.createdAt, lastKey, labelIds));
+      // Issue #370: mirrors `labelIds` above, and `use-history.ts`'s own
+      // `upsertPromotedTasks` — a `/section` resolves within a `#project`
+      // typed on the same line, never guessed at when none was.
+      const projectId = task.projectName !== null ? await resolveProjectId(task.projectName) : null;
+      const sectionId =
+        task.sectionName !== null && projectId !== null
+          ? await resolveSectionId(projectId, task.sectionName)
+          : null;
+      newTasks.push(
+        promotedTaskToTask(
+          task,
+          deviceId,
+          entry.createdAt,
+          lastKey,
+          labelIds,
+          projectId,
+          sectionId,
+        ),
+      );
       tasksCreated += 1;
       if (task.date !== null) {
         tasksDated += 1;
@@ -374,11 +405,22 @@ export async function runTasksBackfillOnce(
   eventStore: EventStore,
   deviceId: string,
   resolveLabelIds?: (names: string[]) => Promise<string[]>,
+  // Issue #370's Project/Section-shaped siblings of `resolveLabelIds`
+  // just above — see `BackfillTasksOptions`'s own doc comment.
+  resolveProjectId?: (name: string) => Promise<string | null>,
+  resolveSectionId?: (projectId: string, name: string) => Promise<string | null>,
 ): Promise<void> {
   if (hasAlreadyBackfilled()) {
     return;
   }
-  const report = await backfillTasksFromHistory({ store, taskStore, deviceId, resolveLabelIds });
+  const report = await backfillTasksFromHistory({
+    store,
+    taskStore,
+    deviceId,
+    resolveLabelIds,
+    resolveProjectId,
+    resolveSectionId,
+  });
   markBackfilled();
   if (report.tasksCreated > 0) {
     console.info(

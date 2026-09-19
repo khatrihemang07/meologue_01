@@ -80,6 +80,17 @@ export function promotedTaskToTask(
   capturedAt: string,
   orderKey: string,
   labelIds: string[],
+  // Issue #370: resolved the identical way `labelIds` above is — a
+  // caller (this file's own `upsertPromotedTasks`,
+  // backfill-tasks.ts's own loop) awaits `resolveProjectId`/
+  // `resolveSectionId` against `promoted.projectName`/`sectionName`
+  // before this function is ever called, since this function itself
+  // stays a plain, synchronous mapper. `null` for either means "no
+  // `#project`/`/section` token, or nothing to resolve it against" —
+  // the same meaning `projectId: null` used to be hardcoded to
+  // unconditionally, before #370 gave Promotion anywhere to put it.
+  projectId: string | null,
+  sectionId: string | null,
 ): Task {
   return {
     id: promoted.id,
@@ -101,8 +112,8 @@ export function promotedTaskToTask(
     priority: promoted.priority,
     labelIds,
     dateString: promoted.dateString,
-    projectId: null,
-    sectionId: null,
+    projectId,
+    sectionId,
     parentId: null,
     // No Description — a Task promoted out of a checkbox line starts
     // with the same "nothing chosen yet" state one created directly in
@@ -233,6 +244,23 @@ export function useHistory(
    * own `resolveLabelIds`).
    */
   resolveLabelIds: (names: string[]) => Promise<string[]> = async () => [],
+  /**
+   * Issue #370's Project/Section-shaped siblings of `resolveLabelIds`
+   * just above — `use-projects.ts`'s own `resolveProjectId`/
+   * `resolveSectionId`, the identical ProjectStore round trip
+   * `todo-page.tsx`'s own `handleAdd` already awaits for the add field's
+   * own `#project`/`/section` tokens, and this hook has no ProjectStore
+   * of its own to do that resolution with directly. Defaulted to
+   * "nothing resolves" for the identical reason `resolveLabelIds`
+   * defaults that way: every existing call site (this file's own tests
+   * among them) that never sends a checkbox line with a `#project`/
+   * `/section` on it keeps compiling unchanged —
+   * `entry-store-layout.tsx` is the one production caller, and it always
+   * passes the real thing (`useProjects`'s own `resolveProjectId`/
+   * `resolveSectionId`).
+   */
+  resolveProjectId: (name: string) => Promise<string | null> = async () => null,
+  resolveSectionId: (projectId: string, name: string) => Promise<string | null> = async () => null,
 ): UseHistoryResult {
   const entriesQuery = useInfiniteQuery({
     queryKey: ENTRIES_QUERY_KEY,
@@ -312,8 +340,11 @@ export function useHistory(
    * not both racing for the same "after the last existing Task" slot.
    * `resolveLabelIds` is awaited once per Task, in order, matching
    * `use-labels.ts`'s own `resolveLabelIds` doc comment on why a second
-   * `#Shopping` in the same Entry must see the Label the first one just
-   * minted rather than racing it.
+   * `@Shopping` in the same Entry must see the Label the first one just
+   * minted rather than racing it. `resolveProjectId`/`resolveSectionId`
+   * (issue #370) are awaited the identical way, per Task, in order —
+   * `use-projects.ts`'s own doc comments carry the matching reasoning for
+   * a `#project` typed twice across two checkbox lines in one Entry.
    */
   async function upsertPromotedTasks(
     promoted: readonly PromotedTask[],
@@ -328,7 +359,20 @@ export function useHistory(
     for (const task of promoted) {
       lastKey = orderKeyBetween(lastKey, null);
       const labelIds = await resolveLabelIds(task.labelNames);
-      tasks.push(promotedTaskToTask(task, deviceId, capturedAt, lastKey, labelIds));
+      // Issue #370: mirrors `labelIds` just above — a Section is only
+      // ever resolved *within* a Project that itself resolved, matching
+      // `todo-page.tsx`'s own `handleAdd` ("resolves inside whichever
+      // Project wins"); a `/section` with no `#project` on the same line
+      // has nothing to resolve within, so it's left unfiled rather than
+      // guessed at.
+      const projectId = task.projectName !== null ? await resolveProjectId(task.projectName) : null;
+      const sectionId =
+        task.sectionName !== null && projectId !== null
+          ? await resolveSectionId(projectId, task.sectionName)
+          : null;
+      tasks.push(
+        promotedTaskToTask(task, deviceId, capturedAt, lastKey, labelIds, projectId, sectionId),
+      );
     }
     await taskStore.upsert(tasks);
   }

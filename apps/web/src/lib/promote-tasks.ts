@@ -108,13 +108,14 @@ import { taskFieldsFromQuickAdd } from "@/lib/quick-add-task";
  * `sendEntry`/`commitEntryEdit` build a real `Task` from each of these.
  * Every field below except `id`/`checked` is exactly
  * `quick-add-task.ts`'s own `QuickAddTaskFields` shape (`content` in
- * place of that file's `content`, `labelNames` still unresolved — a
- * `@label` name needs a LabelStore round trip this module has no
- * business making, `use-history.ts`'s own `upsertPromotedTasks` is what
- * awaits `resolveLabelIds` the same way `todo-page.tsx`'s `handleAdd`
- * already does for the add field) — because Promotion and Todo's own add
- * field are the identical parse, landing in the identical Task fields,
- * per this module's own header comment.
+ * place of that file's `content`, `labelNames`/`projectName`/`sectionName`
+ * still unresolved — a `@label`/`#project`/`/section` name each need a
+ * store round trip this module has no business making, `use-history.ts`'s
+ * own `upsertPromotedTasks` is what awaits `resolveLabelIds`/
+ * `resolveProjectId`/`resolveSectionId` the same way `todo-page.tsx`'s
+ * `handleAdd` already does for the add field) — because Promotion and
+ * Todo's own add field are the identical parse, landing in the identical
+ * Task fields, per this module's own header comment.
  */
 export interface PromotedTask {
   readonly id: string;
@@ -127,6 +128,19 @@ export interface PromotedTask {
   readonly priority: number;
   readonly dateString: string | null;
   readonly labelNames: string[];
+  /**
+   * Issue #370's Project/Section-shaped siblings of `labelNames` above —
+   * a `#project`/`/section` name needs the identical ProjectStore round
+   * trip (use-projects.ts's `resolveProjectId`/`resolveSectionId`) this
+   * module has no business making; `use-history.ts`'s own
+   * `upsertPromotedTasks` is what awaits them, the same door already open
+   * for `labelNames`. `null` when no `#project`/`/section` token matched
+   * this line — the identical "nothing typed" meaning
+   * `QuickAddResult.projectName`/`sectionName` already carry straight
+   * through `taskFieldsFromQuickAdd`.
+   */
+  readonly projectName: string | null;
+  readonly sectionName: string | null;
 }
 
 export interface PromotionResult {
@@ -322,6 +336,8 @@ function transformNode(
         priority: fields.priority,
         dateString: fields.dateString,
         labelNames: fields.labelNames,
+        projectName: fields.projectName,
+        sectionName: fields.sectionName,
       });
       const promotedFirst = entrySchema.node("paragraph", null, [
         entrySchema.node("task_reference", { taskId: id, label: content, checked }),

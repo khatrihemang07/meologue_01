@@ -255,6 +255,9 @@ export interface EntryStoreOutletContext {
   deleteSection: (id: string) => void;
   archiveSection: (id: string) => void;
   unarchiveSection: (id: string) => void;
+  /** Issue #370 — use-projects.ts's own `resolveProjectId`/`resolveSectionId` doc comments carry the full reasoning; forwarded here exactly as `resolveLabelIds` already is. */
+  resolveProjectId: (name: string) => Promise<string>;
+  resolveSectionId: (projectId: string, name: string) => Promise<string>;
   /** Moves a Task into `projectId` (or back to Inbox for `null`) — TaskStore.setProject's own doc comment, via use-tasks.ts's `setTaskProject`. */
   setTaskProject: (id: string, projectId: string | null) => void;
   /** Files a Task into `sectionId`, or clears it for `null` — TaskStore.setSection's own doc comment, via use-tasks.ts's `setTaskSection`. */
@@ -626,6 +629,21 @@ async function noopListSections(_projectId: string): Promise<Section[]> {
 async function noopAddSection(_projectId: string, _name: string): Promise<void> {}
 
 function noopRenameSection(_id: string, _name: string) {}
+
+// `resolveProjectId`/`resolveSectionId`'s own not-ready stand-ins (issue
+// #370), mirroring `noopAddFilter` further below rather than
+// `noopResolveLabelIds` above: the type here is a single `string`, not an
+// array, so there is no empty-list "nothing found" answer to fall back
+// to — a placeholder empty id stands in instead, the same reasoning
+// `noopAddFilter`'s own comment gives, since nothing can call either of
+// these before the store opens.
+async function noopResolveProjectId(_name: string): Promise<string> {
+  return "";
+}
+
+async function noopResolveSectionId(_projectId: string, _name: string): Promise<string> {
+  return "";
+}
 
 function noopSetSectionDescription(_id: string, _description: string | null) {}
 
@@ -1148,14 +1166,50 @@ export function EntryStoreLayout() {
   const deviceId = data?.deviceId ?? "";
 
   // `useLabels` is called before `useHistory` on purpose: Promotion's own
-  // `#Shopping` resolution (`upsertPromotedTasks`, use-history.ts) needs
-  // `resolveLabelIds` handed in as `useHistory`'s own fourth argument
+  // `@Shopping` resolution (`upsertPromotedTasks`, use-history.ts) needs
+  // `resolveLabelIds` handed in as `useHistory`'s own eighth argument
   // below, the identical LabelStore round trip `handleAdd` (further down
   // this file) already awaits for the add field's own `@label` tokens.
   const { labels, addLabel, renameLabel, setLabelColour, removeLabel, resolveLabelIds } = useLabels(
     labelStore,
     deviceId,
   );
+
+  // Issue #370: `useProjects` is called this early — before `useHistory`
+  // and the Tasks backfill effect just below — for the identical reason
+  // `useLabels` just above is: Promotion's own `#project`/`/section`
+  // resolution (`upsertPromotedTasks`, use-history.ts;
+  // `backfillTasksFromHistory`, backfill-tasks.ts) needs
+  // `resolveProjectId`/`resolveSectionId` handed to both, and neither has
+  // a ProjectStore of its own to resolve against directly. Declared once,
+  // here, rather than a second time further down where `useTasks`'s own
+  // Project-shaped fields used to sit beside it — moving the whole call
+  // keeps this the one place `useProjects` is invoked, rather than
+  // splitting its own destructure across two call sites for one field
+  // each.
+  const {
+    projects,
+    addProject,
+    renameProject,
+    setProjectColour,
+    setProjectDescription,
+    setProjectFavourite,
+    archiveProject,
+    unarchiveProject,
+    setProjectParent,
+    reorderProject,
+    removeProject,
+    listSections,
+    addSection,
+    renameSection,
+    setSectionDescription,
+    reorderSection,
+    deleteSection,
+    archiveSection,
+    unarchiveSection,
+    resolveProjectId,
+    resolveSectionId,
+  } = useProjects(projectStore, eventStore, deviceId);
 
   // Issue #174, ADR 0053: the one-time History backfill, kicked off the
   // moment the real store is open — `backfillTasksFromHistory` itself is
@@ -1181,7 +1235,7 @@ export function EntryStoreLayout() {
   // still `undefined` and this effect's own body returns immediately
   // without ever assigning it.
   const backfillDone = useRef<Promise<void>>(Promise.resolve());
-  // biome-ignore lint/correctness/useExhaustiveDependencies: `resolveLabelIds` is read for its current value only, deliberately not a reactive trigger — `backfillStarted` already limits this to one call for the lifetime of this component, so re-running it because a *different* function identity was handed over on a later render would be wrong, not merely redundant.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: `resolveLabelIds`/`resolveProjectId`/`resolveSectionId` are read for their current values only, deliberately not a reactive trigger — `backfillStarted` already limits this to one call for the lifetime of this component, so re-running it because a *different* function identity was handed over on a later render would be wrong, not merely redundant.
   useEffect(() => {
     if (data === undefined || backfillStarted.current) {
       return;
@@ -1196,6 +1250,12 @@ export function EntryStoreLayout() {
       data.eventStore,
       data.deviceId,
       resolveLabelIds,
+      // Issue #370 — the identical ProjectStore round trip `resolveLabelIds`
+      // just above already gets, so an old Entry's own `#project`/
+      // `/section` text is filed, not silently dropped, the same way a
+      // live Send already resolves it (see `useHistory`'s own call below).
+      resolveProjectId,
+      resolveSectionId,
     );
   }, [data]);
 
@@ -1363,6 +1423,11 @@ export function EntryStoreLayout() {
     eventStore,
     deviceId,
     resolveLabelIds,
+    // Issue #370 — the identical live-Send round trip `resolveLabelIds`
+    // above already gets, so a typed `#project`/`/section` in a promoted
+    // checkbox line is filed, not silently dropped.
+    resolveProjectId,
+    resolveSectionId,
   );
   const {
     tasks,
@@ -1399,27 +1464,6 @@ export function EntryStoreLayout() {
     deviceId,
   );
   const { events, listEventsByTask, listEventsByProject } = useEvents(eventStore, deviceId);
-  const {
-    projects,
-    addProject,
-    renameProject,
-    setProjectColour,
-    setProjectDescription,
-    setProjectFavourite,
-    archiveProject,
-    unarchiveProject,
-    setProjectParent,
-    reorderProject,
-    removeProject,
-    listSections,
-    addSection,
-    renameSection,
-    setSectionDescription,
-    reorderSection,
-    deleteSection,
-    archiveSection,
-    unarchiveSection,
-  } = useProjects(projectStore, eventStore, deviceId);
   const { filters, addFilter, renameFilter, setFilterColour, setFilterQuery, removeFilter } =
     useFilters(filterStore, deviceId);
 
@@ -1496,6 +1540,8 @@ export function EntryStoreLayout() {
               deleteSection,
               archiveSection,
               unarchiveSection,
+              resolveProjectId,
+              resolveSectionId,
               events,
               listEventsByTask,
               listEventsByProject,
@@ -1574,6 +1620,8 @@ export function EntryStoreLayout() {
               deleteSection: noopDeleteSection,
               archiveSection: noopArchiveSection,
               unarchiveSection: noopUnarchiveSection,
+              resolveProjectId: noopResolveProjectId,
+              resolveSectionId: noopResolveSectionId,
               events: [],
               listEventsByTask: noopListEventsByTask,
               listEventsByProject: noopListEventsByProject,

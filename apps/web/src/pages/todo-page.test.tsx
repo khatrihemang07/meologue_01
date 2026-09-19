@@ -321,6 +321,14 @@ function readyContext(overrides: Partial<EntryStoreOutletContext> = {}): EntrySt
     setTaskParent: vi.fn(async () => {}),
     labels: [],
     resolveLabelIds: vi.fn(async () => []),
+    // Issue #370 — a distinctive default (not the typed name verbatim, not
+    // empty) so a test asserting `addTask`'s own `projectId`/`sectionId`
+    // can tell "this call reached resolveProjectId/resolveSectionId" apart
+    // from "this call happened to pass the raw name through unresolved".
+    resolveProjectId: vi.fn(async (name: string) => `resolved-project:${name}`),
+    resolveSectionId: vi.fn(
+      async (projectId: string, name: string) => `resolved-section:${projectId}:${name}`,
+    ),
     comments: [],
     addComment: vi.fn(),
     editComment: vi.fn(),
@@ -1175,6 +1183,29 @@ describe("TodoPage — rename resolves recognised phrases (issue #247)", () => {
     expect(setTaskPriority).toHaveBeenCalledWith("a", 4); // p1 UI == stored 4.
   });
 
+  // Issue #370: renaming with a typed `#project` moves the Task — intended,
+  // matching how a typed date/priority above already overwrite an existing
+  // value on rename.
+  it("moves the Task when the row editor's rename types a #project", async () => {
+    const setTaskProject = vi.fn();
+    const resolveProjectId = vi.fn(async () => "project-work");
+    renderTodoPage(
+      inboxContext([task({ id: "a", content: "buy milk", projectId: null })], {
+        setTaskProject,
+        resolveProjectId,
+      }),
+    );
+
+    await waitFor(() => expect(screen.getByText("buy milk")).toBeInTheDocument());
+    fireEvent.click(screen.getByRole("button", { name: 'Edit "buy milk"' }));
+    const editor = await screen.findByLabelText("Task name");
+    fireEvent.change(editor, { target: { value: "buy oat milk #Work" } });
+    fireEvent.keyDown(editor, { key: "Enter" });
+
+    await waitFor(() => expect(resolveProjectId).toHaveBeenCalledWith("Work"));
+    expect(setTaskProject).toHaveBeenCalledWith("a", "project-work");
+  });
+
   it("resolves date and priority through the detail view's own rename", async () => {
     const detailTaskId = "22222222-2222-7222-8222-222222222222";
     const renameTask = vi.fn();
@@ -1471,6 +1502,130 @@ describe("TodoPage — Projects", () => {
         expect.objectContaining({ projectId: "p1" }),
       ),
     );
+  });
+
+  // Issue #370 — a typed `#project` actually files the Task (find-or-create
+  // via use-projects.ts's `resolveProjectId`), and the sigil is stripped
+  // from the saved title exactly like a recognised date already is.
+  describe("a typed #project/section (issue #370)", () => {
+    it("assigns the Task to a typed #project, and strips the sigil from the saved title", async () => {
+      const addTask = vi.fn();
+      const resolveProjectId = vi.fn(async (name: string) => `project-${name}`);
+      renderTodoPage(inboxContext([], { addTask, resolveProjectId }));
+
+      await revealAddTaskField();
+      fireEvent.change(await screen.findByLabelText("Task name"), {
+        target: { value: "buy milk #Groceries" },
+      });
+      fireEvent.click(screen.getByRole("button", { name: "Add task" }));
+
+      await waitFor(() => expect(resolveProjectId).toHaveBeenCalledWith("Groceries"));
+      expect(addTask).toHaveBeenCalledWith(
+        "buy milk",
+        expect.objectContaining({ projectId: "project-Groceries" }),
+      );
+    });
+
+    // The ticket's own worked example: a typed `#project` beats the
+    // ambient view's own Project — issue #370 gives `captureProjectId` the
+    // typed override this file's own `handleAdd` comment used to say it
+    // had none of.
+    it("a typed #project overrides the view's own inherited Project", async () => {
+      const project = {
+        id: "p1",
+        deviceId: "device-a",
+        name: "Groceries",
+        colour: "#DC4C3E",
+        favourite: false,
+        archived: false,
+        parentId: null,
+        description: null,
+        orderKey: "A",
+        createdAt: "2026-01-01T00:00:00.000Z",
+        updatedAt: "2026-01-01T00:00:00.000Z",
+        seq: 1,
+        syncedAt: "2026-01-01T00:00:00.000Z",
+        deletedAt: null,
+      };
+      const addTask = vi.fn();
+      const resolveProjectId = vi.fn(async () => "project-work");
+      renderTodoPage(
+        readyContext({ projects: [project], addTask, resolveProjectId }),
+        "/todo/projects/p1",
+      );
+
+      await revealAddTaskField();
+      fireEvent.change(await screen.findByLabelText("Task name"), {
+        target: { value: "buy milk #Work" },
+      });
+      fireEvent.click(screen.getByRole("button", { name: "Add task" }));
+
+      await waitFor(() => expect(resolveProjectId).toHaveBeenCalledWith("Work"));
+      expect(addTask).toHaveBeenCalledWith(
+        "buy milk",
+        expect.objectContaining({ projectId: "project-work" }),
+      );
+    });
+
+    it("#project /section lands the Task in that Section, resolved inside the typed Project", async () => {
+      const addTask = vi.fn();
+      const resolveProjectId = vi.fn(async () => "project-work");
+      const resolveSectionId = vi.fn(async () => "section-cutover");
+      renderTodoPage(inboxContext([], { addTask, resolveProjectId, resolveSectionId }));
+
+      await revealAddTaskField();
+      fireEvent.change(await screen.findByLabelText("Task name"), {
+        target: { value: "buy milk #Work /Cutover" },
+      });
+      fireEvent.click(screen.getByRole("button", { name: "Add task" }));
+
+      await waitFor(() => expect(resolveSectionId).toHaveBeenCalledWith("project-work", "Cutover"));
+      expect(addTask).toHaveBeenCalledWith(
+        "buy milk",
+        expect.objectContaining({ projectId: "project-work", sectionId: "section-cutover" }),
+      );
+    });
+
+    // "Last one wins" (../../packages/core/src/quick-add/parse-quick-add.ts's
+    // own `buildResult` comment) already collapses two `#project` tokens in
+    // one line to a single `projectName` before this page ever sees it —
+    // this proves the wiring doesn't call `resolveProjectId` a second time
+    // on top of that, which would be the only way this page could still
+    // mint a duplicate.
+    it("two #project references in one line resolve only once, not twice", async () => {
+      const addTask = vi.fn();
+      const resolveProjectId = vi.fn(async () => "project-personal");
+      renderTodoPage(inboxContext([], { addTask, resolveProjectId }));
+
+      await revealAddTaskField();
+      fireEvent.change(await screen.findByLabelText("Task name"), {
+        target: { value: "buy milk #Work #Personal" },
+      });
+      fireEvent.click(screen.getByRole("button", { name: "Add task" }));
+
+      await waitFor(() => expect(addTask).toHaveBeenCalled());
+      expect(resolveProjectId).toHaveBeenCalledTimes(1);
+      expect(resolveProjectId).toHaveBeenCalledWith("Personal");
+    });
+
+    it("a lone /section with no typed or ambient Project is ignored", async () => {
+      const addTask = vi.fn();
+      const resolveSectionId = vi.fn(async () => "section-cutover");
+      renderTodoPage(inboxContext([], { addTask, resolveSectionId }));
+
+      await revealAddTaskField();
+      fireEvent.change(await screen.findByLabelText("Task name"), {
+        target: { value: "buy milk /Cutover" },
+      });
+      fireEvent.click(screen.getByRole("button", { name: "Add task" }));
+
+      await waitFor(() => expect(addTask).toHaveBeenCalled());
+      expect(resolveSectionId).not.toHaveBeenCalled();
+      expect(addTask).toHaveBeenCalledWith(
+        "buy milk",
+        expect.objectContaining({ projectId: null, sectionId: null }),
+      );
+    });
   });
 
   // Issue #297 — `ProjectStore.setProjectParent` existed, was persisted,

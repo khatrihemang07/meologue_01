@@ -109,6 +109,7 @@ export function ComposerPage() {
     setTaskPriority,
     setTaskDateString,
     setTaskProject,
+    setTaskSection,
     setTaskLabels,
     setTaskDescription,
     // Issue #247: already on this context (entry-store-layout.tsx's own
@@ -116,6 +117,11 @@ export function ComposerPage() {
     // here before now — `commitRename` below is the first thing on this
     // page that needs it.
     resolveLabelIds,
+    // Issue #370: the Project/Section-shaped siblings of `resolveLabelIds`
+    // just above — `commitRename` below is the first thing on this page
+    // that needs either.
+    resolveProjectId,
+    resolveSectionId,
     addComment,
     editComment,
     removeComment,
@@ -460,6 +466,10 @@ export function ComposerPage() {
         setTaskDateString,
         setTaskLabels,
         resolveLabelIds,
+        setTaskProject,
+        setTaskSection,
+        resolveProjectId,
+        resolveSectionId,
       },
     );
   }

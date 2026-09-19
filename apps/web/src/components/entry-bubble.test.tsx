@@ -286,6 +286,8 @@ describe("EntryBubble", () => {
         setTaskParent: vi.fn(async () => {}),
         labels: [],
         resolveLabelIds: vi.fn(async () => []),
+        resolveProjectId: vi.fn(async () => ""),
+        resolveSectionId: vi.fn(async () => ""),
         comments: [],
         addComment: vi.fn(),
         editComment: vi.fn(),

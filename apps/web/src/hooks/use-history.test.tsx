@@ -142,6 +142,11 @@ describe("useHistory", () => {
     // `@label` token to resolve — this default mirrors `useHistory`'s own
     // "no labels resolve to anything" fallback rather than duplicating it.
     resolveLabelIds: (names: string[]) => Promise<string[]> = async () => [],
+    // Issue #370's Project/Section-shaped siblings of `resolveLabelIds`
+    // just above — same "nothing resolves" default, same reasoning.
+    resolveProjectId: (name: string) => Promise<string | null> = async () => null,
+    resolveSectionId: (projectId: string, name: string) => Promise<string | null> = async () =>
+      null,
   ) {
     const fresh = await importFresh();
     const wrapper = ({ children }: { children: ReactNode }) => (
@@ -167,6 +172,8 @@ describe("useHistory", () => {
           eventStore,
           deviceId,
           resolveLabelIds,
+          resolveProjectId,
+          resolveSectionId,
         ),
       { wrapper },
     );
@@ -476,6 +483,83 @@ describe("useHistory", () => {
         expect(resolveLabelIds).toHaveBeenCalledWith(["Shopping"]);
         const [mintedTasks] = mustFirstCall(vi.mocked(taskStore.upsert));
         expect(mustAt(mintedTasks, 0).labelIds).toEqual(["label-Shopping"]);
+      });
+
+      // Issue #370's own regression: before this fix, `#Work`/`/Cutover`
+      // were stripped from the promoted Task's content (quick-add-task.ts's
+      // shared `contentKeepingUnsupported`, now that "project"/"section"
+      // are supported tokens app-wide) but `promotedTaskToTask` still
+      // hardcoded `projectId`/`sectionId` to `null` regardless — the words
+      // vanished AND the Task landed unfiled in Inbox, real data loss. This
+      // proves the words are recovered as a real Project/Section
+      // assignment, the same round trip the `@label` test above already
+      // proves for `resolveLabelIds`.
+      it("resolves a #project token through the injected resolveProjectId, the same round trip Todo's own add field uses", async () => {
+        const store = createFakeStore();
+        const resolveProjectId = vi.fn(async (name: string) => `project-${name}`);
+        const { result, taskStore } = await renderUseHistory(
+          store,
+          createFakeTaskStore(),
+          "device-a",
+          async () => [],
+          resolveProjectId,
+        );
+        await waitFor(() => expect(result.current.entries).toEqual([]));
+
+        act(() => result.current.sendEntry("- [ ] buy milk #Work", PROMOTION));
+
+        await waitFor(() => expect(taskStore.upsert).toHaveBeenCalledTimes(1));
+        expect(resolveProjectId).toHaveBeenCalledWith("Work");
+        const [mintedTasks] = mustFirstCall(vi.mocked(taskStore.upsert));
+        expect(mustAt(mintedTasks, 0).content).toBe("buy milk");
+        expect(mustAt(mintedTasks, 0).projectId).toBe("project-Work");
+      });
+
+      it("resolves a /section token within the resolved #project, through the injected resolveSectionId", async () => {
+        const store = createFakeStore();
+        const resolveProjectId = vi.fn(async (name: string) => `project-${name}`);
+        const resolveSectionId = vi.fn(
+          async (projectId: string, name: string) => `section-${projectId}-${name}`,
+        );
+        const { result, taskStore } = await renderUseHistory(
+          store,
+          createFakeTaskStore(),
+          "device-a",
+          async () => [],
+          resolveProjectId,
+          resolveSectionId,
+        );
+        await waitFor(() => expect(result.current.entries).toEqual([]));
+
+        act(() => result.current.sendEntry("- [ ] buy milk #Work /Cutover", PROMOTION));
+
+        await waitFor(() => expect(taskStore.upsert).toHaveBeenCalledTimes(1));
+        expect(resolveSectionId).toHaveBeenCalledWith("project-Work", "Cutover");
+        const [mintedTasks] = mustFirstCall(vi.mocked(taskStore.upsert));
+        expect(mustAt(mintedTasks, 0).content).toBe("buy milk");
+        expect(mustAt(mintedTasks, 0).sectionId).toBe("section-project-Work-Cutover");
+      });
+
+      it("ignores a /section with no #project on the same line, rather than guessing", async () => {
+        const store = createFakeStore();
+        const resolveSectionId = vi.fn(async () => "section-x");
+        const { result, taskStore } = await renderUseHistory(
+          store,
+          createFakeTaskStore(),
+          "device-a",
+          async () => [],
+          async () => null,
+          resolveSectionId,
+        );
+        await waitFor(() => expect(result.current.entries).toEqual([]));
+
+        act(() => result.current.sendEntry("- [ ] buy milk /Cutover", PROMOTION));
+
+        await waitFor(() => expect(taskStore.upsert).toHaveBeenCalledTimes(1));
+        expect(resolveSectionId).not.toHaveBeenCalled();
+        const [mintedTasks] = mustFirstCall(vi.mocked(taskStore.upsert));
+        expect(mustAt(mintedTasks, 0).projectId).toBeNull();
+        expect(mustAt(mintedTasks, 0).sectionId).toBeNull();
       });
 
       it("does not consume a token the reader demoted in the Composer before Send", async () => {

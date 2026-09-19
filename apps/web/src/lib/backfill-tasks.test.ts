@@ -152,6 +152,48 @@ describe("backfillTasksFromHistory", () => {
     expect(store.entries[0]?.body).toBe(`- [ ] ${formatTaskReference(FIRST_ID, "buy milk")}`);
   });
 
+  // Issue #370's own regression: before this fix, `#Work` was stripped
+  // from a promoted Task's content (the shared `contentKeepingUnsupported`
+  // in quick-add-task.ts, once "project"/"section" became supported
+  // tokens app-wide) while `promotedTaskToTask` still hardcoded
+  // `projectId`/`sectionId` to `null` unconditionally — the words
+  // vanished from an old checkbox line's Task, and nothing recovered
+  // them. This proves the backfill resolves them into a real Project,
+  // exactly as `use-history.ts`'s own live-Send path does.
+  it("resolves a #project token through the injected resolveProjectId, rather than silently dropping the text", async () => {
+    const store = fakeEntryStore([entry({ id: "1", body: "- [ ] buy milk #Work" })]);
+    const taskStore = fakeTaskStore();
+    const resolveProjectId = async (name: string) => `project-${name}`;
+
+    await backfillTasksFromHistory({
+      store,
+      taskStore,
+      deviceId: "device-a",
+      mintId: sequentialMintId(),
+      offsetMinutes: 0,
+      resolveProjectId,
+    });
+
+    expect(taskStore.active[0]?.content).toBe("buy milk");
+    expect(taskStore.active[0]?.projectId).toBe("project-Work");
+  });
+
+  it("leaves projectId/sectionId null when no resolver is given, matching resolveLabelIds' own default", async () => {
+    const store = fakeEntryStore([entry({ id: "1", body: "- [ ] buy milk #Work /Cutover" })]);
+    const taskStore = fakeTaskStore();
+
+    await backfillTasksFromHistory({
+      store,
+      taskStore,
+      deviceId: "device-a",
+      mintId: sequentialMintId(),
+      offsetMinutes: 0,
+    });
+
+    expect(taskStore.active[0]?.projectId).toBeNull();
+    expect(taskStore.active[0]?.sectionId).toBeNull();
+  });
+
   it("promotes a ticked checkbox into a completed Task, dated the Entry's own capture instant", async () => {
     const store = fakeEntryStore([
       entry({ id: "1", body: "- [x] already done", createdAt: "2026-03-04T09:30:00.000Z" }),

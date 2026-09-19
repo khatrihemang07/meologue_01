@@ -21,21 +21,28 @@ import { firstOccurrence } from "@meologue/core";
 /**
  * Every `QuickAddTokenKind` the parser recognises but Task
  * (../../packages/core/src/task-types.ts) has no field for yet:
- * `project`/`section` land in issue #171 by that file's own header
- * comment ("sequenced apart on purpose, so each migration's blast radius
- * is the one thing it's actually adding"), and `uncompletable`/
- * `description`/`reminder` are recognised for #170's own sake
- * (QuickAddResult's own doc comments say as much for each — `reminder`'s
- * own field comment names it explicitly: "Task has no field to persist
- * this in yet") with storage left for whichever later ticket adds it.
- * `Task.date`'s own doc comment already lists "reminders" among what a
- * Date will eventually drive, which is a forward-looking mention, not a
- * field that exists today — checked directly against task-types.ts
- * itself, not assumed from that comment's own wording.
+ * `uncompletable`/`description`/`reminder` are recognised for #170's own
+ * sake (QuickAddResult's own doc comments say as much for each —
+ * `reminder`'s own field comment names it explicitly: "Task has no field
+ * to persist this in yet") with storage left for whichever later ticket
+ * adds it. `Task.date`'s own doc comment already lists "reminders" among
+ * what a Date will eventually drive, which is a forward-looking mention,
+ * not a field that exists today — checked directly against
+ * task-types.ts itself, not assumed from that comment's own wording.
  *
- * The point of naming them here rather than leaving them to fall out of
- * `content` silently: a recognised, non-demoted token's span is always
- * removed from `QuickAddResult.content` (../../packages/core/src/
+ * `project`/`section` used to sit in this set too, since issue #171
+ * sequenced Project/Section storage apart from the parser itself ("each
+ * migration's blast radius is the one thing it's actually adding," that
+ * ticket's own header comment). Issue #370 is what finally gives them
+ * somewhere to land — use-projects.ts's `resolveProjectId`/
+ * `resolveSectionId`, the Project/Section-shaped siblings of
+ * `resolveLabelIds` — so their spans are no longer skipped here; they're
+ * stripped from `content` exactly like every other supported token,
+ * the same way a recognised date or `@label` already was.
+ *
+ * The point of naming the three still here rather than leaving them to
+ * fall out of `content` silently: a recognised, non-demoted token's span
+ * is always removed from `QuickAddResult.content` (../../packages/core/src/
  * quick-add/parse-quick-add.ts's `buildContent`) — correct for a field
  * this app actually stores (the reader sees the words move from the
  * Task's title into a Date badge, a priority chip, and so on), wrong for
@@ -44,10 +51,11 @@ import { firstOccurrence } from "@meologue/core";
  * programme's own standing warning names — "a Task that vanished as it
  * was typed" — so `contentKeepingUnsupported` below builds its own
  * content string that skips over these kinds' spans entirely, keeping
- * "#Shopping" or "* " as literal text the reader can still see, exactly
- * as add-task-form.tsx's own pre-#170 header comment already promised
- * every unparsed token ("typing #groceries here today creates a Task
- * literally named '#groceries'").
+ * "* " or "//not yet stored" as literal text the reader can still see,
+ * exactly as add-task-form.tsx's own pre-#170 header comment already
+ * promised every unparsed token ("typing #groceries here today creates a
+ * Task literally named '#groceries'" — true of every kind here until its
+ * own ticket gave it a field, `#groceries` included, until #370).
  *
  * **Not implemented by re-parsing with these spans added to `demoted`** —
  * an earlier version of this file did, and it had a real bug this one
@@ -66,8 +74,6 @@ import { firstOccurrence } from "@meologue/core";
  * second time.
  */
 const UNSUPPORTED_TOKEN_KINDS: ReadonlySet<QuickAddTokenKind> = new Set([
-  "project",
-  "section",
   "uncompletable",
   "description",
   "reminder",
@@ -140,6 +146,16 @@ export interface QuickAddTaskFields {
   dateString: string | null;
   /** `@label` names, not yet resolved to ids — use-labels.ts's `resolveLabelIds` is the async second half of turning these into `Task.labelIds`, which is why this function itself stays synchronous. */
   labelNames: string[];
+  /**
+   * A typed `#project` name, not yet resolved to an id — use-projects.ts's
+   * `resolveProjectId` is the async second half (issue #370), mirroring
+   * `labelNames`/`resolveLabelIds` above exactly. `null` when no `#project`
+   * token was typed, the same "nothing typed" meaning `QuickAddResult.
+   * projectName` already carries straight through.
+   */
+  projectName: string | null;
+  /** The Section-shaped sibling of `projectName` — a typed `/section` name, resolved via `resolveSectionId` *within* whichever Project wins (typed or the view's own ambient one — todo-page.tsx's `handleAdd`). `null` when no `/section` token was typed. */
+  sectionName: string | null;
 }
 
 /**
@@ -285,6 +301,8 @@ export function taskFieldsFromQuickAdd(
     priority: result.priority,
     dateString: recurrence.dateString,
     labelNames: result.labelNames,
+    projectName: result.projectName,
+    sectionName: result.sectionName,
   };
 }
 
