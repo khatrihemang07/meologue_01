@@ -41,6 +41,12 @@ describe("dates", () => {
     ["buy milk next wednesday", "2026-09-09"],
     // "this" is identical to bare.
     ["buy milk this fri", "2026-09-04"],
+    ["buy milk this monday", "2026-09-07"],
+    // "last" reproduces Todoist's own known bug (issue #367, D2): it
+    // resolves identically to "next", not to the Monday that already
+    // passed. See LAST_WEEKDAY_REPRODUCES_TODOIST_BUG in date-rules.ts
+    // and the dedicated test below this table for the full citation.
+    ["buy milk last monday", "2026-09-14"], // == next monday, NOT 2026-08-31
     // Date arithmetic.
     ["buy milk in 3 days", "2026-09-05"],
     ["buy milk in 2 weeks", "2026-09-16"],
@@ -81,6 +87,23 @@ describe("dates", () => {
     expect(parseQuickAdd("buy milk next week", { now: dayKey("2026-09-14") }).date).toBe(
       "2026-09-21",
     );
+  });
+
+  it("reproduces Todoist's known bug: last monday resolves to next monday, not the Monday that already passed", () => {
+    // Issue #367 / D2 (.scratch/todoist-add-todo/DECISIONS.md): measured
+    // independently on Todoist web AND Android — both resolve "last
+    // monday" to the same future date as "next monday", never to the
+    // Monday that already passed this week. It is a bug in Todoist's own
+    // shared parser, not a nuance, and it is reproduced here on purpose
+    // per D1's clone standard (full clone, defects included) — see
+    // docs/adr/0088-todoists-add-task-parser-is-cloned-verbatim-defects-included.md.
+    // "this monday" and bare "monday" are unaffected: both still resolve
+    // to the coming Monday, correctly.
+    const now = dayKey("2026-09-19"); // Saturday — the corpus's own capture date.
+    expect(parseQuickAdd("buy milk last monday", { now }).date).toBe("2026-09-28");
+    expect(parseQuickAdd("buy milk next monday", { now }).date).toBe("2026-09-28");
+    expect(parseQuickAdd("buy milk this monday", { now }).date).toBe("2026-09-21");
+    expect(parseQuickAdd("buy milk monday", { now }).date).toBe("2026-09-21");
   });
 
   it("reads the two-part numeric form day-first when both readings are valid, same as the three-part form (issue #366)", () => {
