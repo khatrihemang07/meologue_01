@@ -85,4 +85,32 @@ export interface QuickAddLanguage {
    * unambiguously).
    */
   dayMonthOrder: "day-month" | "month-day";
+  /**
+   * The word naming the fuzzy weekend range — `"weekend"` for English's
+   * `this weekend`/`weekend`/`next weekend`. Paired with `thisWord`/
+   * `nextWord` the same way a weekday is (see `weekdays`' own doc
+   * comment), plus `theWeekendWord`'s own determiner below, which this
+   * word alone does not cover.
+   */
+  weekendWord: string;
+  /**
+   * The determiner Todoist's own eager match swallows ahead of
+   * `weekendWord` in running prose — `"the"` for English's `Pay for the
+   * weekend trip` (issue #366's corpus row: the matched span is `"the
+   * weekend"`, not bare `"weekend"`, and it resolves identically to the
+   * bare word). Resolves like `thisWord`/bare, never like `nextWord` — a
+   * separate field from `thisWord` because "the weekend" and "this
+   * weekend" are different words that happen to resolve the same way,
+   * not the same word twice.
+   */
+  theWeekendWord: string;
+  /**
+   * Fixed calendar holidays recognised as bare words — `valentine`,
+   * `halloween`, `new year day`, `new year eve` for English (issue
+   * #366). Resolved with the identical year-roll-forward rule an
+   * absolute date without a year gets (`./date-rules.ts`'s
+   * `resolveYearRollForward`), so a holiday already past this year rolls
+   * to next year rather than resolving into the past.
+   */
+  holidays: Readonly<Record<string, { month: number; day: number }>>;
 }
