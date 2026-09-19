@@ -19,7 +19,21 @@ const ORDINAL_WEEKDAY_CLAUSE = new RegExp(
 );
 const MONTH_INTERVAL_CLAUSE = /\b(\d+|other)\s+months?\b/i;
 const UNIT_FORM = /^(\d+\s+|other\s+)?(day|days|week|weeks|month|months|year|years)$/;
+// "every quarter" / "every 2 quarters" / "every other quarter" — a
+// quarter is exactly three months, so this never reaches ./engine.ts as
+// its own frequency kind; parseFrequency below folds it straight into
+// `monthly` with the interval tripled (issue #368's own framing: "free
+// once workdays and ordinal months are in").
+const QUARTER_FORM = /^(\d+\s+|other\s+)?quarters?$/;
 const ORDINAL_WEEKDAY_FORM = /^(\S+)\s+(\S+)$/;
+// The month-scoped sibling of ORDINAL_WEEKDAY_FORM above — "3rd wed jan"
+// rather than "3rd friday" — used both for a single entry and, split on
+// commas first, for every entry of a monthlyOrdinalWeekdayList.
+const ORDINAL_WEEKDAY_MONTH_FORM = /^(\S+)\s+(\S+)\s+(\S+)$/;
+// Same interval-prefix shape UNIT_FORM and QUARTER_FORM use, applied to
+// "workday(s)" — issue #368: the interval was previously silently
+// dropped because this shape didn't parse it at all.
+const WORKDAY_FORM = /^(\d+\s+|other\s+)?workdays?$/;
 
 /**
  * Parses one recurrence rule from its literal, user-typed text
@@ -211,9 +225,13 @@ function toMonthDay(match: RegExpMatchArray): MonthDay | null {
 /**
  * Reads whatever's left after every clause above has been stripped out —
  * "the frequency core" — and decides which RecurrenceFrequency it names,
- * trying each recognised shape in turn: a weekday list first (a closed
- * vocabulary, so it can never be mistaken for anything else), then
- * workdays, then an ordinal weekday, then a plain interval-of-a-unit.
+ * trying each recognised shape in turn: a bare weekday list first (a
+ * closed vocabulary, so it can never be mistaken for anything else), then
+ * workdays (with its own optional interval prefix, issue #368), then
+ * ordinal-weekday-with-month — one entry or several, comma-separated
+ * (issue #368's `monthlyOrdinalWeekday`/`monthlyOrdinalWeekdayList`) —
+ * then the plain (unscoped) ordinal weekday, then "every quarter" folded
+ * into a tripled monthly interval, then a plain interval-of-a-unit.
  * `null` means none of them matched — parseRecurrence turns that into its
  * own "unrecognised recurrence pattern" refusal, quoting the original
  * text rather than this stripped-down core.
@@ -231,8 +249,56 @@ function parseFrequency(core: string): { frequency: RecurrenceFrequency; interva
     return { frequency: { kind: "weekdays", days }, interval: 1 };
   }
 
-  if (/^workdays?$/.test(stripped)) {
-    return { frequency: { kind: "workdays" }, interval: 1 };
+  const workdayMatch = WORKDAY_FORM.exec(stripped);
+  if (workdayMatch !== null) {
+    const prefix = workdayMatch[1]?.trim();
+    const interval = prefix === undefined ? 1 : prefix === "other" ? 2 : Number(prefix);
+    return { frequency: { kind: "workdays" }, interval };
+  }
+
+  // Ordinal-weekday-with-month, one entry or a comma/"and"-separated
+  // several: every part has to be a full (ordinal, weekday, month) triple
+  // or this isn't this shape at all — same "every part or none" rule the
+  // bare weekday list above uses. A single matching part folds into the
+  // ordinary `monthlyOrdinalWeekday` (with `month` set, rather than a
+  // one-element list); two or more become `monthlyOrdinalWeekdayList`,
+  // since only then is there a real "earliest across several" question
+  // for ./engine.ts to answer.
+  const ordinalMonthParts = stripped.split(/\s*(?:,|&|\band\b)\s*/).filter((part) => part !== "");
+  if (ordinalMonthParts.length > 0) {
+    const entries: { ordinal: number; day: Weekday; month: number }[] = [];
+    let everyPartMatched = true;
+    for (const part of ordinalMonthParts) {
+      const match = ORDINAL_WEEKDAY_MONTH_FORM.exec(part);
+      const ordinalWord = match?.[1];
+      const weekdayWord = match?.[2];
+      const monthWord = match?.[3];
+      const ordinal = ordinalWord === undefined ? undefined : ORDINAL_TOKENS.get(ordinalWord);
+      const weekday = weekdayWord === undefined ? undefined : WEEKDAY_TOKENS.get(weekdayWord);
+      const month = monthWord === undefined ? undefined : MONTH_TOKENS.get(monthWord);
+      if (ordinal === undefined || weekday === undefined || month === undefined) {
+        everyPartMatched = false;
+        break;
+      }
+      entries.push({ ordinal, day: weekday, month });
+    }
+    if (everyPartMatched && entries.length === 1) {
+      const entry = entries[0];
+      if (entry !== undefined) {
+        return {
+          frequency: {
+            kind: "monthlyOrdinalWeekday",
+            ordinal: entry.ordinal,
+            day: entry.day,
+            month: entry.month,
+          },
+          interval: 1,
+        };
+      }
+    }
+    if (everyPartMatched && entries.length > 1) {
+      return { frequency: { kind: "monthlyOrdinalWeekdayList", entries }, interval: 1 };
+    }
   }
 
   const ordinalWeekdayMatch = ORDINAL_WEEKDAY_FORM.exec(stripped);
@@ -242,8 +308,18 @@ function parseFrequency(core: string): { frequency: RecurrenceFrequency; interva
     const ordinal = ordinalWord === undefined ? undefined : ORDINAL_TOKENS.get(ordinalWord);
     const weekday = weekdayWord === undefined ? undefined : WEEKDAY_TOKENS.get(weekdayWord);
     if (ordinal !== undefined && weekday !== undefined) {
-      return { frequency: { kind: "monthlyOrdinalWeekday", ordinal, day: weekday }, interval: 1 };
+      return {
+        frequency: { kind: "monthlyOrdinalWeekday", ordinal, day: weekday, month: null },
+        interval: 1,
+      };
     }
+  }
+
+  const quarterMatch = QUARTER_FORM.exec(stripped);
+  if (quarterMatch !== null) {
+    const prefix = quarterMatch[1]?.trim();
+    const quarterCount = prefix === undefined ? 1 : prefix === "other" ? 2 : Number(prefix);
+    return { frequency: { kind: "monthly" }, interval: quarterCount * 3 };
   }
 
   const unitMatch = UNIT_FORM.exec(stripped);

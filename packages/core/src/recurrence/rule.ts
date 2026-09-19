@@ -41,6 +41,30 @@ export type RecurrenceFrequency =
       /** 1-5, or -1 for "last" (./tokens.ts's ORDINAL_TOKENS, ./calendar.ts's nthWeekdayOfMonth). */
       readonly ordinal: number;
       readonly day: Weekday;
+      /**
+       * 1-12 (./tokens.ts's MONTH_TOKENS), or `null` for the unscoped form
+       * ("every 3rd friday" — every month's own 3rd Friday). Issue #368:
+       * "every 3rd wed jan" scopes the pattern to one calendar month, so
+       * ./engine.ts's stepping jumps a year forward instead of a month.
+       */
+      readonly month: number | null;
+    }
+  | {
+      readonly kind: "monthlyOrdinalWeekdayList";
+      /**
+       * Independent (ordinal, weekday, month) entries from a single
+       * comma-list ("every 1st wed jan, 3rd thu jul", issue #368) — unlike
+       * `weekdays` above, each entry carries its own month, so there's no
+       * single shared cadence to fold them into one `monthlyOrdinalWeekday`.
+       * ./engine.ts resolves the next occurrence across all entries and
+       * takes whichever comes earliest, recomputed every step — never
+       * "the first entry wins."
+       */
+      readonly entries: readonly {
+        readonly ordinal: number;
+        readonly day: Weekday;
+        readonly month: number;
+      }[];
     }
   | { readonly kind: "yearly" };
 

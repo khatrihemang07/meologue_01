@@ -243,6 +243,20 @@ const CASES: readonly Case[] = [
     reference: { dueDate: "2026-01-09", now: dayKey("2026-01-09") },
     expect: occurrence("2026-01-12"),
   },
+  {
+    description:
+      '"every 3 workday" (issue #368) counts three business days forward from a Monday — Tue, Wed, Thu, crossing no weekend — not the single next weekday "every workday" alone would give',
+    dateString: "every 3 workday",
+    reference: { dueDate: "2026-01-05", now: dayKey("2026-01-05") },
+    expect: occurrence("2026-01-08"),
+  },
+  {
+    description:
+      '"every 3 workday" from a Thursday crosses a weekend without counting either of its two days — Fri (1), Mon (2), Tue (3)',
+    dateString: "every 3 workday",
+    reference: { dueDate: "2026-01-08", now: dayKey("2026-01-08") },
+    expect: occurrence("2026-01-13"),
+  },
 
   // --- Ordinal weekday.
   {
@@ -250,6 +264,51 @@ const CASES: readonly Case[] = [
     dateString: "every 3rd friday",
     reference: { dueDate: "2026-01-16", now: dayKey("2026-01-16") },
     expect: occurrence("2026-02-20"),
+  },
+  {
+    description:
+      '"every 3rd monday" — same shape as the issue\'s own "3rd friday" example, a different weekday',
+    dateString: "every 3rd monday",
+    reference: { dueDate: "2026-01-05", now: dayKey("2026-01-05") },
+    expect: occurrence("2026-02-16"),
+  },
+
+  // --- Month-scoped ordinal weekday (issue #368): the same shape as
+  // above, but "jan" pins the pattern to one calendar month, so stepping
+  // forward means next *year's* January, not next month.
+  {
+    description:
+      '"every 3rd wed jan" steps a year forward, not a month — only January ever satisfies the pattern',
+    dateString: "every 3rd wed jan",
+    reference: { dueDate: "2026-01-21", now: dayKey("2026-01-21") },
+    expect: occurrence("2027-01-20"),
+  },
+
+  // --- Month-scoped ordinal weekday list (issue #368): independent
+  // (ordinal, weekday, month) entries, resolved to whichever comes
+  // earliest — never "the first entry typed."
+  {
+    description:
+      '"every 1st wed jan, 3rd thu jul" picks the January entry when it\'s the nearer of the two',
+    dateString: "every 1st wed jan, 3rd thu jul",
+    reference: { dueDate: "2026-01-01", now: dayKey("2026-01-01") },
+    expect: occurrence("2026-01-07"),
+  },
+  {
+    description:
+      "\"every 1st wed jan, 3rd thu jul\" picks the July entry once January's own 2026 date has already passed — this year's July still beats next year's January, proving it's a genuine earliest-of-both comparison, not \"always the first-listed entry\"",
+    dateString: "every 1st wed jan, 3rd thu jul",
+    reference: { dueDate: "2026-02-01", now: dayKey("2026-02-01") },
+    expect: occurrence("2026-07-16"),
+  },
+
+  // --- Quarter (issue #368): "free" once workdays and month-scoped
+  // ordinal weekdays are in — monthly with the interval tripled.
+  {
+    description: '"every quarter" is monthly with interval 3',
+    dateString: "every quarter",
+    reference: { dueDate: "2026-01-05", now: dayKey("2026-01-05") },
+    expect: occurrence("2026-04-05"),
   },
 
   // --- Times.
@@ -613,6 +672,105 @@ describe("parseRecurrence — grammar shape a date-only assertion can't show", (
     expect(result).toMatchObject({
       kind: "parsed",
       rule: { frequency: { kind: "monthlyOrdinalWeekday", ordinal: 3, day: "friday" } },
+    });
+  });
+
+  // --- Issue #368: workdays honour interval, ordinal weekdays can be
+  // scoped to one month (singly or as an independent-entries list), and
+  // "every quarter" is monthly with the interval tripled. Each case here
+  // asserts the full parsed shape (`toEqual`, not `toMatchObject`) so a
+  // future change to any of these fields is caught here rather than only
+  // downstream in a computed date.
+
+  it('"every workday" (no number) still defaults interval to 1 — the pre-#368 shape, byte for byte', () => {
+    const result = parseRecurrence("every workday");
+    expect(result).toEqual({
+      kind: "parsed",
+      rule: {
+        frequency: { kind: "workdays" },
+        interval: 1,
+        anchor: "due",
+        time: null,
+        startBound: null,
+        endBound: null,
+        durationBound: null,
+      },
+    });
+  });
+
+  it('"every 3 workday" carries the interval on the rule, not folded into the frequency', () => {
+    const result = parseRecurrence("every 3 workday");
+    expect(result).toMatchObject({
+      kind: "parsed",
+      rule: { frequency: { kind: "workdays" }, interval: 3 },
+    });
+  });
+
+  it('"every other workday" means interval 2, the same "other" convention every other unit uses', () => {
+    const result = parseRecurrence("every other workday");
+    expect(result).toMatchObject({
+      kind: "parsed",
+      rule: { frequency: { kind: "workdays" }, interval: 2 },
+    });
+  });
+
+  it('the unscoped ordinal-weekday shape ("every 3rd monday") carries month: null, not merely an absent field', () => {
+    const result = parseRecurrence("every 3rd monday");
+    expect(result).toMatchObject({
+      kind: "parsed",
+      rule: {
+        frequency: { kind: "monthlyOrdinalWeekday", ordinal: 3, day: "monday", month: null },
+      },
+    });
+  });
+
+  it('a bare weekday comma-list ("every friday, monday and wednesday") still parses as "weekdays", not the new month-scoped list shape', () => {
+    const result = parseRecurrence("every friday, monday and wednesday");
+    expect(result).toMatchObject({
+      kind: "parsed",
+      rule: { frequency: { kind: "weekdays", days: ["friday", "monday", "wednesday"] } },
+    });
+  });
+
+  it('"every 3rd wed jan" — a single ordinal-weekday-month entry — parses as monthlyOrdinalWeekday with month set, not a one-element list', () => {
+    const result = parseRecurrence("every 3rd wed jan");
+    expect(result).toMatchObject({
+      kind: "parsed",
+      rule: {
+        frequency: { kind: "monthlyOrdinalWeekday", ordinal: 3, day: "wednesday", month: 1 },
+      },
+    });
+  });
+
+  it('"every 1st wed jan, 3rd thu jul" parses as monthlyOrdinalWeekdayList, preserving each entry\'s own month', () => {
+    const result = parseRecurrence("every 1st wed jan, 3rd thu jul");
+    expect(result).toMatchObject({
+      kind: "parsed",
+      rule: {
+        frequency: {
+          kind: "monthlyOrdinalWeekdayList",
+          entries: [
+            { ordinal: 1, day: "wednesday", month: 1 },
+            { ordinal: 3, day: "thursday", month: 7 },
+          ],
+        },
+      },
+    });
+  });
+
+  it('"every quarter" parses as monthly with interval 3, never its own frequency kind', () => {
+    const result = parseRecurrence("every quarter");
+    expect(result).toMatchObject({
+      kind: "parsed",
+      rule: { frequency: { kind: "monthly" }, interval: 3 },
+    });
+  });
+
+  it('"every 2 quarters" carries the same multiplier the other units\' number prefix does, tripled for the quarter-to-month conversion', () => {
+    const result = parseRecurrence("every 2 quarters");
+    expect(result).toMatchObject({
+      kind: "parsed",
+      rule: { frequency: { kind: "monthly" }, interval: 6 },
     });
   });
 });
