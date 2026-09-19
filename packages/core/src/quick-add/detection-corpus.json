@@ -1,0 +1,955 @@
+[
+  {
+    "input": "today",
+    "matches": [
+      {
+        "text": "today",
+        "matchId": "19 Sep"
+      }
+    ]
+  },
+  {
+    "input": "tod",
+    "matches": [
+      {
+        "text": "tod",
+        "matchId": "19 Sep"
+      }
+    ]
+  },
+  {
+    "input": "tomorrow",
+    "matches": [
+      {
+        "text": "tomorrow",
+        "matchId": "20 Sep"
+      }
+    ]
+  },
+  {
+    "input": "tom",
+    "matches": [
+      {
+        "text": "tom",
+        "matchId": "20 Sep"
+      }
+    ]
+  },
+  {
+    "input": "tmr",
+    "matches": [
+      {
+        "text": "tmr",
+        "matchId": "20 Sep"
+      }
+    ]
+  },
+  {
+    "input": "tomorow",
+    "matches": []
+  },
+  {
+    "input": "yesterday",
+    "matches": [
+      {
+        "text": "yesterday",
+        "matchId": "18 Sep"
+      }
+    ]
+  },
+  {
+    "input": "this weekend",
+    "matches": [
+      {
+        "text": "this weekend",
+        "matchId": "19 Sep"
+      }
+    ]
+  },
+  {
+    "input": "weekend",
+    "matches": [
+      {
+        "text": "weekend",
+        "matchId": "19 Sep"
+      }
+    ]
+  },
+  {
+    "input": "next weekend",
+    "matches": [
+      {
+        "text": "next weekend",
+        "matchId": "26 Sep"
+      }
+    ]
+  },
+  {
+    "input": "#Inbox",
+    "matches": [
+      {
+        "text": "#Inbox",
+        "matchId": "6hXCXCVp3c4xvpgH"
+      }
+    ]
+  },
+  {
+    "input": "!",
+    "matches": []
+  },
+  {
+    "input": "{24 sept}",
+    "matches": []
+  },
+  {
+    "input": "//",
+    "matches": []
+  },
+  {
+    "input": "* item one",
+    "matches": []
+  },
+  {
+    "input": "https://example.com",
+    "matches": []
+  },
+  {
+    "input": "[text](url)",
+    "matches": []
+  },
+  {
+    "input": ":tada:",
+    "matches": []
+  },
+  {
+    "input": "Buy milk tomorrow p1 @home #Inbox",
+    "matches": [
+      {
+        "text": "tomorrow",
+        "matchId": "20 Sep"
+      },
+      {
+        "text": "p1",
+        "matchId": "1"
+      },
+      {
+        "text": "#Inbox",
+        "matchId": "6hXCXCVp3c4xvpgH"
+      }
+    ]
+  },
+  {
+    "input": "Buy milk tomorrow at 5pm every week p2",
+    "matches": [
+      {
+        "text": "at 5pm every week",
+        "matchId": "every week at 5pm"
+      },
+      {
+        "text": "p2",
+        "matchId": "2"
+      }
+    ]
+  },
+  {
+    "input": "meet monday or tuesday",
+    "matches": [
+      {
+        "text": "monday",
+        "matchId": "21 Sep"
+      },
+      {
+        "text": "tuesday",
+        "matchId": "22 Sep"
+      }
+    ]
+  },
+  {
+    "input": "today tomorrow",
+    "matches": [
+      {
+        "text": "today",
+        "matchId": "19 Sep"
+      },
+      {
+        "text": "tomorrow",
+        "matchId": "20 Sep"
+      }
+    ]
+  },
+  {
+    "input": "Call mom today",
+    "matches": [
+      {
+        "text": "today",
+        "matchId": "19 Sep"
+      }
+    ]
+  },
+  {
+    "input": "Call mom today.",
+    "matches": [
+      {
+        "text": "today.",
+        "matchId": "19 Sep"
+      }
+    ]
+  },
+  {
+    "input": "Call mom today,",
+    "matches": [
+      {
+        "text": "today,",
+        "matchId": "19 Sep"
+      }
+    ]
+  },
+  {
+    "input": "Call mom \"today\"",
+    "matches": [
+      {
+        "text": "\"today\"",
+        "matchId": "19 Sep"
+      }
+    ]
+  },
+  {
+    "input": "todays plan",
+    "matches": []
+  },
+  {
+    "input": "Today's standup",
+    "matches": []
+  },
+  {
+    "input": "Sunday roast",
+    "matches": [
+      {
+        "text": "Sunday",
+        "matchId": "20 Sep"
+      }
+    ]
+  },
+  {
+    "input": "Pay for the weekend trip",
+    "matches": [
+      {
+        "text": "the weekend",
+        "matchId": "19 Sep"
+      }
+    ]
+  },
+  {
+    "input": "p1 at the start",
+    "matches": [
+      {
+        "text": "p1",
+        "matchId": "1"
+      }
+    ]
+  },
+  {
+    "input": "something p1",
+    "matches": [
+      {
+        "text": "p1",
+        "matchId": "1"
+      }
+    ]
+  },
+  {
+    "input": "p1x",
+    "matches": []
+  },
+  {
+    "input": "this week",
+    "matches": []
+  },
+  {
+    "input": "next week",
+    "matches": [
+      {
+        "text": "next week",
+        "matchId": "21 Sep"
+      }
+    ]
+  },
+  {
+    "input": "next month",
+    "matches": [
+      {
+        "text": "next month",
+        "matchId": "19 Oct"
+      }
+    ]
+  },
+  {
+    "input": "next year",
+    "matches": [
+      {
+        "text": "next year",
+        "matchId": "19 Sep 2027"
+      }
+    ]
+  },
+  {
+    "input": "end of month",
+    "matches": [
+      {
+        "text": "end of month",
+        "matchId": "30 Sep"
+      }
+    ]
+  },
+  {
+    "input": "eom",
+    "matches": []
+  },
+  {
+    "input": "end of week",
+    "matches": []
+  },
+  {
+    "input": "eow",
+    "matches": []
+  },
+  {
+    "input": "in 3 days",
+    "matches": [
+      {
+        "text": "in 3 days",
+        "matchId": "22 Sep"
+      }
+    ]
+  },
+  {
+    "input": "in three days",
+    "matches": [
+      {
+        "text": "in three days",
+        "matchId": "22 Sep"
+      }
+    ]
+  },
+  {
+    "input": "in 2 weeks",
+    "matches": [
+      {
+        "text": "in 2 weeks",
+        "matchId": "3 Oct"
+      }
+    ]
+  },
+  {
+    "input": "in an hour",
+    "matches": [
+      {
+        "text": "in an hour",
+        "matchId": "19 Sep 14:06"
+      }
+    ]
+  },
+  {
+    "input": "in 30 min",
+    "matches": [
+      {
+        "text": "in 30 min",
+        "matchId": "19 Sep 13:36"
+      }
+    ]
+  },
+  {
+    "input": "3 days from now",
+    "matches": [
+      {
+        "text": "3 days from now",
+        "matchId": "22 Sep"
+      }
+    ]
+  },
+  {
+    "input": "monday",
+    "matches": [
+      {
+        "text": "monday",
+        "matchId": "21 Sep"
+      }
+    ]
+  },
+  {
+    "input": "mon",
+    "matches": [
+      {
+        "text": "mon",
+        "matchId": "21 Sep"
+      }
+    ]
+  },
+  {
+    "input": "next monday",
+    "matches": [
+      {
+        "text": "next monday",
+        "matchId": "28 Sep"
+      }
+    ]
+  },
+  {
+    "input": "this monday",
+    "matches": [
+      {
+        "text": "this monday",
+        "matchId": "21 Sep"
+      }
+    ]
+  },
+  {
+    "input": "last monday",
+    "matches": [
+      {
+        "text": "last monday",
+        "matchId": "28 Sep"
+      }
+    ]
+  },
+  {
+    "input": "coming friday",
+    "matches": [
+      {
+        "text": "friday",
+        "matchId": "25 Sep"
+      }
+    ]
+  },
+  {
+    "input": "sat",
+    "matches": [
+      {
+        "text": "sat",
+        "matchId": "19 Sep"
+      }
+    ]
+  },
+  {
+    "input": "sunday",
+    "matches": [
+      {
+        "text": "sunday",
+        "matchId": "20 Sep"
+      }
+    ]
+  },
+  {
+    "input": "24 sept",
+    "matches": [
+      {
+        "text": "24 sept",
+        "matchId": "24 Sep"
+      }
+    ]
+  },
+  {
+    "input": "24 Sept",
+    "matches": [
+      {
+        "text": "24 Sept",
+        "matchId": "24 Sep"
+      }
+    ]
+  },
+  {
+    "input": "24th September",
+    "matches": [
+      {
+        "text": "24th September",
+        "matchId": "24 Sep"
+      }
+    ]
+  },
+  {
+    "input": "September 24",
+    "matches": [
+      {
+        "text": "September 24",
+        "matchId": "24 Sep"
+      }
+    ]
+  },
+  {
+    "input": "sept 24",
+    "matches": [
+      {
+        "text": "sept 24",
+        "matchId": "24 Sep"
+      }
+    ]
+  },
+  {
+    "input": "Sep 24 2026",
+    "matches": [
+      {
+        "text": "Sep 24 2026",
+        "matchId": "24 Sep"
+      }
+    ]
+  },
+  {
+    "input": "24/9",
+    "matches": [
+      {
+        "text": "24/9",
+        "matchId": "24 Sep"
+      }
+    ]
+  },
+  {
+    "input": "9/24",
+    "matches": [
+      {
+        "text": "9/24",
+        "matchId": "24 Sep"
+      }
+    ]
+  },
+  {
+    "input": "24-09",
+    "matches": [
+      {
+        "text": "24-09",
+        "matchId": "24 Sep"
+      }
+    ]
+  },
+  {
+    "input": "2026-09-24",
+    "matches": [
+      {
+        "text": "2026-09-24",
+        "matchId": "24 Sep"
+      }
+    ]
+  },
+  {
+    "input": "24.9.2026",
+    "matches": [
+      {
+        "text": "24.9.2026",
+        "matchId": "24 Sep"
+      }
+    ]
+  },
+  {
+    "input": "1 jan",
+    "matches": [
+      {
+        "text": "1 jan",
+        "matchId": "1 Jan 2027"
+      }
+    ]
+  },
+  {
+    "input": "29 feb",
+    "matches": [
+      {
+        "text": "29 feb",
+        "matchId": "1 Mar 2027"
+      }
+    ]
+  },
+  {
+    "input": "32 sept",
+    "matches": []
+  },
+  {
+    "input": "5pm",
+    "matches": [
+      {
+        "text": "5pm",
+        "matchId": "19 Sep 17:00"
+      }
+    ]
+  },
+  {
+    "input": "at 5pm",
+    "matches": [
+      {
+        "text": "at 5pm",
+        "matchId": "19 Sep 17:00"
+      }
+    ]
+  },
+  {
+    "input": "17:00",
+    "matches": [
+      {
+        "text": "17:00",
+        "matchId": "19 Sep 17:00"
+      }
+    ]
+  },
+  {
+    "input": "5:30pm",
+    "matches": [
+      {
+        "text": "5:30pm",
+        "matchId": "19 Sep 17:30"
+      }
+    ]
+  },
+  {
+    "input": "noon",
+    "matches": [
+      {
+        "text": "noon",
+        "matchId": "20 Sep 12:00"
+      }
+    ]
+  },
+  {
+    "input": "midnight",
+    "matches": [
+      {
+        "text": "midnight",
+        "matchId": "20 Sep 00:00"
+      }
+    ]
+  },
+  {
+    "input": "morning",
+    "matches": [
+      {
+        "text": "morning",
+        "matchId": "20 Sep 09:00"
+      }
+    ]
+  },
+  {
+    "input": "evening",
+    "matches": [
+      {
+        "text": "evening",
+        "matchId": "19 Sep 19:00"
+      }
+    ]
+  },
+  {
+    "input": "tonight",
+    "matches": [
+      {
+        "text": "tonight",
+        "matchId": "19 Sep 22:00"
+      }
+    ]
+  },
+  {
+    "input": "today at 5pm",
+    "matches": [
+      {
+        "text": "today at 5pm",
+        "matchId": "19 Sep 17:00"
+      }
+    ]
+  },
+  {
+    "input": "tomorrow morning",
+    "matches": [
+      {
+        "text": "tomorrow morning",
+        "matchId": "20 Sep 09:00"
+      }
+    ]
+  },
+  {
+    "input": "mon 9am",
+    "matches": [
+      {
+        "text": "mon 9am",
+        "matchId": "21 Sep 09:00"
+      }
+    ]
+  },
+  {
+    "input": "at 5",
+    "matches": [
+      {
+        "text": "at 5",
+        "matchId": "20 Sep 05:00"
+      }
+    ]
+  },
+  {
+    "input": "every day",
+    "matches": [
+      {
+        "text": "every day",
+        "matchId": "every day"
+      }
+    ]
+  },
+  {
+    "input": "daily",
+    "matches": [
+      {
+        "text": "daily",
+        "matchId": "every day"
+      }
+    ]
+  },
+  {
+    "input": "ev day",
+    "matches": [
+      {
+        "text": "ev day",
+        "matchId": "ev day"
+      }
+    ]
+  },
+  {
+    "input": "every week",
+    "matches": [
+      {
+        "text": "every week",
+        "matchId": "every week"
+      }
+    ]
+  },
+  {
+    "input": "weekly",
+    "matches": [
+      {
+        "text": "weekly",
+        "matchId": "every week"
+      }
+    ]
+  },
+  {
+    "input": "every monday",
+    "matches": [
+      {
+        "text": "every monday",
+        "matchId": "every monday"
+      }
+    ]
+  },
+  {
+    "input": "every mon, wed",
+    "matches": [
+      {
+        "text": "every mon, wed",
+        "matchId": "every mon, wed"
+      }
+    ]
+  },
+  {
+    "input": "every other week",
+    "matches": [
+      {
+        "text": "every other week",
+        "matchId": "every 2 weeks"
+      }
+    ]
+  },
+  {
+    "input": "every 3 days",
+    "matches": [
+      {
+        "text": "every 3 days",
+        "matchId": "every 3 days"
+      }
+    ]
+  },
+  {
+    "input": "every weekday",
+    "matches": [
+      {
+        "text": "every weekday",
+        "matchId": "every weekday"
+      }
+    ]
+  },
+  {
+    "input": "every workday",
+    "matches": [
+      {
+        "text": "every workday",
+        "matchId": "every workday"
+      }
+    ]
+  },
+  {
+    "input": "every month",
+    "matches": [
+      {
+        "text": "every month",
+        "matchId": "every month"
+      }
+    ]
+  },
+  {
+    "input": "every 1st",
+    "matches": [
+      {
+        "text": "every 1st",
+        "matchId": "every 1st"
+      }
+    ]
+  },
+  {
+    "input": "every month on the 1st",
+    "matches": [
+      {
+        "text": "every month on the 1st",
+        "matchId": "every 1st"
+      }
+    ]
+  },
+  {
+    "input": "every year",
+    "matches": [
+      {
+        "text": "every year",
+        "matchId": "every year"
+      }
+    ]
+  },
+  {
+    "input": "every jan 1",
+    "matches": [
+      {
+        "text": "every jan 1",
+        "matchId": "every jan 1"
+      }
+    ]
+  },
+  {
+    "input": "every! day",
+    "matches": [
+      {
+        "text": "every! day",
+        "matchId": "every! day"
+      }
+    ]
+  },
+  {
+    "input": "every day at 9am",
+    "matches": [
+      {
+        "text": "every day at 9am",
+        "matchId": "every day at 9am"
+      }
+    ]
+  },
+  {
+    "input": "every day starting next monday",
+    "matches": [
+      {
+        "text": "every day starting next monday",
+        "matchId": "every day"
+      }
+    ]
+  },
+  {
+    "input": "every day ending 24 sept",
+    "matches": [
+      {
+        "text": "every day ending 24 sept",
+        "matchId": "every day ending 2026-09-24"
+      }
+    ]
+  },
+  {
+    "input": "every day for 3 weeks",
+    "matches": [
+      {
+        "text": "every day for 3 weeks",
+        "matchId": "every day ending 2026-10-10"
+      }
+    ]
+  },
+  {
+    "input": "p1",
+    "matches": [
+      {
+        "text": "p1",
+        "matchId": "1"
+      }
+    ]
+  },
+  {
+    "input": "p2",
+    "matches": [
+      {
+        "text": "p2",
+        "matchId": "2"
+      }
+    ]
+  },
+  {
+    "input": "p3",
+    "matches": [
+      {
+        "text": "p3",
+        "matchId": "3"
+      }
+    ]
+  },
+  {
+    "input": "p4",
+    "matches": [
+      {
+        "text": "p4",
+        "matchId": "4"
+      }
+    ]
+  },
+  {
+    "input": "P1",
+    "matches": [
+      {
+        "text": "P1",
+        "matchId": "1"
+      }
+    ]
+  },
+  {
+    "input": "!!1",
+    "matches": [
+      {
+        "text": "!!1",
+        "matchId": "1"
+      }
+    ]
+  },
+  {
+    "input": "p5",
+    "matches": []
+  },
+  {
+    "input": "p1p2",
+    "matches": []
+  },
+  {
+    "input": "p 1",
+    "matches": []
+  },
+  {
+    "input": "@",
+    "matches": []
+  },
+  {
+    "input": "@home",
+    "matches": []
+  },
+  {
+    "input": "@nonexistent-label-xyz",
+    "matches": []
+  },
+  {
+    "input": "@ho",
+    "matches": []
+  },
+  {
+    "input": "two labels @home @work",
+    "matches": []
+  }
+]
