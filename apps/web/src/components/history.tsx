@@ -935,16 +935,34 @@ export function History({
     [groups, tasks, completedTasks, events, offsetMinutes],
   );
 
-  // Issue #354: whether today has a separator row at all — the day-jump
-  // pair's own gate (`HistoryDayJumpState.hasTodaySeparator`, shell.tsx).
-  // `flattenGroups` only ever emits a separator for a day that actually has
-  // an Entry, so this is exactly "does today have an Entry," the same
-  // condition the acceptance criteria name directly ("neither control
-  // appears when today has no Entries, since there is no day boundary to
-  // jump to").
-  const hasTodaySeparator = useMemo(
-    () => flatItems.some((item) => item.kind === "separator" && item.dayKey === todayKey),
-    [flatItems, todayKey],
+  // ADR 0087: the day the most recently inserted Entry belongs to — the
+  // day-jump anchor (`HistoryDayJumpState.newestEntryDayKey`, shell.tsx).
+  //
+  // Derived from `groups`, not `flatItems`: the concept is a day that has
+  // Entries, which is what a group *is*, and `groups` is the shorter array
+  // (one element per day, rather than one per separator + Day block +
+  // Referrers row + Entry).
+  //
+  // `findLast`, not `find`: `groups` is oldest-first. composer-page.tsx
+  // hands History `orderedEntries`, which is `shown.slice().reverse()`
+  // (use-history-search.ts) precisely because `list()` returns newest-first
+  // and the thread reads downwards. The same fact is why jump-to-newest
+  // targets `flatItems.length - 1` below rather than index 0.
+  //
+  // `findLast` over a `dayKey !== null` predicate, not `groups.at(-1)`: an
+  // Entry whose `createdAt` doesn't parse gets its own trailing,
+  // null-keyed group (`groupByDay` above), and `flattenGroups` emits no
+  // separator for such a group. Anchoring on it would hand Shell a day
+  // boundary that does not exist in `flatItems`, and the jump would fall
+  // into the `onSeekNeedsOlder` retry below and page the whole journal in
+  // looking for a row that is never coming.
+  //
+  // `null` only when no group has a parseable day at all — an empty
+  // journal, or one holding nothing but unparseable Entries. Shell reads
+  // that as "no destination" and renders neither control.
+  const newestEntryDayKey = useMemo(
+    () => groups.findLast((group) => group.dayKey !== null)?.dayKey ?? null,
+    [groups],
   );
 
   // Issue #83: the scroll element and the upward jump-to-newest hookup —
@@ -1275,10 +1293,16 @@ export function History({
   // a plain prop Shell could otherwise observe), and reports `null` on
   // unmount so Shell can never render these controls off a since-unmounted
   // History's last known state.
+  //
+  // Deliberately above the `entries.length === 0` return below: an empty
+  // journal still publishes, with `newestEntryDayKey: null`, which is the
+  // signal Shell hides on. Moving this under the early return would leave
+  // Shell holding the *previous* journal's anchor after the last Entry was
+  // deleted.
   useEffect(() => {
-    publishDayJumpState({ topmostDayKey, todayKey, hasTodaySeparator });
+    publishDayJumpState({ topmostDayKey, newestEntryDayKey, todayKey });
     return () => publishDayJumpState(null);
-  }, [topmostDayKey, todayKey, hasTodaySeparator, publishDayJumpState]);
+  }, [topmostDayKey, newestEntryDayKey, todayKey, publishDayJumpState]);
 
   if (entries.length === 0) {
     return (

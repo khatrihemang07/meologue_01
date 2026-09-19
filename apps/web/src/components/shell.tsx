@@ -45,9 +45,8 @@ import { cn } from "@/lib/utils";
  * already uses for the bottom-right control — Shell owns both controls
  * (outside the scroll region, so neither can ever cover a row; see
  * shell.test.tsx's own "outside the scroll region" assertion on the
- * jump-to-newest control), but only History's virtualizer and flattened
- * row list know which day is topmost, what today's key is, or whether
- * today even has a separator to land on.
+ * jump-to-newest control), but only History's virtualizer and grouped
+ * Entries know which day is topmost or which day was written on last.
  */
 export interface HistoryDayJumpState {
   /**
@@ -58,16 +57,38 @@ export interface HistoryDayJumpState {
    * the real viewport and would name the day one scroll-frame early).
    */
   topmostDayKey: string | null;
-  /** The Device's current local day (history.tsx's own `todayKey`) — the "start of today" target. */
-  todayKey: string;
   /**
-   * Whether `todayKey` actually has a separator row in History's
-   * flattened list. Only a day with at least one Entry gets one
-   * (`flattenGroups`), which is why both controls hide entirely rather
-   * than jumping to a day boundary that doesn't exist when today is
-   * empty.
+   * ADR 0087: the day the most recently inserted Entry belongs to — what
+   * the lower of the two controls jumps to, and the only thing deciding
+   * whether either control exists at all. Ordinarily today; on a morning
+   * nothing has been written on it is yesterday, and after a gap it is
+   * whatever day was written on last. "Back to where I was writing" is a
+   * fact about the journal, not about the calendar, which is why this
+   * replaced the pair of `todayKey`/`hasTodaySeparator` fields that used
+   * to sit here: anchoring on today meant vanishing on exactly the
+   * mornings the control was most worth having.
+   *
+   * `null` only for a journal holding no parseable Entry anywhere —
+   * nothing to jump to, so Shell renders nothing. That is the one case
+   * the controls are absent.
    */
-  hasTodaySeparator: boolean;
+  newestEntryDayKey: string | null;
+  /**
+   * The Device's current local day (history.tsx's own `todayKey`). No
+   * longer a target — purely the second argument `formatDaySeparator` and
+   * `dayJumpAriaLabel` need to choose between "Today", "Yesterday" and a
+   * date.
+   *
+   * Published from History rather than recomputed here on purpose:
+   * history.tsx leaves `todayKey` deliberately un-memoised so it
+   * re-derives every render and survives a midnight rollover mid-session,
+   * and the publish effect's dep array carries that through to Shell. A
+   * Shell-local `entryDayKey(new Date()…)` would be computed on Shell's
+   * own render cadence, which nothing drives from a clock, and can sit
+   * stale past midnight — the control saying "Today" over a separator
+   * that now reads "Yesterday".
+   */
+  todayKey: string;
 }
 
 export interface HistoryScrollContextValue {
@@ -78,8 +99,8 @@ export interface HistoryScrollContextValue {
    * rather than the newest end — the day-jump pair's own escape hatch into
    * the virtualizer. Unlike `registerScrollToNewest`, the registered
    * function itself takes an argument: Shell has two different days it may
-   * want to reach (today, or whichever day is topmost) from the one
-   * registration, not one fixed target.
+   * want to reach (the anchor day, or whichever day is topmost) from the
+   * one registration, not one fixed target.
    */
   registerScrollToDay: (fn: ((dayKey: string) => void) | null) => void;
   /**
@@ -325,25 +346,8 @@ interface ShellProps {
 }
 
 /**
- * Issue #354: one half of the bottom-left day-jump pair. Same size/shape as
- * the jump-to-newest circle (`size-10 rounded-full`, shared verbatim below)
- * so the two read as one family of control rather than two unrelated ones —
- * the circle itself never grows, at any width, which is what "the two never
- * overlap and never need extra room" actually rests on.
- *
- * The visible text label is the width-responsive half: hidden below
- * `min-[900px]` (`WIDE_LAYOUT_QUERY`, use-wide-layout.ts — the same
- * breakpoint Todo's own column already steps at, reused here rather than a
- * second, independent guess at "wide enough"), an inline caption beside the
- * circle from there up. It carries `aria-hidden` because it exists only to
- * echo, visually, what `aria-label` below already says in full — a screen
- * reader with no "icon-only" mode of its own must not hear the same day
- * named twice.
- *
- * `aria-label` itself never varies by width: the accessible name always
- * carries the day, exactly as `dayJumpAriaLabel` composes it, so a keyboard
- * or screen-reader user on a narrow window learns exactly what a sighted
- * reader on a wide one sees written out beside the circle.
+ * The accessible name for one of the bottom-left day-jump controls. It
+ * never varies by width — see `DayJumpButton` below.
  */
 function dayJumpAriaLabel(dayKey: string, todayKey: string): string {
   return dayKey === todayKey
@@ -351,6 +355,49 @@ function dayJumpAriaLabel(dayKey: string, todayKey: string): string {
     : `Jump to the start of ${formatDaySeparator(dayKey, todayKey)}`;
 }
 
+/**
+ * ADR 0087: one of the bottom-left day-jump controls. Exactly one element:
+ * a 40px circle below `sm`, the same circle grown into a pill with the day
+ * written inside it from `sm` up.
+ *
+ * It was two elements — a circle, and an `aria-hidden` caption sitting
+ * beside it as a sibling — which meant that on a wide window the thing
+ * most obviously shaped like a button was the one thing that did nothing
+ * when clicked, and the focus ring landed on a bare circle next to
+ * unfocusable text. Folding the label inside the Button fixes both at
+ * once: one click target, one focus ring, one hover state.
+ *
+ * `sm` (640px), not `min-[900px]`: the old value was borrowed from
+ * `WIDE_LAYOUT_QUERY` (use-wide-layout.ts), which answers a different
+ * question — "is there room for two panes beside each other". Nothing
+ * about a ~90px caption needs that much room, and the borrowed number had
+ * a consequence nobody checked: the desktop window opens at 800px
+ * (apps/macos/tauri.conf.json), so the label never rendered at all in the
+ * Tauri app unless the reader dragged the window wider. `sm` is Tailwind's
+ * own token, already used elsewhere in this codebase, and sits below every
+ * desktop window this app opens.
+ *
+ * NO `size` prop, deliberately, and this is load-bearing rather than
+ * stylistic. `size="icon"` sets `size-8` and nothing else (ui/button.tsx),
+ * and tailwind-merge's conflict map is one-directional — `size: ['w', 'h']`
+ * means a later `size-*` clears an earlier `w-*`/`h-*`, but a later `w-10`
+ * or `sm:w-auto` does NOT clear an earlier `size-8`. Both would survive
+ * onto the element and the winner would be decided by whatever order
+ * Tailwind emitted them in, which nothing here controls. Overriding the
+ * cva *default* size instead keeps every class we set in the same merge
+ * group as the base class it replaces (`h-10`/`h-8`, `gap-2`/`gap-1.5`,
+ * `px-0`/`px-2.5`, `rounded-full`/`rounded-lg`), so resolution is
+ * deterministic, and `w-10` vs `sm:w-auto` is a same-utility variant pair,
+ * where Tailwind's ordering guarantee does hold.
+ *
+ * The label keeps `aria-hidden` and `aria-label` keeps the full day at
+ * every width: `aria-label` on a button wins over its contents in the
+ * accessible-name computation, so a screen reader hears the day once, and
+ * hears it on a narrow window too where nothing is written on screen.
+ * `whitespace-nowrap` and `[&_svg]:pointer-events-none` both come from the
+ * Button base — the day never wraps inside the pill, and a click on the
+ * arrow lands on the button rather than the icon.
+ */
 function DayJumpButton({
   dayKey,
   todayKey,
@@ -360,26 +407,19 @@ function DayJumpButton({
   todayKey: string;
   onClick: () => void;
 }) {
-  const label = formatDaySeparator(dayKey, todayKey);
   return (
-    <div className="flex items-center gap-2">
-      <Button
-        type="button"
-        variant="secondary"
-        size="icon"
-        aria-label={dayJumpAriaLabel(dayKey, todayKey)}
-        onClick={onClick}
-        className="size-10 shrink-0 rounded-full border border-border shadow-md motion-safe:animate-in motion-safe:fade-in"
-      >
-        <ArrowUp aria-hidden="true" className="size-4" />
-      </Button>
-      <span
-        aria-hidden="true"
-        className="hidden rounded-md border border-border bg-background/90 px-2 py-1 text-xs font-medium text-foreground shadow-md backdrop-blur-sm min-[900px]:inline motion-safe:animate-in motion-safe:fade-in"
-      >
-        {label}
+    <Button
+      type="button"
+      variant="secondary"
+      aria-label={dayJumpAriaLabel(dayKey, todayKey)}
+      onClick={onClick}
+      className="h-10 w-10 gap-2 rounded-full border border-border px-0 shadow-md motion-safe:animate-in motion-safe:fade-in sm:w-auto sm:px-4"
+    >
+      <ArrowUp aria-hidden="true" className="size-4" />
+      <span aria-hidden="true" className="hidden text-xs font-medium sm:inline">
+        {formatDaySeparator(dayKey, todayKey)}
       </span>
-    </div>
+    </Button>
   );
 }
 
@@ -533,29 +573,41 @@ export function Shell({
     search?.onDismiss();
   }
 
-  // Issue #354: the day-jump pair's own visibility rule. Gated on
-  // `awayFromNewest` the same as the jump-to-newest control — "scrolled up"
-  // is the whole reason either corner has anything to show, per the issue's
-  // own framing ("Scrolling up through History gives a reader a way back
-  // down but no way to reach the start of a day"). `hasTodaySeparator`
-  // false (today has no Entries at all) hides both controls outright: there
-  // is no day boundary to land on. `dayJumpState` stays `null` on every
-  // page but the Composer (History is the only thing that ever calls
-  // `publishDayJumpState`, and composer-page.tsx is its only mount site),
-  // which is what keeps this feature Composer-only without a route check.
+  // ADR 0087: the day-jump pair's own visibility rule. Deliberately NOT
+  // gated on `awayFromNewest`, unlike the jump-to-newest circle below.
+  // The two are symmetric in position only: the right-hand circle has
+  // nothing to say once you are already at the newest end, whereas this
+  // one does — the top of the day you are reading is somewhere you cannot
+  // already be while looking at that day's newest Entry. Gating it on
+  // scroll also made it flicker in and out of the corner on every scroll
+  // that crossed `NEWEST_THRESHOLD_PX`.
+  //
+  // The one thing that hides it is having nowhere to go:
+  // `newestEntryDayKey === null`, a journal with no parseable Entry
+  // anywhere. `dayJumpState` stays `null` on every page but the Composer
+  // (History is the only thing that ever calls `publishDayJumpState`, and
+  // composer-page.tsx is its only mount site), which is what keeps this
+  // feature Composer-only without a route check.
+  //
+  // Deliberately NOT also gated on `pinnedThread`, unlike the
+  // jump-to-newest circle below. That circle has to be: its `jumpToNewest`
+  // comes from `usePinnedScroll`, so without a pinned thread it has no
+  // function to call. This pair doesn't — it jumps through
+  // `scrollToDayFn`, which History registers directly. Carrying the clause
+  // anyway would have been a second, redundant route check that happens to
+  // be true today only because composer-page.tsx passes `pinnedThread`
+  // unconditionally, and would have silently hidden the controls for any
+  // future caller that mounted History without one.
+  const anchorDayKey = dayJumpState?.newestEntryDayKey ?? null;
   const dayJumpTodayKey = dayJumpState?.todayKey ?? null;
-  const showDayJumpControls =
-    pinnedThread !== undefined &&
-    awayFromNewest &&
-    dayJumpState?.hasTodaySeparator === true &&
-    dayJumpTodayKey !== null;
+  const showDayJumpControls = anchorDayKey !== null && dayJumpTodayKey !== null;
   // The day-in-view control only earns its place once it would say
-  // something the "start of today" control doesn't already say — reading
-  // as the acceptance criteria's own two states: one control while still
-  // within today, a second once the topmost visible day is an earlier one.
+  // something the anchor control doesn't already say: one control while
+  // the day at the top of the viewport is the anchor day itself, a second
+  // once the reader has scrolled up into an earlier one.
   const dayInViewKey = dayJumpState?.topmostDayKey ?? null;
   const showDayInView =
-    showDayJumpControls && dayInViewKey !== null && dayInViewKey !== dayJumpTodayKey;
+    showDayJumpControls && dayInViewKey !== null && dayInViewKey !== anchorDayKey;
 
   return (
     // One pane, sized to whatever `chat-shell-layout.tsx` gives it, rather
@@ -869,12 +921,12 @@ export function Shell({
           shell.test.tsx already pins for the newest-end control.
 
           `flex-col-reverse`, not `flex-col`: anchoring at `bottom-3` and
-          stacking in reverse is what keeps "start of today" pinned to that
-          same bottom-3 spot regardless of whether the second control is
-          mounted above it, rather than needing to know the pair's total
-          height to anchor correctly. The acceptance criteria's own order —
-          day-in-view above start-of-today — falls out of DOM order once
-          reversed: the first child (today) lands at the anchor, the second
+          stacking in reverse is what keeps the anchor-day control pinned to
+          that same bottom-3 spot regardless of whether the second control
+          is mounted above it, rather than needing to know the pair's total
+          height to position correctly. The required order — day-in-view
+          above the anchor day — falls out of DOM order once reversed: the
+          first child (the anchor day) lands at the bottom, the second
           (day-in-view) stacks above it.
 
           The two never render side by side, and never share a row with the
@@ -882,15 +934,15 @@ export function Shell({
           absolutely positioned box, so there is nothing here for either to
           collide with regardless of how little width the viewport has.
         */}
-        {showDayJumpControls && dayJumpTodayKey !== null && (
+        {showDayJumpControls && anchorDayKey !== null && dayJumpTodayKey !== null && (
           <div
             data-testid="day-jump-controls"
             className="absolute bottom-3 left-4 z-10 flex flex-col-reverse items-start gap-2"
           >
             <DayJumpButton
-              dayKey={dayJumpTodayKey}
+              dayKey={anchorDayKey}
               todayKey={dayJumpTodayKey}
-              onClick={() => scrollToDayFn?.(dayJumpTodayKey)}
+              onClick={() => scrollToDayFn?.(anchorDayKey)}
             />
             {showDayInView && dayInViewKey !== null && (
               <DayJumpButton
