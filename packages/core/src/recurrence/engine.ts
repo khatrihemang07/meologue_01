@@ -10,9 +10,16 @@ import {
   nextWeekdayOnOrAfter,
   nthWeekdayOfMonth,
   parseFloating,
+  weekdayOf,
   ymdOf,
 } from "./calendar";
-import type { MonthDay, RecurrenceOutcome, RecurrenceReference, RecurrenceRule } from "./rule";
+import type {
+  MonthDay,
+  RecurrenceOutcome,
+  RecurrenceReference,
+  RecurrenceRule,
+  Weekday,
+} from "./rule";
 import { WEEKDAY_INDEX } from "./tokens";
 
 // Every frequency this grammar accepts steps forward by at least a day
@@ -179,7 +186,7 @@ function stepOnce(epoch: Epoch, rule: RecurrenceRule): Epoch {
     case "weekly":
       return addDays(epoch, rule.interval * 7);
     case "workdays":
-      return nextMatchingWeekday(epoch, [1, 2, 3, 4, 5]);
+      return addWorkdays(epoch, rule.interval);
     case "weekdays":
       return nextMatchingWeekday(
         epoch,
@@ -190,7 +197,14 @@ function stepOnce(epoch: Epoch, rule: RecurrenceRule): Epoch {
     case "yearly":
       return addYears(epoch, rule.interval);
     case "monthlyOrdinalWeekday":
-      return nextOrdinalWeekday(epoch, rule.frequency.ordinal, WEEKDAY_INDEX[rule.frequency.day]);
+      return nextOrdinalWeekday(
+        epoch,
+        rule.frequency.ordinal,
+        WEEKDAY_INDEX[rule.frequency.day],
+        rule.frequency.month,
+      );
+    case "monthlyOrdinalWeekdayList":
+      return earliestOf(rule.frequency.entries.map((entry) => nextEntryOccurrence(epoch, entry)));
   }
 }
 
@@ -231,6 +245,11 @@ function firstOnOrAfterOrigin(epoch: Epoch, rule: RecurrenceRule): Epoch {
         epoch,
         rule.frequency.ordinal,
         WEEKDAY_INDEX[rule.frequency.day],
+        rule.frequency.month,
+      );
+    case "monthlyOrdinalWeekdayList":
+      return earliestOf(
+        rule.frequency.entries.map((entry) => firstEntryOccurrenceOnOrAfter(epoch, entry)),
       );
   }
 }
@@ -265,34 +284,118 @@ function firstMatchingWeekdayOnOrAfter(epoch: Epoch, targets: readonly number[])
   return earliest as Epoch;
 }
 
-// The ordinal weekday of the month *after* `epoch`'s own — origin is
-// itself normally already this month's Nth weekday (the last due date),
-// so "one step" for this frequency kind means next month's occurrence,
-// never a second candidate inside the same month. Only ever called (via
+// The next `interval` working days (Mon-Fri) strictly after `epoch`,
+// counting only the weekdays it steps onto and skipping straight over
+// any weekend in between — issue #368: "every 3 workday" means three
+// business days forward, not the next matching weekday multiplied by
+// three (which would count the weekend days it lands next to). `interval`
+// 1 walks exactly one weekday forward, the same single step
+// nextMatchingWeekday(epoch, [1,2,3,4,5]) always produced, so every
+// already-passing `interval`-less "every workday" case is unaffected.
+function addWorkdays(epoch: Epoch, interval: number): Epoch {
+  let candidate = epoch;
+  let remaining = interval;
+  while (remaining > 0) {
+    candidate = addDays(candidate, 1);
+    const day = weekdayOf(candidate);
+    if (day !== 0 && day !== 6) {
+      remaining -= 1;
+    }
+  }
+  return candidate;
+}
+
+// The ordinal weekday one period *after* `epoch`'s own — origin is
+// itself normally already sitting on the pattern (the last due date), so
+// "one step" for this frequency kind means the next instance, never a
+// second candidate inside the same period. Only ever called (via
 // stepOnce) with an `epoch` that already sits on the pattern —
 // firstOrdinalWeekdayOnOrAfter below is the one that handles an
-// arbitrary, possibly-off-pattern epoch.
-function nextOrdinalWeekday(epoch: Epoch, ordinal: number, targetWeekday: number): Epoch {
-  const { year, month } = ymdOf(epoch);
-  const totalMonths = year * 12 + (month - 1) + 1;
+// arbitrary, possibly-off-pattern epoch. `month === null` (the unscoped
+// "every 3rd friday" form) steps one calendar month forward, as before
+// issue #368; `month` set (`monthlyOrdinalWeekday`'s own scoped form,
+// "every 3rd friday jan") steps one calendar *year* forward instead,
+// since only that one month of the year ever matches.
+function nextOrdinalWeekday(
+  epoch: Epoch,
+  ordinal: number,
+  targetWeekday: number,
+  month: number | null,
+): Epoch {
+  const { year } = ymdOf(epoch);
+  if (month !== null) {
+    return nthWeekdayOfMonth(year + 1, month, ordinal, targetWeekday);
+  }
+  const currentMonth = ymdOf(epoch).month;
+  const totalMonths = year * 12 + (currentMonth - 1) + 1;
   const nextYear = Math.floor(totalMonths / 12);
   const nextMonth = totalMonths - nextYear * 12 + 1;
   return nthWeekdayOfMonth(nextYear, nextMonth, ordinal, targetWeekday);
 }
 
-// This month's `ordinal`th `targetWeekday` if that's still on or after
-// `epoch`, else the identical later-month walk nextOrdinalWeekday already
-// does. Unlike nextOrdinalWeekday, this doesn't assume `epoch` already
-// sits on the pattern — it's the one place that asks "does this month's
-// own Nth weekday still lie ahead of (or land on) today" rather than
-// jumping straight past it into next month, which is exactly what
-// firstOnOrAfterOrigin needs for monthlyOrdinalWeekday and
-// nextOrdinalWeekday, by its own contract above, cannot be used for
-// directly.
-function firstOrdinalWeekdayOnOrAfter(epoch: Epoch, ordinal: number, targetWeekday: number): Epoch {
-  const { year, month } = ymdOf(epoch);
-  const thisMonth = nthWeekdayOfMonth(year, month, ordinal, targetWeekday);
-  return thisMonth >= epoch ? thisMonth : nextOrdinalWeekday(epoch, ordinal, targetWeekday);
+// This period's `ordinal`th `targetWeekday` if that's still on or after
+// `epoch`, else the identical later walk nextOrdinalWeekday already does.
+// Unlike nextOrdinalWeekday, this doesn't assume `epoch` already sits on
+// the pattern — it's the one place that asks "does this period's own Nth
+// weekday still lie ahead of (or land on) today" rather than jumping
+// straight past it, which is exactly what firstOnOrAfterOrigin needs for
+// monthlyOrdinalWeekday and nextOrdinalWeekday, by its own contract
+// above, cannot be used for directly. `month` carries the same
+// null-means-every-month, set-means-scoped-to-one-month meaning as
+// nextOrdinalWeekday's own parameter.
+function firstOrdinalWeekdayOnOrAfter(
+  epoch: Epoch,
+  ordinal: number,
+  targetWeekday: number,
+  month: number | null,
+): Epoch {
+  const { year, month: currentMonth } = ymdOf(epoch);
+  const thisPeriod = nthWeekdayOfMonth(year, month ?? currentMonth, ordinal, targetWeekday);
+  return thisPeriod >= epoch
+    ? thisPeriod
+    : nextOrdinalWeekday(epoch, ordinal, targetWeekday, month);
+}
+
+// One (ordinal, weekday, month) entry's own next occurrence strictly
+// after `epoch` — the monthlyOrdinalWeekdayList building block stepOnce
+// uses, computed independently per entry since each entry carries its
+// own month and therefore its own, unrelated cadence (unlike
+// monthlyOrdinalWeekday, there is no single shared "one period" to step
+// by across the whole list).
+function nextEntryOccurrence(
+  epoch: Epoch,
+  entry: { readonly ordinal: number; readonly day: Weekday; readonly month: number },
+): Epoch {
+  const { year } = ymdOf(epoch);
+  const targetWeekday = WEEKDAY_INDEX[entry.day];
+  const thisYear = nthWeekdayOfMonth(year, entry.month, entry.ordinal, targetWeekday);
+  return thisYear > epoch
+    ? thisYear
+    : nthWeekdayOfMonth(year + 1, entry.month, entry.ordinal, targetWeekday);
+}
+
+// firstEntryOccurrenceOnOrAfter's own on-or-after twin of
+// nextEntryOccurrence above, for firstOnOrAfterOrigin's sake — same
+// "does this year's own instance still lie ahead of (or land on) epoch"
+// question firstOrdinalWeekdayOnOrAfter asks for the single-entry shape.
+function firstEntryOccurrenceOnOrAfter(
+  epoch: Epoch,
+  entry: { readonly ordinal: number; readonly day: Weekday; readonly month: number },
+): Epoch {
+  const { year } = ymdOf(epoch);
+  const targetWeekday = WEEKDAY_INDEX[entry.day];
+  const thisYear = nthWeekdayOfMonth(year, entry.month, entry.ordinal, targetWeekday);
+  return thisYear >= epoch
+    ? thisYear
+    : nthWeekdayOfMonth(year + 1, entry.month, entry.ordinal, targetWeekday);
+}
+
+// The earliest of several already-computed epochs — monthlyOrdinalWeekdayList's
+// own "whichever entry's next occurrence comes first" rule (issue #368).
+// `epochs` is never empty: the parser only ever produces this frequency
+// kind with two or more entries (its own parseFrequency doc comment).
+function earliestOf(epochs: readonly Epoch[]): Epoch {
+  return epochs.reduce((earliest, candidate) => (candidate < earliest ? candidate : earliest));
 }
 
 // A MonthDay carries no year of its own unless the text spelled one out
