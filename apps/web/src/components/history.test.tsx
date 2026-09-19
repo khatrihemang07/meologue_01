@@ -2292,6 +2292,35 @@ describe("the day-jump pair, bottom-left (issue #354)", () => {
     expect(screen.queryByRole("button", { name: /Jump to the start of/ })).not.toBeInTheDocument();
   });
 
+  // ADR 0087: "a journal with no parseable Entry anywhere" is the ONLY
+  // condition that hides these controls, so no second gate may creep back
+  // in beside it. The bottom-right jump-to-newest circle is gated on
+  // `pinnedThread` because its `jumpToNewest` comes from `usePinnedScroll`
+  // and there is nothing to call without one; this pair jumps through
+  // `scrollToDayFn`, which History registers itself, so it has no such
+  // dependency. The clause was there and was dead — composer-page.tsx
+  // passes `pinnedThread` unconditionally — which is exactly the kind of
+  // redundant guard that stays correct until the day someone mounts
+  // History somewhere new and cannot work out why the corner is empty.
+  it("renders the controls for a History with no pinnedThread, the anchor being the only gate", () => {
+    pinClock("2026-08-20T12:00:00.000Z");
+    const { triggerResize } = installResizeObserverStub();
+    render(
+      <Shell title="Composer">
+        <History entries={THREE_DAY_FIXTURE} syncEnabled={false} />
+      </Shell>,
+    );
+    const scroller = screen.getByTestId("shell-scroll-region");
+    stubOffsetSize(scroller, { width: 400, height: VIEWPORT_PX });
+    act(() => triggerResize(scroller));
+
+    expect(screen.getByRole("button", { name: "Jump to the start of today" })).toBeInTheDocument();
+    // The newest-end control genuinely does depend on `pinnedThread`, and
+    // its absence here is what proves the two gates are independent rather
+    // than this test having simply supplied one by accident.
+    expect(screen.queryByRole("button", { name: "Jump to newest" })).not.toBeInTheDocument();
+  });
+
   // ADR 0087: the anchor is `groups.findLast(g => g.dayKey !== null)`, not
   // `groups.at(-1)`. An Entry whose `createdAt` doesn't parse gets its own
   // trailing, null-keyed group (`groupByDay`) that `flattenGroups` emits no

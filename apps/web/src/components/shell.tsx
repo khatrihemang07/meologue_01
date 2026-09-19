@@ -588,10 +588,19 @@ export function Shell({
   // (History is the only thing that ever calls `publishDayJumpState`, and
   // composer-page.tsx is its only mount site), which is what keeps this
   // feature Composer-only without a route check.
+  //
+  // Deliberately NOT also gated on `pinnedThread`, unlike the
+  // jump-to-newest circle below. That circle has to be: its `jumpToNewest`
+  // comes from `usePinnedScroll`, so without a pinned thread it has no
+  // function to call. This pair doesn't — it jumps through
+  // `scrollToDayFn`, which History registers directly. Carrying the clause
+  // anyway would have been a second, redundant route check that happens to
+  // be true today only because composer-page.tsx passes `pinnedThread`
+  // unconditionally, and would have silently hidden the controls for any
+  // future caller that mounted History without one.
   const anchorDayKey = dayJumpState?.newestEntryDayKey ?? null;
   const dayJumpTodayKey = dayJumpState?.todayKey ?? null;
-  const showDayJumpControls =
-    pinnedThread !== undefined && anchorDayKey !== null && dayJumpTodayKey !== null;
+  const showDayJumpControls = anchorDayKey !== null && dayJumpTodayKey !== null;
   // The day-in-view control only earns its place once it would say
   // something the anchor control doesn't already say: one control while
   // the day at the top of the viewport is the anchor day itself, a second
