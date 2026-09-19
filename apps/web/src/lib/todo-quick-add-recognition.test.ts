@@ -10,6 +10,7 @@ import {
   computeQuickAddMatches,
   matchIdForToken,
   quickAddRecognitionPlugin,
+  quickAddRecognitionPluginKey,
   remapWithdrawnSpans,
 } from "./todo-quick-add-recognition";
 
@@ -171,6 +172,26 @@ describe("computeQuickAddMatches", () => {
   });
 });
 
+/**
+ * Shared mount helper for both `quickAddRecognitionPlugin` DOM suites below
+ * — identical plugin order production uses (`buildTitlePlugins`'s own
+ * comment: the recognition plugin's `handleKeyDown`/`handleClick` must be
+ * asked before `baseKeymap`'s ordinary Backspace).
+ */
+function mountRecognitionEditor(text: string): { view: EditorView; host: HTMLDivElement } {
+  const doc = titleDocFromText(text);
+  const state = EditorState.create({
+    schema: taskTitleSchema,
+    doc,
+    selection: Selection.atEnd(doc),
+    plugins: [quickAddRecognitionPlugin(() => ({ now: NOW })), keymap(baseKeymap)],
+  });
+  const host = document.createElement("div");
+  document.body.appendChild(host);
+  const view = new EditorView({ mount: host }, { state });
+  return { view, host };
+}
+
 describe("quickAddRecognitionPlugin — DOM node identity on withdrawal", () => {
   let view: EditorView | undefined;
   let host: HTMLDivElement | undefined;
@@ -183,21 +204,10 @@ describe("quickAddRecognitionPlugin — DOM node identity on withdrawal", () => 
   });
 
   function mount(text: string): EditorView {
-    const doc = titleDocFromText(text);
-    const state = EditorState.create({
-      schema: taskTitleSchema,
-      doc,
-      selection: Selection.atEnd(doc),
-      // Same order buildTitlePlugins uses in production: the recognition
-      // plugin's own `handleKeyDown` must be asked before `baseKeymap`'s
-      // ordinary Backspace (this module's own header comment on
-      // `quickAddRecognitionPlugin`).
-      plugins: [quickAddRecognitionPlugin(() => ({ now: NOW })), keymap(baseKeymap)],
-    });
-    host = document.createElement("div");
-    document.body.appendChild(host);
-    view = new EditorView({ mount: host }, { state });
-    return view;
+    const mounted = mountRecognitionEditor(text);
+    host = mounted.host;
+    view = mounted.view;
+    return mounted.view;
   }
 
   function backspace(target: EditorView): KeyboardEvent {
@@ -310,5 +320,104 @@ describe("quickAddRecognitionPlugin — DOM node identity on withdrawal", () => 
     expect(editorView.state.selection.from).toBe(2);
     // "to" no longer parses as a date — the span disappears entirely.
     expect(editorHost.querySelector('[data-testid="natural-language-match"]')).toBeNull();
+  });
+});
+
+/**
+ * Issue #371 — click-to-reject.
+ *
+ * Real click behaviour is covered end-to-end (`apps/e2e`), not here.
+ * ProseMirror has no `click` DOM listener at all — it resolves clicks
+ * internally from `mousedown` — so a synthetic `element.click()` in jsdom is
+ * a guaranteed no-op regardless of whether this feature works; an earlier
+ * audit concluded "clicking does nothing" for exactly that reason, and it
+ * was wrong. These tests call the plugin's own `handleClick` prop directly
+ * instead — the same function a real click resolves to — rather than
+ * dispatching a synthetic DOM click ProseMirror would never see.
+ */
+describe("quickAddRecognitionPlugin — handleClick (issue #371, real clicks are e2e-only)", () => {
+  const mounted: Array<{ view: EditorView; host: HTMLDivElement }> = [];
+
+  afterEach(() => {
+    for (const { view, host } of mounted) {
+      view.destroy();
+      host.remove();
+    }
+    mounted.length = 0;
+  });
+
+  function mount(text: string) {
+    const plugin = quickAddRecognitionPlugin(() => ({ now: NOW }));
+    const doc = titleDocFromText(text);
+    const state = EditorState.create({
+      schema: taskTitleSchema,
+      doc,
+      selection: Selection.atEnd(doc),
+      plugins: [plugin, keymap(baseKeymap)],
+    });
+    const host = document.createElement("div");
+    document.body.appendChild(host);
+    const view = new EditorView({ mount: host }, { state });
+    mounted.push({ view, host });
+    return { view, plugin };
+  }
+
+  function click(
+    target: EditorView,
+    plugin: ReturnType<typeof quickAddRecognitionPlugin>,
+    pos: number,
+  ): boolean {
+    const event = new MouseEvent("click", { bubbles: true, cancelable: true });
+    // `handleClick`'s own type pins `this` to the owning `Plugin` (ProseMirror
+    // calls it that way internally) — `.call(plugin, …)` matches that,
+    // rather than a plain `?.()` invocation TS correctly rejects.
+    return plugin.props.handleClick?.call(plugin, target, pos, event) ?? false;
+  }
+
+  it("removes the highlight and leaves the text unchanged on a click inside the match", () => {
+    const { view, plugin } = mount("tod p1");
+
+    const handled = click(view, plugin, 1); // inside "tod"
+
+    // Always `false`: ProseMirror still resolves the click and places the
+    // caret itself, the same as a real click does (confirmed on a real
+    // device: a click both cancels the highlight AND leaves
+    // `selection.isCollapsed`).
+    expect(handled).toBe(false);
+    expect(view.state.doc.textContent).toBe("tod p1");
+    expect(quickAddRecognitionPluginKey.getState(view.state)).toEqual([{ start: 0, end: 3 }]);
+  });
+
+  it("rejects the whole span, clicked from its first, middle, or last word", () => {
+    const text = "next week"; // one two-word date token, span [0, 9)
+    for (const pos of [1, 3, 6, 8]) {
+      const { view, plugin } = mount(text);
+      click(view, plugin, pos);
+      expect(quickAddRecognitionPluginKey.getState(view.state)).toEqual([
+        { start: 0, end: text.length },
+      ]);
+    }
+  });
+
+  it("does nothing when the clicked word isn't a recognised match", () => {
+    const { view, plugin } = mount("call mom please"); // parses to zero tokens
+
+    const handled = click(view, plugin, 6); // inside "mom"
+
+    expect(handled).toBe(false);
+    expect(view.state.doc.textContent).toBe("call mom please");
+    expect(quickAddRecognitionPluginKey.getState(view.state)).toEqual([]);
+  });
+
+  it("the corresponding chip reverts — withdrawal feeds computeQuickAddMatches, which chips are built from", () => {
+    const { view, plugin } = mount("tod");
+
+    click(view, plugin, 1);
+
+    const withdrawn = quickAddRecognitionPluginKey.getState(view.state) ?? [];
+    const matches = computeQuickAddMatches(view.state.doc.textContent, { now: NOW }, withdrawn);
+    expect(matches).toEqual([
+      { start: 0, end: 3, kind: "date", matchId: "2026-09-10", withdrawn: true },
+    ]);
   });
 });
