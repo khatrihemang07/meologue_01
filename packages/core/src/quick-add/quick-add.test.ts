@@ -256,19 +256,37 @@ describe("tokens", () => {
     });
   });
 
-  describe("@label — the sigil issue #226 restored", () => {
-    it("recognises a single label", () => {
+  describe("@label / %label — issue #226 restored @, issue #369 re-added %", () => {
+    it("recognises a single @ label", () => {
       expect(parse("buy milk @urgent").labelNames).toEqual(["urgent"]);
     });
 
-    it("recognises multiple labels, in the order typed", () => {
+    it("recognises multiple @ labels, in the order typed", () => {
       expect(parse("buy milk @urgent @home").labelNames).toEqual(["urgent", "home"]);
     });
 
-    it("does not recognise % as a label sigil — it was retired by issue #226", () => {
-      const result = parse("buy milk %urgent");
-      expect(result.labelNames).toEqual([]);
-      expect(result.content).toBe("buy milk %urgent");
+    // Todoist's help centre now documents `%label` as the sigil, with "@
+    // also works for now, but is planned to be retired by the end of
+    // 2026." Measured in the live app: both are fully equivalent today —
+    // same dropdown, same resolved label id, same saved result, no
+    // deprecation hint anywhere in the UI — so meologue recognises both,
+    // not just the one Todoist's docs currently lead with. `%` was
+    // deliberately retired here by issue #226 in favour of `@` alone;
+    // this is Todoist itself reversing that call, not a return to a bug.
+    it("recognises a single % label — the sigil Todoist itself un-retired", () => {
+      expect(parse("buy milk %urgent").labelNames).toEqual(["urgent"]);
+    });
+
+    it("recognises a hyphenated % label name", () => {
+      expect(parse("buy milk %book-club").labelNames).toEqual(["book-club"]);
+    });
+
+    it("recognises @ and % labels mixed in the same line, in the order typed", () => {
+      expect(parse("buy milk @urgent %home").labelNames).toEqual(["urgent", "home"]);
+    });
+
+    it("removes a % label from content, exactly like an @ label", () => {
+      expect(parse("buy milk %urgent").content).toBe("buy milk");
     });
   });
 
@@ -403,6 +421,11 @@ describe("recurrence phrases (issue #188)", () => {
     // "at 5pm" behind as stray words).
     ["take pills every day at 5pm", "every day at 5pm", "take pills"],
     ["pay rent every month starting 1 oct", "every month starting 1 oct", "pay rent"],
+    // One-word "everyday" (issue #369) — one of Todoist's own published
+    // recurrence-table rows, glued with no space at all. Parses
+    // identically to the spaced form, including with a trailing clause.
+    ["water the plants everyday", "everyday", "water the plants"],
+    ["pay rent everyday starting 1 nov", "everyday starting 1 nov", "pay rent"],
   ])("%s", (input, expectedRaw, expectedContent) => {
     it(`recognises "${expectedRaw}" as one recurrence span and strips it from content`, () => {
       const result = parse(input);
@@ -504,10 +527,56 @@ describe("recurrence phrases (issue #188)", () => {
       "water plants regularly",
       // Nonsense after the anchor.
       "water plants every zorp thing",
+      // "everyday" (issue #369) is deliberately narrow: it's "every" glued
+      // onto exactly the word "day", not "every" glued onto any word —
+      // "everybody" must stay ordinary text, not a false-positive
+      // recurrence span.
+      "everybody loves cake",
     ])("%s", (input) => {
       const result = parse(input);
       expect(result.tokens.some((t) => t.kind === "recurrence")).toBe(false);
       expect(result.content).toBe(input);
+    });
+  });
+});
+
+describe("after N days (issue #369)", () => {
+  describe.each<[string, string, string]>([
+    ["restock after 10 days", "after 10 days", "restock"],
+    ["water plants after 1 day", "after 1 day", "water plants"],
+  ])("%s", (input, expectedRaw, expectedContent) => {
+    it(`recognises "${expectedRaw}" as one recurrence span and strips it from content`, () => {
+      const result = parse(input);
+      const recurrenceTokens = result.tokens.filter((t) => t.kind === "recurrence");
+      expect(recurrenceTokens).toHaveLength(1);
+      const [token] = recurrenceTokens as [QuickAddToken];
+      expect(token.raw).toBe(expectedRaw);
+      expect(input.slice(token.start, token.end)).toBe(expectedRaw);
+      expect(result.content).toBe(expectedContent);
+      // Never resolved here — the same "this parser only ever flags the
+      // span" discipline the phrase-recognition block above documents;
+      // apps/web/src/lib/quick-add-task.ts's `resolveRecurrencePhrase` is
+      // where "after 10 days" actually becomes "every! 10 days".
+      expect(result.date).toBeNull();
+    });
+  });
+
+  it("stops recognising the phrase when smartDates is off, exactly like every other eager rule", () => {
+    const result = parse("restock after 10 days", { smartDates: false });
+    expect(result.tokens.some((t) => t.kind === "recurrence")).toBe(false);
+    expect(result.content).toBe("restock after 10 days");
+  });
+
+  describe("demotion", () => {
+    it("restores the phrase to plain content and removes the token", () => {
+      const input = "restock after 10 days";
+      const first = parse(input);
+      const recurrenceToken = first.tokens.find((t) => t.kind === "recurrence");
+      expect(recurrenceToken).toBeDefined();
+      // biome-ignore lint/style/noNonNullAssertion: asserted present above
+      const demoted = demoteQuickAddToken(input, recurrenceToken!, { now: NOW });
+      expect(demoted.tokens.some((t) => t.kind === "recurrence")).toBe(false);
+      expect(demoted.content).toBe(input);
     });
   });
 });

@@ -207,6 +207,55 @@ describe("taskFieldsFromQuickAdd", () => {
         expect(result.content).toBe("water the plants every day");
       });
     });
+
+    // Issue #369: "after N days" is Todoist's own completion-anchored
+    // shorthand, textually equivalent to "every! N days". Unlike a phrase
+    // (above), which is already legal ../recurrence/ input and stored
+    // verbatim, "after 10 days" is never legal input as typed — so, like a
+    // bare word, it's bridged to a canonical phrase before being stored,
+    // via `resolveRecurrencePhrase`'s own `AFTER_DAYS_PATTERN` branch
+    // (this file's own header comment on `RECURRENCE_WORD_TO_PHRASE`).
+    describe('typed as "after N days" (issue #369)', () => {
+      it("rewrites to the completion-anchored canonical phrase, not the literal typed text", () => {
+        const result = fields("restock after 10 days");
+
+        expect(result.dateString).toBe("every! 10 days");
+        expect(result.content).toBe("restock");
+        // firstOccurrence's own phase-locked rule (issue #191): a daily
+        // cadence always matches its own origin trivially regardless of
+        // interval — "every 3 months" typed today is due today, and
+        // "every! 10 days" is no different — so a Task just given this
+        // recurrence is due today, not ten days out. The ten-day interval
+        // is what the *next* occurrence steps by, after completion.
+        expect(result.date).toBe(NOW);
+      });
+
+      it("carries the number through unchanged for a different N", () => {
+        const result = fields("water plants after 1 day");
+
+        expect(result.dateString).toBe("every! 1 days");
+        expect(result.content).toBe("water plants");
+      });
+
+      it("is completion-anchored — a coincidental due date elsewhere in the input is not used as the anchor", () => {
+        // "27 Jan" is its own, independent date token; "after 10 days"
+        // resolves to "every! 10 days", whose bang anchors to completion
+        // (`now`) rather than that unrelated due date — unlike the
+        // due-anchored "every month" case above, which *does* land on
+        // "27 Jan" itself, this stays on `now`.
+        const result = fields("pay rent 27 Jan after 10 days");
+
+        expect(result.dateString).toBe("every! 10 days");
+        expect(result.date).toBe(NOW);
+      });
+
+      it("smartDates off suppresses the phrase exactly as it does every other eager rule", () => {
+        const result = fields("restock after 10 days", { smartDates: false });
+
+        expect(result.dateString).toBeNull();
+        expect(result.content).toBe("restock after 10 days");
+      });
+    });
   });
 
   describe("smartDates off", () => {

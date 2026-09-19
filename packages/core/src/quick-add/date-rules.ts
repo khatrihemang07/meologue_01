@@ -583,14 +583,17 @@ export function matchRecurrenceWord(input: string, ctx: DateRuleContext): QuickA
   return tokens;
 }
 
-// "every"/"every!" followed by whitespace — the one fixed anchor
+// "every"/"every!" followed by whitespace, or glued straight onto "day"
+// with none at all ("everyday", issue #369) — the one fixed anchor
 // ../recurrence/parser.ts's own EVERY_PREFIX requires, mirrored here
 // (not read off that module, which exports no such pattern) only far
 // enough to find where a *candidate* phrase might start; nothing here
 // decides whether what follows is actually a legal recurrence, which is
 // exactly why `\b` alone (not the full grammar) is enough for this
-// regex's own job.
-const EVERY_ANCHOR = /\bevery!?(?=\s)/gi;
+// regex's own job. Kept in lockstep with EVERY_PREFIX's own `(?=day\b)`
+// branch — see that regex's own comment for why it's `day\b` specifically
+// and not any looser "glued word" rule.
+const EVERY_ANCHOR = /\bevery!?(?=\s|day\b)/gi;
 
 /**
  * True when `input[bangIndex]` is the `!` glued onto the end of the word
@@ -702,6 +705,44 @@ export function matchRecurrencePhrase(input: string): QuickAddToken[] {
     // this file gets for free from `matchAll` never re-scanning consumed
     // text.
     searchFrom = absoluteEnd;
+  }
+  return tokens;
+}
+
+/**
+ * `after N days` (issue #369) — Todoist's own completion-anchored
+ * shorthand, textually equivalent to `every! N days` (../recurrence/'s
+ * own bang syntax). Never legal ../recurrence/ input as typed — "after"
+ * isn't a word `parseRecurrence` knows at all — so, unlike
+ * matchRecurrencePhrase above, this validates the *rewritten* phrase
+ * rather than the literal match; the token's own `raw` still carries the
+ * literal text the reader typed ("recognition, not persistence," this
+ * module's own header comment), and the rewrite itself happens exactly
+ * once, at the point Task.dateString is actually written
+ * (apps/web/src/lib/quick-add-task.ts's `resolveRecurrencePhrase` — the
+ * same seam `RECURRENCE_WORD_TO_PHRASE` already bridges a bare recurrence
+ * word through, mirrored here for a phrase with a number in it rather
+ * than a fixed table entry). Not a new frequency kind: ../recurrence/
+ * knows nothing about "after" before or after this change.
+ */
+const AFTER_DAYS_CLAUSE = /\bafter\s+(\d+)\s+days?\b/gi;
+
+export function matchAfterDays(input: string): QuickAddToken[] {
+  const tokens: QuickAddToken[] = [];
+  for (const match of input.matchAll(AFTER_DAYS_CLAUSE)) {
+    const count = match[1];
+    if (count === undefined) {
+      continue;
+    }
+    if (parseRecurrence(`every! ${count} days`).kind !== "parsed") {
+      continue; // Same false-positive guard matchRecurrencePhrase above uses — see its own doc comment.
+    }
+    tokens.push({
+      kind: "recurrence",
+      start: match.index,
+      end: match.index + match[0].length,
+      raw: match[0],
+    });
   }
   return tokens;
 }

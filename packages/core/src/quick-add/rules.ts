@@ -11,7 +11,7 @@ import type { QuickAddToken } from "./types";
 /**
  * The sigil-marked rules (issue #170's Part A) — every one of these is
  * always active, regardless of `QuickAddOptions.smartDates`, because the
- * user typed an explicit marker on purpose: `#`, `/`, `@`, `p1`-`p4`,
+ * user typed an explicit marker on purpose: `#`, `/`, `@`/`%`, `p1`-`p4`,
  * `!`, `{}`, a leading `* `, `//`. See ./types.ts's
  * `QuickAddTokenKind` doc comment for why that's the line
  * `smartDates` draws, and ./date-rules.ts for the family it turns off.
@@ -65,8 +65,18 @@ export function matchSection(input: string): QuickAddToken[] {
   return collectNamedMatches(input, regex, "section");
 }
 
+/**
+ * `@label` and `%label` (issue #369) — Todoist's help centre now
+ * documents `%` as the label sigil, with "@ also works for now, but is
+ * planned to be retired by the end of 2026." Measured in the live app:
+ * both are fully equivalent today — same dropdown, same resolved label
+ * id, same saved result, no deprecation hint anywhere in the UI — so both
+ * are recognised here, not just the one Todoist's docs lead with. `%` was
+ * deliberately retired by issue #226 in favour of `@` alone; this
+ * re-add is Todoist itself reversing that call, not a return to a bug.
+ */
 export function matchLabel(input: string): QuickAddToken[] {
-  return matchNamedSigil(input, "@", "label");
+  return [...matchNamedSigil(input, "@", "label"), ...matchNamedSigil(input, "%", "label")];
 }
 
 function matchNamedSigil(input: string, sigil: string, kind: "project" | "label"): QuickAddToken[] {

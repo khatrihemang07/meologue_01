@@ -95,6 +95,13 @@ const CASES: readonly Case[] = [
     expect: occurrence("2026-09-22"),
   },
   {
+    description:
+      '"everyday" (one word, issue #369) computes the identical next occurrence "every day" does',
+    dateString: "everyday",
+    reference: { dueDate: "2026-01-05", now: dayKey("2026-01-05") },
+    expect: occurrence("2026-01-06"),
+  },
+  {
     description: '"every week" completed exactly on its due date (on time) lands one week out',
     dateString: "every week",
     reference: { dueDate: "2026-01-05", now: dayKey("2026-01-05") },
@@ -772,6 +779,31 @@ describe("parseRecurrence — grammar shape a date-only assertion can't show", (
       kind: "parsed",
       rule: { frequency: { kind: "monthly" }, interval: 6 },
     });
+  });
+
+  // --- Issue #369: one-word "everyday" — one of Todoist's own published
+  // recurrence-table rows — parses byte-identically to the spaced form.
+  it('"everyday" (one word, issue #369) parses byte-identically to "every day"', () => {
+    expect(parseRecurrence("everyday")).toEqual(parseRecurrence("every day"));
+  });
+
+  it('"everyday" carries a bound clause exactly like the spaced form does', () => {
+    expect(parseRecurrence("everyday starting 1 nov")).toEqual(
+      parseRecurrence("every day starting 1 nov"),
+    );
+  });
+
+  it('"everyday" is due-anchored by default, the same as "every day"', () => {
+    const result = parseRecurrence("everyday");
+    expect(result).toMatchObject({
+      kind: "parsed",
+      rule: { frequency: { kind: "daily" }, interval: 1, anchor: "due" },
+    });
+  });
+
+  it('"everybody" is not mistaken for "every" + "day" glued together — it still refuses', () => {
+    const result = parseRecurrence("everybody");
+    expect(result.kind).toBe("refused");
   });
 });
 

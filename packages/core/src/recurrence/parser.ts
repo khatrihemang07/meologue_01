@@ -7,7 +7,17 @@ import type {
 } from "./rule";
 import { MONTH_TOKENS, ORDINAL_TOKENS, UNIT_TOKENS, WEEKDAY_TOKENS } from "./tokens";
 
-const EVERY_PREFIX = /^every(!)?\s+/;
+// "every"/"every!" followed by whitespace, or — issue #369 — glued
+// straight onto "day" with none at all ("everyday", one of Todoist's own
+// published recurrence-table rows). The `(?=day\b)` branch consumes only
+// "every"/"every!" itself, leaving "day" (or "day starting 1 nov", etc.)
+// in the text this function goes on to slice — the identical remainder
+// the spaced form "every day" already produces — so everything past this
+// line treats the two forms identically without needing to know which one
+// it got. `\bday\b` alone (nothing looser, like matching any following
+// word) is deliberate: "everybody" or "everydayisagoodday" typed as one
+// run must not be mistaken for this word.
+const EVERY_PREFIX = /^every(!)?(?:\s+|(?=day\b))/;
 const EXCLUSION_WORDS = /\b(except|excluding|but not)\b/;
 const TIME_CLAUSE = /\bat\s+([0-9]{1,2})(?::([0-9]{2}))?\s*(am|pm)?\b/gi;
 const DURATION_CLAUSE = /\bfor\s+(\d+)\s+(day|days|week|weeks|month|months|year|years)\b/i;

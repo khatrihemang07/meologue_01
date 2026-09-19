@@ -137,6 +137,19 @@ const RECURRENCE_WORD_TO_PHRASE: Readonly<Record<string, string>> = {
   annually: "every year",
 };
 
+/**
+ * `after N days` (issue #369) — Todoist's own completion-anchored
+ * shorthand, textually equivalent to `every! N days`. This is
+ * `RECURRENCE_WORD_TO_PHRASE`'s own bridging job, just with a number in
+ * the phrase instead of a fixed table entry: a table can't hold every N,
+ * so this is a regex-shaped sibling rather than one more table row.
+ * `../../packages/core/src/quick-add/date-rules.ts`'s `matchAfterDays`
+ * already validated the rewritten phrase before ever producing the
+ * token, so this only re-derives the identical rewrite; it never sees an
+ * `N` `../recurrence/` would refuse.
+ */
+const AFTER_DAYS_PATTERN = /^after\s+(\d+)\s+days?$/i;
+
 export interface QuickAddTaskFields {
   content: string;
   date: string | null;
@@ -206,32 +219,35 @@ function findRecurrenceToken(tokens: readonly QuickAddToken[]): QuickAddToken | 
 }
 
 /**
- * `recurrenceToken.raw` is either one of `RECURRENCE_WORD_TO_PHRASE`'s
- * seven bare words or an already-canonical phrase — never anything else,
- * because a "recurrence" token only ever comes from
- * ../../packages/core/src/quick-add/date-rules.ts's `matchRecurrenceWord`
- * (a bare word, from that exact table) or its `matchRecurrencePhrase`
- * (a phrase already validated against ../../packages/core's own
- * `parseRecurrence` before the token was even produced — see that
- * function's doc comment). So the map lookup below either finds a bare
- * word's canonical phrase, or misses because `raw` is a phrase already
- * and needs no translation at all (this file's own header comment on
+ * `recurrenceToken.raw` is one of `RECURRENCE_WORD_TO_PHRASE`'s seven bare
+ * words, an `after N days` phrase (issue #369), or an already-canonical
+ * phrase — never anything else, because a "recurrence" token only ever
+ * comes from ../../packages/core/src/quick-add/date-rules.ts's
+ * `matchRecurrenceWord` (a bare word, from that exact table), its
+ * `matchAfterDays` (validated against the *rewritten* phrase before the
+ * token was even produced — see that function's own doc comment for why
+ * this and `matchRecurrencePhrase` differ there), or `matchRecurrencePhrase`
+ * itself (a phrase already validated against ../../packages/core's own
+ * `parseRecurrence` before the token was even produced). So the lookup
+ * below either finds a bare word's canonical phrase, rewrites an `after N
+ * days` match, or falls through because `raw` is a phrase already and
+ * needs no translation at all (this file's own header comment on
  * `RECURRENCE_WORD_TO_PHRASE` explains why a phrase needs none) — there
- * is no third case where the miss means "unrecognised text slipped
- * through." The seven canonical phrases are each independently exercised
- * by quick-add-task.test.ts against the real ../../packages/core
- * `firstOccurrence`, and every phrase `matchRecurrencePhrase` can produce
- * is, by construction, something `parseRecurrence` already accepted — so
- * a `"refused"` outcome here would mean the map or the tokeniser and the
- * engine have drifted apart, not that this particular input was bad.
- * Treated as "not recognised" rather than thrown regardless, the same
- * defensive posture ../../packages/core's own `parseRecurrence` takes for
- * input this module cannot fully vouch for at compile time (a table
- * lookup and a tokeniser's own guarantee, unlike a type, admit no such
- * guarantee). An `{ kind: "ended" }` outcome — a phrase that parses but
- * whose own `ending`/`for` bound has already elapsed as of `now` — reads
- * identically to a refusal here: there is no next occurrence to store
- * either way.
+ * is no fourth case where the fallthrough means "unrecognised text
+ * slipped through." The canonical phrases are each independently
+ * exercised by quick-add-task.test.ts against the real
+ * ../../packages/core `firstOccurrence`, and every phrase either source
+ * rule can produce is, by construction, something `parseRecurrence`
+ * already accepted — so a `"refused"` outcome here would mean this file
+ * and the tokeniser/engine have drifted apart, not that this particular
+ * input was bad. Treated as "not recognised" rather than thrown
+ * regardless, the same defensive posture ../../packages/core's own
+ * `parseRecurrence` takes for input this module cannot fully vouch for at
+ * compile time (a table lookup and a tokeniser's own guarantee, unlike a
+ * type, admit no such guarantee). An `{ kind: "ended" }` outcome — a
+ * phrase that parses but whose own `ending`/`for` bound has already
+ * elapsed as of `now` — reads identically to a refusal here: there is no
+ * next occurrence to store either way.
  */
 /**
  * Exported for task-schedule-popover.tsx's own "Type a date" input
@@ -244,7 +260,17 @@ function findRecurrenceToken(tokens: readonly QuickAddToken[]): QuickAddToken | 
  * phrase ../recurrence/ accepts out" is one call.
  */
 export function resolveRecurrencePhrase(raw: string): string {
-  return RECURRENCE_WORD_TO_PHRASE[raw.toLowerCase()] ?? raw;
+  const lowered = raw.toLowerCase();
+  const bareWordPhrase = RECURRENCE_WORD_TO_PHRASE[lowered];
+  if (bareWordPhrase !== undefined) {
+    return bareWordPhrase;
+  }
+  const afterDaysMatch = AFTER_DAYS_PATTERN.exec(lowered);
+  const count = afterDaysMatch?.[1];
+  if (count !== undefined) {
+    return `every! ${count} days`;
+  }
+  return raw;
 }
 
 function resolveRecurrence(
