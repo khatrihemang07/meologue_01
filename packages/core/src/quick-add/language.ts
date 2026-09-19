@@ -59,6 +59,17 @@ export interface QuickAddLanguage {
   thisWord: string;
   /** The word pushing a weekday into the following week — `"next"` for English's `next monday`. */
   nextWord: string;
+  /**
+   * The word that, per issue #367, resolves identically to `nextWord` —
+   * `"last"` for English's `last monday`. This is Todoist's own known
+   * bug, reproduced on purpose: see `./date-rules.ts`'s
+   * `LAST_WEEKDAY_REPRODUCES_TODOIST_BUG` and
+   * `docs/adr/0088-todoists-add-task-parser-is-cloned-verbatim-defects-included.md`.
+   * Not "the weekday that already passed" — that correct reading is
+   * deliberately not implemented, because Todoist's own live app doesn't
+   * implement it either.
+   */
+  lastWord: string;
   /** Arithmetic unit word (lower-cased, singular or plural) to the unit it names. */
   arithmeticUnits: Readonly<Record<string, "days" | "weeks" | "months" | "years">>;
   /**

@@ -202,16 +202,41 @@ export function matchRelativeDate(input: string, ctx: DateRuleContext): QuickAdd
 }
 
 /**
- * `monday`, `next monday`, `this fri` — a bare weekday resolves to its
- * nearest occurrence on or after today (today itself, if today already
- * is that weekday); `this` is identical to bare; `next` always skips to
- * the following week's occurrence, even said on the day itself (`next
- * monday` on a Monday means 7 days out, never today) — see
+ * **`last` reproduces Todoist's own known bug, on purpose.** Measured on
+ * both Todoist web and Android (issue #367,
+ * `.scratch/todoist-add-todo/DECISIONS.md`'s D2): `last monday` resolves
+ * to the exact same *future* date as `next monday`, not the Monday that
+ * already passed — the correct reading a user would expect, and the
+ * reading this constant deliberately does *not* implement. It is wrong,
+ * it is measured as wrong on two independent clients of Todoist's shared
+ * parser, and it is reproduced anyway per D1's clone standard: divergence
+ * from a bug still counts as divergence. See
+ * `docs/adr/0088-todoists-add-task-parser-is-cloned-verbatim-defects-included.md`
+ * for the standard this serves and why it's not "fixed" into a parity
+ * break. Left `true` unconditionally — this is not a runtime feature
+ * flag, it's a named landmark so a future reader hits this comment
+ * before quietly deleting the `last` branch below.
+ */
+const LAST_WEEKDAY_REPRODUCES_TODOIST_BUG = true;
+
+/**
+ * `monday`, `next monday`, `this fri`, `last monday` — a bare weekday
+ * resolves to its nearest occurrence on or after today (today itself, if
+ * today already is that weekday); `this` is identical to bare; `next`
+ * always skips to the following week's occurrence, even said on the day
+ * itself (`next monday` on a Monday means 7 days out, never today);
+ * `last` resolves identically to `next` — see
+ * `LAST_WEEKDAY_REPRODUCES_TODOIST_BUG`'s own doc comment immediately
+ * above for why that's a reproduced bug, not a typo. See
  * ../quick-add.test.ts's table for the worked dates this resolves to.
  */
 export function matchWeekday(input: string, ctx: DateRuleContext): QuickAddToken[] {
   const weekdayAlt = alternation(Object.keys(ctx.language.weekdays));
-  const modifierAlt = alternation([ctx.language.thisWord, ctx.language.nextWord]);
+  const modifierAlt = alternation([
+    ctx.language.thisWord,
+    ctx.language.nextWord,
+    ctx.language.lastWord,
+  ]);
   const regex = new RegExp(`\\b(?:(${modifierAlt})\\s+)?(${weekdayAlt})\\b`, "gi");
   const tokens: QuickAddToken[] = [];
   const todayIso = isoWeekday(ctx.now);
@@ -220,7 +245,10 @@ export function matchWeekday(input: string, ctx: DateRuleContext): QuickAddToken
     // biome-ignore lint/style/noNonNullAssertion: the alternation is built from this exact table's own keys
     const targetIso = ctx.language.weekdays[match[2]!.toLowerCase()]!;
     const bareDaysAhead = (targetIso - todayIso + 7) % 7;
-    const daysAhead = modifier === ctx.language.nextWord ? bareDaysAhead + 7 : bareDaysAhead;
+    const pushesForward =
+      modifier === ctx.language.nextWord ||
+      (modifier === ctx.language.lastWord && LAST_WEEKDAY_REPRODUCES_TODOIST_BUG);
+    const daysAhead = pushesForward ? bareDaysAhead + 7 : bareDaysAhead;
     tokens.push({
       kind: "date",
       start: match.index,

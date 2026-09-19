@@ -91,6 +91,7 @@ export const englishQuickAddLanguage: QuickAddLanguage = {
   inWord: "in",
   thisWord: "this",
   nextWord: "next",
+  lastWord: "last",
 
   arithmeticUnits: {
     day: "days",

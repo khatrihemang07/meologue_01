@@ -212,10 +212,6 @@ function checkRow(row: CorpusRow): RowCheck {
  */
 const PENDING: ReadonlyArray<{ reason: string; inputs: readonly string[] }> = [
   {
-    reason: "#367 — last monday resolves like next monday (Todoist's own bug, reproduced)",
-    inputs: ["last monday"],
-  },
-  {
     reason:
       "#377 — {deadline} braces are Pro-gated in Todoist (no match at all); meologue still resolves one",
     inputs: ["{24 sept}"],
