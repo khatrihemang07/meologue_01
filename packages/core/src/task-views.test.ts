@@ -226,6 +226,103 @@ describe("overdue is its own section, always ordered chronologically", () => {
   });
 });
 
+// Issue #375 — Deadline stops participating in Today ordering, overdue
+// classification and the primary sort key (D12: Deadline is Pro-gated in
+// Todoist and 0 Tasks carry one in either live database). These two tests
+// bracket that change: the first is unaffected by it (no Task here carries
+// a deadline, so it asserts the identical order on both sides), the second
+// is written against *today's* (pre-#375) behaviour on purpose — captured
+// here, before the code changes, so the diff that updates it is legible as
+// a deliberate change rather than an incidental one.
+describe("issue #375 — deadline's ordering/classification footprint", () => {
+  it("orders a varied fixture — overdue, due-today (all-day and timed), same-time priority ties, an undated Task and a future-dated one — with no Task anywhere carrying a deadline", () => {
+    const overdueEarlier = task({
+      id: "overdue-earlier",
+      date: "2026-08-25",
+      priority: storedPriorityOf(1),
+    });
+    const overdueLater = task({
+      id: "overdue-later",
+      date: "2026-08-30",
+      priority: storedPriorityOf(4),
+    });
+    const allDayToday = task({
+      id: "all-day-today",
+      date: "2026-09-02",
+      priority: storedPriorityOf(3),
+    });
+    const timedMorningHighPriority = task({
+      id: "timed-morning-high-priority",
+      date: "2026-09-02T09:00",
+      priority: storedPriorityOf(1),
+    });
+    const timedMorningLowPriority = task({
+      id: "timed-morning-low-priority",
+      date: "2026-09-02T09:00",
+      priority: storedPriorityOf(4),
+    });
+    const timedAfternoon = task({
+      id: "timed-afternoon",
+      date: "2026-09-02T15:00",
+      priority: storedPriorityOf(1),
+    });
+    const undated = task({ id: "undated", date: null });
+    const futureDated = task({ id: "future-dated", date: "2026-09-10" });
+
+    const view = today(
+      [
+        timedAfternoon,
+        timedMorningLowPriority,
+        overdueLater,
+        allDayToday,
+        undated,
+        overdueEarlier,
+        futureDated,
+        timedMorningHighPriority,
+      ],
+      NOW,
+    );
+
+    // Overdue: chronological only — dates differ, so priority never enters.
+    expect(view.overdue.map((t) => t.id)).toEqual(["overdue-earlier", "overdue-later"]);
+    // Due today: all-day before timed, timed ordered by time-of-day, and
+    // the one same-time pair broken by priority.
+    expect(view.dueToday.map((t) => t.id)).toEqual([
+      "all-day-today",
+      "timed-morning-high-priority",
+      "timed-morning-low-priority",
+      "timed-afternoon",
+    ]);
+    const shown = new Set([...view.overdue, ...view.dueToday].map((t) => t.id));
+    expect(shown.has("undated")).toBe(false);
+    expect(shown.has("future-dated")).toBe(false);
+  });
+
+  it("BEFORE #375: an undated Task surfaces in Today, and outranks/underranks a dated Task in the same section, purely because of its Deadline", () => {
+    const deadlineOnlyOverdue = task({
+      id: "deadline-only-overdue",
+      date: null,
+      deadline: "2026-08-20",
+    });
+    const datedOverdue = task({ id: "dated-overdue", date: "2026-08-25" });
+    const deadlineOnlyToday = task({
+      id: "deadline-only-today",
+      date: null,
+      deadline: "2026-09-02",
+    });
+
+    const view = today([datedOverdue, deadlineOnlyOverdue, deadlineOnlyToday], NOW);
+
+    // The Deadline-only Task's effective key (its deadline, "2026-08-20")
+    // is earlier than datedOverdue's date ("2026-08-25"), so it sorts
+    // first — an undated Task outranking a dated one, on Deadline alone.
+    expect(view.overdue.map((t) => t.id)).toEqual(["deadline-only-overdue", "dated-overdue"]);
+    // Included in dueToday with no `date` at all — the Deadline alone puts
+    // it here.
+    expect(view.dueToday.map((t) => t.id)).toEqual(["deadline-only-today"]);
+  });
+});
+
 describe("grouping does not collapse the order to priority", () => {
   it("partitioning an already-sorted dueToday list preserves date-and-time order inside a priority group", () => {
     // Two Tasks share a priority, so grouping by priority puts them in one
