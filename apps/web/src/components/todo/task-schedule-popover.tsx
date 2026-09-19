@@ -18,8 +18,8 @@ import { Button, buttonVariants } from "@/components/ui/button";
 import { Calendar } from "@/components/ui/calendar";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Sheet, SheetContent, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
-import { useWideLayout } from "@/hooks/use-wide-layout";
 import { localDayKey, parseDayKey } from "@/lib/local-day-key";
+import { touchOnlyDevice } from "@/lib/pointer";
 import { resolveRecurrencePhrase } from "@/lib/quick-add-task";
 import { cn } from "@/lib/utils";
 import { TaskCustomRepeatDialog } from "./task-custom-repeat-dialog";
@@ -268,10 +268,12 @@ export function TaskSchedulePopover({
   onOpenChange,
 }: TaskSchedulePopoverProps) {
   // Which shell this renders in — see the branch near the bottom of the
-  // component. The identical 900px split `todo-nav.tsx` and
-  // `task-detail-view.tsx` already make, rather than a second breakpoint of
-  // this component's own.
-  const wide = useWideLayout();
+  // component. Issue #365: this used to be `todo-nav.tsx`/
+  // `task-detail-view.tsx`'s 900px split, but width answers the wrong
+  // question here — a touch tablet at >=900px got a desktop Popover inside
+  // what should be a full-screen Sheet. `touchOnlyDevice()` is the actual
+  // cause (the soft keyboard), so it's the actual test, at any width.
+  const touch = touchOnlyDevice();
   const [internalOpen, setInternalOpen] = useState(false);
   // Controlled iff a caller passed `open` at all — checked once via the
   // prop's presence, not compared against a sentinel, so a caller that
@@ -889,7 +891,7 @@ export function TaskSchedulePopover({
     </>
   );
 
-  if (!wide) {
+  if (touch) {
     return (
       <>
         <Sheet open={open} onOpenChange={setOpen}>

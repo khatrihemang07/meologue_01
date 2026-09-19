@@ -42,10 +42,33 @@ export function hoverCapable(): boolean {
  * `hoverCapable()` is: a keyboard can be attached mid-session.
  */
 export function keyboardLikely(): boolean {
+  return !touchOnlyDevice();
+}
+
+/**
+ * `keyboardLikely()`'s inverse: true when this device is touch-only — a
+ * coarse pointer AND no hover. Same test, same guard, kept as its own
+ * export because callers that pick layout (not just a keyboard-hint legend)
+ * want the touch answer directly rather than negating a keyboard one.
+ *
+ * Issue #365: Todoist genuinely behaves differently on phone and desktop,
+ * but the cause is the soft keyboard, not the window. A width rule gets
+ * this backwards — the Tauri desktop window opens at 800px (see
+ * `apps/macos/tauri.conf.json`'s own `width: 800`), below
+ * `WIDE_LAYOUT_QUERY`'s 900px, so anything keyed off width alone would hand
+ * the desktop app phone behaviour. Touch capability is the actual cause, so
+ * it's the actual test, at any width.
+ *
+ * Defaults to `false` when `matchMedia` is unavailable (jsdom), mirroring
+ * `keyboardLikely()`'s own "absence of information never withholds the
+ * keyboard-having behaviour" rule: a device is only ever treated as
+ * touch-only on positive evidence, never because nothing could be read.
+ */
+export function touchOnlyDevice(): boolean {
   if (typeof window.matchMedia !== "function") {
-    return true;
+    return false;
   }
-  const touchOnly =
-    window.matchMedia("(pointer: coarse)").matches && window.matchMedia("(hover: none)").matches;
-  return !touchOnly;
+  return (
+    window.matchMedia("(pointer: coarse)").matches && window.matchMedia("(hover: none)").matches
+  );
 }
