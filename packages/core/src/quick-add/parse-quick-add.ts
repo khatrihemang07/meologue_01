@@ -1,6 +1,7 @@
 import type { DateRuleContext } from "./date-rules";
 import {
   matchAbsoluteDate,
+  matchAfterDays,
   matchArithmeticDate,
   matchExplicitTime,
   matchFuzzyRange,
@@ -115,6 +116,11 @@ function collectCandidates(
       // comment gives for going before plain matchWeekday/
       // matchArithmeticDate.
       ...matchRecurrencePhrase(input),
+      // "after N days" (issue #369) is the same kind of compound-before-
+      // simple case matchRecurrencePhrase's own comment above describes —
+      // pushed right alongside it so the whole phrase wins over whatever
+      // shorter, unrelated candidate a bare number might otherwise match.
+      ...matchAfterDays(input),
       ...matchWeekdayArithmeticCombo(input, dateCtx),
       ...matchAbsoluteDate(input, dateCtx),
       ...matchRelativeDate(input, dateCtx),
