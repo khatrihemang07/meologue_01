@@ -38,6 +38,11 @@ export interface TaskTitleCommitSetters {
   setTaskDateString: (id: string, dateString: string | null, today: LocalDayKey) => void;
   setTaskLabels: (id: string, labelIds: string[]) => void;
   resolveLabelIds: (names: string[]) => Promise<string[]>;
+  /** Issue #370 — the Project/Section-shaped siblings of `setTaskLabels`/`resolveLabelIds` above: renaming a Task with a typed `#project`/`/section` moves it, exactly as a typed date or priority already do. */
+  setTaskProject: (id: string, projectId: string | null) => void;
+  setTaskSection: (id: string, sectionId: string | null) => void;
+  resolveProjectId: (name: string) => Promise<string>;
+  resolveSectionId: (projectId: string, name: string) => Promise<string>;
 }
 
 export async function commitTaskTitle(
@@ -113,6 +118,29 @@ export async function commitTaskTitle(
     // therefore enough to detect a real change without a second pass.
     if (merged.length !== task.labelIds.length) {
       setters.setTaskLabels(task.id, merged);
+    }
+  }
+
+  // Issue #370: a typed `#project` moves the Task, exactly as a typed date
+  // or priority above already do — this is not a divergence from those,
+  // it's the same rule applied to structure. `/section` resolves *inside*
+  // whichever Project wins: a typed `#project` in this same rename, or —
+  // with none typed — the Task's own existing `projectId`, the rename's
+  // own stand-in for handleAdd's "ambient Project" (a rename has no view
+  // to inherit from, only the Task it's already filed under). A `/section`
+  // with neither is silently ignored, the same "nothing to do" posture
+  // handleAdd already gives that case.
+  const projectId =
+    fields.projectName !== null ? await setters.resolveProjectId(fields.projectName) : null;
+  if (projectId !== null && projectId !== task.projectId) {
+    setters.setTaskProject(task.id, projectId);
+  }
+
+  const sectionProjectId = projectId ?? task.projectId;
+  if (fields.sectionName !== null && sectionProjectId !== null) {
+    const sectionId = await setters.resolveSectionId(sectionProjectId, fields.sectionName);
+    if (sectionId !== task.sectionId) {
+      setters.setTaskSection(task.id, sectionId);
     }
   }
 }

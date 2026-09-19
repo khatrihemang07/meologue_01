@@ -255,6 +255,9 @@ export interface EntryStoreOutletContext {
   deleteSection: (id: string) => void;
   archiveSection: (id: string) => void;
   unarchiveSection: (id: string) => void;
+  /** Issue #370 — use-projects.ts's own `resolveProjectId`/`resolveSectionId` doc comments carry the full reasoning; forwarded here exactly as `resolveLabelIds` already is. */
+  resolveProjectId: (name: string) => Promise<string>;
+  resolveSectionId: (projectId: string, name: string) => Promise<string>;
   /** Moves a Task into `projectId` (or back to Inbox for `null`) — TaskStore.setProject's own doc comment, via use-tasks.ts's `setTaskProject`. */
   setTaskProject: (id: string, projectId: string | null) => void;
   /** Files a Task into `sectionId`, or clears it for `null` — TaskStore.setSection's own doc comment, via use-tasks.ts's `setTaskSection`. */
@@ -626,6 +629,21 @@ async function noopListSections(_projectId: string): Promise<Section[]> {
 async function noopAddSection(_projectId: string, _name: string): Promise<void> {}
 
 function noopRenameSection(_id: string, _name: string) {}
+
+// `resolveProjectId`/`resolveSectionId`'s own not-ready stand-ins (issue
+// #370), mirroring `noopAddFilter` further below rather than
+// `noopResolveLabelIds` above: the type here is a single `string`, not an
+// array, so there is no empty-list "nothing found" answer to fall back
+// to — a placeholder empty id stands in instead, the same reasoning
+// `noopAddFilter`'s own comment gives, since nothing can call either of
+// these before the store opens.
+async function noopResolveProjectId(_name: string): Promise<string> {
+  return "";
+}
+
+async function noopResolveSectionId(_projectId: string, _name: string): Promise<string> {
+  return "";
+}
 
 function noopSetSectionDescription(_id: string, _description: string | null) {}
 
@@ -1419,6 +1437,8 @@ export function EntryStoreLayout() {
     deleteSection,
     archiveSection,
     unarchiveSection,
+    resolveProjectId,
+    resolveSectionId,
   } = useProjects(projectStore, eventStore, deviceId);
   const { filters, addFilter, renameFilter, setFilterColour, setFilterQuery, removeFilter } =
     useFilters(filterStore, deviceId);
@@ -1496,6 +1516,8 @@ export function EntryStoreLayout() {
               deleteSection,
               archiveSection,
               unarchiveSection,
+              resolveProjectId,
+              resolveSectionId,
               events,
               listEventsByTask,
               listEventsByProject,
@@ -1574,6 +1596,8 @@ export function EntryStoreLayout() {
               deleteSection: noopDeleteSection,
               archiveSection: noopArchiveSection,
               unarchiveSection: noopUnarchiveSection,
+              resolveProjectId: noopResolveProjectId,
+              resolveSectionId: noopResolveSectionId,
               events: [],
               listEventsByTask: noopListEventsByTask,
               listEventsByProject: noopListEventsByProject,

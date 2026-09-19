@@ -73,6 +73,36 @@ export interface UseProjectsResult {
   /** Completes every Task inside the Section and preserves them — ProjectStore.archiveSection's own doc comment, the gentle sibling of deleteSection above. */
   archiveSection: (id: string) => void;
   unarchiveSection: (id: string) => void;
+  /**
+   * Turns issue #170's quick-add parser's `projectName` (a Task's
+   * `#project` token, resolved to a plain string — ../../packages/core/
+   * src/quick-add/types.ts's own doc comment on why the parser itself
+   * never resolves a name to an id: it carries no ProjectStore) into the
+   * `projectId` a Task actually stores. Find-or-create, mirroring
+   * use-labels.ts's `resolveLabelIds` exactly, including the detail that
+   * matters there too: read fresh off the query cache between
+   * resolutions, case-insensitively, else create — coloured
+   * DEFAULT_LABEL_COLOUR and appended after every existing Project,
+   * exactly as `addProject` creates one any other way.
+   *
+   * Issue #370 — `#project`/`/section` tokens existed since #170
+   * (../../packages/core has carried them all along) but had nowhere to
+   * land until this ticket built one, the identical gap issue #229's own
+   * header comment on `resolveLabelIds` describes for `@label`.
+   */
+  resolveProjectId: (name: string) => Promise<string>;
+  /**
+   * The Section-shaped sibling of `resolveProjectId` just above — resolves
+   * a `/section` name to a Section id *within* `projectId`, the identical
+   * find-or-create shape (case-insensitive match, else create, appended
+   * after that Project's own existing Sections). `projectId` is whichever
+   * Project has already won by the time this is called — a typed
+   * `#project` or the view's own ambient one (todo-page.tsx's
+   * `handleAdd`), or a rename's own Task.projectId (task-title-commit.ts)
+   * — so this function never resolves a Project itself, only a Section
+   * inside one already chosen.
+   */
+  resolveSectionId: (projectId: string, name: string) => Promise<string>;
 }
 
 /**
@@ -379,6 +409,75 @@ export function useProjects(
     });
   }
 
+  async function resolveProjectId(name: string): Promise<string> {
+    // Read fresh off the query cache rather than the `projects` this
+    // hook's own render closed over — mirrors use-labels.ts's
+    // `resolveLabelIds`'s own comment on why: a second `#project`
+    // resolved moments after this one (two renames typed back-to-back, or
+    // a rename following straight after an add) must see a Project this
+    // call just minted, or it would mint a duplicate instead of reusing
+    // it.
+    const current = queryClient.getQueryData<Project[]>(PROJECTS_QUERY_KEY) ?? projects;
+    const existing = current.find((p) => p.name.toLowerCase() === name.toLowerCase());
+    if (existing !== undefined) {
+      return existing.id;
+    }
+    const capturedAt = new Date().toISOString();
+    const created: Project = {
+      id: mintId(),
+      deviceId,
+      name,
+      colour: DEFAULT_LABEL_COLOUR,
+      favourite: false,
+      archived: false,
+      parentId: null,
+      description: null,
+      orderKey: orderKeyAfter(current),
+      createdAt: capturedAt,
+      // Issue #196: starts equal to createdAt, the same single clock read.
+      updatedAt: capturedAt,
+      seq: null,
+      syncedAt: null,
+      deletedAt: null,
+    };
+    await addProjectMutation.mutateAsync(created);
+    return created.id;
+  }
+
+  async function resolveSectionId(projectId: string, name: string): Promise<string> {
+    // Mirrors resolveProjectId above and addSection's own fresh-read
+    // pattern just below: read this Project's own cached Section list,
+    // falling back to the store directly when nothing is cached yet — the
+    // Project itself may have been resolved (or created) moments ago by
+    // resolveProjectId above, in the same call, with no Section list ever
+    // queried for it yet.
+    const current =
+      queryClient.getQueryData<Section[]>(sectionsQueryKey(projectId)) ??
+      (await projectStore.listSections(projectId));
+    const existing = current.find((s) => s.name.toLowerCase() === name.toLowerCase());
+    if (existing !== undefined) {
+      return existing.id;
+    }
+    const capturedAt = new Date().toISOString();
+    const created: Section = {
+      id: mintId(),
+      deviceId,
+      projectId,
+      name,
+      description: null,
+      orderKey: orderKeyAfter(current),
+      archived: false,
+      createdAt: capturedAt,
+      // Issue #196: starts equal to createdAt, the same single clock read.
+      updatedAt: capturedAt,
+      seq: null,
+      syncedAt: null,
+      deletedAt: null,
+    };
+    await addSectionMutation.mutateAsync(created);
+    return created.id;
+  }
+
   const renameSectionMutation = useMutation({
     mutationFn: async ({ id, name }: { id: string; name: string }) => {
       const before = await projectStore.getSection(id);
@@ -486,6 +585,8 @@ export function useProjects(
     deleteSection,
     archiveSection,
     unarchiveSection,
+    resolveProjectId,
+    resolveSectionId,
   };
 }
 

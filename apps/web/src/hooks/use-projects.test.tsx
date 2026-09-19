@@ -386,4 +386,107 @@ describe("useProjects", () => {
       });
     });
   });
+
+  // Issue #370: the Project/Section-shaped sibling of use-labels.test.tsx's
+  // own `resolveLabelIds` suite — same find-or-create shape, same race
+  // this hook's own `resolveProjectId`/`resolveSectionId` doc comments
+  // point at.
+  describe("resolveProjectId (issue #370)", () => {
+    it("resolves an existing Project by name, case-insensitively, without minting a duplicate", async () => {
+      const store = createFakeStore();
+      await store.upsertProjects([project({ id: "existing", name: "Work" })]);
+      const { result } = await renderUseProjects(store);
+      await waitFor(() => expect(result.current.projects).toHaveLength(1));
+      vi.mocked(store.upsertProjects).mockClear();
+
+      let id = "";
+      await act(async () => {
+        id = await result.current.resolveProjectId("work");
+      });
+
+      expect(id).toBe("existing");
+      expect(store.upsertProjects).not.toHaveBeenCalled();
+    });
+
+    it("mints a new Project for a name with no existing match, coloured the default", async () => {
+      const store = createFakeStore();
+      const { result } = await renderUseProjects(store);
+
+      let id = "";
+      await act(async () => {
+        id = await result.current.resolveProjectId("Errands");
+      });
+
+      expect(id).not.toBe("");
+      expect(store.upsertProjects).toHaveBeenCalledWith([
+        expect.objectContaining({ name: "Errands", colour: "#808080", deviceId: "device-a" }),
+      ]);
+    });
+
+    // The regression use-labels.test.tsx's own identical case guards: a
+    // second `#project` resolved in the same call must see the Project the
+    // first one just minted, not the render's own stale `projects` array.
+    it("a second #project resolved right after reuses the Project the first one just minted", async () => {
+      const store = createFakeStore();
+      const { result } = await renderUseProjects(store);
+
+      let firstId = "";
+      let secondId = "";
+      await act(async () => {
+        firstId = await result.current.resolveProjectId("Work");
+        secondId = await result.current.resolveProjectId("work");
+      });
+
+      expect(firstId).toBe(secondId);
+      expect(store.upsertProjects).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe("resolveSectionId (issue #370)", () => {
+    it("resolves an existing Section by name within the given Project, case-insensitively, without minting a duplicate", async () => {
+      const store = createFakeStore();
+      await store.addSection(section({ id: "existing", projectId: "p1", name: "Cutover night" }));
+      const { result } = await renderUseProjects(store);
+      vi.mocked(store.addSection).mockClear();
+
+      let id = "";
+      await act(async () => {
+        id = await result.current.resolveSectionId("p1", "cutover night");
+      });
+
+      expect(id).toBe("existing");
+      expect(store.addSection).not.toHaveBeenCalled();
+    });
+
+    it("mints a new Section for a name with no existing match in that Project, appended after the existing ones", async () => {
+      const store = createFakeStore();
+      await store.addSection(section({ id: "existing", projectId: "p1", orderKey: "M" }));
+      const { result } = await renderUseProjects(store);
+
+      let id = "";
+      await act(async () => {
+        id = await result.current.resolveSectionId("p1", "New Section");
+      });
+
+      expect(id).not.toBe("");
+      const created = vi.mocked(store.addSection).mock.calls[1]?.[0];
+      expect(created).toMatchObject({ projectId: "p1", name: "New Section" });
+      expect((created as { orderKey: string }).orderKey > "M").toBe(true);
+    });
+
+    it("does not resolve a same-named Section in a different Project", async () => {
+      const store = createFakeStore();
+      await store.addSection(
+        section({ id: "other-project", projectId: "p2", name: "Cutover night" }),
+      );
+      const { result } = await renderUseProjects(store);
+
+      let id = "";
+      await act(async () => {
+        id = await result.current.resolveSectionId("p1", "Cutover night");
+      });
+
+      expect(id).not.toBe("other-project");
+    });
+  });
 });

@@ -401,6 +401,8 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
     deleteSection,
     archiveSection,
     unarchiveSection,
+    resolveProjectId,
+    resolveSectionId,
     events,
     addFilter,
     renameFilter,
@@ -762,6 +764,10 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
         setTaskDateString,
         setTaskLabels,
         resolveLabelIds,
+        setTaskProject,
+        setTaskSection,
+        resolveProjectId,
+        resolveSectionId,
       },
     );
   }
@@ -793,26 +799,40 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
   };
 
   // The add field's own parse (add-task-form.tsx, quick-add-task.ts)
-  // resolves everything except `labelIds` — a `@label` name needs a
-  // LabelStore round trip (use-labels.ts's `resolveLabelIds`) this
-  // function is what awaits before a Task literal can be built at all.
-  // `fields.date` overrides `captureDate` only when the reader actually
-  // typed a date/time token or a recurrence resolved one (quick-add-
-  // task.ts's own doc comment on why `??` — not the view's own inherited
-  // date — is the fallback direction): what was typed always wins over
-  // what the view merely suggested. `captureProjectId` has no equivalent
-  // typed override — the add field parses dates and recurrence, not
-  // `#project` tokens (CONTEXT.md names no such syntax), so a Project's
-  // own inherited id is simply what every Task added from that view gets.
+  // resolves everything except `labelIds`/`projectId`/`sectionId` — a
+  // `@label`/`#project`/`/section` name each need a store round trip
+  // (use-labels.ts's `resolveLabelIds`, use-projects.ts's
+  // `resolveProjectId`/`resolveSectionId`) this function is what awaits
+  // before a Task literal can be built at all. `fields.date` overrides
+  // `captureDate` only when the reader actually typed a date/time token
+  // or a recurrence resolved one (quick-add-task.ts's own doc comment on
+  // why `??` — not the view's own inherited date — is the fallback
+  // direction): what was typed always wins over what the view merely
+  // suggested. Issue #370 gives `captureProjectId` the identical typed
+  // override: a resolved `#project` wins over the view's own inherited
+  // id, exactly as a typed date already won over `captureDate` — a
+  // Project's own inherited id is only ever the fallback, never the final
+  // word. `/section` resolves *inside* whichever Project wins, typed or
+  // ambient — there is no Project to file a Section under otherwise, so a
+  // lone `/section` with neither a typed nor an ambient Project is
+  // silently ignored, the same "nothing to do" posture a blank `#project`
+  // name would already get.
   async function handleAdd(fields: QuickAddTaskFields) {
     const labelIds = await resolveLabelIds(fields.labelNames);
+    const projectId =
+      fields.projectName !== null ? await resolveProjectId(fields.projectName) : captureProjectId;
+    const sectionId =
+      fields.sectionName !== null && projectId !== null
+        ? await resolveSectionId(projectId, fields.sectionName)
+        : null;
     addTask(fields.content, {
       date: fields.date ?? captureDate,
       deadline: fields.deadline,
       priority: fields.priority,
       dateString: fields.dateString,
       labelIds,
-      projectId: captureProjectId,
+      projectId,
+      sectionId,
     });
   }
 

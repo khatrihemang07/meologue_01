@@ -23,11 +23,12 @@ describe("taskFieldsFromQuickAdd", () => {
 
     expect(result.date).toBe("2026-09-03");
     expect(result.priority).toBe(4); // p1 UI == stored 4.
-    // "#Shopping" is a recognised project token, but Task has no project
-    // field yet (issue #171) — kept as literal content rather than
-    // silently dropped (this module's own header comment on
-    // UNSUPPORTED_TOKEN_KINDS).
-    expect(result.content).toBe("buy milk #Shopping");
+    // Issue #370: "#Shopping" is a recognised project token, and Task now
+    // has somewhere for it to land — use-projects.ts's `resolveProjectId`
+    // is the async second half (mirroring `labelNames` below), so its span
+    // is stripped from `content` exactly like any other supported token.
+    expect(result.content).toBe("buy milk");
+    expect(result.projectName).toBe("Shopping");
   });
 
   it("resolves a @label into labelNames, not labelIds — resolution is a caller concern", () => {
