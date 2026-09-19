@@ -54,9 +54,17 @@ describe("dates", () => {
     ["buy milk 2 Sep", "2026-09-02"], // exactly today — not rolled forward
     ["buy milk 25 Dec", "2026-12-25"], // still ahead this year
     // Absolute, numeric, day-first (issue #170's own example convention).
+    // The two-part form (no year) now reads `dayMonthOrder`'s preferred
+    // order first, exactly as the three-part form does, falling back to
+    // the other reading only when the preferred one has no valid month
+    // at all (`resolveTwoPartMonthDay` in ./date-rules.ts) — proven
+    // necessary, not just defensive, by the corpus's `9/24` row below.
+    // See the flipped/added tests below this table for the pairs whose
+    // reading changes as a result of the fix.
     ["buy milk 5/9/2026", "2026-09-05"],
-    ["buy milk 12/25", "2026-12-25"], // still ahead this year
-    ["buy milk 1/15", "2027-01-15"], // 15 Jan already passed (today is 2 Sep) — rolls forward
+    ["buy milk 24/9", "2026-09-24"], // still ahead this year — issue #366's corpus row: data-match-id "24 Sep"
+    ["buy milk 9/24", "2026-09-24"], // same corpus date, digits swapped — data-match-id "24 Sep" again; only a day-first reading of "24" is possible either way
+    ["buy milk 1/6", "2027-06-01"], // 1 Jun already passed (today is 2 Sep) — rolls forward
   ])("%s", (input, expectedDate) => {
     it(`resolves to ${expectedDate}`, () => {
       expect(parse(input).date).toBe(expectedDate);
@@ -75,11 +83,95 @@ describe("dates", () => {
     );
   });
 
-  it("does not read 25/12 as day=12 month=25 — the numeric form is read month-first", () => {
-    // Confirms the new bare two-part form is hardcoded month-first, never
-    // day-first: "25/12" has no valid month=25, so this must stay
-    // unrecognised rather than silently reading it the other way round.
-    expect(parseQuickAdd("do it 25/12", { now: dayKey("2026-09-02") }).date).toBeNull();
+  it("reads the two-part numeric form day-first when both readings are valid, same as the three-part form (issue #366)", () => {
+    // Previously asserted the opposite — "25/12" resolved to nothing,
+    // because the two-part form was hardcoded month-first regardless of
+    // `dayMonthOrder`, and reading it that same hardcoded way makes "12"
+    // the month and "25" an invalid day-as-month. Flipped, not deleted:
+    // under English's day-month order this is day 25, month 12 (25
+    // Dec), and both digits are valid months on their own, so there is
+    // no invalid-month fallback to reach for — the day-first reading
+    // wins outright, the same disambiguation the three-part form already
+    // applied to "5/9/2026".
+    expect(parseQuickAdd("do it 25/12", { now: dayKey("2026-09-02") }).date).toBe("2026-12-25");
+  });
+
+  it("falls back to the other reading when the day-first one has no valid month, rather than refusing the match", () => {
+    // "12/25": day-first reads day 12, month 25 — not a valid month, so
+    // this falls back to the other reading (month 12, day 25 = 25 Dec)
+    // instead of staying unrecognised. Without this fallback, this
+    // fix would regress the corpus's already-passing "9/24" row (see
+    // the table above and resolveTwoPartMonthDay's own doc comment).
+    expect(parseQuickAdd("do it 12/25", { now: dayKey("2026-09-02") }).date).toBe("2026-12-25");
+  });
+
+  it("still refuses a two-part pair where neither reading has a valid month", () => {
+    // "13/25": day-first reads month 25 (invalid); the fallback reads
+    // month 13 (also invalid). No reading of this pair is a real
+    // calendar date, so it stays unrecognised.
+    expect(parseQuickAdd("do it 13/25", { now: dayKey("2026-09-02") }).date).toBeNull();
+  });
+
+  describe("fuzzy weekend range (issue #366)", () => {
+    // D1 (.scratch/todoist-add-todo/DECISIONS.md): Todoist's eager
+    // detection is cloned including the false positives it causes —
+    // rejecting a wrong match costs one click/Backspace, while never
+    // detecting a real one leaves nothing to recover with. Dates below
+    // are worked against this file's own NOW, 2026-09-02 (Wednesday).
+    it.each<[string, string]>([
+      ["buy milk this weekend", "2026-09-05"], // nearest Saturday on/after Wed 2 Sep
+      ["buy milk weekend", "2026-09-05"], // bare == "this" here, same as matchWeekday's bare reading
+      ["buy milk next weekend", "2026-09-12"], // always a full week past the nearest Saturday
+    ])("%s -> %s", (input, expectedDate) => {
+      expect(parse(input).date).toBe(expectedDate);
+    });
+
+    it("swallows the determiner: 'Pay for the weekend trip' matches 'the weekend', not bare 'weekend' — this reverses a previous non-match on purpose (D1)", () => {
+      // Previously this parser correctly (by its own older design)
+      // refused to schedule "the weekend" out of running prose. Under
+      // D1's clone standard that refusal is now the bug: Todoist's own
+      // corpus row for this exact sentence carries data-match-id
+      // "19 Sep" against a 19 Sep 2026 capture date — it matches, and
+      // the matched span is "the weekend" (with the determiner), not
+      // "weekend" alone.
+      const result = parse("Pay for the weekend trip");
+      expect(result.date).toBe("2026-09-05");
+      const dateToken = result.tokens.find((t) => t.kind === "date");
+      expect(dateToken?.raw).toBe("the weekend");
+      expect(result.content).toBe("Pay for trip");
+    });
+  });
+
+  describe("next month / next year (issue #366)", () => {
+    it("'next month' resolves to the same date, one month on", () => {
+      expect(parse("buy milk next month").date).toBe("2026-10-02");
+    });
+
+    it("'next year' resolves to the same date, one year on — not 1 January", () => {
+      // Issue #366's own ticket text paraphrased Todoist's help centre as
+      // "next year resolves to 1 January." The measured corpus
+      // contradicts that paraphrase: detection-corpus.json's "next year"
+      // row carries data-match-id "19 Sep 2027" against a 19 Sep 2026
+      // capture date — same day and month, year rolled forward once. D1
+      // settles this in favour of the measured value over the doc
+      // paraphrase.
+      expect(parse("buy milk next year").date).toBe("2027-09-02");
+    });
+  });
+
+  describe("holidays (issue #366)", () => {
+    // .scratch/todoist-add-todo/research.md's own holiday table (no
+    // corpus row measures these directly — the 117-row capture pass
+    // never typed one). Resolved with the same year-roll-forward rule a
+    // yearless absolute date already gets.
+    it.each<[string, string]>([
+      ["book flowers for valentine", "2027-02-14"], // 14 Feb already passed this year (today is 2 Sep) — rolls forward
+      ["get a costume for halloween", "2026-10-31"], // still ahead this year
+      ["plan the new year day brunch", "2027-01-01"], // rolls forward
+      ["book a table for new year eve", "2026-12-31"], // still ahead this year
+    ])("%s -> %s", (input, expectedDate) => {
+      expect(parse(input).date).toBe(expectedDate);
+    });
   });
 });
 

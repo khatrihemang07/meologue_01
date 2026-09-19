@@ -133,18 +133,53 @@ export function matchAbsoluteDate(input: string, ctx: DateRuleContext): QuickAdd
     pushIfValidCalendarDate(tokens, match, year, month, day);
   }
 
+  // Bare two-part numeric form, no year (`24/9`) — issue #366: this used
+  // to hardcode month-first regardless of `dayMonthOrder`, disagreeing
+  // with the three-part loop above over the identical grammar. Fixed to
+  // read `dayMonthOrder`'s preferred order first, exactly as the
+  // three-part loop does — but, unlike that loop, falling back to the
+  // *other* reading when the preferred one has no valid month at all
+  // (`resolveTwoPartMonthDay` below), rather than refusing the match.
+  // The corpus is why this form needs a fallback the three-part one
+  // doesn't: `9/24` and `24/9` both carry `data-match-id` "24 Sep" —
+  // strictly reading `9/24` as day-first (day 9, month 24) has no valid
+  // month, so a fallback-free version of this fix would regress an
+  // already-passing corpus row, not just fail to fix the pending one.
   const monthDayNoYear = /\b(\d{1,2})\/(\d{1,2})\b(?!\/\d)/g;
   for (const match of input.matchAll(monthDayNoYear)) {
-    const month = Number(match[1]);
-    const day = Number(match[2]);
-    if (month < 1 || month > 12) {
-      continue;
-    }
+    const [first, second] = [Number(match[1]), Number(match[2])];
+    const [month, day] = resolveTwoPartMonthDay(ctx.language.dayMonthOrder, first, second);
     const date = resolveYearRollForward(ctx.now, month, day, undefined);
     pushIfValidCalendarDate(tokens, match, parseDateOnly(date).year, month, day);
   }
 
   return tokens;
+}
+
+/**
+ * Which of `first`/`second` is the month for the bare two-part numeric
+ * date form — `dayMonthOrder`'s preferred reading, falling back to the
+ * other reading when the preferred one has no valid month (1-12) at
+ * all. Proven necessary, not just defensive, by the corpus: `9/24` and
+ * `24/9` both resolve to 24 Sep — reading `9/24` strictly day-first
+ * (day 9, month 24) has no valid month, so Todoist's own two-part
+ * grammar must fall back to the other reading rather than refuse the
+ * match, exactly what this function does. `pushIfValidCalendarDate`'s
+ * own round-trip reparse still refuses a pair where *neither* reading
+ * has a valid month (e.g. `13/25`) — this function only decides which
+ * reading to try, not whether the result is a real calendar date.
+ */
+function resolveTwoPartMonthDay(
+  dayMonthOrder: QuickAddLanguage["dayMonthOrder"],
+  first: number,
+  second: number,
+): [month: number, day: number] {
+  const preferred: [number, number] =
+    dayMonthOrder === "day-month" ? [second, first] : [first, second];
+  if (preferred[0] >= 1 && preferred[0] <= 12) {
+    return preferred;
+  }
+  return dayMonthOrder === "day-month" ? [first, second] : [second, first];
 }
 
 /** `today`, `tomorrow`, `tod`, `tom`. */
@@ -255,6 +290,138 @@ export function matchNextWeek(input: string, ctx: DateRuleContext): QuickAddToke
       end: match.index + match[0].length,
       raw: match[0],
       date: addDays(ctx.now, daysToNextMonday),
+    });
+  }
+  return tokens;
+}
+
+/**
+ * `this weekend`, `weekend`, `next weekend` — and, embedded in running
+ * prose, `the weekend` (issue #366's corpus row for `Pay for the weekend
+ * trip`: the matched span is `"the weekend"`, not bare `"weekend"`, and
+ * it resolves identically to the bare word — Todoist's own determiner
+ * swallow, not this parser inventing one).
+ *
+ * **This reverses meologue's previous, deliberate refusal to match
+ * `weekend`-shaped words at all** (`quick-add.test.ts` used to assert
+ * `Pay for the weekend trip` produced no date). D1
+ * (`.scratch/todoist-add-todo/DECISIONS.md`) is explicit that this is
+ * not an oversight being corrected but Todoist's own design being
+ * cloned on purpose: eager detection costs the user one click or
+ * Backspace to reject a false positive, while non-detection leaves
+ * nothing to recover a missed date with — "the unrecoverable state."
+ * The reversed test lives in `quick-add.test.ts`, flipped rather than
+ * deleted, with this same citation.
+ *
+ * Same bare/`this`/`next` shape as `matchWeekday` (`this` and bare both
+ * mean "the nearest one, today included"; `next` always skips a full
+ * week), targeting the fixed weekday Saturday rather than a table entry,
+ * since "the weekend" always means the same day of the week regardless
+ * of which weekday is typed.
+ */
+export function matchFuzzyRange(input: string, ctx: DateRuleContext): QuickAddToken[] {
+  const SATURDAY_ISO_WEEKDAY = 6;
+  const modifierAlt = alternation([
+    ctx.language.thisWord,
+    ctx.language.nextWord,
+    ctx.language.theWeekendWord,
+  ]);
+  const regex = new RegExp(
+    `\\b(?:(${modifierAlt})\\s+)?(${escapeRegExp(ctx.language.weekendWord)})\\b`,
+    "gi",
+  );
+  const tokens: QuickAddToken[] = [];
+  const todayIso = isoWeekday(ctx.now);
+  const bareDaysAhead = (SATURDAY_ISO_WEEKDAY - todayIso + 7) % 7;
+  for (const match of input.matchAll(regex)) {
+    const modifier = match[1]?.toLowerCase();
+    const daysAhead = modifier === ctx.language.nextWord ? bareDaysAhead + 7 : bareDaysAhead;
+    tokens.push({
+      kind: "date",
+      start: match.index,
+      end: match.index + match[0].length,
+      raw: match[0],
+      date: addDays(ctx.now, daysAhead),
+    });
+  }
+  return tokens;
+}
+
+// Shared by matchNextMonth/matchNextYear below — "next month"/"next
+// year" both mean the identical calendar date one unit further on (the
+// corpus's own `data-match-id`s: "next month" -> same day, next month;
+// "next year" -> same day, next year — see matchNextYear's own doc
+// comment for why that second one is worth calling out explicitly), so
+// both are one `addByUnit` call keyed off the same `arithmeticUnits`
+// table `matchArithmeticDate`/`matchNextWeek` already read from, not a
+// second word list.
+function matchNextUnit(
+  input: string,
+  ctx: DateRuleContext,
+  unit: "months" | "years",
+): QuickAddToken[] {
+  const words = Object.keys(ctx.language.arithmeticUnits).filter(
+    (word) => ctx.language.arithmeticUnits[word] === unit,
+  );
+  const regex = new RegExp(
+    `\\b${escapeRegExp(ctx.language.nextWord)}\\s+(${alternation(words)})\\b`,
+    "gi",
+  );
+  const tokens: QuickAddToken[] = [];
+  for (const match of input.matchAll(regex)) {
+    tokens.push({
+      kind: "date",
+      start: match.index,
+      end: match.index + match[0].length,
+      raw: match[0],
+      date: addByUnit(ctx.now, 1, unit),
+    });
+  }
+  return tokens;
+}
+
+/** `next month` — the same calendar date one month on (`addMonths(now, 1)`), clamped exactly as every other `addMonths` caller in this file is. */
+export function matchNextMonth(input: string, ctx: DateRuleContext): QuickAddToken[] {
+  return matchNextUnit(input, ctx, "months");
+}
+
+/**
+ * `next year` — the same calendar date one year on (`addYears(now, 1)`),
+ * **not** January 1st. Issue #366's own ticket text paraphrased Todoist's
+ * help-centre doc as "next year resolves to 1 January," but the measured
+ * corpus (`detection-corpus.json`'s `"next year"` row, captured against
+ * the live app) records `data-match-id` `"19 Sep 2027"` against a 19 Sep
+ * 2026 capture date — the same day and month, the year rolled forward
+ * once, exactly like every other same-day-next-year case in this file.
+ * D1 (`.scratch/todoist-add-todo/DECISIONS.md`) settles this in favour
+ * of what the live app actually does over what its own docs say it
+ * does, so this function clones the corpus, not the paraphrase.
+ */
+export function matchNextYear(input: string, ctx: DateRuleContext): QuickAddToken[] {
+  return matchNextUnit(input, ctx, "years");
+}
+
+/**
+ * Fixed calendar holidays — `valentine`, `halloween`, `new year day`,
+ * `new year eve` (issue #366) — resolved off `ctx.language.holidays`
+ * with the identical year-roll-forward rule a yearless absolute date
+ * already gets (`resolveYearRollForward`, used unchanged rather than
+ * reimplemented): a holiday already passed this year rolls to next year,
+ * one still ahead stays this year.
+ */
+export function matchHolidayWord(input: string, ctx: DateRuleContext): QuickAddToken[] {
+  const alt = alternation(Object.keys(ctx.language.holidays));
+  const regex = new RegExp(`\\b(${alt})\\b`, "gi");
+  const tokens: QuickAddToken[] = [];
+  for (const match of input.matchAll(regex)) {
+    // biome-ignore lint/style/noNonNullAssertion: the alternation is built from this exact table's own keys
+    const holiday = ctx.language.holidays[match[1]!.toLowerCase()]!;
+    tokens.push({
+      kind: "date",
+      start: match.index,
+      end: match.index + match[0].length,
+      raw: match[0],
+      date: resolveYearRollForward(ctx.now, holiday.month, holiday.day, undefined),
     });
   }
   return tokens;
@@ -520,6 +687,10 @@ export function matchDateForms(input: string, ctx: DateRuleContext): QuickAddTok
     ...matchWeekday(input, ctx),
     ...matchArithmeticDate(input, ctx),
     ...matchNextWeek(input, ctx),
+    ...matchNextMonth(input, ctx),
+    ...matchNextYear(input, ctx),
+    ...matchFuzzyRange(input, ctx),
+    ...matchHolidayWord(input, ctx),
   ];
 }
 

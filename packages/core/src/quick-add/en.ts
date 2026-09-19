@@ -121,4 +121,20 @@ export const englishQuickAddLanguage: QuickAddLanguage = {
   },
 
   dayMonthOrder: "day-month",
+
+  weekendWord: "weekend",
+  theWeekendWord: "the",
+
+  // February 14, October 31, January 1, December 31 — verified against
+  // .scratch/todoist-add-todo/research.md's own holiday table (issue
+  // #366); no corpus row measures these directly (the 117-row capture
+  // pass never typed one), so this table is the ticket's documented
+  // vocabulary, not a `data-match-id`-traced value like the rest of this
+  // file's dates.
+  holidays: {
+    valentine: { month: 2, day: 14 },
+    halloween: { month: 10, day: 31 },
+    "new year day": { month: 1, day: 1 },
+    "new year eve": { month: 12, day: 31 },
+  },
 };

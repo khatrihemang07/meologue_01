@@ -212,18 +212,6 @@ function checkRow(row: CorpusRow): RowCheck {
  */
 const PENDING: ReadonlyArray<{ reason: string; inputs: readonly string[] }> = [
   {
-    reason: "#366 — fuzzy weekend ranges",
-    inputs: ["this weekend", "weekend", "next weekend", "Pay for the weekend trip"],
-  },
-  {
-    reason: "#366 — next month / next year",
-    inputs: ["next month", "next year"],
-  },
-  {
-    reason: "#366 — two-part numeric date ignores the language's day-month order",
-    inputs: ["24/9"],
-  },
-  {
     reason: "#367 — last monday resolves like next monday (Todoist's own bug, reproduced)",
     inputs: ["last monday"],
   },
