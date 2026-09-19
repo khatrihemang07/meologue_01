@@ -35,6 +35,8 @@ describe("promoteBareCheckboxes", () => {
         priority: 1,
         dateString: null,
         labelNames: [],
+        projectName: null,
+        sectionName: null,
       },
     ]);
     expect(result.body).toBe(`- [ ] ${formatTaskReference("task-1", "buy milk")}`);
@@ -165,6 +167,25 @@ describe("promoteBareCheckboxes", () => {
       const task = result.tasks[0];
       expect(task?.content).toBe("buy milk");
       expect(task?.labelNames).toEqual(["Shopping"]);
+    });
+
+    // Issue #370's own Project/Section-shaped siblings of the @label test
+    // just above — `use-history.ts`'s own `upsertPromotedTasks` is what
+    // resolves these into `projectId`/`sectionId`, the identical door this
+    // function leaves open for `labelNames`, so it stays unresolved here
+    // too rather than this module reaching for a ProjectStore it has no
+    // business holding.
+    it("resolves a #project /section pair into projectName/sectionName, both stripped from content", () => {
+      const result = promoteBareCheckboxes(
+        "- [ ] buy milk #Work /Cutover",
+        sequentialMintId(),
+        OPTIONS,
+      );
+
+      const task = result.tasks[0];
+      expect(task?.content).toBe("buy milk");
+      expect(task?.projectName).toBe("Work");
+      expect(task?.sectionName).toBe("Cutover");
     });
 
     it("a line consumed entirely by recognised tokens falls back to the full text rather than an empty Task name", () => {

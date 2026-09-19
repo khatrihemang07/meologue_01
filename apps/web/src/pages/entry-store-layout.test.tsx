@@ -499,6 +499,12 @@ describe("EntryStoreLayout", () => {
       eventStore,
       "device-a",
       expect.any(Function),
+      // Issue #370's Project/Section-shaped siblings of `resolveLabelIds`
+      // just above — this test only checks they were threaded through by
+      // reference, never that anything on them was actually called (this
+      // test's own header comment).
+      expect.any(Function),
+      expect.any(Function),
     );
   });
 
