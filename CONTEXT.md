@@ -492,12 +492,22 @@ choose to unlearn, paid every time they open the feature. So "Project" stays "Pr
 because it is the right word for a personal list, but because it is the settled word that costs
 the least to keep.
 
-### "composer" — not for Todoist's Quick Add
+### "composer" — not for Quick Add, Todoist's or meologue's
 
 "Composer" names one thing in this app: the Destination where the user writes an Entry (see
-above). Todoist's own task-creation dialog is a different product entirely, and it is called
-"Quick Add" — that name is Todoist's own, not a coinage here. Referring to it as "the composer"
-cost a full round of confusion in a real session, once a note about Todoist reused meologue's own
-term for a Todoist surface that shares none of its properties. Write "Quick Add" for Todoist's
-dialog, "Composer" only for meologue's own Destination, and name the product explicitly wherever
-a sentence could be read either way.
+above). The surface that creates a Task is a different thing entirely, and it is called
+"Quick Add". Referring to it as "the composer" cost a full round of confusion in a real session,
+once a note about Todoist reused meologue's own term for a Todoist surface that shares none of its
+properties. That half of this entry earned itself and stands: "Composer" only for meologue's
+Destination, never for any surface that creates a Task.
+
+"Quick Add" now names meologue's own add-task surface as well as Todoist's. This entry used to
+reserve it for Todoist alone, as "Todoist's own, not a coinage here", while leaving meologue's
+surface unnamed — and the code called it Quick Add throughout regardless. That reservation made
+sense while the two were merely similar. It stopped making sense once meologue's surface became a
+deliberate clone of Todoist's, reproducing its grammar, layout and behaviour: two surfaces built to
+be indistinguishable are best served by one name, and a different name would imply a difference
+that is being deliberately removed. So the relaxation applies to Quick Add and not to Composer
+because the reasons point opposite ways — Composer and Todoist's dialog share none of their
+properties, meologue's Quick Add and Todoist's share all of them. Where a sentence could mean
+either product's Quick Add, name the product.
