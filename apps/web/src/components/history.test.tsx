@@ -2068,10 +2068,12 @@ describe("the day-jump pair, bottom-left (issue #354)", () => {
   // Today gets five Entries, the older two days one each, specifically so
   // that landing at the very *start* of today is still comfortably more
   // than `NEWEST_THRESHOLD_PX` (24px, use-pinned-scroll.ts) away from the
-  // true newest edge — with only one Entry per day throughout, "scrolled to
-  // the start of today" and "at the newest end" collapse into the same
-  // handful of pixels and the two states this suite tells apart become
-  // impossible to reach independently.
+  // true newest edge. Two positions this suite has to reach independently
+  // depend on that gap: "scrolled up, but still within today" (the anchor
+  // control alone) and "parked at the very newest end" (where the
+  // jump-to-newest circle is gone but, since ADR 0087, the anchor control
+  // is not). With one Entry per day throughout they collapse into the same
+  // handful of pixels.
   //
   // Three days, not two, and `OVERSCAN` (25, history.tsx) left at its real
   // value rather than mocked down: with 13 flattened rows total, 25 rows of
@@ -2103,6 +2105,14 @@ describe("the day-jump pair, bottom-left (issue #354)", () => {
   const TOTAL_HEIGHT_PX = 560;
   const TODAY_SEPARATOR_START_PX = 224;
   const YESTERDAY_SEPARATOR_START_PX = 112;
+  // Scrolled as far down as the document goes: 560 - 100 = 460 leaves
+  // `scrollHeight - clientHeight - scrollTop` at exactly 0, inside
+  // `NEWEST_THRESHOLD_PX`, so `usePinnedScroll` reports the reader as
+  // pinned to the newest end.
+  const NEWEST_END_SCROLL_PX = TOTAL_HEIGHT_PX - VIEWPORT_PX;
+  // The same three-day fixture with today removed — two 112px day blocks.
+  const NO_TODAY_FIXTURE = [DAY_MINUS_2, YESTERDAY];
+  const NO_TODAY_TOTAL_HEIGHT_PX = 224;
 
   // Mounts the real Shell/History pairing and gives it a real, sized
   // viewport (this describe block's own header comment). `stubOffsetSize`
@@ -2161,14 +2171,29 @@ describe("the day-jump pair, bottom-left (issue #354)", () => {
     fireEvent.scroll(scroller);
   }
 
-  it("shows neither control while pinned to the newest end, even though today has Entries", () => {
+  // ADR 0087: the anchor control is part of the Composer, not a scrolled-up
+  // mode of it. This test used to assert the opposite — that neither
+  // control appeared here — which is the behaviour the ADR reverses. The
+  // jump-to-newest assertion is what actually establishes the premise:
+  // without it, "parked at the newest end" would be an untested claim
+  // about `scrollTop` arithmetic rather than a state this suite has
+  // observed `usePinnedScroll` agree with.
+  it("keeps the anchor-day control while parked at the newest end, where jump-to-newest has gone", () => {
     pinClock("2026-08-20T12:00:00.000Z");
-    mountComposer(THREE_DAY_FIXTURE);
+    const scroller = mountComposer(THREE_DAY_FIXTURE);
 
-    expect(screen.queryByRole("button", { name: /Jump to the start of/ })).not.toBeInTheDocument();
+    scrollTo(scroller, NEWEST_END_SCROLL_PX, TOTAL_HEIGHT_PX);
+
+    expect(screen.queryByRole("button", { name: "Jump to newest" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Jump to the start of today" })).toBeInTheDocument();
+    // 460 lands inside today's fourth Entry, so the day in view *is* the
+    // anchor day and the second control has nothing to add.
+    expect(
+      screen.queryByRole("button", { name: /Jump to the start of Yesterday/ }),
+    ).not.toBeInTheDocument();
   });
 
-  it("shows only the start-of-today control once scrolled up but still within today", () => {
+  it("shows only the anchor-day control once scrolled up but still within today", () => {
     pinClock("2026-08-20T12:00:00.000Z");
     const scroller = mountComposer(THREE_DAY_FIXTURE);
 
@@ -2185,7 +2210,7 @@ describe("the day-jump pair, bottom-left (issue #354)", () => {
     ).not.toBeInTheDocument();
   });
 
-  it("shows both controls, day-in-view above start-of-today, once scrolled above today", () => {
+  it("shows both controls, day-in-view above the anchor day, once scrolled above today", () => {
     pinClock("2026-08-20T12:00:00.000Z");
     const scroller = mountComposer(THREE_DAY_FIXTURE);
 
@@ -2208,22 +2233,77 @@ describe("the day-jump pair, bottom-left (issue #354)", () => {
     const container = todayControl.closest('[data-testid="day-jump-controls"]');
     expect(container).not.toBeNull();
     expect(container).toHaveClass("flex-col-reverse");
+    //
+    // ADR 0087: this is also the regression test for "one control is one
+    // <button>". The day label used to be an `aria-hidden` span sitting
+    // *beside* the button rather than inside it, so the visible pill was
+    // not clickable; were it ever moved back out, these two controls would
+    // still be two buttons but the span would no longer be inside either,
+    // which the click test below catches, while an extra wrapper button
+    // would fail right here.
     const buttons = container?.querySelectorAll("button") ?? [];
     expect(Array.from(buttons)).toEqual([todayControl, yesterdayControl]);
   });
 
-  it("shows neither control when today has no Entries, however far the reader has scrolled", () => {
+  // ADR 0087: this test used to assert that neither control appeared on a
+  // day with nothing written on it yet — the behaviour the ADR reverses.
+  // Anchoring on today meant the control vanished on exactly the mornings
+  // a reader most wants to get back to what they were writing, because
+  // `flattenGroups` emits no separator for a day with no Entries and there
+  // was nothing to land on. Anchoring on the newest day that *does* hold
+  // Entries gives it a real destination on every day but a wholly empty
+  // journal.
+  it("anchors on the newest day holding Entries when today has none, rather than disappearing", () => {
     pinClock("2026-08-20T12:00:00.000Z");
-    // Only the two older days — no separator for today exists in
-    // `flatItems` at all (`flattenGroups` only emits one for a day that
-    // actually has an Entry), which is this suite's own stand-in for "no
-    // day boundary to jump to." Total height: two 112px day blocks (see the
-    // fixture's own header comment for how 112 is derived) = 224.
-    const scroller = mountComposer([DAY_MINUS_2, YESTERDAY]);
+    const scroller = mountComposer(NO_TODAY_FIXTURE);
 
-    scrollTo(scroller, 0, 224);
+    scrollTo(scroller, 0, NO_TODAY_TOTAL_HEIGHT_PX);
 
+    // No "today" control: today is not a day this journal can reach.
+    expect(
+      screen.queryByRole("button", { name: "Jump to the start of today" }),
+    ).not.toBeInTheDocument();
+
+    // Asserted before the click, and by count rather than by label. Before,
+    // because clicking the anchor lands the reader on yesterday's own
+    // separator — which makes yesterday the day in view, and the pair
+    // collapses back to one control by design. By count, because the label
+    // for a plain date is whatever the runtime's own `Intl.DateTimeFormat`
+    // produces, which is not this test's subject.
+    const container = screen.getByTestId("day-jump-controls");
+    expect(container.querySelectorAll("button")).toHaveLength(2);
+
+    const anchorControl = screen.getByRole("button", { name: "Jump to the start of Yesterday" });
+    fireEvent.click(anchorControl);
+    expect(scroller.scrollTop).toBe(YESTERDAY_SEPARATOR_START_PX);
+  });
+
+  // ADR 0087: the one case the controls are genuinely absent. `null` is
+  // published rather than the effect being skipped (the publish effect sits
+  // above History's own `entries.length === 0` return), so Shell hides
+  // rather than holding the previous journal's anchor. The empty-state
+  // assertion is what keeps this from passing because nothing mounted.
+  it("renders no day-jump control at all for a journal with no Entries", () => {
+    pinClock("2026-08-20T12:00:00.000Z");
+    mountComposer([]);
+
+    expect(screen.getByText("History will appear here.")).toBeInTheDocument();
+    expect(screen.queryByTestId("day-jump-controls")).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /Jump to the start of/ })).not.toBeInTheDocument();
+  });
+
+  // ADR 0087: the anchor is `groups.findLast(g => g.dayKey !== null)`, not
+  // `groups.at(-1)`. An Entry whose `createdAt` doesn't parse gets its own
+  // trailing, null-keyed group (`groupByDay`) that `flattenGroups` emits no
+  // separator for, so `at(-1)` would publish `null` here and hide both
+  // controls — failing silently, in the same shape as a genuinely empty
+  // journal. This is the only test that tells the two apart.
+  it("never anchors on an Entry whose date does not parse", () => {
+    pinClock("2026-08-20T12:00:00.000Z");
+    const undated = entry({ id: "bad", body: "undated", createdAt: "not-a-date" });
+    mountComposer([...NO_TODAY_FIXTURE, ...TODAY_ENTRIES, undated]);
+
+    expect(screen.getByRole("button", { name: "Jump to the start of today" })).toBeInTheDocument();
   });
 
   it("keeps the day-jump controls outside the scroll region, so neither can cover an Entry", () => {
@@ -2251,23 +2331,61 @@ describe("the day-jump pair, bottom-left (issue #354)", () => {
     expect(scroller.scrollTop).toBe(TODAY_SEPARATOR_START_PX);
   });
 
-  // Issue #354: icon-only below `min-[900px]` (`WIDE_LAYOUT_QUERY`,
-  // use-wide-layout.ts), an inline text label beside the circle from there
-  // up — jsdom evaluates no media query at all, so this suite can only
-  // confirm the responsive class is the one actually gating the label
-  // (`hidden` by default, `min-[900px]:inline` from that width up) and that
-  // the accessible name never depends on it, exactly the "the date is in
-  // the accessible label at every width" acceptance criterion.
-  it("hides the text label below the min-[900px] breakpoint but always carries the day in aria-label", () => {
+  // ADR 0087: one element at every width — a 40px circle below `sm`, the
+  // same circle grown into a pill with the day written inside it from `sm`
+  // (640px) up. jsdom evaluates no media query at all, so this suite can
+  // only confirm that the responsive classes are the ones gating the shape
+  // and that the accessible name never depends on them.
+  //
+  // The `w-10`/`sm:w-auto` pair on the *button* is the assertion that
+  // matters: it is the only way jsdom can witness one element that changes
+  // width, as against the two elements this used to be (a circle, and a
+  // caption sitting beside it as a sibling) which is precisely what made
+  // the visible pill unclickable. The label is queried from *inside* the
+  // control for the same reason.
+  //
+  // 640px and not the old `min-[900px]`: that value was borrowed from
+  // `WIDE_LAYOUT_QUERY` (use-wide-layout.ts), which answers "is there room
+  // for two panes", and it sat above the 800px window the desktop app
+  // opens at (apps/macos/tauri.conf.json) — so the label never rendered
+  // there at all.
+  it("collapses to a circle below sm and grows into a pill above it, naming the day either way", () => {
     pinClock("2026-08-20T12:00:00.000Z");
     const scroller = mountComposer(THREE_DAY_FIXTURE);
     scrollTo(scroller, 150, TOTAL_HEIGHT_PX);
 
+    // Found by its accessible name alone, which is the proof that the
+    // visible text inside it does not disturb that name.
     const todayControl = screen.getByRole("button", { name: "Jump to the start of today" });
-    const label = todayControl.parentElement?.querySelector("span[aria-hidden]");
+    expect(todayControl).toHaveClass("w-10", "sm:w-auto");
+
+    const label = todayControl.querySelector("span[aria-hidden]");
     expect(label).not.toBeNull();
-    expect(label).toHaveClass("hidden", "min-[900px]:inline");
+    expect(label).toHaveClass("hidden", "sm:inline");
     expect(label).toHaveTextContent("Today");
+  });
+
+  // ADR 0087: the complaint this rework exists for. The day label used to
+  // be a sibling of the button, so on a wide window the widest, most
+  // button-looking part of the control did nothing when clicked. Clicking
+  // the span itself — not the button, and not the arrow — is the only
+  // assertion that distinguishes "the label is inside the button" from
+  // "the label merely sits next to it".
+  it("is one click target: clicking the day label itself jumps, not just the icon", () => {
+    pinClock("2026-08-20T12:00:00.000Z");
+    const scroller = mountComposer(THREE_DAY_FIXTURE);
+    scrollTo(scroller, 150, TOTAL_HEIGHT_PX);
+
+    const yesterdayControl = screen.getByRole("button", {
+      name: "Jump to the start of Yesterday",
+    });
+    expect(yesterdayControl).toHaveTextContent("Yesterday");
+
+    const label = yesterdayControl.querySelector("span[aria-hidden]");
+    expect(label).not.toBeNull();
+    fireEvent.click(label as HTMLElement);
+
+    expect(scroller.scrollTop).toBe(YESTERDAY_SEPARATOR_START_PX);
   });
 
   // Issue #354: "jumping to a day that has not been paged in yet still
@@ -2276,11 +2394,12 @@ describe("the day-jump pair, bottom-left (issue #354)", () => {
   // describe block above), rather than a second, parallel paging loop.
   // Exercised directly against `HistoryScrollContext`, bypassing Shell
   // entirely: neither of the two buttons Shell actually renders can ever
-  // target a day that isn't loaded (`topmostDayKey` is always something
-  // currently rendered; `todayKey` is only ever offered once
-  // `hasTodaySeparator` is already true), so this pins down the underlying
-  // mechanism the same way the pre-existing seek tests do, independent of
-  // whether any caller happens to reach it that way today.
+  // target a day that isn't loaded (`topmostDayKey` is always a currently
+  // rendered row, and `newestEntryDayKey` is by construction a group with
+  // a parseable day, for which `flattenGroups` has certainly emitted a
+  // separator), so this pins down the underlying mechanism the same way
+  // the pre-existing seek tests do, independent of whether any caller
+  // happens to reach it that way today.
   it("asks for an older page via onSeekNeedsOlder when the day-jump target isn't loaded, then reaches it once the page lands", () => {
     const onSeekNeedsOlder = vi.fn();
     let registered: ((dayKey: string) => void) | null = null;
