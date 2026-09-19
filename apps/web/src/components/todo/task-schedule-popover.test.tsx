@@ -6,22 +6,27 @@ import { isOwnedPortalTarget, TaskSchedulePopover } from "./task-schedule-popove
 const NOW = new Date(2026, 8, 10, 12, 0); // Thu 10 Sep 2026, local noon
 
 /**
- * Pins which shell the component renders in (issue #282).
+ * Pins which shell the component renders in (issue #282; moved off width
+ * onto touch capability by issue #365 — see `touchOnlyDevice()`'s own
+ * comment).
  *
  * `test/setup.ts`'s global stub answers `false` to every query but
- * `(hover: hover)`, which includes the wide-layout breakpoint — so without
- * this, every test below silently exercises the *bottom sheet* rather than
- * the anchored popover. That is not hypothetical: when the narrow variant
- * landed, all 59 assertions in this file kept passing while testing the
- * other shell entirely, because they query by `data-testid="scheduler-view"`
- * and by role, and both shells satisfy both. Assert the property, not the
- * difference — and state which shell you meant.
+ * `(hover: hover)`, which is now exactly `touchOnlyDevice()`'s own "not
+ * touch-only" default — so without this, every test below silently
+ * exercises the *popover* rather than either sheet variant. (Issue #282's
+ * own trap ran the other way, when the component still read width: all 59
+ * assertions in this file kept passing while testing the wrong shell,
+ * because they query by `data-testid="scheduler-view"` and by role, and
+ * both shells satisfy both.) Assert the property, not the difference — and
+ * state which shell you meant.
  */
-function stubLayout(wide: boolean) {
+function stubLayout(popover: boolean) {
   vi.stubGlobal(
     "matchMedia",
     vi.fn((query: string) => ({
-      matches: query === "(hover: hover)" || (wide && query === WIDE_LAYOUT_QUERY),
+      matches: popover
+        ? query === "(hover: hover)"
+        : query === "(pointer: coarse)" || query === "(hover: none)",
       media: query,
       onchange: null,
       addListener: vi.fn(),
@@ -30,6 +35,44 @@ function stubLayout(wide: boolean) {
       removeEventListener: vi.fn(),
       dispatchEvent: vi.fn(),
     })),
+  );
+}
+
+/**
+ * Issue #365's own regression shape: stubs pointer/hover *and* the
+ * wide-layout breakpoint independently, so a test can put them in the
+ * combination that used to be impossible to express — a touch device at a
+ * wide viewport, or a non-touch device (Tauri's coarse-pointer misreport
+ * included) at a narrow one — and show the shell follows touch, not width.
+ */
+function stubTouchAtWidth(touch: boolean, wideViewport: boolean) {
+  vi.stubGlobal(
+    "matchMedia",
+    vi.fn((query: string) => {
+      if (query === WIDE_LAYOUT_QUERY) {
+        // Stubbed to the opposite of what the shell choice would need if it
+        // still read width, so a test that passes can only be passing
+        // because the component stopped asking.
+        return { matches: wideViewport } as MediaQueryList;
+      }
+      const matches = touch
+        ? query === "(pointer: coarse)" || query === "(hover: none)"
+        : // Tauri's real misreport (D4/#365): a coarse pointer with hover
+          // still present. Included on the non-touch branch so the "desktop
+          // behaviour survives width alone" test exercises that guard too,
+          // not just a plain mouse.
+          query === "(hover: hover)" || query === "(pointer: coarse)";
+      return {
+        matches,
+        media: query,
+        onchange: null,
+        addListener: vi.fn(),
+        removeListener: vi.fn(),
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+        dispatchEvent: vi.fn(),
+      } as unknown as MediaQueryList;
+    }),
   );
 }
 
@@ -58,8 +101,8 @@ function open() {
   fireEvent.click(screen.getByRole("button", { name: "Pick a date" }));
 }
 
-describe("shell by breakpoint (issue #282)", () => {
-  it("renders an anchored popover at wide widths", () => {
+describe("shell by touch capability (issue #282, moved off width by #365)", () => {
+  it("renders an anchored popover on a non-touch device", () => {
     stubLayout(true);
     renderPopover();
     open();
@@ -73,7 +116,7 @@ describe("shell by breakpoint (issue #282)", () => {
     expect(screen.queryByText("Date")).toBeNull();
   });
 
-  it("renders a bottom sheet below the wide breakpoint", () => {
+  it("renders a bottom sheet on a touch-only device", () => {
     stubLayout(false);
     renderPopover();
     open();
@@ -83,7 +126,7 @@ describe("shell by breakpoint (issue #282)", () => {
     expect(screen.getByRole("dialog")).toBe(view);
   });
 
-  it("gives the narrow sheet a visible Date title, as Todoist Android's has", () => {
+  it("gives the sheet a visible Date title, as Todoist Android's has", () => {
     stubLayout(false);
     renderPopover();
     open();
@@ -120,6 +163,28 @@ describe("shell by breakpoint (issue #282)", () => {
     // The sheet adds its own title element but no extra controls.
     expect(narrow).toEqual(wide);
     expect(wide.length).toBeGreaterThan(4);
+  });
+
+  it("gives a touch device the sheet even at a wide (>=900px) viewport", () => {
+    stubTouchAtWidth(true, true);
+    renderPopover();
+    open();
+
+    const view = screen.getByTestId("scheduler-view");
+    expect(view.getAttribute("data-slot")).toBe("sheet-content");
+  });
+
+  it("gives a Tauri desktop window at 800px the popover, not the sheet", () => {
+    // Tauri opens at 800px (`apps/macos/tauri.conf.json`'s own `width: 800`)
+    // and can misreport a coarse pointer for its trackpad — the exact case
+    // `touchOnlyDevice()` guards with `(hover: none)`, and the exact case a
+    // width-only rule would get wrong.
+    stubTouchAtWidth(false, false);
+    renderPopover();
+    open();
+
+    const view = screen.getByTestId("scheduler-view");
+    expect(view.getAttribute("data-slot")).toBe("popover-content");
   });
 });
 
