@@ -26,10 +26,13 @@ const NOW = "2026-09-02T08:00";
 // without restating the reasoning twice.
 const NOW_THURSDAY = "2026-09-10T08:00";
 
-describe("today()'s union — due today, overdue, or deadline today-or-past", () => {
-  it("includes a Task due today, an overdue Task, one with a deadline today, and one with a deadline in the past and no date at all — and excludes a Task with neither field and one whose date/deadline are both in the future", () => {
+describe("today()'s union — due today, or overdue, by date alone", () => {
+  it("includes a Task due today and an overdue Task — and excludes a Task with no date, one whose date is in the future, and one whose Deadline alone would have qualified it before #375", () => {
     const dueToday = task({ id: "due-today", date: "2026-09-02" });
     const overdue = task({ id: "overdue", date: "2026-08-30" });
+    // Before #375 these two qualified through `deadline` alone (no `date`
+    // at all) — now that deadline is never read, an undated Task never
+    // surfaces here regardless of what its deadline says.
     const deadlineToday = task({ id: "deadline-today", date: null, deadline: "2026-09-02" });
     const deadlinePastNoDate = task({
       id: "deadline-past-no-date",
@@ -38,36 +41,48 @@ describe("today()'s union — due today, overdue, or deadline today-or-past", ()
     });
     const neither = task({ id: "neither", date: null, deadline: null });
     const dateFuture = task({ id: "date-future", date: "2026-09-10" });
-    const deadlineFuture = task({ id: "deadline-future", date: null, deadline: "2026-09-10" });
 
     const view = today(
-      [dueToday, overdue, deadlineToday, deadlinePastNoDate, neither, dateFuture, deadlineFuture],
+      [dueToday, overdue, deadlineToday, deadlinePastNoDate, neither, dateFuture],
       NOW,
     );
 
-    expect(new Set(view.overdue.map((t) => t.id))).toEqual(
-      new Set(["overdue", "deadline-past-no-date"]),
-    );
-    expect(new Set(view.dueToday.map((t) => t.id))).toEqual(
-      new Set(["due-today", "deadline-today"]),
-    );
+    expect(new Set(view.overdue.map((t) => t.id))).toEqual(new Set(["overdue"]));
+    expect(new Set(view.dueToday.map((t) => t.id))).toEqual(new Set(["due-today"]));
     const shown = new Set([...view.overdue, ...view.dueToday].map((t) => t.id));
     expect(shown.has("neither")).toBe(false);
     expect(shown.has("date-future")).toBe(false);
-    expect(shown.has("deadline-future")).toBe(false);
+    expect(shown.has("deadline-today")).toBe(false);
+    expect(shown.has("deadline-past-no-date")).toBe(false);
   });
 
-  it("treats a passed deadline as overdue even when the Task's own date is still in the future", () => {
-    // An unusual combination — planning to do something after its hard
-    // cutoff — but not one this module refuses to represent, and the
-    // deadline having already passed is what "overdue" means here,
-    // independent of what was separately planned for later.
+  it("a passed deadline no longer makes a future-dated Task overdue (#375) — it reads only by its own future date, so it's excluded from both sections", () => {
+    // Before #375 this was overdue purely on its passed deadline,
+    // independent of its future date (deadline was its own union arm).
+    // Deadline is never read now, so only `date` — which is in the
+    // future — decides, and this Task doesn't qualify for either section.
     const t = task({ id: "future-date-past-deadline", date: "2026-09-20", deadline: "2026-08-01" });
 
     const view = today([t], NOW);
 
-    expect(view.overdue.map((x) => x.id)).toEqual(["future-date-past-deadline"]);
+    expect(view.overdue).toEqual([]);
     expect(view.dueToday).toEqual([]);
+  });
+
+  it("a non-null deadline never throws and never changes where a Task lands — a Restore from an old backup can inject one into a schema that no longer reads it (D12)", () => {
+    const restoredWithDeadline = task({
+      id: "restored-with-deadline",
+      date: "2026-09-02",
+      deadline: "2026-08-01",
+    });
+    const plain = task({ id: "plain", date: "2026-09-02" });
+
+    expect(() => today([restoredWithDeadline, plain], NOW)).not.toThrow();
+    const view = today([restoredWithDeadline, plain], NOW);
+    // Same date, no other distinguishing field — the two Tasks tie all the
+    // way down to `id`, exactly as they would if neither carried a
+    // deadline at all.
+    expect(view.dueToday.map((t) => t.id)).toEqual(["plain", "restored-with-deadline"]);
   });
 
   it("keeps a Task due earlier today in dueToday, not overdue — the boundary is the calendar day, not the time of day", () => {
@@ -80,7 +95,7 @@ describe("today()'s union — due today, overdue, or deadline today-or-past", ()
   });
 });
 
-describe("compareForToday's chain: date-and-time -> priority -> deadline -> manual -> created", () => {
+describe("compareForToday's chain: date-and-time -> priority -> manual -> created", () => {
   it(
     "priority is a tie-break inside the same date-and-time, never a global rank — " +
       "an unprioritized 09:00 Task outranks the most-urgent 15:00 Task",
@@ -141,33 +156,42 @@ describe("compareForToday's chain: date-and-time -> priority -> deadline -> manu
     expect(view.dueToday.map((t) => t.id)).toEqual(["more-urgent", "less-urgent"]);
   });
 
-  it("breaks a same date-and-time, same-priority tie by deadline — earlier first, no deadline last", () => {
-    const noDeadline = task({ id: "no-deadline", date: "2026-09-02T09:00", priority: 2 });
+  it("no longer breaks a same date-and-time, same-priority tie by deadline (#375) — falls straight through to manual order (dayOrder) instead", () => {
+    // Before #375, `withDeadline` would win this tie outright regardless of
+    // dayOrder (the removed deadlineOrder step fired before the manual
+    // one). Giving it the *later* dayOrder here proves deadline is no
+    // longer consulted at all — if it still were, this Task would sort
+    // first despite losing on dayOrder.
+    const noDeadline = task({
+      id: "no-deadline",
+      date: "2026-09-02T09:00",
+      priority: 2,
+      dayOrder: "a",
+    });
     const withDeadline = task({
       id: "with-deadline",
       date: "2026-09-02T09:00",
       priority: 2,
       deadline: "2026-09-05",
+      dayOrder: "b",
     });
 
-    const view = today([noDeadline, withDeadline], NOW);
+    const view = today([withDeadline, noDeadline], NOW);
 
-    expect(view.dueToday.map((t) => t.id)).toEqual(["with-deadline", "no-deadline"]);
+    expect(view.dueToday.map((t) => t.id)).toEqual(["no-deadline", "with-deadline"]);
   });
 
-  it("falls back to manual order (dayOrder) once date-and-time, priority and deadline all tie", () => {
+  it("falls back to manual order (dayOrder) once date-and-time and priority tie", () => {
     const b = task({
       id: "b",
       date: "2026-09-02T09:00",
       priority: 2,
-      deadline: "2026-09-05",
       dayOrder: "b",
     });
     const a = task({
       id: "a",
       date: "2026-09-02T09:00",
       priority: 2,
-      deadline: "2026-09-05",
       dayOrder: "a",
     });
 
@@ -228,12 +252,12 @@ describe("overdue is its own section, always ordered chronologically", () => {
 
 // Issue #375 — Deadline stops participating in Today ordering, overdue
 // classification and the primary sort key (D12: Deadline is Pro-gated in
-// Todoist and 0 Tasks carry one in either live database). These two tests
-// bracket that change: the first is unaffected by it (no Task here carries
-// a deadline, so it asserts the identical order on both sides), the second
-// is written against *today's* (pre-#375) behaviour on purpose — captured
-// here, before the code changes, so the diff that updates it is legible as
-// a deliberate change rather than an incidental one.
+// Todoist and 0 Tasks carry one in either live database). The first test
+// below is unaffected by the change (no Task here carries a deadline, so
+// it asserts the identical order before and after); the second was added
+// pinning the *old* (deadline-driven) behaviour, in the commit before this
+// one, and its expectations were then updated here — see its own comment
+// for exactly what changed and why.
 describe("issue #375 — deadline's ordering/classification footprint", () => {
   it("orders a varied fixture — overdue, due-today (all-day and timed), same-time priority ties, an undated Task and a future-dated one — with no Task anywhere carrying a deadline", () => {
     const overdueEarlier = task({
@@ -298,7 +322,13 @@ describe("issue #375 — deadline's ordering/classification footprint", () => {
     expect(shown.has("future-dated")).toBe(false);
   });
 
-  it("BEFORE #375: an undated Task surfaces in Today, and outranks/underranks a dated Task in the same section, purely because of its Deadline", () => {
+  it("AFTER #375: an undated Task no longer surfaces in Today on its Deadline alone, and no longer outranks a dated Task because of it", () => {
+    // Before #375 (see this test's own history in this PR), the
+    // Deadline-only Task's effective key was its deadline ("2026-08-20"),
+    // earlier than datedOverdue's date ("2026-08-25"), so it sorted first
+    // and deadline-only-today surfaced in dueToday with no `date` at all.
+    // Deadline is never read now, so both Deadline-only Tasks are simply
+    // absent — undated, deadline or not, is undated.
     const deadlineOnlyOverdue = task({
       id: "deadline-only-overdue",
       date: null,
@@ -313,13 +343,8 @@ describe("issue #375 — deadline's ordering/classification footprint", () => {
 
     const view = today([datedOverdue, deadlineOnlyOverdue, deadlineOnlyToday], NOW);
 
-    // The Deadline-only Task's effective key (its deadline, "2026-08-20")
-    // is earlier than datedOverdue's date ("2026-08-25"), so it sorts
-    // first — an undated Task outranking a dated one, on Deadline alone.
-    expect(view.overdue.map((t) => t.id)).toEqual(["deadline-only-overdue", "dated-overdue"]);
-    // Included in dueToday with no `date` at all — the Deadline alone puts
-    // it here.
-    expect(view.dueToday.map((t) => t.id)).toEqual(["deadline-only-today"]);
+    expect(view.overdue.map((t) => t.id)).toEqual(["dated-overdue"]);
+    expect(view.dueToday).toEqual([]);
   });
 });
 

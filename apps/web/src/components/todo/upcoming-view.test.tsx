@@ -143,7 +143,12 @@ describe("UpcomingView", () => {
     expect(todayHeadingIndex).toBeGreaterThan(overdueIndex);
   });
 
-  it("reuses today()'s own overdue bucket — a Deadline-only overdue Task (no date at all) still appears here", () => {
+  // Before #375, today()'s own overdue bucket (reused here) surfaced a
+  // Deadline-only Task with no date at all. Deadline is never read now
+  // (D12: Pro-gated in Todoist, 0 Tasks carry one in either live
+  // database), so an undated Task never reaches this bucket regardless of
+  // its deadline.
+  it("does not reuse today()'s own overdue bucket for a Deadline-only Task (no date at all) — #375", () => {
     renderUpcomingView({
       tasks: [
         task({
@@ -155,8 +160,8 @@ describe("UpcomingView", () => {
       ],
     });
 
-    expect(screen.getByText("deadline only task")).toBeInTheDocument();
-    expect(screen.getByText("Overdue")).toBeInTheDocument();
+    expect(screen.queryByText("deadline only task")).not.toBeInTheDocument();
+    expect(screen.queryByText("Overdue")).not.toBeInTheDocument();
   });
 
   it("renders the Overdue heading inside a native <details> disclosure, not a plain <section>/<h2>", () => {
@@ -251,7 +256,11 @@ describe("UpcomingView", () => {
       renderUpcomingView({
         tasks: [
           task({ id: "a", content: "a", date: "2026-08-30" }),
-          task({ id: "b", content: "b", deadline: "2026-08-31" }),
+          // Before #375 an undated Task with a passed deadline also counted
+          // as overdue (task-views.ts's own former union arm) — deadline is
+          // never read now, so this second overdue Task needs its own real
+          // `date` to stay in the section this test is about.
+          task({ id: "b", content: "b", date: "2026-08-31" }),
         ],
         onSetDate,
       });

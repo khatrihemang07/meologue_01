@@ -69,22 +69,31 @@ describe("flags", () => {
 });
 
 describe("criterion 4: a query asking what is due prefers the Date when a Task has both", () => {
-  it("a Task with only a Deadline is found by today/overdue through that Deadline", () => {
+  // Before issue #375, `effectiveDateKey` (../task-views.ts, reused here)
+  // fell back to `deadline` when a Task had no `date` — so a Deadline-only
+  // Task used to match `today`/`overdue` through it. #375 stopped
+  // `effectiveDateKey` reading `deadline` at all (D12: Deadline is
+  // Pro-gated in Todoist, 0 Tasks carry one in either live database), and
+  // that change is shared code, not reimplemented here — this evaluator's
+  // own `today`/`overdue`/`tomorrow` flags inherited it for free.
+  it("a Task with only a Deadline is no longer found by today/overdue — effectiveDateKey never reads deadline (#375)", () => {
     const deadlineOnly = task({ id: "deadline-only", deadline: NOW });
-    expect(matchIds("today", { tasks: [deadlineOnly] })).toEqual(["deadline-only"]);
+    expect(matchIds("today", { tasks: [deadlineOnly] })).toEqual([]);
 
     const overdueDeadline = task({ id: "overdue-deadline", deadline: "2026-09-01" });
-    expect(matchIds("overdue", { tasks: [overdueDeadline] })).toEqual(["overdue-deadline"]);
+    expect(matchIds("overdue", { tasks: [overdueDeadline] })).toEqual([]);
   });
 
-  // The awkward case ../task-views.ts's own header comment names for
-  // today(): a future Date with a passed Deadline. today() puts this in
-  // `overdue` (its Deadline half fires independently of the Date). A
-  // Filter's `overdue` flag does not — see ./evaluate.ts's own header
-  // comment for why "preferring the Date" has to mean picking one field,
-  // not unioning both, and why that is a deliberate divergence from
-  // today()'s own rule rather than an oversight.
-  it("a future Date with a passed Deadline is NOT overdue, unlike Today's own union rule", () => {
+  // Before issue #375 this was the one case Filter's `overdue` flag and
+  // today() (../task-views.ts) deliberately disagreed on: today() put a
+  // future-dated, past-deadlined Task in `overdue` (its Deadline union arm
+  // fired on its own), while a Filter's `overdue` flag did not (see
+  // evaluate.ts's own header comment for the "preferring the Date" reading
+  // that produced the split). #375 removed Deadline from both, so there is
+  // no longer a case to disagree on here — this Task simply reads as due
+  // on its future Date everywhere, and this test's title no longer names a
+  // real divergence, only a historical one.
+  it("a future Date with a passed Deadline is not overdue — its Deadline is never read", () => {
     const futureButOverdueDeadline = task({
       id: "future-date-passed-deadline",
       date: "2026-09-20",

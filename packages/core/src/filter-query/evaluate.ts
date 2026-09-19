@@ -17,38 +17,27 @@ import type { FilterNode, ParsedFilterQuery } from "./types";
  * implementations of this in sync the way `TaskStore.list()`'s own
  * ordering guarantee exists to avoid.
  *
- * **Criterion 4, precisely: two different rules for two different
- * questions.** A `date`/`deadline` predicate (`date:2026-09-10`,
+ * **Criterion 4: two different rules for two different questions —
+ * historically.** A `date`/`deadline` predicate (`date:2026-09-10`,
  * `deadline<2026-09-10`) names one field explicitly and reads only that
  * field — the criterion 3 case, "a query can name... dates and
- * deadlines" as two separate things a reader can ask about on purpose. A
- * `today`/`tomorrow`/`overdue` flag is a different question — "what is
- * due" — and criterion 4 spells out its own rule for it: "considers both
- * a Date and a Deadline, preferring the Date when a Task has both." That
- * is not the same rule `today()` (../task-views.ts) uses for its own
- * Today view, which is an inclusive *union* ("Date matches OR Deadline
- * matches," both conditions checked independently and either one
- * qualifies) with no preference between them at all — a union has
- * nothing to prefer. "Preferring the Date" only means something once a
- * Task's *one, single* effective due day is asked for, which is exactly
- * `effectiveDateKey` (../task-views.ts): `t.date ?? t.deadline`, reused
- * here rather than reimplemented, since it already encodes precisely
- * "the Date if there is one, the Deadline only if there isn't."
+ * deadlines" as two separate things a reader can ask about on purpose.
+ * A `today`/`tomorrow`/`overdue` flag is a different question — "what is
+ * due" — which this module answers with `effectiveDateKey`
+ * (../task-views.ts), reused here rather than reimplemented.
  *
- * The two rules disagree on one case, and it is the same one
- * `task-views.ts`'s own header comment names for `today()`: a Task with a
- * *future* Date and a *passed* Deadline. `today()` puts that Task in
- * `overdue` (the Deadline half of its union fires on its own, regardless
- * of the Date). A Filter's `overdue` flag does not: `effectiveDateKey`
- * picks the Date because one exists, so this Task reads as due on its
- * future Date and `overdue` does not match it. This is not a bug this
- * evaluator failed to notice — it is what "preferring the Date" has to
- * mean for a Task that carries both, and evaluate.test.ts pins this exact
- * case (`"a future Date with a passed Deadline is not overdue, unlike
- * Today's own union rule"`) so a future edit that tries to make the two
- * agree fails loudly rather than silently drifting Filter's own rule back
- * toward Today's.
+ * Issue #375 stopped `effectiveDateKey` reading `deadline` at all (D12:
+ * Deadline is Pro-gated in Todoist and 0 Tasks carry one in either live
+ * database) — a change made in ../task-views.ts, not here, that this
+ * evaluator's `today`/`tomorrow`/`overdue` flags inherited for free by
+ * reusing the shared function rather than reimplementing criterion 4's
+ * original "prefer the Date" rule locally. Before #375 that rule and
+ * `today()`'s own inclusive union ("Date matches OR Deadline matches")
+ * disagreed on one case — a Task with a *future* Date and a *passed*
+ * Deadline — which evaluate.test.ts used to pin explicitly; #375 removed
+ * Deadline from both sides, so there is nothing left to disagree on.
  *
+
  * Name matching (`#Project`, `/Section`, `@Label`) is
  * case-and-diacritic-insensitive via ../task-search.ts's `normalize` —
  * reused rather than reimplemented, the same convention every other
