@@ -1,16 +1,16 @@
 import { fireEvent, render as rtlRender, screen } from "@testing-library/react";
 import type { ReactElement } from "react";
-import { MemoryRouter } from "react-router";
+import { MemoryRouter, useNavigate } from "react-router";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useSettingsStore } from "@/lib/settings";
 import { useSyncStatusStore } from "@/lib/sync-status";
 import { Shell } from "./shell";
 
-// Shell reads `useLocation`/`useNavigationType` to decide whether it was
-// pushed onto (ADR 0036's list-then-push shape), so it needs a router above
-// it. Wrapping once here rather than at all 22 call sites below keeps each
-// test about the thing it names instead of about routing. RTL reapplies the
-// wrapper on `rerender`, so the pinned-thread tests that re-render keep it.
+// Shell reads `useLocation` to work out which Destination this pane is (it
+// keys the pane on that), so it needs a router above it. Wrapping once here
+// rather than at all 22 call sites below keeps each test about the thing it
+// names instead of about routing. RTL reapplies the wrapper on `rerender`,
+// so the pinned-thread tests that re-render keep it.
 function render(ui: ReactElement) {
   return rtlRender(ui, {
     wrapper: ({ children }) => <MemoryRouter>{children}</MemoryRouter>,
@@ -568,5 +568,77 @@ describe("Shell's floatingAction slot (issue #304)", () => {
     // is what stops the fix above from being "add the class everywhere".
     const bar = document.querySelector("header") as HTMLElement;
     expect(bar.className).toContain("[padding-top:env(safe-area-inset-top)]");
+  });
+});
+
+// Shell's pane used to carry an entrance animation that slid it in from the
+// right, gated on `navigationType === "PUSH"` alone, while the `key` that
+// decides whether this is even a new pane was gated on the Destination. ADR
+// 0086 made the Task detail route a push that stays *inside* one Destination,
+// so opening that modal re-added the animation classes to an already-mounted
+// element — which starts the animation immediately. Measured in a browser:
+// the pane's own `transform` ran `translateX(16px)` -> `9.46` -> `6.79` ->
+// `0.06` -> `none`, shoving the page sideways and easing it back over ~200ms
+// before the dialog appeared. Todoist, measured with the identical
+// instrument, holds its background at a single position across the whole
+// open; the owner chose to match that by removing the animation outright.
+//
+// These assert the pane's className is EXACTLY the static string, rather
+// than that one particular animation class is absent. Two reasons. It pins
+// the real invariant — this element's classes do not vary with navigation at
+// all — so it fails for any entrance animation a future change adds, not
+// just the one that was removed. And it keeps the deleted utility's name out
+// of this file: Tailwind v4 scans source as plain text, so an assertion
+// written as `[class*="slide-in-from-…"]` regenerates that utility into the
+// shipped CSS as dead code. That is not hypothetical; the first draft of
+// these tests did exactly that.
+const STATIC_PANE_CLASSES = "flex h-full min-w-0 flex-1 flex-col overflow-hidden bg-background";
+
+describe("Shell's pane entrance animation", () => {
+  function Pusher({ to }: { to: string }) {
+    const navigate = useNavigate();
+    return (
+      <button type="button" onClick={() => navigate(to)}>
+        push
+      </button>
+    );
+  }
+
+  function renderAt(to: string) {
+    const utils = rtlRender(
+      <>
+        <Pusher to={to} />
+        <Shell title="Todo">content</Shell>
+      </>,
+      {
+        wrapper: ({ children }) => (
+          <MemoryRouter initialEntries={["/todo/today"]}>{children}</MemoryRouter>
+        ),
+      },
+    );
+    // Re-query rather than capture: a push that changes Destination remounts
+    // this subtree, and a captured node would go stale exactly where the
+    // assertion matters.
+    const pane = () =>
+      screen.getByTestId("shell-scroll-region").parentElement?.parentElement as HTMLElement;
+    return { ...utils, pane };
+  }
+
+  it("stays still when a push keeps the reader inside one Destination", () => {
+    const { pane } = renderAt("/todo/task/quick-succession-task-2-01a0b36a");
+    expect(pane().className).toBe(STATIC_PANE_CLASSES);
+
+    fireEvent.click(screen.getByRole("button", { name: "push" }));
+
+    expect(pane().className).toBe(STATIC_PANE_CLASSES);
+  });
+
+  it("stays still when a push changes Destination too", () => {
+    const { pane } = renderAt("/composer");
+    expect(pane().className).toBe(STATIC_PANE_CLASSES);
+
+    fireEvent.click(screen.getByRole("button", { name: "push" }));
+
+    expect(pane().className).toBe(STATIC_PANE_CLASSES);
   });
 });
