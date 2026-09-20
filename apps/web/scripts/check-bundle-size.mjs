@@ -288,6 +288,14 @@ const CHUNK_BUDGETS = {
   "src/pages/sessions-page.tsx": { ceilingBytes: 26_000, baselineBytes: 20_088 },
   // Measured 13,586 bytes gzip (own chunk + 3 shared).
   "src/pages/settings-page.tsx": { ceilingBytes: 17_600, baselineBytes: 13_586 },
+  // TimePage (issue #418, comparative lanes in #420). Carries `date-fns`'s
+  // `format` for the request key and `lib/time-lanes.ts`'s layout maths; the
+  // lanes themselves are plain absolutely-positioned elements rather than a
+  // charting library, which is most of why this sits nearer Digest's size
+  // than Todo's. Measured 12,708 bytes gzip (own chunk + 7 shared)
+  // immediately after landing, with the ~1.3x headroom every other route
+  // entry here uses.
+  "src/pages/time-page.tsx": { ceilingBytes: 16_500, baselineBytes: 12_708 },
   "src/pages/todo-page.tsx": { ceilingBytes: 92_832, baselineBytes: 92_795 },
 };
 

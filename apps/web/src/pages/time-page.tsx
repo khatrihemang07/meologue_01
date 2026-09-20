@@ -256,31 +256,48 @@ function ComparativeTimeline({
     // feed: alignment against the shared clock is the whole comparison, and a
     // phone that cannot fit three lanes should scroll past them with the hour
     // gutter still on screen, not lose the alignment that makes them readable.
-    <div className="-mx-4 overflow-x-auto px-4" data-testid="time-lane-scroller">
-      <div className="flex min-w-max gap-2">
-        <HourGutter marks={marks} />
-        {lanes.map((lane) => (
-          <LaneColumn key={lane.sourceId} lane={lane} dayStart={dayStart} dayEnd={dayEnd} />
-        ))}
+    //
+    // The gutter sits OUTSIDE the scroller rather than sticking to its left
+    // edge from within it. Both keep the clock on screen, but a sticky gutter
+    // inside the scroller is painted over the lanes that scroll under it —
+    // measured on the device, the leftmost lane lost about 50px of its 192 to
+    // the gutter at full scroll. Beside the scroller it costs the same width
+    // and hides nothing.
+    <div className="-mx-4 flex gap-2 px-4">
+      <HourGutter marks={marks} />
+      <div className="min-w-0 flex-1 overflow-x-auto" data-testid="time-lane-scroller">
+        <div className="flex min-w-max gap-2">
+          {lanes.map((lane) => (
+            <LaneColumn key={lane.sourceId} lane={lane} dayStart={dayStart} dayEnd={dayEnd} />
+          ))}
+        </div>
       </div>
     </div>
   );
 }
 
+/**
+ * The shared clock, and the heading-shaped spacer that keeps it aligned.
+ *
+ * The spacer is not decoration. Each lane draws a heading above its scale, so
+ * a gutter that simply started at the top of the row sat exactly one heading
+ * higher than the scale it labels — measured on the device, every hour mark
+ * was 20px out, with hour 01 drawn at y=328 where the scale put it at 348.
+ * That is a silent lie in the one thing this view exists to do.
+ *
+ * Both sides therefore render the *same* `LaneHeading` component, so the two
+ * boxes cannot drift apart: one shows a lane's name, the other is hidden with
+ * `invisible`, which reserves the identical box.
+ */
 function HourGutter({ marks }: { marks: { hour: number; top: number }[] }) {
   return (
-    // Sticky so the clock stays beside whichever lane has been scrolled to —
-    // a lane read without its scale is just a column of coloured blocks.
-    <div
-      aria-hidden="true"
-      className="sticky left-0 z-10 w-10 shrink-0 bg-background"
-      style={{ height: SCALE_HEIGHT }}
-    >
-      <div className="relative h-full">
+    <div aria-hidden="true" className="w-10 shrink-0">
+      <LaneHeading hidden>0</LaneHeading>
+      <div className="relative" style={{ height: SCALE_HEIGHT }}>
         {marks.map((mark) => (
           <span
             key={mark.top}
-            className="absolute right-1 -translate-y-1/2 text-[10px] text-muted-foreground tabular-nums"
+            className="-translate-y-1/2 absolute right-1 text-[10px] text-muted-foreground tabular-nums"
             style={{ top: `${mark.top * 100}%` }}
           >
             {String(mark.hour).padStart(2, "0")}
@@ -288,6 +305,23 @@ function HourGutter({ marks }: { marks: { hour: number; top: number }[] }) {
         ))}
       </div>
     </div>
+  );
+}
+
+/**
+ * One heading above a scale. Rendered by every lane and, hidden, by the hour
+ * gutter — see `HourGutter` for why that has to be the same component rather
+ * than a matching height copied into two places.
+ */
+function LaneHeading({ children, hidden }: { children: React.ReactNode; hidden?: boolean }) {
+  return (
+    <h3
+      className={`sticky top-0 z-10 truncate bg-background pb-1 font-medium text-xs ${
+        hidden ? "invisible" : ""
+      }`}
+    >
+      {children}
+    </h3>
   );
 }
 
@@ -301,12 +335,12 @@ function LaneColumn({ lane, dayStart, dayEnd }: { lane: Lane; dayStart: number; 
       data-source-kind={lane.sourceKind}
       data-source-enabled={lane.enabled}
     >
-      <h3 className="sticky top-0 z-10 truncate bg-background pb-1 font-medium text-xs">
+      <LaneHeading>
         {lane.sourceName}
         {!lane.enabled && (
           <span className="ml-1 font-normal text-muted-foreground">(archived)</span>
         )}
-      </h3>
+      </LaneHeading>
       <ol
         aria-label={`${lane.sourceName} activity`}
         className="relative rounded-md border border-border bg-muted/30"
