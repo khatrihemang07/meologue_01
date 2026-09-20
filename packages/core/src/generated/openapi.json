@@ -499,21 +499,34 @@
           {
             "name": "day",
             "in": "path",
+            "description": "A calendar date, `YYYY-MM-DD`. Which instants it covers is the\nServer's answer rather than each Device's — see `day_bounds`.",
             "required": true,
             "schema": {
               "type": "string"
             }
           },
           {
-            "name": "source_id",
+            "name": "source_ids",
             "in": "path",
+            "description": "Comma-separated source ids. Absent means every source; present and\nempty means none, which is what a reader who has switched every lane\noff has actually asked for.",
             "required": true,
             "schema": {
               "type": [
                 "string",
                 "null"
-              ],
-              "format": "uuid"
+              ]
+            }
+          },
+          {
+            "name": "q",
+            "in": "path",
+            "description": "Free text matched against an interval's label and detail, case\ninsensitively. Nothing here reaches outside `activity_intervals`:\nTime searches what recorders observed, not Entries or Tasks.",
+            "required": true,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
             }
           }
         ],
@@ -563,6 +576,32 @@
             }
           },
           "404": {
+            "description": ""
+          }
+        }
+      }
+    },
+    "/v1/time/refresh": {
+      "post": {
+        "tags": [
+          "crate::time"
+        ],
+        "operationId": "refresh_handler",
+        "responses": {
+          "202": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RefreshAccepted"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": ""
+          },
+          "423": {
             "description": ""
           }
         }
@@ -1780,6 +1819,19 @@
           }
         }
       },
+      "RefreshAccepted": {
+        "type": "object",
+        "required": [
+          "queued"
+        ],
+        "properties": {
+          "queued": {
+            "type": "integer",
+            "description": "How many enabled sources this run will import, in order.",
+            "minimum": 0
+          }
+        }
+      },
       "ResolvedField": {
         "type": "object",
         "description": "One field's resolved value, paired with where it came from.",
@@ -2052,6 +2104,15 @@
           "stored",
           "env",
           "unset"
+        ]
+      },
+      "SourceRunState": {
+        "type": "string",
+        "description": "Where a source is in the current refresh run, if there is one.",
+        "enum": [
+          "idle",
+          "queued",
+          "running"
         ]
       },
       "SyncRequest": {
@@ -2540,7 +2601,10 @@
           "name",
           "kind",
           "path",
-          "enabled"
+          "enabled",
+          "last_inserted_count",
+          "last_warning_count",
+          "state"
         ],
         "properties": {
           "enabled": {
@@ -2553,11 +2617,44 @@
           "kind": {
             "type": "string"
           },
+          "last_attempt_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "What the last import run made of this source (issue #421). Separate\nattempt and success timestamps because the difference between them is\nthe whole point: a recent attempt with a stale success is a recorder\nfailing right now."
+          },
+          "last_error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "last_inserted_count": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "last_success_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "last_warning_count": {
+            "type": "integer",
+            "format": "int32"
+          },
           "name": {
             "type": "string"
           },
           "path": {
             "type": "string"
+          },
+          "state": {
+            "$ref": "#/components/schemas/SourceRunState",
+            "description": "Where this source is in the run happening *now*, which is memory, not\na column: a Server restart has no queued sources, and persisting\n\"running\" would leave a source stuck that way after a crash."
           }
         }
       },

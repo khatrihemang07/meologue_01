@@ -14,7 +14,8 @@ use crate::sync::{
     SyncResponse, TaskInput, TaskOutput,
 };
 use crate::time::{
-    ActivityInterval, ActivityIntervalDetail, CreateTimeSource, TimeSource, UpdateTimeSource,
+    ActivityInterval, ActivityIntervalDetail, CreateTimeSource, RefreshAccepted, SourceRunState,
+    TimeSource, UpdateTimeSource,
 };
 
 #[derive(OpenApi)]
@@ -38,6 +39,7 @@ use crate::time::{
         crate::time::list_sources_handler,
         crate::time::create_source_handler,
         crate::time::update_source_handler,
+        crate::time::refresh_handler,
         crate::time::list_intervals_handler,
         crate::time::interval_detail_handler,
     ),
@@ -79,6 +81,8 @@ use crate::time::{
         TimeSource,
         CreateTimeSource,
         UpdateTimeSource,
+        RefreshAccepted,
+        SourceRunState,
         ActivityInterval,
         ActivityIntervalDetail,
     ))

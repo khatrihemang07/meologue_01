@@ -60,6 +60,15 @@ function sourceFixture(overrides: Record<string, unknown>) {
     kind: "toggl_activity",
     path: "/Users/me/Toggl.sqlite",
     enabled: true,
+    // The import status a real Server always sends (issue #421). Omitting it
+    // here made every test run as though an import were in flight, which is a
+    // state no Server this code talks to can actually report.
+    last_attempt_at: "2026-09-20T09:00:00Z",
+    last_success_at: "2026-09-20T09:00:05Z",
+    last_inserted_count: 0,
+    last_warning_count: 0,
+    last_error: null,
+    state: "idle",
     ...overrides,
   };
 }
@@ -458,5 +467,109 @@ describe("TimePage", () => {
     await waitFor(() =>
       expect(screen.queryByRole("region", { name: "Activity interval" })).not.toBeInTheDocument(),
     );
+  });
+
+  it("starts a refresh and says how many sources it queued", async () => {
+    useSettingsStore.setState({ serverUrl: "https://server.example", capabilities: SUPPORTED });
+    let refreshes = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        const parsed = new URL(url);
+        if (parsed.pathname === "/v1/time/refresh" && init?.method === "POST") {
+          refreshes += 1;
+          return { ok: true, status: 202, json: async () => ({ queued: 2 }) };
+        }
+        if (parsed.pathname === "/v1/time/sources") {
+          return { ok: true, status: 200, json: async () => [sourceFixture({})] };
+        }
+        return { ok: true, status: 200, json: async () => [] };
+      }),
+    );
+
+    renderPage();
+
+    fireEvent.click(await screen.findByRole("button", { name: "Refresh now" }));
+
+    expect(await screen.findByText(/Importing 2 sources…/)).toBeInTheDocument();
+    expect(refreshes).toBe(1);
+  });
+
+  it("says an import is already running rather than quietly doing nothing", async () => {
+    // Two runs over the same sources would race each other's writes, so a
+    // second press has to be told, not ignored.
+    useSettingsStore.setState({ serverUrl: "https://server.example", capabilities: SUPPORTED });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        const parsed = new URL(url);
+        if (parsed.pathname === "/v1/time/refresh" && init?.method === "POST") {
+          return { ok: false, status: 409, json: async () => ({}) };
+        }
+        if (parsed.pathname === "/v1/time/sources") {
+          return { ok: true, status: 200, json: async () => [sourceFixture({})] };
+        }
+        return { ok: true, status: 200, json: async () => [] };
+      }),
+    );
+
+    renderPage();
+
+    fireEvent.click(await screen.findByRole("button", { name: "Refresh now" }));
+
+    expect(await screen.findByText("An import is already running.")).toBeInTheDocument();
+  });
+
+  it("reports each source's own outcome, so one failure hides no others", async () => {
+    // The point of recording outcomes per source rather than per run: a
+    // broken recorder must be readable *beside* the healthy ones, not instead
+    // of them.
+    useSettingsStore.setState({ serverUrl: "https://server.example", capabilities: SUPPORTED });
+    stubServer({
+      sources: [
+        sourceFixture({
+          name: "Healthy",
+          last_inserted_count: 12,
+          last_warning_count: 3,
+        }),
+        sourceFixture({
+          id: "broken-source",
+          name: "Broken",
+          last_error: "source database is unreadable",
+          last_success_at: null,
+        }),
+        sourceFixture({
+          id: "busy-source",
+          name: "Busy",
+          state: "running",
+        }),
+      ],
+      intervals: [],
+    });
+
+    renderPage();
+
+    const status = within(await screen.findByRole("list", { name: "Time source status" }));
+    expect(status.getByText(/12 new/)).toBeInTheDocument();
+    expect(status.getByText(/3 record\(s\) skipped/)).toBeInTheDocument();
+    expect(status.getByText(/Last run failed — source database is unreadable/)).toBeInTheDocument();
+    expect(status.getByText("running")).toBeInTheDocument();
+
+    // While a run is in flight the action says so and cannot start a second.
+    expect(screen.getByRole("button", { name: "Importing…" })).toBeDisabled();
+  });
+
+  it("does not poll a Server that has Time but cannot report run state", async () => {
+    // A Server between #418 and #421 sends no `state` at all. Treating that
+    // as "running" would leave the page polling it forever and the Refresh
+    // action permanently disabled.
+    useSettingsStore.setState({ serverUrl: "https://server.example", capabilities: SUPPORTED });
+    const older = sourceFixture({});
+    delete (older as Record<string, unknown>).state;
+    stubServer({ sources: [older], intervals: [] });
+
+    renderPage();
+
+    expect(await screen.findByRole("button", { name: "Refresh now" })).toBeEnabled();
   });
 });

@@ -58,6 +58,8 @@ export type WireTogglePatch = components["schemas"]["TogglePatch"];
 export type WireTimeSource = components["schemas"]["TimeSource"];
 export type WireCreateTimeSource = components["schemas"]["CreateTimeSource"];
 export type WireUpdateTimeSource = components["schemas"]["UpdateTimeSource"];
+export type WireSourceRunState = components["schemas"]["SourceRunState"];
+export type WireRefreshAccepted = components["schemas"]["RefreshAccepted"];
 export type WireActivityInterval = components["schemas"]["ActivityInterval"];
 export type WireActivityIntervalDetail = components["schemas"]["ActivityIntervalDetail"];
 // Issue #198's own web-side follow-up: `GET /v1/backup` streams raw bytes

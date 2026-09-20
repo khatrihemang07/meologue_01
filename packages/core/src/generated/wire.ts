@@ -380,6 +380,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/time/refresh": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["refresh_handler"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/time/sources": {
         parameters: {
             query?: never;
@@ -1170,6 +1186,10 @@ export interface components {
              */
             tool_called: boolean;
         };
+        RefreshAccepted: {
+            /** @description How many enabled sources this run will import, in order. */
+            queued: number;
+        };
         /** @description One field's resolved value, paired with where it came from. */
         ResolvedField: {
             source: components["schemas"]["Source"];
@@ -1337,6 +1357,11 @@ export interface components {
          * @enum {string}
          */
         Source: "stored" | "env" | "unset";
+        /**
+         * @description Where a source is in the current refresh run, if there is one.
+         * @enum {string}
+         */
+        SourceRunState: "idle" | "queued" | "running";
         SyncRequest: {
             comments?: components["schemas"]["CommentInput"][];
             /** Format: uuid */
@@ -1688,8 +1713,29 @@ export interface components {
             /** Format: uuid */
             id: string;
             kind: string;
+            /**
+             * Format: date-time
+             * @description What the last import run made of this source (issue #421). Separate
+             *     attempt and success timestamps because the difference between them is
+             *     the whole point: a recent attempt with a stale success is a recorder
+             *     failing right now.
+             */
+            last_attempt_at?: string | null;
+            last_error?: string | null;
+            /** Format: int32 */
+            last_inserted_count: number;
+            /** Format: date-time */
+            last_success_at?: string | null;
+            /** Format: int32 */
+            last_warning_count: number;
             name: string;
             path: string;
+            /**
+             * @description Where this source is in the run happening *now*, which is memory, not
+             *     a column: a Server restart has no queued sources, and persisting
+             *     "running" would leave a source stuck that way after a crash.
+             */
+            state: components["schemas"]["SourceRunState"];
         };
         /**
          * @description The wire value one tri-state toggle field of a `PATCH /v1/config` body
@@ -2184,8 +2230,23 @@ export interface operations {
             query?: never;
             header?: never;
             path: {
+                /**
+                 * @description A calendar date, `YYYY-MM-DD`. Which instants it covers is the
+                 *     Server's answer rather than each Device's — see `day_bounds`.
+                 */
                 day: string;
-                source_id: string | null;
+                /**
+                 * @description Comma-separated source ids. Absent means every source; present and
+                 *     empty means none, which is what a reader who has switched every lane
+                 *     off has actually asked for.
+                 */
+                source_ids: string | null;
+                /**
+                 * @description Free text matched against an interval's label and detail, case
+                 *     insensitively. Nothing here reaches outside `activity_intervals`:
+                 *     Time searches what recorders observed, not Entries or Tasks.
+                 */
+                q: string | null;
             };
             cookie?: never;
         };
@@ -2221,6 +2282,37 @@ export interface operations {
                 };
             };
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    refresh_handler: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RefreshAccepted"];
+                };
+            };
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            423: {
                 headers: {
                     [name: string]: unknown;
                 };

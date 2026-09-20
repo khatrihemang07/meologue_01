@@ -175,3 +175,40 @@ export async function updateTimeSource(
   }
   return { ok: true, source: (await response.json()) as TimeSource };
 }
+
+export type RefreshResult =
+  | { ok: true; queued: number }
+  | { ok: false; reason: "not-supported" | "unreachable" | "already-running" | "locked" };
+
+/**
+ * POST /v1/time/refresh — import every enabled source, once, serially.
+ *
+ * Returns as soon as the run is queued rather than when it finishes: a Server
+ * with a week of unimported activity would otherwise hold the request open
+ * for minutes. Progress is read back off the source list, whose `state` says
+ * which source is running and which are still queued.
+ *
+ * `already-running` is its own reason, not a generic refusal. Two runs over
+ * the same sources would race each other's writes, so a second press has to
+ * be told a run is already going rather than silently doing nothing.
+ */
+export async function refreshTimeSources(): Promise<RefreshResult> {
+  const response = await serverRequest("/v1/time/refresh", { method: "POST" });
+  if (response === null) {
+    return { ok: false, reason: "unreachable" };
+  }
+  if (response.status === 404) {
+    return { ok: false, reason: "not-supported" };
+  }
+  if (response.status === 409) {
+    return { ok: false, reason: "already-running" };
+  }
+  if (response.status === 423) {
+    return { ok: false, reason: "locked" };
+  }
+  if (!response.ok) {
+    return { ok: false, reason: "unreachable" };
+  }
+  const body = (await response.json()) as { queued: number };
+  return { ok: true, queued: body.queued };
+}

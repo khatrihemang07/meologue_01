@@ -1814,3 +1814,390 @@ async fn a_filtered_day_still_serves_only_normalized_fields(pool: PgPool) {
         );
     }
 }
+
+// ---------------------------------------------------------------------------
+// Refresh runs (issue #421)
+// ---------------------------------------------------------------------------
+
+/// Posts a refresh through a *given* app, so several requests can share one
+/// `ImportRuns`.
+///
+/// Every other helper here builds a fresh router per request, which is fine
+/// for handlers that keep nothing in memory. The refresh guard is exactly the
+/// thing that does, and two requests through two routers would each have their
+/// own — a test written that way would pass while proving nothing.
+async fn post_refresh(app: Router) -> (StatusCode, Vec<u8>) {
+    send(
+        app,
+        Request::builder()
+            .method("POST")
+            .uri("/v1/time/refresh")
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await
+}
+
+async fn sources_of(pool: &PgPool) -> Vec<Value> {
+    let (status, bytes) = send(
+        app(pool, false),
+        Request::builder()
+            .method("GET")
+            .uri("/v1/time/sources")
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    serde_json::from_slice::<Vec<Value>>(&bytes).unwrap()
+}
+
+async fn source_status(pool: &PgPool, id: Uuid) -> Value {
+    sources_of(pool)
+        .await
+        .into_iter()
+        .find(|source| source["id"] == id.to_string())
+        .expect("the source should still be listed")
+}
+
+/// Waits for every source to have been attempted at least `rounds` times.
+async fn wait_for_attempts(pool: &PgPool, source: Uuid, rounds: i64) {
+    for _ in 0..400 {
+        let seen: i64 = sqlx::query_scalar(
+            "select count(*) from time_sources where id = $1 and last_attempt_at is not null",
+        )
+        .bind(source)
+        .fetch_one(pool)
+        .await
+        .unwrap();
+        if seen >= rounds.min(1) {
+            // The attempt stamp only tells us a run touched it; wait for the
+            // run itself to settle before reading counts.
+            let running: Option<chrono::DateTime<chrono::Utc>> =
+                sqlx::query_scalar("select last_success_at from time_sources where id = $1")
+                    .bind(source)
+                    .fetch_one(pool)
+                    .await
+                    .unwrap();
+            if running.is_some() {
+                return;
+            }
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    panic!("source {source} was never imported");
+}
+
+#[sqlx::test]
+async fn refresh_imports_every_enabled_source_and_reports_each_one_separately(pool: PgPool) {
+    let dir = scratch_dir("refresh");
+    let good = dir.join("good.sqlite");
+    let gone = dir.join("gone.sqlite");
+    let archived = dir.join("archived.sqlite");
+    write_toggl_db(&good, &[one_activity(&[0xf0], "Xcode")]);
+    write_toggl_db(&gone, &[one_activity(&[0xf1], "Will vanish")]);
+    write_toggl_db(&archived, &[one_activity(&[0xf2], "Archived")]);
+
+    // The broken source is created FIRST on purpose. Sources are imported in
+    // creation order, so with it last an importer that gave up on the first
+    // error would still have done the healthy one and this test would pass
+    // while proving nothing — measured: that mutation survived until the
+    // order was flipped.
+    let broken = create_toggl_source(&pool, "Broken", &gone).await;
+    let healthy = create_toggl_source(&pool, "Healthy", &good).await;
+    let retired = create_toggl_source(&pool, "Retired", &archived).await;
+    wait_for_intervals(&pool, healthy, 1).await;
+    wait_for_intervals(&pool, broken, 1).await;
+    wait_for_intervals(&pool, retired, 1).await;
+
+    patch_source(&pool, retired, json!({ "enabled": false }), false).await;
+    // The recorder's database is deleted out from under the Server between
+    // runs — the ordinary way a source breaks.
+    std::fs::remove_file(&gone).unwrap();
+
+    let (status, body) = post_refresh(app(&pool, false)).await;
+    assert_eq!(
+        status,
+        StatusCode::ACCEPTED,
+        "{}",
+        String::from_utf8_lossy(&body)
+    );
+    let accepted: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(
+        accepted["queued"], 2,
+        "an archived source must not be queued for import"
+    );
+
+    // Wait for the run to settle: the broken source ends with an error, the
+    // healthy one with a fresh success.
+    for _ in 0..400 {
+        let broken_status = source_status(&pool, broken).await;
+        if broken_status["last_error"].is_string() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+
+    let healthy_status = source_status(&pool, healthy).await;
+    let broken_status = source_status(&pool, broken).await;
+    let retired_status = source_status(&pool, retired).await;
+
+    // A failing source does not stop the others: the healthy one still ran.
+    assert!(healthy_status["last_success_at"].is_string());
+    assert_eq!(
+        healthy_status["last_inserted_count"], 0,
+        "a repeated import of unchanged evidence inserts nothing"
+    );
+    assert!(healthy_status["last_error"].is_null());
+
+    assert!(
+        broken_status["last_error"].is_string(),
+        "a broken source must say why, not fail silently: {broken_status}"
+    );
+    assert!(broken_status["last_attempt_at"].is_string());
+
+    // The archived source was skipped entirely — its status is whatever its
+    // last real run left, untouched by this one.
+    assert!(retired_status["last_error"].is_null());
+    assert_eq!(retired_status["last_inserted_count"], 1);
+}
+
+#[sqlx::test]
+async fn a_second_refresh_while_one_is_running_is_told_so(pool: PgPool) {
+    // Two runs over the same sources would race each other's writes, so the
+    // second must be refused rather than queued behind the first.
+    //
+    // Made deterministic by size rather than timing: the first run has two
+    // thousand records to insert, one statement at a time, so it is still
+    // going microseconds later when the second request arrives. Both requests
+    // go through the *same* app, because the guard lives in its state.
+    let dir = scratch_dir("concurrent");
+    let path = dir.join("big.sqlite");
+    let rows: Vec<Vec<u8>> = (0..2000u32).map(|n| n.to_be_bytes().to_vec()).collect();
+    let activities: Vec<Activity<'_>> = rows
+        .iter()
+        .enumerate()
+        .map(|(index, id)| Activity {
+            id,
+            start: MORNING_START + index as f64,
+            end: Some(MORNING_END + index as f64),
+            filename: "Xcode",
+            title: None,
+            idle: 0,
+            client: &[],
+        })
+        .collect();
+    write_toggl_db(&path, &activities);
+
+    let source = create_toggl_source(&pool, "Big", &path).await;
+    wait_for_intervals(&pool, source, 2000).await;
+
+    let shared = app(&pool, false);
+    let (first, _) = post_refresh(shared.clone()).await;
+    assert_eq!(first, StatusCode::ACCEPTED);
+
+    let (second, body) = post_refresh(shared.clone()).await;
+    assert_eq!(
+        second,
+        StatusCode::CONFLICT,
+        "a second run was allowed to start alongside the first"
+    );
+    assert!(String::from_utf8_lossy(&body).contains("already running"));
+
+    // And the run really does finish, freeing the slot for a later refresh.
+    for _ in 0..800 {
+        let (status, _) = post_refresh(shared.clone()).await;
+        if status == StatusCode::ACCEPTED {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    panic!("the refresh slot was never released");
+}
+
+#[sqlx::test]
+async fn malformed_records_are_skipped_with_warnings_while_the_rest_import(pool: PgPool) {
+    // One unreadable row must not stop a day's evidence importing — but it
+    // must not vanish either, or a recorder quietly losing half its records
+    // would look perfectly healthy.
+    let dir = scratch_dir("malformed");
+    let path = dir.join("db.sqlite");
+    write_toggl_db(
+        &path,
+        &[
+            one_activity(&[0xc1], "Good"),
+            // Ends before it starts: a real Toggl database has produced these.
+            Activity {
+                id: &[0xc2],
+                start: MORNING_END,
+                end: Some(MORNING_START),
+                filename: "Backwards",
+                title: None,
+                idle: 0,
+                client: &[],
+            },
+        ],
+    );
+    // And one with no identity at all, which cannot be deduplicated.
+    let connection = Connection::open(&path).unwrap();
+    connection
+        .execute(
+            "insert into ZMANAGEDACTIVITY (Z_ENT, Z_OPT, ZISIDLE, ZSYNCSTATUS, ZEND, ZSTART, ZFILENAME, ZTITLE, ZCLIENT, ZID)
+             values (1, 9, 0, 1, ?1, ?2, 'No identity', null, null, null)",
+            rusqlite::params![AFTERNOON_END, AFTERNOON_START],
+        )
+        .unwrap();
+    connection.close().unwrap();
+
+    let source = create_toggl_source(&pool, "Mixed", &path).await;
+    wait_for_intervals(&pool, source, 1).await;
+    wait_for_attempts(&pool, source, 1).await;
+
+    let status = source_status(&pool, source).await;
+    assert_eq!(
+        status["last_inserted_count"], 1,
+        "the good record must import"
+    );
+    assert_eq!(
+        status["last_warning_count"], 2,
+        "both unusable records must be counted, not dropped: {status}"
+    );
+    assert!(
+        status["last_error"].is_null(),
+        "skipping bad rows is not a failed import"
+    );
+
+    let (_, intervals) = list_intervals(&pool, DAY, Some(source)).await;
+    assert_eq!(labels(&intervals), vec!["Good"]);
+}
+
+#[sqlx::test]
+async fn a_still_open_record_is_deferred_rather_than_warned_about(pool: PgPool) {
+    // Deferring is the ordinary state of the record a recorder is writing
+    // right now. Counting it as a warning would make every healthy source
+    // look like it had a problem.
+    let dir = scratch_dir("deferred");
+    let path = dir.join("db.sqlite");
+    write_toggl_db(
+        &path,
+        &[
+            one_activity(&[0xc3], "Closed"),
+            Activity {
+                id: &[0xc4],
+                start: AFTERNOON_START,
+                end: None,
+                filename: "Still recording",
+                title: None,
+                idle: 0,
+                client: &[],
+            },
+        ],
+    );
+
+    let source = create_toggl_source(&pool, "Toggl", &path).await;
+    wait_for_attempts(&pool, source, 1).await;
+
+    let status = source_status(&pool, source).await;
+    assert_eq!(status["last_warning_count"], 0);
+    assert_eq!(status["last_inserted_count"], 1);
+    assert!(status["last_error"].is_null());
+}
+
+#[sqlx::test]
+async fn repeated_refreshes_stay_idempotent_and_say_so(pool: PgPool) {
+    let dir = scratch_dir("repeat");
+    let path = dir.join("db.sqlite");
+    write_toggl_db(&path, &[one_activity(&[0xc5], "Xcode")]);
+
+    let source = create_toggl_source(&pool, "Toggl", &path).await;
+    wait_for_intervals(&pool, source, 1).await;
+    wait_for_attempts(&pool, source, 1).await;
+    assert_eq!(source_status(&pool, source).await["last_inserted_count"], 1);
+
+    let ids_before: Vec<String> =
+        sqlx::query_scalar("select id::text from activity_intervals where source_id = $1")
+            .bind(source)
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+
+    let shared = app(&pool, false);
+    assert_eq!(post_refresh(shared.clone()).await.0, StatusCode::ACCEPTED);
+    for _ in 0..400 {
+        if source_status(&pool, source).await["last_inserted_count"] == 0 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+
+    assert_eq!(
+        source_status(&pool, source).await["last_inserted_count"],
+        0,
+        "a refresh that found nothing new must report nothing new"
+    );
+    let ids_after: Vec<String> =
+        sqlx::query_scalar("select id::text from activity_intervals where source_id = $1")
+            .bind(source)
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+    assert_eq!(ids_after, ids_before, "a refresh rewrote stored evidence");
+}
+
+#[sqlx::test]
+async fn deleting_a_record_from_the_source_never_removes_imported_evidence(pool: PgPool) {
+    // Activity intervals are append-only evidence (ADR 0091). A recorder that
+    // prunes its own database must not take the Server's history with it.
+    let dir = scratch_dir("source-deletes");
+    let path = dir.join("db.sqlite");
+    write_toggl_db(
+        &path,
+        &[
+            one_activity(&[0xc6], "Kept"),
+            one_activity(&[0xc7], "Pruned"),
+        ],
+    );
+
+    let source = create_toggl_source(&pool, "Toggl", &path).await;
+    wait_for_intervals(&pool, source, 2).await;
+
+    let connection = Connection::open(&path).unwrap();
+    connection
+        .execute(
+            "delete from ZMANAGEDACTIVITY where ZFILENAME = 'Pruned'",
+            [],
+        )
+        .unwrap();
+    connection.close().unwrap();
+
+    let shared = app(&pool, false);
+    assert_eq!(post_refresh(shared).await.0, StatusCode::ACCEPTED);
+    wait_for_attempts(&pool, source, 2).await;
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    let (_, intervals) = list_intervals(&pool, DAY, Some(source)).await;
+    let mut found = labels(&intervals);
+    found.sort();
+    assert_eq!(found, vec!["Kept", "Pruned"]);
+}
+
+#[sqlx::test]
+async fn refresh_is_refused_while_configuration_is_locked(pool: PgPool) {
+    let (status, _) = post_refresh(app(&pool, true)).await;
+    assert_eq!(status, StatusCode::LOCKED);
+}
+
+#[sqlx::test]
+async fn a_source_reports_no_run_state_when_nothing_is_running(pool: PgPool) {
+    let dir = scratch_dir("idle-state");
+    let path = dir.join("db.sqlite");
+    write_toggl_db(&path, &[one_activity(&[0xc8], "Xcode")]);
+    let source = create_toggl_source(&pool, "Toggl", &path).await;
+    wait_for_attempts(&pool, source, 1).await;
+
+    assert_eq!(
+        source_status(&pool, source).await["state"],
+        "idle",
+        "run state is memory, not a column: a Server that restarted has nothing queued"
+    );
+}

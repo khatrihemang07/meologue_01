@@ -134,7 +134,50 @@ pub struct TimeSource {
     pub kind: String,
     pub path: String,
     pub enabled: bool,
+    /// What the last import run made of this source (issue #421). Separate
+    /// attempt and success timestamps because the difference between them is
+    /// the whole point: a recent attempt with a stale success is a recorder
+    /// failing right now.
+    pub last_attempt_at: Option<DateTime<Utc>>,
+    pub last_success_at: Option<DateTime<Utc>>,
+    pub last_inserted_count: i32,
+    pub last_warning_count: i32,
+    pub last_error: Option<String>,
+    /// Where this source is in the run happening *now*, which is memory, not
+    /// a column: a Server restart has no queued sources, and persisting
+    /// "running" would leave a source stuck that way after a crash.
+    #[sqlx(skip)]
+    pub state: SourceRunState,
 }
+
+impl Default for SourceRunState {
+    fn default() -> Self {
+        Self::Idle
+    }
+}
+
+/// The columns `time_sources` actually stores, for the queries that read one.
+/// A macro rather than a `const` so the queries below assemble with `concat!`
+/// into `&'static str`s — sqlx 0.9 refuses SQL built at runtime, and that
+/// refusal is worth keeping for a string that is entirely literal anyway.
+macro_rules! source_columns {
+    () => {
+        "id, name, kind, path, enabled, last_attempt_at, last_success_at, \
+         last_inserted_count, last_warning_count, last_error"
+    };
+}
+
+const LIST_SOURCES_SQL: &str = concat!(
+    "select ",
+    source_columns!(),
+    " from time_sources order by created_at"
+);
+
+const SOURCE_BY_ID_SQL: &str = concat!(
+    "select ",
+    source_columns!(),
+    " from time_sources where id = $1"
+);
 
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct CreateTimeSource {
@@ -310,12 +353,16 @@ fn validate_source(kind: SourceKind, path: &Path) -> Result<(), String> {
 #[utoipa::path(get, path = "/v1/time/sources", responses((status = 200, body = [TimeSource])))]
 pub async fn list_sources_handler(
     State(pool): State<PgPool>,
+    State(runs): State<ImportRuns>,
 ) -> Result<Json<Vec<TimeSource>>, StatusCode> {
-    sqlx::query_as("select id, name, kind, path, enabled from time_sources order by created_at")
+    let mut sources: Vec<TimeSource> = sqlx::query_as(LIST_SOURCES_SQL)
         .fetch_all(&pool)
         .await
-        .map(Json)
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    for source in &mut sources {
+        source.state = runs.state_for(source.id);
+    }
+    Ok(Json(sources))
 }
 
 #[utoipa::path(post, path = "/v1/time/sources", request_body = CreateTimeSource, responses((status = 201, body = TimeSource), (status = 400), (status = 409), (status = 423)))]
@@ -345,6 +392,14 @@ pub async fn create_source_handler(
         kind: kind.as_wire().to_owned(),
         path: path.to_string_lossy().into_owned(),
         enabled: true,
+        // A source that has just been saved has no import history yet; its
+        // first run is queued by `spawn_import` below.
+        last_attempt_at: None,
+        last_success_at: None,
+        last_inserted_count: 0,
+        last_warning_count: 0,
+        last_error: None,
+        state: SourceRunState::Queued,
     };
     sqlx::query("insert into time_sources (id,name,kind,path,enabled) values ($1,$2,$3,$4,$5)")
         .bind(source.id)
@@ -365,47 +420,244 @@ pub async fn create_source_handler(
     Ok((StatusCode::CREATED, Json(source)))
 }
 
-/// Queues the all-history import for a newly configured source without making
-/// the Settings request wait for it. Two recorders can be configured back to
-/// back and neither blocks the other; the `(source_id, provider_record_id)`
-/// uniqueness boundary is what keeps repeated runs from duplicating.
-fn spawn_import(pool: PgPool, source_id: Uuid, kind: SourceKind, path: String) {
-    tokio::spawn(async move {
-        // SQLite work stays on a blocking worker; the inserts use the async
-        // Postgres pool after that worker returns, never `Handle::current()`.
-        let rows = tokio::task::spawn_blocking(move || read_source(kind, &path))
-            .await
-            .unwrap_or_default();
-        for row in rows {
-            let _ = sqlx::query(
-                "insert into activity_intervals \
-                 (id, source_id, provider_record_id, started_at, ended_at, label, detail, idle, raw_row) \
-                 values ($1,$2,$3,$4,$5,$6,$7,$8,$9) \
-                 on conflict (source_id, provider_record_id) do nothing",
-            )
-            .bind(Uuid::new_v4())
-            .bind(source_id)
-            .bind(row.provider_record_id)
-            .bind(row.started_at)
-            .bind(row.ended_at)
-            .bind(row.label)
-            .bind(row.detail)
-            .bind(row.idle)
-            .bind(row.raw_row)
-            .execute(&pool)
-            .await;
-        }
-        // Stamped only once, and only after the run finished, because this is
-        // what closes the window in which a source's kind and path may still
-        // be corrected (issue #423).
+/// What importing one source did.
+#[derive(Debug, Default, Clone, Serialize, ToSchema)]
+pub struct ImportOutcome {
+    pub inserted: i32,
+    pub warnings: i32,
+    pub error: Option<String>,
+}
+
+/// Imports one source and records the outcome on its own row.
+///
+/// Never returns an error. A source that cannot be read is a fact about that
+/// source, recorded against it, and the run moves on to the next one — one
+/// failing recorder must not hide every other recorder's result (issue #421).
+pub async fn import_source(
+    pool: &PgPool,
+    source_id: Uuid,
+    kind: SourceKind,
+    path: String,
+) -> ImportOutcome {
+    let _ = sqlx::query("update time_sources set last_attempt_at = now() where id = $1")
+        .bind(source_id)
+        .execute(pool)
+        .await;
+
+    // SQLite work stays on a blocking worker; the inserts use the async
+    // Postgres pool after that worker returns, never `Handle::current()`.
+    let read = tokio::task::spawn_blocking(move || read_source(kind, &path))
+        .await
+        .unwrap_or_else(|_| SourceRead {
+            intervals: vec![],
+            warnings: vec![],
+            error: Some("the import worker stopped unexpectedly".into()),
+        });
+
+    let warnings = read.warnings.len() as i32;
+    for warning in &read.warnings {
+        tracing::warn!(source_id = %source_id, "time import: {warning}");
+    }
+
+    if let Some(error) = read.error {
+        tracing::warn!(source_id = %source_id, "time import failed: {error}");
         let _ = sqlx::query(
-            "update time_sources set first_imported_at = now() \
-             where id = $1 and first_imported_at is null",
+            "update time_sources set last_warning_count = $2, last_error = $3 where id = $1",
         )
         .bind(source_id)
-        .execute(&pool)
+        .bind(warnings)
+        .bind(&error)
+        .execute(pool)
         .await;
+        return ImportOutcome {
+            inserted: 0,
+            warnings,
+            error: Some(error),
+        };
+    }
+
+    let mut inserted = 0;
+    for row in read.intervals {
+        let result = sqlx::query(
+            "insert into activity_intervals \
+             (id, source_id, provider_record_id, started_at, ended_at, label, detail, idle, raw_row) \
+             values ($1,$2,$3,$4,$5,$6,$7,$8,$9) \
+             on conflict (source_id, provider_record_id) do nothing",
+        )
+        .bind(Uuid::new_v4())
+        .bind(source_id)
+        .bind(row.provider_record_id)
+        .bind(row.started_at)
+        .bind(row.ended_at)
+        .bind(row.label)
+        .bind(row.detail)
+        .bind(row.idle)
+        .bind(row.raw_row)
+        .execute(pool)
+        .await;
+        // `do nothing` reports zero rows affected for a record already stored,
+        // which is what makes a repeated refresh report honestly rather than
+        // claiming to have imported the whole database again.
+        if let Ok(done) = result {
+            inserted += done.rows_affected() as i32;
+        }
+    }
+
+    // `first_imported_at` is stamped only once, and only after a run that
+    // actually succeeded: it is what closes the window in which a source's
+    // kind and path may still be corrected (issue #423).
+    let _ = sqlx::query(
+        "update time_sources \
+         set last_success_at = now(), last_inserted_count = $2, last_warning_count = $3, \
+             last_error = null, first_imported_at = coalesce(first_imported_at, now()) \
+         where id = $1",
+    )
+    .bind(source_id)
+    .bind(inserted)
+    .bind(warnings)
+    .execute(pool)
+    .await;
+
+    ImportOutcome {
+        inserted,
+        warnings,
+        error: None,
+    }
+}
+
+/// Queues the all-history import for a newly configured or re-enabled source
+/// without making the Settings request wait for it.
+fn spawn_import(pool: PgPool, source_id: Uuid, kind: SourceKind, path: String) {
+    tokio::spawn(async move {
+        import_source(&pool, source_id, kind, path).await;
     });
+}
+
+// ---------------------------------------------------------------------------
+// Refresh runs
+// ---------------------------------------------------------------------------
+
+/// Where a source is in the current refresh run, if there is one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, ToSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum SourceRunState {
+    Idle,
+    Queued,
+    Running,
+}
+
+/// The one refresh run a Server may have in flight.
+///
+/// A plain `std::sync::Mutex` rather than an async one: nothing holds this
+/// lock across an `await`. It is taken to decide whether a run may start, and
+/// taken again, briefly, each time the run moves to the next source.
+#[derive(Clone, Default)]
+pub struct ImportRuns(std::sync::Arc<std::sync::Mutex<RunState>>);
+
+#[derive(Default)]
+pub struct RunState {
+    running: bool,
+    current: Option<Uuid>,
+    queued: Vec<Uuid>,
+}
+
+impl ImportRuns {
+    /// Claims the single run slot. `false` means one is already in flight —
+    /// the caller must not start a second, because two runs over the same
+    /// sources would race each other's writes.
+    pub fn try_start(&self, sources: Vec<Uuid>) -> bool {
+        let mut state = self.0.lock().expect("import run state is never poisoned");
+        if state.running {
+            return false;
+        }
+        state.running = true;
+        state.current = None;
+        state.queued = sources;
+        true
+    }
+
+    fn begin(&self, source: Uuid) {
+        let mut state = self.0.lock().expect("import run state is never poisoned");
+        state.queued.retain(|queued| *queued != source);
+        state.current = Some(source);
+    }
+
+    fn finish(&self) {
+        let mut state = self.0.lock().expect("import run state is never poisoned");
+        *state = RunState::default();
+    }
+
+    pub fn is_running(&self) -> bool {
+        self.0
+            .lock()
+            .expect("import run state is never poisoned")
+            .running
+    }
+
+    pub fn state_for(&self, source: Uuid) -> SourceRunState {
+        let state = self.0.lock().expect("import run state is never poisoned");
+        if state.current == Some(source) {
+            SourceRunState::Running
+        } else if state.queued.contains(&source) {
+            SourceRunState::Queued
+        } else {
+            SourceRunState::Idle
+        }
+    }
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct RefreshAccepted {
+    /// How many enabled sources this run will import, in order.
+    pub queued: usize,
+}
+
+#[utoipa::path(post, path = "/v1/time/refresh", responses((status = 202, body = RefreshAccepted), (status = 409), (status = 423)))]
+pub async fn refresh_handler(
+    State(pool): State<PgPool>,
+    State(runs): State<ImportRuns>,
+    State(ConfigLocked(locked)): State<ConfigLocked>,
+) -> Result<(StatusCode, Json<RefreshAccepted>), (StatusCode, String)> {
+    if locked {
+        return Err((StatusCode::LOCKED, "Server configuration is locked".into()));
+    }
+
+    // Archived sources are excluded here rather than inside the run, so the
+    // queued count a Device is told matches what will actually be imported.
+    let enabled: Vec<(Uuid, String, String)> =
+        sqlx::query_as("select id, kind, path from time_sources where enabled order by created_at")
+            .fetch_all(&pool)
+            .await
+            .map_err(|_| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "could not list Time sources".to_string(),
+                )
+            })?;
+
+    if !runs.try_start(enabled.iter().map(|(id, _, _)| *id).collect()) {
+        return Err((
+            StatusCode::CONFLICT,
+            "an import is already running".to_string(),
+        ));
+    }
+
+    let queued = enabled.len();
+    tokio::spawn(async move {
+        // Serial, deliberately: two sources importing at once would contend
+        // for the same Postgres pool and, worse, make "which source is
+        // running" unanswerable.
+        for (id, kind, path) in enabled {
+            let Some(kind) = SourceKind::from_wire(&kind) else {
+                continue;
+            };
+            runs.begin(id);
+            import_source(&pool, id, kind, path).await;
+        }
+        runs.finish();
+    });
+
+    Ok((StatusCode::ACCEPTED, Json(RefreshAccepted { queued })))
 }
 
 #[utoipa::path(patch, path = "/v1/time/sources/{id}", request_body = UpdateTimeSource, params(("id" = Uuid, Path)), responses((status = 200, body = TimeSource), (status = 400), (status = 404), (status = 409), (status = 423)))]
@@ -419,35 +671,28 @@ pub async fn update_source_handler(
         return Err((StatusCode::LOCKED, "Server configuration is locked".into()));
     }
 
-    let existing: Option<(TimeSource, Option<DateTime<Utc>>)> = sqlx::query_as::<
-        _,
-        (Uuid, String, String, String, bool, Option<DateTime<Utc>>),
-    >(
-        "select id, name, kind, path, enabled, first_imported_at from time_sources where id = $1",
-    )
-    .bind(id)
-    .fetch_optional(&pool)
-    .await
-    .map_err(|_| {
+    let lookup_failed = || {
         (
             StatusCode::INTERNAL_SERVER_ERROR,
             "lookup failed".to_string(),
         )
-    })?
-    .map(|(id, name, kind, path, enabled, first_imported_at)| {
-        (
-            TimeSource {
-                id,
-                name,
-                kind,
-                path,
-                enabled,
-            },
-            first_imported_at,
-        )
-    });
-    let (current, first_imported_at) =
-        existing.ok_or((StatusCode::NOT_FOUND, "no such Time source".to_string()))?;
+    };
+    let current: Option<TimeSource> = sqlx::query_as(SOURCE_BY_ID_SQL)
+        .bind(id)
+        .fetch_optional(&pool)
+        .await
+        .map_err(|_| lookup_failed())?;
+    let current = current.ok_or((StatusCode::NOT_FOUND, "no such Time source".to_string()))?;
+
+    // Read separately rather than widened into `TimeSource`: when a source
+    // first imported is the Server's own bookkeeping, not something a Device
+    // has any use for.
+    let first_imported_at: Option<DateTime<Utc>> =
+        sqlx::query_scalar("select first_imported_at from time_sources where id = $1")
+            .bind(id)
+            .fetch_one(&pool)
+            .await
+            .map_err(|_| lookup_failed())?;
 
     let was_enabled = current.enabled;
     let mut next = current.clone();
@@ -660,14 +905,14 @@ pub async fn interval_detail_handler(
 // ---------------------------------------------------------------------------
 
 /// One provider record, normalized but not yet stored.
-struct ImportedInterval {
-    provider_record_id: String,
-    started_at: DateTime<Utc>,
-    ended_at: DateTime<Utc>,
-    label: String,
-    detail: Option<String>,
-    idle: bool,
-    raw_row: Value,
+pub struct ImportedInterval {
+    pub provider_record_id: String,
+    pub started_at: DateTime<Utc>,
+    pub ended_at: DateTime<Utc>,
+    pub label: String,
+    pub detail: Option<String>,
+    pub idle: bool,
+    pub raw_row: Value,
 }
 
 fn uuid_hex(value: &[u8]) -> String {
@@ -731,15 +976,37 @@ fn base64(bytes: &[u8]) -> String {
     out
 }
 
+/// What one pass over a provider database found.
+pub struct SourceRead {
+    pub intervals: Vec<ImportedInterval>,
+    /// Rows that could not be made sense of and were skipped. Skipping is the
+    /// right answer — one unreadable row must not stop the rest of a day's
+    /// evidence importing — but skipping *silently* is not, so each one is
+    /// described and counted (issue #421).
+    pub warnings: Vec<String>,
+    /// Why nothing could be read at all: the database vanished, is locked by
+    /// something that will not let go, or no longer has the shape it had when
+    /// the source was configured.
+    pub error: Option<String>,
+}
+
 /// Reads every closed record out of one provider database.
 ///
 /// A record still being recorded has no end yet, and is left for a later
 /// import rather than being given one — an importer that treated a missing end
 /// as "now" would mint an interval that changed length every time it was read.
-fn read_source(kind: SourceKind, path: &str) -> Vec<ImportedInterval> {
+/// Deferring such a record is not a warning: it is the ordinary state of the
+/// one the recorder is writing right now.
+fn read_source(kind: SourceKind, path: &str) -> SourceRead {
     let adapter = kind.adapter();
-    let Ok(connection) = open_read_only(Path::new(path)) else {
-        return vec![];
+    let failed = |message: &str| SourceRead {
+        intervals: vec![],
+        warnings: vec![],
+        error: Some(message.to_string()),
+    };
+    let connection = match open_read_only(Path::new(path)) {
+        Ok(connection) => connection,
+        Err(message) => return failed(&message),
     };
     // `select *` rather than the six mapped columns: the whole row is kept as
     // evidence, including the columns nothing has found a use for yet.
@@ -747,7 +1014,7 @@ fn read_source(kind: SourceKind, path: &str) -> Vec<ImportedInterval> {
         "select * from {} where {} is not null",
         adapter.table, adapter.ended
     )) else {
-        return vec![];
+        return failed("source database no longer has the shape it was configured with");
     };
     let columns: Vec<String> = statement
         .column_names()
@@ -755,7 +1022,7 @@ fn read_source(kind: SourceKind, path: &str) -> Vec<ImportedInterval> {
         .map(ToString::to_string)
         .collect();
 
-    let Ok(rows) = statement.query_map([], |row| {
+    let rows = statement.query_map([], |row| {
         let raw = columns
             .iter()
             .enumerate()
@@ -772,23 +1039,58 @@ fn read_source(kind: SourceKind, path: &str) -> Vec<ImportedInterval> {
             row.get::<_, Option<f64>>(adapter.idle)?.unwrap_or(0.0) != 0.0,
             Value::Object(raw),
         ))
-    }) else {
-        return vec![];
+    });
+    let rows = match rows {
+        Ok(rows) => rows,
+        Err(_) => return failed("source database could not be read"),
     };
 
-    rows.flatten()
-        .filter_map(|(identity, start, end, label, detail, idle, raw_row)| {
-            (end > start).then_some(ImportedInterval {
-                provider_record_id: identity?,
-                started_at: apple_timestamp(start)?,
-                ended_at: apple_timestamp(end)?,
-                label,
-                detail,
-                idle,
-                raw_row,
-            })
-        })
-        .collect()
+    let mut intervals = Vec::new();
+    let mut warnings = Vec::new();
+    for row in rows {
+        match row {
+            // A column the adapter maps is missing, or holds a type it cannot
+            // be read as. The row is evidence nobody can interpret, so it is
+            // skipped — and said out loud rather than vanishing.
+            Err(error) => warnings.push(format!("a record could not be read: {error}")),
+            Ok((identity, start, end, label, detail, idle, raw_row)) => {
+                let Some(provider_record_id) = identity else {
+                    warnings
+                        .push("a record has no provider identity and cannot be imported".into());
+                    continue;
+                };
+                if end <= start {
+                    warnings.push(format!(
+                        "record {provider_record_id} ends before it starts and was skipped"
+                    ));
+                    continue;
+                }
+                let (Some(started_at), Some(ended_at)) =
+                    (apple_timestamp(start), apple_timestamp(end))
+                else {
+                    warnings.push(format!(
+                        "record {provider_record_id} has a timestamp outside any representable instant"
+                    ));
+                    continue;
+                };
+                intervals.push(ImportedInterval {
+                    provider_record_id,
+                    started_at,
+                    ended_at,
+                    label,
+                    detail,
+                    idle,
+                    raw_row,
+                });
+            }
+        }
+    }
+
+    SourceRead {
+        intervals,
+        warnings,
+        error: None,
+    }
 }
 
 #[cfg(test)]

@@ -1,4 +1,4 @@
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { addDays, format, isToday, parseISO } from "date-fns";
 import { useState } from "react";
 import { Link } from "react-router";
@@ -28,6 +28,7 @@ import {
   fetchActivityInterval,
   listActivityIntervals,
   listTimeSources,
+  refreshTimeSources,
   type TimeSource,
 } from "@/lib/time-transport";
 
@@ -72,7 +73,18 @@ export function TimePage() {
  * because a Device visited `/time`.
  */
 function TimeContent() {
-  const sourcesQuery = useQuery({ queryKey: TIME_SOURCES_QUERY_KEY, queryFn: listTimeSources });
+  const sourcesQuery = useQuery({
+    queryKey: TIME_SOURCES_QUERY_KEY,
+    queryFn: listTimeSources,
+    // Polled only while a run is actually in flight (issue #421). A fixed
+    // interval would keep waking an idle Server forever; stopping at idle
+    // means the poll ends by itself when the run does.
+    refetchInterval: (query) => {
+      const data = query.state.data;
+      const running = data?.ok && data.sources.some((source) => source.state !== "idle");
+      return running ? 1000 : false;
+    },
+  });
 
   if (sourcesQuery.data?.ok === false) {
     return (
@@ -103,10 +115,16 @@ function TimeContent() {
     );
   }
 
-  return <DailyComparison sources={sources} />;
+  return <DailyComparison sources={sources} refetchSources={sourcesQuery.refetch} />;
 }
 
-function DailyComparison({ sources }: { sources: TimeSource[] }) {
+function DailyComparison({
+  sources,
+  refetchSources,
+}: {
+  sources: TimeSource[];
+  refetchSources: () => void;
+}) {
   // A floating YYYY-MM-DD. Which instants it covers is the Server's answer,
   // resolved against its configured timezone, so two Devices in different
   // zones asking for the same date see the same day (issue #424).
@@ -150,6 +168,8 @@ function DailyComparison({ sources }: { sources: TimeSource[] }) {
           setOpenIntervalId(null);
         }}
       />
+
+      <RefreshRow sources={sources} onRefreshed={refetchSources} day={day} />
 
       <SearchField value={search} onChange={setSearch} />
 
@@ -223,6 +243,146 @@ function DayCount({
       {term ? <> matching “{term}”</> : null}
     </>
   );
+}
+
+/**
+ * "Refresh now", and what the last run made of each recorder.
+ *
+ * The result is per source, not one verdict for the run: a single failing
+ * recorder must not be able to make every other recorder's result unreadable,
+ * which is the whole reason the importer records outcomes against sources
+ * rather than against runs (issue #421).
+ */
+function RefreshRow({
+  sources,
+  onRefreshed,
+  day,
+}: {
+  sources: TimeSource[];
+  onRefreshed: () => void;
+  day: string;
+}) {
+  const queryClient = useQueryClient();
+  const [message, setMessage] = useState<string | null>(null);
+  const running = sources.some(isRunning);
+
+  const refresh = useMutation({
+    mutationFn: refreshTimeSources,
+    onSuccess: (result) => {
+      if (!result.ok) {
+        setMessage(refreshFailureCopy(result.reason));
+        return;
+      }
+      setMessage(`Importing ${result.queued} source${result.queued === 1 ? "" : "s"}…`);
+      onRefreshed();
+    },
+  });
+
+  // A finished run may have imported records into the day being looked at, so
+  // the timeline has to be re-read — but only once the run is actually over,
+  // not on every poll while it is still inserting.
+  const previouslyRunning = usePrevious(running);
+  if (previouslyRunning && !running) {
+    void queryClient.invalidateQueries({ queryKey: ["time", "intervals"] });
+    setMessage("Import finished.");
+  }
+
+  return (
+    <div className="flex flex-col gap-1">
+      <div className="flex items-center gap-2">
+        <Button
+          type="button"
+          size="touch"
+          variant="outline"
+          disabled={refresh.isPending || running}
+          onClick={() => {
+            setMessage(null);
+            void refresh.mutateAsync();
+          }}
+        >
+          {running ? "Importing…" : "Refresh now"}
+        </Button>
+        {message && (
+          <span className="text-muted-foreground text-xs" aria-live="polite">
+            {message}
+          </span>
+        )}
+      </div>
+
+      <details>
+        <summary className="cursor-pointer text-muted-foreground text-xs">Source status</summary>
+        <ul aria-label="Time source status" className="mt-1 flex flex-col gap-1 text-xs">
+          {sources.map((source) => (
+            <li key={source.id} className="flex flex-col">
+              <span className="font-medium">
+                {source.name}
+                {!source.enabled && " (archived)"}
+                {isRunning(source) && (
+                  <span className="ml-1 font-normal text-muted-foreground">{source.state}</span>
+                )}
+              </span>
+              <SourceStatusLine source={source} />
+            </li>
+          ))}
+        </ul>
+        {/* The day is named here so a reader who refreshed while looking at
+            an older day knows which one the new records will land on. */}
+        <p className="mt-1 text-muted-foreground text-xs">Showing {day}.</p>
+      </details>
+    </div>
+  );
+}
+
+/** Missing run state means idle — see the sources query's own comment. */
+function isRunning(source: TimeSource): boolean {
+  return source.state !== undefined && source.state !== "idle";
+}
+
+function SourceStatusLine({ source }: { source: TimeSource }) {
+  if (source.last_error) {
+    // The error wins the line: a source that is failing right now is the one
+    // fact worth reading, and burying it after the counts would hide it.
+    return <span className="text-muted-foreground">Last run failed — {source.last_error}</span>;
+  }
+  if (!source.last_attempt_at) {
+    return <span className="text-muted-foreground">Not imported yet.</span>;
+  }
+  const succeeded = source.last_success_at
+    ? new Date(source.last_success_at).toLocaleString()
+    : "never";
+  return (
+    <span className="text-muted-foreground">
+      Last success {succeeded} · {source.last_inserted_count} new
+      {source.last_warning_count > 0 && <> · {source.last_warning_count} record(s) skipped</>}
+    </span>
+  );
+}
+
+function refreshFailureCopy(
+  reason: "not-supported" | "unreachable" | "already-running" | "locked",
+): string {
+  switch (reason) {
+    case "not-supported":
+      return "This Server doesn't support refreshing Time sources yet.";
+    case "unreachable":
+      return "Couldn't reach the Server. Check that it's running and try again.";
+    case "already-running":
+      return "An import is already running.";
+    case "locked":
+      return "This Server's configuration is locked, so imports can't be started here.";
+  }
+}
+
+/** The previous render's value, for spotting the moment a run ends. */
+function usePrevious<T>(value: T): T | undefined {
+  const [pair, setPair] = useState<{ previous: T | undefined; current: T }>({
+    previous: undefined,
+    current: value,
+  });
+  if (pair.current !== value) {
+    setPair({ previous: pair.current, current: value });
+  }
+  return pair.previous;
 }
 
 /**

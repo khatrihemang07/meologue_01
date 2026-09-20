@@ -113,6 +113,11 @@ pub struct AppState {
     /// that boundary untestable, since `cargo test`'s threads share one
     /// process environment (see `settings.rs`'s own test-module note).
     pub timezone: chrono_tz::Tz,
+    /// Issue #421: the single refresh run this Server may have in flight,
+    /// shared across requests so a second "Refresh now" can be told one is
+    /// already going rather than starting a run that races the first one's
+    /// writes. A handle, not a snapshot — the same reasoning `flags` gives.
+    pub import_runs: time::ImportRuns,
 }
 
 impl FromRef<AppState> for PgPool {
@@ -197,6 +202,12 @@ pub struct ServerTimezone(pub chrono_tz::Tz);
 impl FromRef<AppState> for ServerTimezone {
     fn from_ref(state: &AppState) -> Self {
         ServerTimezone(state.timezone)
+    }
+}
+
+impl FromRef<AppState> for time::ImportRuns {
+    fn from_ref(state: &AppState) -> Self {
+        state.import_runs.clone()
     }
 }
 
@@ -596,6 +607,10 @@ pub fn router_with_everything(
             "/v1/time/sources/{id}",
             axum::routing::patch(time::update_source_handler),
         )
+        .route(
+            "/v1/time/refresh",
+            axum::routing::post(time::refresh_handler),
+        )
         .route("/v1/time/intervals", get(time::list_intervals_handler))
         .route(
             "/v1/time/intervals/{id}",
@@ -677,6 +692,7 @@ pub fn router_with_everything(
             mode,
             flags,
             timezone: period::server_timezone(),
+            import_runs: time::ImportRuns::default(),
         })
         .fallback_service(app_shell)
         .layer(axum::middleware::from_fn(metrics::track_metrics))
