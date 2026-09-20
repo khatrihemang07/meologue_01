@@ -779,6 +779,116 @@ describe("after N days (issue #369)", () => {
   });
 });
 
+describe("detected matches take Todoist's shape (issue #384)", () => {
+  describe("punctuation is swallowed into the match", () => {
+    it.each<[string, string]>([
+      ["call mom today.", "today."],
+      ["call mom today,", "today,"],
+      ['call mom "today"', '"today"'],
+    ])("%s", (input, expectedRaw) => {
+      const result = parse(input);
+      expect(result.tokens).toHaveLength(1);
+      expect(result.tokens[0]?.raw).toBe(expectedRaw);
+      expect(input.slice(result.tokens[0]?.start, result.tokens[0]?.end)).toBe(expectedRaw);
+    });
+
+    it("strips the punctuation along with the rest of the matched span from content", () => {
+      expect(parse("call mom today.").content).toBe("call mom");
+    });
+  });
+
+  it('an apostrophe is not a word boundary — "Today\'s standup" detects nothing, same as "todays"', () => {
+    expect(parse("Today's standup").tokens).toHaveLength(0);
+    expect(parse("Today's standup").content).toBe("Today's standup");
+    expect(parse("todays standup").tokens).toHaveLength(0);
+  });
+
+  describe("an adjacent date+time or weekday+time phrase becomes one match", () => {
+    it.each<[string, string, string]>([
+      ["buy milk today at 5pm", "today at 5pm", "2026-09-02T17:00"],
+      ["buy milk tomorrow morning", "tomorrow morning", "2026-09-03T09:00"],
+      ["call mon 9am", "mon 9am", "2026-09-07T09:00"],
+    ])("%s", (input, expectedRaw, expectedDate) => {
+      const result = parse(input);
+      const dateTokens = result.tokens.filter((t) => t.kind === "date");
+      expect(dateTokens).toHaveLength(1);
+      expect(dateTokens[0]?.raw).toBe(expectedRaw);
+      expect(dateTokens[0]).toMatchObject({ date: expectedDate });
+      expect(result.date).toBe(expectedDate);
+    });
+
+    it("strips the whole merged span, including the time half, from content", () => {
+      expect(parse("buy milk today at 5pm").content).toBe("buy milk");
+    });
+
+    it("rejecting the merged span removes the whole thing in one gesture, not just its date half", () => {
+      // #371's own click-to-reject contract: the span decides what one
+      // Backspace/click rejects, and a merged span is still one span.
+      const input = "buy milk today at 5pm";
+      const first = parse(input);
+      const dateToken = first.tokens.find((t) => t.kind === "date");
+      expect(dateToken).toBeDefined();
+      // biome-ignore lint/style/noNonNullAssertion: asserted present above
+      const demoted = demoteQuickAddToken(input, dateToken!, { now: NOW });
+      expect(demoted.tokens).toHaveLength(0);
+      expect(demoted.content).toBe(input);
+    });
+  });
+
+  describe("a recurrence phrase absorbs a trailing clause its own grammar doesn't parse", () => {
+    it('"every day starting next monday" becomes one recurrence span, not a recurrence plus a separate date', () => {
+      const input = "every day starting next monday";
+      const result = parse(input);
+      expect(result.tokens).toHaveLength(1);
+      expect(result.tokens[0]).toMatchObject({ kind: "recurrence", raw: input });
+      expect(result.content).toBe("");
+    });
+
+    it("rejecting the merged span removes the whole recurrence+date phrase in one gesture", () => {
+      const input = "every day starting next monday";
+      const first = parse(input);
+      const recurrenceToken = first.tokens.find((t) => t.kind === "recurrence");
+      expect(recurrenceToken).toBeDefined();
+      // biome-ignore lint/style/noNonNullAssertion: asserted present above
+      const demoted = demoteQuickAddToken(input, recurrenceToken!, { now: NOW });
+      expect(demoted.tokens).toHaveLength(0);
+      expect(demoted.content).toBe(input);
+    });
+  });
+
+  it('a time immediately before a recurrence phrase merges with the recurrence, not a coincidentally-earlier date word — "Buy milk tomorrow at 5pm every week p2" leaves "tomorrow" unclaimed entirely, matching the corpus', () => {
+    const result = parse("Buy milk tomorrow at 5pm every week p2");
+    expect(result.tokens.map((t) => ({ kind: t.kind, raw: t.raw }))).toEqual([
+      { kind: "recurrence", raw: "at 5pm every week" },
+      { kind: "priority", raw: "p2" },
+    ]);
+    // "tomorrow" is neither its own match nor part of any merge — it
+    // reads back as ordinary content, exactly like the corpus's own
+    // measured row.
+    expect(result.content).toBe("Buy milk tomorrow");
+  });
+
+  describe("regression: existing compound-before-simple priority is unaffected", () => {
+    it('"monday in 2 weeks" still wins over this file\'s own bare weekday survivor', () => {
+      const result = parse("buy milk monday in 2 weeks");
+      expect(result.tokens).toHaveLength(1);
+      expect(result.tokens[0]).toMatchObject({ raw: "monday in 2 weeks" });
+    });
+
+    it('"every monday" still wins over the bare "monday" it\'s built from', () => {
+      const result = parse("call mum every monday");
+      expect(result.tokens).toHaveLength(1);
+      expect(result.tokens[0]).toMatchObject({ kind: "recurrence", raw: "every monday" });
+    });
+
+    it("an unmerged bare weekday elsewhere in the same line still matches on its own", () => {
+      const result = parse("call mum monday, then email tuesday");
+      const dateTokens = result.tokens.filter((t) => t.kind === "date");
+      expect(dateTokens.map((t) => t.raw)).toEqual(["monday", "tuesday"]);
+    });
+  });
+});
+
 describe("demotion — general", () => {
   it("re-derives the result with the demoted span excluded from recognition", () => {
     const input = "buy milk tomorrow";
@@ -857,7 +967,11 @@ describe("offsets", () => {
   // appearing twice must not be re-found by searching `input` for its
   // first occurrence — each token carries its own, distinct offsets.
   it("distinguishes two occurrences of the same word by offset, not by re-searching the input", () => {
-    const input = "Monday call, then Monday morning";
+    // Neither "Monday" is immediately followed by a time word (issue
+    // #384's own "Monday morning"-shaped merge would otherwise turn the
+    // second one into a two-word span, which isn't what this test is
+    // about) — "errand" deliberately, not a fuzzy-time-table word.
+    const input = "Monday call, then Monday errand";
     const result = parse(input);
     const dateTokens = result.tokens.filter((t) => t.kind === "date");
     expect(dateTokens).toHaveLength(2);
