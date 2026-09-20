@@ -1614,41 +1614,47 @@ describe("TodoPage — Projects", () => {
       );
     });
 
-    // Issue #388: `/section` only scopes against the AMBIENT Project's own
-    // Section list (todo-page.tsx's own `sectionNamesByProject` doc
-    // comment — a typed `#project` different from the one currently being
-    // viewed has no Section list fetched for it, a known, deliberate
-    // limitation, not solved by this ticket). So unlike #370's own
-    // original version of this test, the typed `#project` here is the SAME
-    // one the view is already open on — still exercises the real,
-    // end-to-end resolve path (`resolveProjectId`/`resolveSectionId` both
-    // actually called), just no longer proves an override at the same
-    // time; that's `a typed #project overrides the view's own inherited
-    // Project` just above's own job now.
-    it("#project /section lands the Task in that Section, resolved inside the typed Project", async () => {
+    // Issue #388's remaining half: `/section` used to scope ONLY against
+    // the AMBIENT Project's own Section list (this test's own pre-fix
+    // version, and `todo-page.tsx`'s own `sectionNamesByProject` doc
+    // comment, both said so) — a typed `#project` different from the one
+    // currently being viewed had no Section list fetched for it at all.
+    // `use-quick-add-composer.ts`'s own on-demand `listSections` fetch
+    // closes that: the view is open on "Groceries" (p1), the Task types
+    // `#Work` (p2, NOT the ambient Project), and this proves the whole
+    // vertical slice — the composer notices the typed Project differs
+    // from `sectionNamesByProject`'s own eager entry, fetches Work's own
+    // Sections on demand, and the real end-to-end resolve path
+    // (`resolveProjectId`/`resolveSectionId`) still lands the Task in the
+    // right place.
+    it("#project /section fetches that OTHER Project's Sections on demand and lands the Task in the right one", async () => {
+      const groceries = project({ id: "p1", name: "Groceries" });
       const work = project({ id: "p2", name: "Work" });
       const addTask = vi.fn();
       const resolveProjectId = vi.fn(async () => "project-work");
       const resolveSectionId = vi.fn(async () => "section-cutover");
-      const listSections = vi.fn(async () => [
-        section({ id: "s1", projectId: "p2", name: "Cutover" }),
-      ]);
+      const listSections = vi.fn(async (projectId: string) =>
+        projectId === "p2" ? [section({ id: "s1", projectId: "p2", name: "Cutover" })] : [],
+      );
       renderTodoPage(
         readyContext({
-          projects: [work],
+          projects: [groceries, work],
           addTask,
           resolveProjectId,
           resolveSectionId,
           listSections,
         }),
-        "/todo/projects/p2",
+        "/todo/projects/p1",
       );
 
       await revealAddTaskField();
-      await waitFor(() => expect(listSections).toHaveBeenCalledWith("p2"));
       fireEvent.change(await screen.findByLabelText("Task name"), {
         target: { value: "buy milk #Work /Cutover" },
       });
+      // The on-demand fetch, for the TYPED Project — not the ambient one
+      // this page's own `sectionsQuery` already fetched (`p1`) as part of
+      // just viewing it.
+      await waitFor(() => expect(listSections).toHaveBeenCalledWith("p2"));
       fireEvent.click(screen.getByRole("button", { name: "Add task" }));
 
       await waitFor(() => expect(resolveSectionId).toHaveBeenCalledWith("project-work", "Cutover"));

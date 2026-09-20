@@ -1,7 +1,26 @@
-import { act, renderHook } from "@testing-library/react";
+import type { Section } from "@meologue/core";
+import { act, renderHook, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useSettingsStore } from "@/lib/settings";
 import { useQuickAddComposer } from "./use-quick-add-composer";
+
+function section(overrides: Partial<Section> = {}): Section {
+  return {
+    id: "s1",
+    deviceId: "device-a",
+    projectId: "p2",
+    name: "Cutover night",
+    description: null,
+    orderKey: "A",
+    archived: false,
+    createdAt: "2026-01-01T00:00:00.000Z",
+    updatedAt: "2026-01-01T00:00:00.000Z",
+    seq: 1,
+    syncedAt: "2026-01-01T00:00:00.000Z",
+    deletedAt: null,
+    ...overrides,
+  };
+}
 
 /**
  * The pure parse/commit logic shared by `add-task-form.tsx` and
@@ -261,6 +280,149 @@ describe("useQuickAddComposer", () => {
       const { result } = renderHook(() => useQuickAddComposer({ onAdd: vi.fn() }));
 
       expect(result.current.placeholder).toBe("Submit essay on AI by Thursday p1");
+    });
+  });
+
+  // Issue #388's remaining half — the interactive `/` dropdown's own web
+  // layer plumbing.
+  describe("Section autocomplete (issue #388)", () => {
+    it("autocomplete.getSections/onCreateSection are both undefined when sectionNamesByProject isn't supplied — matches this hook's own undefined-in/undefined-out contract for every other name list", () => {
+      const { result } = renderHook(() => useQuickAddComposer({ onAdd: vi.fn() }));
+
+      expect(result.current.autocomplete.getSections).toBeUndefined();
+      expect(result.current.autocomplete.onCreateSection).toBeUndefined();
+    });
+
+    it("getSections scopes to a typed #Project in the SAME text, falling back to ambientProjectName when none is typed", () => {
+      const { result } = renderHook(() =>
+        useQuickAddComposer({
+          onAdd: vi.fn(),
+          projects: [
+            { id: "p1", name: "Groceries" },
+            { id: "p2", name: "Work" },
+          ],
+          ambientProjectName: "Groceries",
+          sectionNamesByProject: new Map([
+            ["groceries", ["Produce"]],
+            ["work", ["Cutover night"]],
+          ]),
+        }),
+      );
+
+      expect(result.current.autocomplete.getSections?.("")).toEqual([
+        { id: "Produce", name: "Produce" },
+      ]);
+      expect(result.current.autocomplete.getSections?.("#Work /")).toEqual([
+        { id: "Cutover night", name: "Cutover night" },
+      ]);
+    });
+
+    it("onCreateSection resolves the active Project's real id and forwards it, not the Project's name", () => {
+      const onCreateSection = vi.fn();
+      const { result } = renderHook(() =>
+        useQuickAddComposer({
+          onAdd: vi.fn(),
+          projects: [
+            { id: "p1", name: "Inbox" },
+            { id: "p2", name: "Work" },
+          ],
+          ambientProjectName: "Inbox",
+          sectionNamesByProject: new Map([["inbox", []]]),
+          onCreateSection,
+        }),
+      );
+
+      act(() => {
+        result.current.autocomplete.onCreateSection?.("#Work /Cutover", "Cutover");
+      });
+
+      expect(onCreateSection).toHaveBeenCalledWith("p2", "Cutover");
+    });
+
+    it("fetches a typed, NON-ambient Project's own Sections on demand via listSections, and getSections reflects them once resolved", async () => {
+      const listSections = vi.fn(async (projectId: string) => [
+        section({ id: "s1", projectId, name: "Cutover night" }),
+      ]);
+      const { result } = renderHook(() =>
+        useQuickAddComposer({
+          onAdd: vi.fn(),
+          projects: [
+            { id: "p1", name: "Groceries" },
+            { id: "p2", name: "Work" },
+          ],
+          ambientProjectName: "Groceries",
+          // Only the ambient Project's own Sections are known eagerly —
+          // the identical shape `todo-page.tsx` builds.
+          sectionNamesByProject: new Map([["groceries", []]]),
+          listSections,
+        }),
+      );
+
+      act(() => {
+        result.current.setValue("buy milk #Work /");
+      });
+
+      await waitFor(() => expect(listSections).toHaveBeenCalledWith("p2"));
+      await waitFor(() =>
+        expect(result.current.autocomplete.getSections?.("buy milk #Work /")).toEqual([
+          { id: "Cutover night", name: "Cutover night" },
+        ]),
+      );
+      // The ambient Project is already covered by the caller's own eager
+      // Map and is never fetched through `listSections`.
+      expect(listSections).not.toHaveBeenCalledWith("p1");
+    });
+
+    it("never calls listSections for a Project already covered by the caller's own sectionNamesByProject", async () => {
+      const listSections = vi.fn(async () => [section()]);
+      const { result } = renderHook(() =>
+        useQuickAddComposer({
+          onAdd: vi.fn(),
+          projects: [{ id: "p1", name: "Groceries" }],
+          ambientProjectName: "Groceries",
+          sectionNamesByProject: new Map([["groceries", ["Produce"]]]),
+          listSections,
+        }),
+      );
+
+      act(() => {
+        result.current.setValue("buy milk /");
+      });
+
+      await waitFor(() =>
+        expect(result.current.autocomplete.getSections?.("buy milk /")).toEqual([
+          { id: "Produce", name: "Produce" },
+        ]),
+      );
+      expect(listSections).not.toHaveBeenCalled();
+    });
+
+    it("options.sectionNamesByProject (the parser's own input) reflects the on-demand fetch too, not just the dropdown", async () => {
+      const listSections = vi.fn(async (projectId: string) => [
+        section({ id: "s1", projectId, name: "Cutover night" }),
+      ]);
+      const { result } = renderHook(() =>
+        useQuickAddComposer({
+          onAdd: vi.fn(),
+          projects: [
+            { id: "p1", name: "Groceries" },
+            { id: "p2", name: "Work" },
+          ],
+          ambientProjectName: "Groceries",
+          sectionNamesByProject: new Map([["groceries", []]]),
+          listSections,
+        }),
+      );
+
+      act(() => {
+        result.current.setValue("buy milk #Work /");
+      });
+
+      await waitFor(() =>
+        expect(result.current.options.sectionNamesByProject?.get("work")).toEqual([
+          "Cutover night",
+        ]),
+      );
     });
   });
 });

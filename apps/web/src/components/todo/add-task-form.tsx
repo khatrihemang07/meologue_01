@@ -1,3 +1,4 @@
+import type { Section } from "@meologue/core";
 import { useEffect, useState } from "react";
 import { touchOnlyDevice } from "@/lib/pointer";
 import type { AutocompleteEntry } from "@/lib/quick-add-autocomplete";
@@ -28,6 +29,10 @@ export interface AddTaskFormProps {
   ambientProjectName?: string;
   /** Issue #388 — forwarded straight into `useQuickAddComposer`'s own identically-named option; `todo-page.tsx`'s own doc comment on building this Map has the full reasoning. Omitted keeps `/section` on its pre-#388 permissive behaviour, the same as every other caller that doesn't wire this. */
   sectionNamesByProject?: ReadonlyMap<string, readonly string[]>;
+  /** Issue #388's remaining half — forwarded straight into `useQuickAddComposer`'s identically-named option; that option's own doc comment has the full reasoning for the on-demand fetch this enables. */
+  listSections?: (projectId: string) => Promise<readonly Section[]>;
+  /** Issue #388's remaining half — forwarded straight into `useQuickAddComposer`'s identically-named option (`entry-store-layout.tsx`'s own `addSection`). */
+  onCreateSection?: (projectId: string, name: string) => void;
 }
 
 const TRIGGER_CLASSES =
@@ -52,6 +57,8 @@ export function AddTaskForm({
   datesWithTasks,
   ambientProjectName,
   sectionNamesByProject,
+  listSections,
+  onCreateSection,
 }: AddTaskFormProps) {
   const [open, setOpen] = useState(false);
   const touch = touchOnlyDevice();
@@ -88,6 +95,8 @@ export function AddTaskForm({
     // one.
     ambientProjectName: touch ? "Inbox" : ambientProjectName,
     sectionNamesByProject,
+    listSections,
+    onCreateSection,
     onCommitted: () => {
       if (!touch) {
         setOpen(false);

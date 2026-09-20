@@ -9,22 +9,36 @@ export interface AutocompleteEntry {
 }
 
 /**
- * `/` (Section) is deliberately left out here. Issue #388's own web
- * capture (`.scratch/todoist-add-todo/web/09-projects-sections.md`)
- * shows Todoist offering an identical interactive suggestions dropdown
- * for `/`, scoped to whichever Project is "active" — but wiring that up
- * correctly needs this plugin to know which Project is active at the
- * caret, live, mid-keystroke (the typed `#project` in the same line, or
- * the view's own ambient one), which is new plumbing this module has no
- * seam for today and #388's own design pass never scoped in its
- * file-by-file plan. `/section`'s own EXACT-MATCH HIGHLIGHT (issue
- * #388's headline acceptance criterion) is implemented regardless —
- * `packages/core`'s `matchSection` and this app's own `todo-quick-add-
- * recognition.ts` need nothing from this file to do that. Only the
- * interactive dropdown for `/` is out of this ticket's scope, a
- * deliberate cut flagged in its own PR, not an oversight.
+ * `/` (Section) closes the gap the PR that introduced this file's own
+ * previous header comment left open: Todoist's capture
+ * (`.scratch/todoist-add-todo/web/09-projects-sections.md`) shows an
+ * identical interactive suggestions dropdown for `/`, scoped to whichever
+ * Project is "active" — a typed `#OtherProject` earlier in the SAME line
+ * if one won, else the view's own ambient Project. This module still
+ * carries no notion of a Project or its Sections beyond `AutocompleteEntry`
+ * (id/name), and deliberately doesn't grow one: `QuickAddAutocompleteOptions.
+ * getSections` below is handed the CURRENT full document text on every
+ * keystroke (`buildState`), not a caller-computed value read through a
+ * ref the way `getProjects`/`getLabels` are — a value built one React
+ * render behind the live text (this hook's usual "ref refreshed each
+ * render" pattern) would answer "active Project" with whatever was typed
+ * BEFORE the keystroke that just landed, not the one that did. Handing
+ * back the text instead lets the caller (`use-quick-add-composer.ts`)
+ * resolve "which Project is active" the exact same way `packages/core`'s
+ * own `resolveSectionNames` (parse-quick-add.ts) already does for the
+ * PARSER half of this identical question — reusing `parseQuickAdd`
+ * itself, not a second, hand-rolled scan for a `#project` token in here.
+ *
+ * `getSections` is optional, unlike `getProjects`/`getLabels`: every
+ * caller of `TaskTitleEditor.autocomplete` today except the Composer
+ * (`use-quick-add-composer.ts`) has no Section data source to offer at
+ * all (a Task's title rename has no `/section` concept), so `/` simply
+ * mounts no popup for them — `buildState` returns `null` for a `/`
+ * trigger whenever this is `undefined`, the identical "unwired
+ * capability, no popup" contract the rest of this file already uses for
+ * `onCreateProject`/`onCreateLabel`.
  */
-export type AutocompleteSigil = "#" | "@";
+export type AutocompleteSigil = "#" | "@" | "/";
 
 /** One rendered row: a real entry, or the "not found" fallback that carries the literal query so `Create <text>` (and the token inserted on selecting it) can show what the reader actually typed. */
 export type AutocompleteOptionRow =
@@ -54,6 +68,10 @@ export interface QuickAddAutocompleteOptions {
   getLabels: () => readonly AutocompleteEntry[];
   onCreateProject?: (name: string) => void;
   onCreateLabel?: (name: string) => void;
+  /** `AutocompleteSigil`'s own doc comment above has the full reasoning for why this is a function of the CURRENT full document text, not a live-ref accessor like `getProjects`/`getLabels`. Optional — omitted entirely by a caller with no Section capability, `/` then mounts no popup at all (`buildState` below). */
+  getSections?: (fullText: string) => readonly AutocompleteEntry[];
+  /** Mirrors `onCreateProject`/`onCreateLabel`'s own optionality — a caller with no clean create path for a Section simply omits this, and selecting the "Create" row only inserts the typed token. Takes the full document text for the identical "resolve the active Project" reason `getSections` does: which Project a newly minted Section belongs to is itself a live, text-derived answer, not something this plugin can supply on the caller's behalf. */
+  onCreateSection?: (fullText: string, name: string) => void;
 }
 
 /** The plugin's own public state — what `task-title-editor.tsx` reads on every transaction to decide whether to render the listbox at all. */
@@ -143,14 +161,24 @@ export function findTrigger(
     return null;
   }
   const sigilChar = text[sigilPos];
-  if (sigilChar !== "#" && sigilChar !== "@") {
+  if (sigilChar !== "#" && sigilChar !== "@" && sigilChar !== "/") {
     return null;
   }
   const beforeSigil = sigilPos - 1;
   if (beforeSigil >= 0 && !/\s/.test(text[beforeSigil] as string)) {
     return null;
   }
-  return { sigil: sigilChar, from: sigilPos, query: text.slice(i, caret) };
+  const query = text.slice(i, caret);
+  // `matchSection`/`matchAgainstKnownNames`'s own digit-lookahead guard
+  // (`packages/core/src/quick-add/rules.ts`) — a Section name can't start
+  // with a digit, which is what keeps the `/` inside a numeric date like
+  // `27/1/2026` from ever opening this popup. `#`/`@` have no equivalent
+  // guard: a Project or Label name starting with a digit is a real,
+  // recognised name for either of those.
+  if (sigilChar === "/" && query.length > 0 && /^[0-9]/.test(query)) {
+    return null;
+  }
+  return { sigil: sigilChar, from: sigilPos, query };
 }
 
 /** Case-insensitive substring filter — this module's own header comment on why "substring," not a measured Todoist algorithm. */
@@ -207,7 +235,15 @@ function buildState(
   if (trigger === null) {
     return null;
   }
-  const entries = trigger.sigil === "#" ? options.getProjects() : options.getLabels();
+  const entries =
+    trigger.sigil === "#"
+      ? options.getProjects()
+      : trigger.sigil === "@"
+        ? options.getLabels()
+        : (options.getSections?.(text) ?? null);
+  if (entries === null) {
+    return null;
+  }
   const optionRows = computeOptionRows(entries, trigger.query);
   const sameOccurrence =
     previous !== null && previous.sigil === trigger.sigil && previous.from === trigger.from;
@@ -245,8 +281,10 @@ export function selectAutocompleteOption(
     }
     if (state.sigil === "#") {
       options.onCreateProject?.(name);
-    } else {
+    } else if (state.sigil === "@") {
       options.onCreateLabel?.(name);
+    } else {
+      options.onCreateSection?.(view.state.doc.textContent, name);
     }
   }
   const text = insertionTextFor(state.sigil, name);

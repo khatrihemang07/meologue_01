@@ -88,6 +88,36 @@ describe("findTrigger", () => {
       expect(findTrigger("#work ", 6)).toBeNull();
     });
   });
+
+  // Issue #388's remaining half — `/` (Section) joins `#`/`@` as a
+  // recognised trigger sigil.
+  describe("'/' (Section, issue #388)", () => {
+    it("finds a bare '/' right at the caret, with an empty query", () => {
+      expect(findTrigger("/", 1)).toEqual({ sigil: "/", from: 0, query: "" });
+    });
+
+    it("carries the typed query after the sigil, requires whitespace/start before it, and allows a multi-word query exactly like '#'/'@'", () => {
+      expect(findTrigger("Due /Cut", 8)).toEqual({ sigil: "/", from: 4, query: "Cut" });
+      expect(findTrigger("foo/bar", 7)).toBeNull();
+      expect(findTrigger("/Before cutover", 15)).toEqual({
+        sigil: "/",
+        from: 0,
+        query: "Before cutover",
+      });
+    });
+
+    // `matchSection`/`matchAgainstKnownNames`'s own digit-lookahead guard
+    // (`packages/core/src/quick-add/rules.ts`) — keeps the `/` inside a
+    // numeric date like `27/1/2026` from ever opening this popup. `#`/`@`
+    // have no equivalent: `#2026` is a real, recognisable Project name.
+    it("does not trigger once the character right after '/' is a digit", () => {
+      expect(findTrigger("Due /27", 7)).toBeNull();
+    });
+
+    it("still triggers on a '/' followed by a non-digit, even right after the digit guard's own boundary", () => {
+      expect(findTrigger("Due /C27", 8)).toEqual({ sigil: "/", from: 4, query: "C27" });
+    });
+  });
 });
 
 describe("filterEntries", () => {

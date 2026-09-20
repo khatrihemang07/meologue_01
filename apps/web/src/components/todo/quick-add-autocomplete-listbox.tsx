@@ -12,7 +12,26 @@ export interface QuickAddAutocompleteListboxProps {
 }
 
 function notFoundLabelFor(sigil: AutocompleteSigil): string {
-  return sigil === "#" ? "Project not found." : "Label not found.";
+  if (sigil === "#") {
+    return "Project not found.";
+  }
+  if (sigil === "/") {
+    // Matches Todoist's own measured capture verbatim
+    // (`.scratch/todoist-add-todo/web/09-projects-sections.md`: "Section
+    // not found. Create C" / "Section not found. Create Cutover").
+    return "Section not found.";
+  }
+  return "Label not found.";
+}
+
+function ariaLabelFor(sigil: AutocompleteSigil): string {
+  if (sigil === "#") {
+    return "Projects";
+  }
+  if (sigil === "/") {
+    return "Sections";
+  }
+  return "Labels";
 }
 
 export function QuickAddAutocompleteListbox({
@@ -28,7 +47,7 @@ export function QuickAddAutocompleteListbox({
       id={id}
       role="listbox"
       data-testid="content-editor-suggestions-dropdown"
-      aria-label={sigil === "#" ? "Projects" : "Labels"}
+      aria-label={ariaLabelFor(sigil)}
       className="absolute z-50 max-h-60 min-w-[180px] overflow-auto rounded-md border border-border bg-popover py-1 text-sm shadow-md"
       style={style}
     >
