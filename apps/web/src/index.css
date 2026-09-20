@@ -356,22 +356,31 @@
 
   /* A recognised natural-language match (README's own "one fact that
      shapes the rebuild") — an inline-block span, not a text colour, hence
-     radius and padding tokens alongside the background. Left exactly as
-     it was (still the DARK-theme value, in `:root` too) on purpose:
-     `web/07-native-colours.md` shows the light "Todoist" theme's own
-     highlight pill is actually `#fde7d8`/`rgb(32,32,32)` text, not this
-     value — a real, known drift this ticket does NOT fix, because this
-     token also feeds `--td-nav-active-pill` below (an unrelated surface),
-     and re-pointing it here would silently repaint that too. Flagged in
-     this ticket's own report as deferred, not silently left. */
-  --td-recognition-background: rgb(111, 38, 37);
+     radius and padding tokens alongside the background. Issue #411: this
+     used to carry the DARK-theme value here unconditionally (`web/07-
+     native-colours.md` shows the light "Todoist" theme's own highlight
+     pill is actually `#fde7d8`/`rgb(32,32,32)` text, not the dark maroon)
+     — the deferred drift issue #374's own comment (now removed) flagged.
+     Now theme-aware: this `:root` block carries the LIGHT value, `.dark`
+     below re-declares both tokens with the previously-unconditional dark
+     value (check-css-cascade.mjs's own invariant requires that re-
+     declaration, not just equality-by-accident). `--td-nav-active-pill`
+     below no longer derives from this token — issue #374's own deferral
+     existed only because the two were coupled; decoupling them here is
+     what makes fixing this one safe without silently repainting that
+     unrelated surface, which keeps its own fixed value in every theme,
+     exactly as before. */
+  --td-recognition-background: rgb(253, 231, 216);
   /* A token rather than the literal white the rule below carried, per ADR
      0069's own second rule: everything Todoist has and this palette has no
-     name for gets a `--td-*` of its own. Measured white on the recognised
-     chip, and deliberately NOT `--foreground` — that follows the theme,
-     while this has to stay legible on one fixed dark red whichever theme
-     is active. */
-  --td-recognition-foreground: rgb(255, 255, 255);
+     name for gets a `--td-*` of its own. `web/07-native-colours.md`'s own
+     light "Todoist" theme table: the recognised chip's text is the same
+     `rgb(32,32,32)` as ordinary title text, no distinct override — unlike
+     the dark preset (`.dark` below), where it does need one (deliberately
+     NOT `--foreground` there either, for the identical reason: it has to
+     stay legible on one fixed dark red regardless of which theme is
+     active, not follow the theme the way `--foreground` does). */
+  --td-recognition-foreground: rgb(32, 32, 32);
   --td-recognition-radius: 3px;
   --td-recognition-padding-inline: 4px;
 
@@ -432,7 +441,14 @@
      a different, unmeasured value. */
   --td-quick-add-sheet-scrim: rgba(16, 16, 16, 0.7);
 
-  --td-nav-active-pill: var(--td-recognition-background);
+  /* Issue #411: no longer `var(--td-recognition-background)`. That
+     token now resolves per theme (its own comment above); this one never
+     measured a light-theme value of its own and stays exactly what it
+     always rendered as — the dark maroon literal, unconditionally, in
+     every theme — rather than silently following the recognition pill's
+     fix into a colour nothing here has confirmed against Todoist's own
+     nav in light theme. */
+  --td-nav-active-pill: rgb(111, 38, 37);
   --td-nav-active-icon: var(--td-calendar-selected);
   --td-nav-active-label: var(--td-priority-row-1);
   --td-nav-inactive: var(--muted-foreground);
@@ -489,6 +505,14 @@
   --td-quick-add-chip-color: rgb(255, 255, 255);
   --td-quick-add-submit-background: rgb(208, 67, 72);
   --td-quick-add-cancel-color: rgb(209, 209, 209);
+  /* Issue #411: re-declared here, not just equal by accident —
+     check-css-cascade.mjs's own invariant. This is the value the light
+     `:root` block above unconditionally carried before this ticket; now
+     that `:root` holds the LIGHT "Todoist" value instead, dark theme
+     needs its own copy to keep rendering exactly as it did (the one half
+     of this bug the ticket's own report says must NOT change). */
+  --td-recognition-background: rgb(111, 38, 37);
+  --td-recognition-foreground: rgb(255, 255, 255);
 }
 
 @layer base {
@@ -720,6 +744,11 @@
     border-radius: var(--td-recognition-radius);
     background-color: var(--td-recognition-background);
     color: var(--td-recognition-foreground);
+    /* Issue #411: genuinely clickable (click-to-reject, issue #371's own
+       `handleClick` — real-pointer clicking already worked; only the
+       affordance was missing), so it needs its own cursor rather than
+       inheriting the editor's `text` caret. */
+    cursor: pointer;
   }
 }
 
