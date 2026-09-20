@@ -66,7 +66,31 @@ export type RecurrenceFrequency =
         readonly month: number;
       }[];
     }
-  | { readonly kind: "yearly" };
+  | { readonly kind: "yearly" }
+  | {
+      readonly kind: "monthlyDay";
+      /**
+       * 1-31 — the calendar day of the month this repeats on ("every
+       * 1st" / "every month on the 1st", issue #385). Distinct from
+       * `monthlyOrdinalWeekday`: there's no weekday here at all, just a
+       * fixed day-of-month, so a month too short to contain it clamps
+       * the same way ./calendar.ts's addMonths/addYears already clamp
+       * (31 Jan's "same day next month" in a 30-day April, say).
+       */
+      readonly day: number;
+    }
+  | {
+      readonly kind: "yearlyMonthDay";
+      /**
+       * The fixed calendar date this repeats on every year ("every jan
+       * 1", issue #385) — a birthday/anniversary shape, not to be
+       * confused with `startBound`/`endBound` (./rule.ts's own
+       * `MonthDay`), which bound a *different* frequency's window rather
+       * than being the frequency itself.
+       */
+      readonly month: number; // 1-12
+      readonly day: number; // 1-31, clamped the same way monthlyDay's own day is
+    };
 
 export type RecurrenceUnit = "day" | "week" | "month" | "year";
 

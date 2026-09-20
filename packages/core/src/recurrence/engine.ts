@@ -205,6 +205,10 @@ function stepOnce(epoch: Epoch, rule: RecurrenceRule): Epoch {
       );
     case "monthlyOrdinalWeekdayList":
       return earliestOf(rule.frequency.entries.map((entry) => nextEntryOccurrence(epoch, entry)));
+    case "monthlyDay":
+      return nextMonthlyDay(epoch, rule.frequency.day);
+    case "yearlyMonthDay":
+      return nextYearlyMonthDay(epoch, rule.frequency.month, rule.frequency.day);
   }
 }
 
@@ -218,9 +222,10 @@ function stepOnce(epoch: Epoch, rule: RecurrenceRule): Epoch {
  * `epoch` always qualifies — it's zero intervals from itself, by
  * definition — so this returns it unchanged, and the caller's floor
  * check is what decides whether that's actually usable. For an
- * absolute-calendar frequency (weekdays/workdays/monthlyOrdinalWeekday)
- * it genuinely depends on whether `epoch` falls on the pattern; when it
- * doesn't, this finds the nearest later instance without skipping past
+ * absolute-calendar frequency (weekdays/workdays/monthlyOrdinalWeekday/
+ * monthlyDay/yearlyMonthDay) it genuinely depends on whether `epoch`
+ * falls on the pattern; when it doesn't, this finds the nearest later
+ * instance without skipping past
  * one still inside `epoch`'s own period — the case issue #191 measured
  * going wrong ("every 3rd friday" typed on the month's first Friday
  * landing on next month's third Friday instead of this month's own,
@@ -251,6 +256,10 @@ function firstOnOrAfterOrigin(epoch: Epoch, rule: RecurrenceRule): Epoch {
       return earliestOf(
         rule.frequency.entries.map((entry) => firstEntryOccurrenceOnOrAfter(epoch, entry)),
       );
+    case "monthlyDay":
+      return firstMonthlyDayOnOrAfter(epoch, rule.frequency.day);
+    case "yearlyMonthDay":
+      return firstYearlyMonthDayOnOrAfter(epoch, rule.frequency.month, rule.frequency.day);
   }
 }
 
@@ -396,6 +405,59 @@ function firstEntryOccurrenceOnOrAfter(
 // kind with two or more entries (its own parseFrequency doc comment).
 function earliestOf(epochs: readonly Epoch[]): Epoch {
   return epochs.reduce((earliest, candidate) => (candidate < earliest ? candidate : earliest));
+}
+
+// `day` (1-31) inside `year`/`month`, clamped to that month's own length
+// the same way addMonths/addYears clamp a day that doesn't exist in the
+// resolved month — issue #385's `monthlyDay` and `yearlyMonthDay` share
+// this clamping rule, so both go through it rather than each
+// re-deriving it.
+function dayInMonth(year: number, month: number, day: number): Epoch {
+  return epochOf(year, month, Math.min(day, daysInMonth(year, month)));
+}
+
+// The next month's own `day`, one period *after* `epoch`'s own —
+// `monthlyDay`'s (issue #385) sibling of nextOrdinalWeekday above, minus
+// the weekday: only ever called (via stepOnce) with an `epoch` that
+// already sits on the pattern (i.e. `ymdOf(epoch).day === day`, modulo
+// clamping), so "one step" always means next month's instance.
+// firstMonthlyDayOnOrAfter below is the one that handles an arbitrary,
+// possibly-off-pattern epoch.
+function nextMonthlyDay(epoch: Epoch, day: number): Epoch {
+  const { year, month } = ymdOf(epoch);
+  const totalMonths = year * 12 + (month - 1) + 1;
+  const nextYear = Math.floor(totalMonths / 12);
+  const nextMonth = totalMonths - nextYear * 12 + 1;
+  return dayInMonth(nextYear, nextMonth, day);
+}
+
+// This month's own `day` if that's still on or after `epoch`, else the
+// identical later-month walk nextMonthlyDay above already does — the
+// same "does this period's own instance still lie ahead of (or land on)
+// today" question firstOrdinalWeekdayOnOrAfter asks, without the
+// weekday.
+function firstMonthlyDayOnOrAfter(epoch: Epoch, day: number): Epoch {
+  const { year, month } = ymdOf(epoch);
+  const thisMonth = dayInMonth(year, month, day);
+  return thisMonth >= epoch ? thisMonth : nextMonthlyDay(epoch, day);
+}
+
+// yearlyMonthDay's (issue #385) own "one period forward" — next year's
+// same month/day, clamped. Only ever called (via stepOnce) with an
+// `epoch` that already sits on the pattern; firstYearlyMonthDayOnOrAfter
+// below handles an arbitrary origin.
+function nextYearlyMonthDay(epoch: Epoch, month: number, day: number): Epoch {
+  const { year } = ymdOf(epoch);
+  return dayInMonth(year + 1, month, day);
+}
+
+// This year's own month/day if that's still on or after `epoch`, else
+// next year's — yearlyMonthDay's own "does this year's instance still
+// lie ahead of (or land on) today" question.
+function firstYearlyMonthDayOnOrAfter(epoch: Epoch, month: number, day: number): Epoch {
+  const { year } = ymdOf(epoch);
+  const thisYear = dayInMonth(year, month, day);
+  return thisYear >= epoch ? thisYear : nextYearlyMonthDay(epoch, month, day);
 }
 
 // A MonthDay carries no year of its own unless the text spelled one out

@@ -7,17 +7,18 @@ import type {
 } from "./rule";
 import { MONTH_TOKENS, ORDINAL_TOKENS, UNIT_TOKENS, WEEKDAY_TOKENS } from "./tokens";
 
-// "every"/"every!" followed by whitespace, or — issue #369 — glued
-// straight onto "day" with none at all ("everyday", one of Todoist's own
-// published recurrence-table rows). The `(?=day\b)` branch consumes only
-// "every"/"every!" itself, leaving "day" (or "day starting 1 nov", etc.)
+// "every"/"every!" (or issue #385's abbreviated "ev"/"ev!") followed by
+// whitespace, or — issue #369 — glued straight onto "day" with none at
+// all ("everyday", one of Todoist's own published recurrence-table
+// rows). The `(?=day\b)` branch consumes only "every"/"ev" (plus an
+// optional bang) itself, leaving "day" (or "day starting 1 nov", etc.)
 // in the text this function goes on to slice — the identical remainder
 // the spaced form "every day" already produces — so everything past this
-// line treats the two forms identically without needing to know which one
-// it got. `\bday\b` alone (nothing looser, like matching any following
-// word) is deliberate: "everybody" or "everydayisagoodday" typed as one
-// run must not be mistaken for this word.
-const EVERY_PREFIX = /^every(!)?(?:\s+|(?=day\b))/;
+// line treats every one of these forms identically without needing to
+// know which one it got. `\bday\b` alone (nothing looser, like matching
+// any following word) is deliberate: "everybody" or "everydayisagoodday"
+// typed as one run must not be mistaken for this word.
+const EVERY_PREFIX = /^(?:every|ev)(!)?(?:\s+|(?=day\b))/;
 const EXCLUSION_WORDS = /\b(except|excluding|but not)\b/;
 const TIME_CLAUSE = /\bat\s+([0-9]{1,2})(?::([0-9]{2}))?\s*(am|pm)?\b/gi;
 const DURATION_CLAUSE = /\bfor\s+(\d+)\s+(day|days|week|weeks|month|months|year|years)\b/i;
@@ -42,8 +43,27 @@ const ORDINAL_WEEKDAY_FORM = /^(\S+)\s+(\S+)$/;
 const ORDINAL_WEEKDAY_MONTH_FORM = /^(\S+)\s+(\S+)\s+(\S+)$/;
 // Same interval-prefix shape UNIT_FORM and QUARTER_FORM use, applied to
 // "workday(s)" — issue #368: the interval was previously silently
-// dropped because this shape didn't parse it at all.
-const WORKDAY_FORM = /^(\d+\s+|other\s+)?workdays?$/;
+// dropped because this shape didn't parse it at all. "weekday(s)" (issue
+// #385) is accepted as the identical pattern: Todoist's own "every
+// weekday" means the same Monday-Friday cadence "every workday" already
+// does, not a second frequency kind.
+const WORKDAY_FORM = /^(\d+\s+|other\s+)?(?:workdays?|weekdays?)$/;
+// A bare day-of-month, digit-suffixed ("1st"), with an optional literal
+// "month" in front (issue #385: "every 1st" and "every month on the 1st"
+// — after stripFiller removes "on"/"the" from the latter — are the same
+// rule, "month" carrying no meaning of its own here beyond distinguishing
+// this shape from a lone ordinal that ORDINAL_WEEKDAY_FORM below would
+// otherwise need a weekday to complete). Digit-based, not
+// ./tokens.ts's ORDINAL_TOKENS (word ordinals only go to "5th"/"last",
+// which names a weekday's position within a month, not an arbitrary
+// day-of-month up to 31).
+const MONTHLY_DAY_FORM = /^(?:month\s+)?(\d{1,2})(?:st|nd|rd|th)$/;
+// A month name plus a bare day number, no ordinal suffix ("jan 1", issue
+// #385) — a fixed yearly calendar date, distinct from `monthlyDay` above
+// (which has no month) and from `startBound`/`endBound`'s own `MonthDay`
+// (which bound a different frequency's window rather than being the
+// frequency itself).
+const YEARLY_MONTH_DAY_FORM = /^(\S+)\s+(\d{1,2})$/;
 
 /**
  * Parses one recurrence rule from its literal, user-typed text
@@ -237,14 +257,16 @@ function toMonthDay(match: RegExpMatchArray): MonthDay | null {
  * "the frequency core" — and decides which RecurrenceFrequency it names,
  * trying each recognised shape in turn: a bare weekday list first (a
  * closed vocabulary, so it can never be mistaken for anything else), then
- * workdays (with its own optional interval prefix, issue #368), then
- * ordinal-weekday-with-month — one entry or several, comma-separated
- * (issue #368's `monthlyOrdinalWeekday`/`monthlyOrdinalWeekdayList`) —
- * then the plain (unscoped) ordinal weekday, then "every quarter" folded
- * into a tripled monthly interval, then a plain interval-of-a-unit.
- * `null` means none of them matched — parseRecurrence turns that into its
- * own "unrecognised recurrence pattern" refusal, quoting the original
- * text rather than this stripped-down core.
+ * workdays/weekdays (with its own optional interval prefix, issue #368;
+ * "weekday" as a synonym, issue #385), then ordinal-weekday-with-month —
+ * one entry or several, comma-separated (issue #368's
+ * `monthlyOrdinalWeekday`/`monthlyOrdinalWeekdayList`) — then the plain
+ * (unscoped) ordinal weekday, then "every quarter" folded into a tripled
+ * monthly interval, then a bare day-of-month ("1st"/"month 1st") or a
+ * fixed yearly month-and-day ("jan 1") — both issue #385 — then a plain
+ * interval-of-a-unit. `null` means none of them matched — parseRecurrence
+ * turns that into its own "unrecognised recurrence pattern" refusal,
+ * quoting the original text rather than this stripped-down core.
  */
 function parseFrequency(core: string): { frequency: RecurrenceFrequency; interval: number } | null {
   const stripped = stripFiller(core);
@@ -330,6 +352,34 @@ function parseFrequency(core: string): { frequency: RecurrenceFrequency; interva
     const prefix = quarterMatch[1]?.trim();
     const quarterCount = prefix === undefined ? 1 : prefix === "other" ? 2 : Number(prefix);
     return { frequency: { kind: "monthly" }, interval: quarterCount * 3 };
+  }
+
+  // A bare day-of-month ("1st") or "month 1st" (issue #385) — checked
+  // before YEARLY_MONTH_DAY_FORM below, since a lone ordinal-suffixed
+  // token would also satisfy that regex's second group if it somehow
+  // preceded a month word, which it never does in this shape's own text.
+  const monthlyDayMatch = MONTHLY_DAY_FORM.exec(stripped);
+  if (monthlyDayMatch !== null) {
+    const dayText = monthlyDayMatch[1];
+    const day = dayText === undefined ? undefined : Number(dayText);
+    if (day !== undefined && day >= 1 && day <= 31) {
+      return { frequency: { kind: "monthlyDay", day }, interval: 1 };
+    }
+  }
+
+  // A month name plus a bare day number ("jan 1", issue #385) — a fixed
+  // yearly date. Tried last among the ordinal/month shapes: nothing
+  // earlier in this function claims a two-token "word digit" core, so
+  // there's no risk of shadowing a shape that should have matched first.
+  const yearlyMonthDayMatch = YEARLY_MONTH_DAY_FORM.exec(stripped);
+  if (yearlyMonthDayMatch !== null) {
+    const monthWord = yearlyMonthDayMatch[1];
+    const dayText = yearlyMonthDayMatch[2];
+    const month = monthWord === undefined ? undefined : MONTH_TOKENS.get(monthWord);
+    const day = dayText === undefined ? undefined : Number(dayText);
+    if (month !== undefined && day !== undefined && day >= 1 && day <= 31) {
+      return { frequency: { kind: "yearlyMonthDay", month, day }, interval: 1 };
+    }
   }
 
   const unitMatch = UNIT_FORM.exec(stripped);

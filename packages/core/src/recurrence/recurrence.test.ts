@@ -318,6 +318,58 @@ const CASES: readonly Case[] = [
     expect: occurrence("2026-04-05"),
   },
 
+  // --- Abbreviated "ev" and the "weekday" synonym (issue #385): both
+  // parse to the identical frequency an already-supported spelling
+  // produces, so their computed occurrence is the same as that spelling's
+  // own case above, not a new value to independently verify.
+  {
+    description: '"ev day" (issue #385) computes the identical occurrence "every day" does',
+    dateString: "ev day",
+    reference: { dueDate: "2026-01-05", now: dayKey("2026-01-05") },
+    expect: occurrence("2026-01-06"),
+  },
+  {
+    description:
+      '"every weekday" (issue #385) is the same Monday-Friday cadence "every workday" already is, not a second frequency kind',
+    dateString: "every weekday",
+    reference: { dueDate: "2026-01-09", now: dayKey("2026-01-09") },
+    expect: occurrence("2026-01-12"),
+  },
+
+  // --- Bare day-of-month (issue #385): "every 1st" and "every month on
+  // the 1st" name the identical rule — the same computed occurrence
+  // proves it, not just the parsed shape.
+  {
+    description: "\"every 1st\" steps to next month's 1st, from a due date that's itself the 1st",
+    dateString: "every 1st",
+    reference: { dueDate: "2026-01-01", now: dayKey("2026-01-01") },
+    expect: occurrence("2026-02-01"),
+  },
+  {
+    description: '"every month on the 1st" computes the identical occurrence "every 1st" does',
+    dateString: "every month on the 1st",
+    reference: { dueDate: "2026-01-01", now: dayKey("2026-01-01") },
+    expect: occurrence("2026-02-01"),
+  },
+  {
+    description:
+      '"every 31st" clamps to February\'s own last day in a non-leap year — the same clamping addMonths/addYears already apply, not a thrown or skipped occurrence',
+    dateString: "every 31st",
+    reference: { dueDate: "2026-01-31", now: dayKey("2026-01-31") },
+    expect: occurrence("2026-02-28"),
+  },
+
+  // --- Fixed yearly month-and-day (issue #385): "every jan 1," a
+  // birthday/anniversary shape distinct from monthlyOrdinalWeekday (no
+  // weekday at all) and from startBound/endBound's own MonthDay (which
+  // bounds a different frequency's window, not the frequency itself).
+  {
+    description: '"every jan 1" steps a full year forward from a due date that\'s itself Jan 1',
+    dateString: "every jan 1",
+    reference: { dueDate: "2026-01-01", now: dayKey("2026-01-01") },
+    expect: occurrence("2027-01-01"),
+  },
+
   // --- Times.
   {
     description: '"every day at 9am" attaches a time-of-day to every occurrence',
@@ -580,6 +632,39 @@ const FIRST_OCCURRENCE_CASES: readonly Case[] = [
     expect: occurrence("2026-10-02"),
   },
 
+  // --- Bare day-of-month (issue #385): absolute-calendar, like
+  // monthlyOrdinalWeekday above — matches its own origin only if the
+  // origin genuinely falls on the pattern.
+  {
+    description: '"every 1st" created on the 1st itself is due today',
+    dateString: "every 1st",
+    reference: { dueDate: null, now: dayKey("2026-09-01") },
+    expect: occurrence("2026-09-01"),
+  },
+  {
+    description:
+      "\"every 1st\" created after this month's 1st has already passed rolls to next month's",
+    dateString: "every 1st",
+    reference: { dueDate: null, now: FRIDAY },
+    expect: occurrence("2026-10-01"),
+  },
+
+  // --- Fixed yearly month-and-day (issue #385): same absolute-calendar
+  // reasoning, one year wide instead of one month.
+  {
+    description: '"every jan 1" created on Jan 1 itself is due today',
+    dateString: "every jan 1",
+    reference: { dueDate: null, now: dayKey("2026-01-01") },
+    expect: occurrence("2026-01-01"),
+  },
+  {
+    description:
+      "\"every jan 1\" created after this year's Jan 1 has already passed rolls to next year's",
+    dateString: "every jan 1",
+    reference: { dueDate: null, now: FRIDAY },
+    expect: occurrence("2027-01-01"),
+  },
+
   // --- The dueDate anchor: a rule anchored to a due date the caller also
   // supplied lands on that due date itself, not one interval past it.
   {
@@ -804,6 +889,91 @@ describe("parseRecurrence — grammar shape a date-only assertion can't show", (
   it('"everybody" is not mistaken for "every" + "day" glued together — it still refuses', () => {
     const result = parseRecurrence("everybody");
     expect(result.kind).toBe("refused");
+  });
+
+  // --- Issue #385: five phrasings Todoist accepts that the parser
+  // previously refused outright — each checked here for the shape it
+  // produces, on top of the computed-occurrence CASES above.
+
+  it('"ev" (issue #385) parses byte-identically to "every" for the same remainder', () => {
+    expect(parseRecurrence("ev day")).toEqual(parseRecurrence("every day"));
+  });
+
+  it('"ev!" carries the completion-anchor bang exactly like "every!" does', () => {
+    const result = parseRecurrence("ev! day");
+    expect(result).toMatchObject({ kind: "parsed", rule: { anchor: "completion" } });
+  });
+
+  it('"even" is not mistaken for the "ev" abbreviation — it still refuses', () => {
+    expect(parseRecurrence("even day").kind).toBe("refused");
+  });
+
+  it('"every weekday" parses to the same "workdays" frequency "every workday" does, not a second kind', () => {
+    expect(parseRecurrence("every weekday")).toEqual(parseRecurrence("every workday"));
+  });
+
+  it('"every 2 weekdays" carries an interval prefix exactly like "every 2 workdays" does', () => {
+    expect(parseRecurrence("every 2 weekdays")).toEqual(parseRecurrence("every 2 workdays"));
+  });
+
+  it('"every 1st" parses as monthlyDay, not monthlyOrdinalWeekday — there is no weekday in this shape at all', () => {
+    const result = parseRecurrence("every 1st");
+    expect(result).toEqual({
+      kind: "parsed",
+      rule: {
+        frequency: { kind: "monthlyDay", day: 1 },
+        interval: 1,
+        anchor: "due",
+        time: null,
+        startBound: null,
+        endBound: null,
+        durationBound: null,
+      },
+    });
+  });
+
+  it('"every month on the 1st" parses to the identical rule "every 1st" does — "month"/"on"/"the" carry no meaning of their own here', () => {
+    expect(parseRecurrence("every month on the 1st")).toEqual(parseRecurrence("every 1st"));
+  });
+
+  it('"every 3rd" (a different day-of-month) parses with that day, proving this isn\'t hard-coded to "1st"', () => {
+    const result = parseRecurrence("every 3rd");
+    expect(result).toMatchObject({
+      kind: "parsed",
+      rule: { frequency: { kind: "monthlyDay", day: 3 } },
+    });
+  });
+
+  it('"every jan 1" parses as yearlyMonthDay, distinct from monthlyDay (which has no month) and from a "starting"/"ending" MonthDay bound', () => {
+    const result = parseRecurrence("every jan 1");
+    expect(result).toEqual({
+      kind: "parsed",
+      rule: {
+        frequency: { kind: "yearlyMonthDay", month: 1, day: 1 },
+        interval: 1,
+        anchor: "due",
+        time: null,
+        startBound: null,
+        endBound: null,
+        durationBound: null,
+      },
+    });
+  });
+
+  it("\"every dec 25\" (a different month) resolves that month's token, proving this isn't hard-coded to January", () => {
+    const result = parseRecurrence("every dec 25");
+    expect(result).toMatchObject({
+      kind: "parsed",
+      rule: { frequency: { kind: "yearlyMonthDay", month: 12, day: 25 } },
+    });
+  });
+
+  it('a bare weekday comma-list ("every monday, wednesday and friday") still parses as "weekdays" — unaffected by the new monthlyDay/yearlyMonthDay shapes', () => {
+    const result = parseRecurrence("every monday, wednesday and friday");
+    expect(result).toMatchObject({
+      kind: "parsed",
+      rule: { frequency: { kind: "weekdays", days: ["monday", "wednesday", "friday"] } },
+    });
   });
 });
 

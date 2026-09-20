@@ -476,6 +476,13 @@ describe("recurrence phrases (issue #188)", () => {
     // identically to the spaced form, including with a trailing clause.
     ["water the plants everyday", "everyday", "water the plants"],
     ["pay rent everyday starting 1 nov", "everyday starting 1 nov", "pay rent"],
+    // Five phrasings the #364 corpus fixture measured as pending (issue
+    // #385) — each input below is the corpus's own exact string.
+    ["water plants ev day", "ev day", "water plants"],
+    ["take out the trash every weekday", "every weekday", "take out the trash"],
+    ["pay rent every 1st", "every 1st", "pay rent"],
+    ["pay rent every month on the 1st", "every month on the 1st", "pay rent"],
+    ["renew passport every jan 1", "every jan 1", "renew passport"],
   ])("%s", (input, expectedRaw, expectedContent) => {
     it(`recognises "${expectedRaw}" as one recurrence span and strips it from content`, () => {
       const result = parse(input);
