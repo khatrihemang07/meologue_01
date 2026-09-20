@@ -34,7 +34,6 @@ import { refreshTasks } from "@/lib/tasks-refresh";
 export interface AddTaskOverrides {
   /** The Task's `date` — the view's own inherited date if the reader typed no date/time token of their own, or `taskFieldsFromQuickAdd`'s resolved `date` (an explicit token, or a recognised recurrence's first occurrence) if they did. Undated (`null`) by default, matching a Task created directly in Todo (issue #169's own acceptance criterion). */
   date?: string | null;
-  deadline?: string | null;
   priority?: number;
   labelIds?: string[];
   /** `Task.dateString` — the canonical recurrence phrase quick-add-task.ts resolved, or `null` for a Task that doesn't repeat. */
@@ -115,8 +114,6 @@ export interface UseTasksResult {
    * goes through, rather than each calling `TaskStore.setDate` directly.
    */
   setTaskDate: (id: string, date: string | null) => void;
-  /** Sets a Task's `deadline` (issue #169) — TaskStore.setDeadline throws on a timed value; DatePickerSheet only ever hands this a bare day, so that refusal is never reachable from a picker. */
-  setTaskDeadline: (id: string, deadline: string | null) => void;
   /** Sets a Task's stored `priority` (1-4) — callers pass `storedPriorityOf(uiPriority)`, never the UI number directly (task-types.ts's own warning against open-coding the inversion). */
   setTaskPriority: (id: string, priority: number) => void;
   /**
@@ -416,10 +413,15 @@ export function useTasks(
       // call site rather than left to an omitted key's default — `?? `'s
       // right-hand side is that explicit "nothing" state for a caller
       // (every pre-#170 one, and this file's own tests) with no overrides
-      // of its own to give: undated, no deadline, priority 1
-      // ("no priority"), no Labels, no recurrence.
+      // of its own to give: undated, priority 1 ("no priority"), no
+      // Labels, no recurrence.
       date: overrides.date ?? null,
-      deadline: overrides.deadline ?? null,
+      // `deadline` is always `null` here — issue #376 removed every UI
+      // surface that could set one, so `AddTaskOverrides` carries no field
+      // for it anymore. The Task type still requires this field (D12: the
+      // storage column stays, unread — see task-views.ts's own header
+      // comment), so it's still written explicitly rather than omitted.
+      deadline: null,
       priority: overrides.priority ?? 1,
       labelIds: overrides.labelIds ?? [],
       dateString: overrides.dateString ?? null,
@@ -582,21 +584,6 @@ export function useTasks(
     setDateMutation.mutate({ id, date });
   }
 
-  const setDeadlineMutation = useMutation({
-    mutationFn: async ({ id, deadline }: { id: string; deadline: string | null }) => {
-      const before = await findTask(id);
-      await taskStore.setDeadline(id, deadline);
-      if (before) {
-        recordTaskEvent(before, "updated", { deadline, lastDeadline: before.deadline });
-      }
-    },
-    onSuccess: afterLocalWrite,
-  });
-
-  function setTaskDeadline(id: string, deadline: string | null) {
-    setDeadlineMutation.mutate({ id, deadline });
-  }
-
   const setPriorityMutation = useMutation({
     mutationFn: async ({ id, priority }: { id: string; priority: number }) => {
       const before = await findTask(id);
@@ -653,9 +640,9 @@ export function useTasks(
   const setDescriptionMutation = useMutation({
     // Issue #229: recorded on the activity log (format-event.ts's own
     // `"description" in extra` branch reads `description`/`lastDescription`
-    // the identical way `date`/`deadline` above already do) — before this
-    // ticket, a Description edit left no trace at all, the one Task
-    // attribute this hook silently didn't log.
+    // the identical way `date` above already does) — before this ticket,
+    // a Description edit left no trace at all, the one Task attribute
+    // this hook silently didn't log.
     mutationFn: async ({ id, description }: { id: string; description: string | null }) => {
       const before = await findTask(id);
       await taskStore.setDescription(id, description);
@@ -859,7 +846,6 @@ export function useTasks(
     reorderTaskToday,
     removeTask,
     setTaskDate,
-    setTaskDeadline,
     setTaskPriority,
     setTaskDateString,
     setTaskLabels,

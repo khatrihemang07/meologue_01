@@ -127,7 +127,6 @@ function renderProjectView(overrides: Partial<Parameters<typeof ProjectView>[0]>
     onComplete: vi.fn(),
     onCompleteForever: vi.fn(),
     onRequestDelete: vi.fn(),
-    onOpenSchedule: vi.fn(),
     onMoveToSection: vi.fn(),
     reorderTask: vi.fn(),
     setTaskParent: vi.fn(async () => {}),

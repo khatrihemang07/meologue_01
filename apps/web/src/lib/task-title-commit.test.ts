@@ -35,7 +35,6 @@ function setters(overrides: Partial<TaskTitleCommitSetters> = {}): TaskTitleComm
   return {
     renameTask: vi.fn(),
     setTaskDate: vi.fn(),
-    setTaskDeadline: vi.fn(),
     setTaskPriority: vi.fn(),
     setTaskDateString: vi.fn(),
     setTaskLabels: vi.fn(),
@@ -56,7 +55,6 @@ describe("commitTaskTitle", () => {
     expect(s.renameTask).not.toHaveBeenCalled();
     expect(s.setTaskDate).toHaveBeenCalledWith("task-1", "2026-09-03");
     expect(s.setTaskPriority).toHaveBeenCalledWith("task-1", 4);
-    expect(s.setTaskDeadline).not.toHaveBeenCalled();
     expect(s.setTaskDateString).not.toHaveBeenCalled();
     expect(s.setTaskLabels).not.toHaveBeenCalled();
   });
@@ -82,7 +80,10 @@ describe("commitTaskTitle", () => {
     expect(s.setTaskDate).toHaveBeenCalledWith("task-1", "2026-09-03");
   });
 
-  it("skips every date-family setter when nothing resolved, leaving an existing Date/Deadline/Priority/Labels untouched", async () => {
+  // Issue #376 removed `setTaskDeadline` (no surface can set one
+  // anymore), so a restored `deadline` value on the existing Task is
+  // included only to prove the rename path still tolerates it.
+  it("skips every date-family setter when nothing resolved, leaving an existing Date/Priority/Labels untouched", async () => {
     const existing = task({
       content: "buy milk",
       date: "2026-09-10",
@@ -95,7 +96,6 @@ describe("commitTaskTitle", () => {
 
     expect(s.renameTask).toHaveBeenCalledWith("task-1", "buy oat milk");
     expect(s.setTaskDate).not.toHaveBeenCalled();
-    expect(s.setTaskDeadline).not.toHaveBeenCalled();
     expect(s.setTaskPriority).not.toHaveBeenCalled();
     expect(s.setTaskDateString).not.toHaveBeenCalled();
     expect(s.setTaskLabels).not.toHaveBeenCalled();
@@ -110,12 +110,16 @@ describe("commitTaskTitle", () => {
     expect(s.setTaskDate).not.toHaveBeenCalled();
   });
 
-  it("skips setTaskDeadline when the resolved deadline already equals the Task's own", async () => {
+  // Issue #376: `{tomorrow}` still tokenises as "deadline" (issue #377
+  // removes that rule; untouched here), but this module has no
+  // `setTaskDeadline` left to call — the braces stay in the renamed
+  // content instead of being silently consumed.
+  it("keeps a typed {deadline} phrase as literal renamed content, calling no setter for it", async () => {
     const existing = task({ content: "buy milk", deadline: "2026-09-03" });
     const s = setters();
     await commitTaskTitle(existing, "buy milk {tomorrow}", { now: NOW }, s);
 
-    expect(s.setTaskDeadline).not.toHaveBeenCalled();
+    expect(s.renameTask).toHaveBeenCalledWith("task-1", "buy milk {tomorrow}");
   });
 
   // The sharpest priority case: typing "p4" resolves to the stored value

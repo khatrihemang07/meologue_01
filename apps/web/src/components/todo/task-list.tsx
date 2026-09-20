@@ -55,7 +55,6 @@ export interface TaskListProps {
   onComplete: (task: Task) => void;
   onCompleteForever: (task: Task) => void;
   onRequestDelete: (task: Task) => void;
-  onOpenSchedule: (task: Task) => void;
   /** Wired to every row's own "move to Section" select when `sections` is non-empty — undefined when it is, since TaskRow already hides the control for an empty `sectionOptions` array on its own, but there is no Section to name here regardless. */
   onMoveToSection?: (taskId: string, sectionId: string | null) => void;
   reorderTask: (id: string, orderKey: string) => void;
@@ -77,7 +76,6 @@ export function TaskList({
   onComplete,
   onCompleteForever,
   onRequestDelete,
-  onOpenSchedule,
   onMoveToSection,
   reorderTask,
   setTaskParent,
@@ -115,7 +113,6 @@ export function TaskList({
     onComplete,
     onCompleteForever,
     onRequestDelete,
-    onOpenSchedule,
     onMoveToSection,
     onUncomplete,
     reorderTask,

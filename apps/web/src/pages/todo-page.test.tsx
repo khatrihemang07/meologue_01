@@ -303,7 +303,6 @@ function readyContext(overrides: Partial<EntryStoreOutletContext> = {}): EntrySt
     reorderTaskToday: vi.fn(),
     removeTask: vi.fn(),
     setTaskDate: vi.fn(),
-    setTaskDeadline: vi.fn(),
     setTaskPriority: vi.fn(),
     setTaskDateString: vi.fn(),
     setTaskLabels: vi.fn(),
@@ -1230,10 +1229,13 @@ describe("TodoPage — rename resolves recognised phrases (issue #247)", () => {
     expect(setTaskPriority).toHaveBeenCalledWith(detailTaskId, 4);
   });
 
-  it("leaves an existing Date, Deadline, Priority and Labels untouched when a rename contains no recognised phrase", async () => {
+  // Issue #376 removed `setTaskDeadline` (no surface can set one anymore),
+  // so a Task carrying a restored `deadline` value is included here only
+  // to prove the rename path still tolerates it without throwing — not
+  // because anything could still act on it.
+  it("leaves an existing Date, Priority and Labels untouched when a rename contains no recognised phrase", async () => {
     const renameTask = vi.fn();
     const setTaskDate = vi.fn();
-    const setTaskDeadline = vi.fn();
     const setTaskPriority = vi.fn();
     const setTaskLabels = vi.fn();
     renderTodoPage(
@@ -1248,7 +1250,7 @@ describe("TodoPage — rename resolves recognised phrases (issue #247)", () => {
             labelIds: ["label-existing"],
           }),
         ],
-        { renameTask, setTaskDate, setTaskDeadline, setTaskPriority, setTaskLabels },
+        { renameTask, setTaskDate, setTaskPriority, setTaskLabels },
       ),
     );
 
@@ -1260,7 +1262,6 @@ describe("TodoPage — rename resolves recognised phrases (issue #247)", () => {
 
     await waitFor(() => expect(renameTask).toHaveBeenCalledWith("a", "buy oat milk"));
     expect(setTaskDate).not.toHaveBeenCalled();
-    expect(setTaskDeadline).not.toHaveBeenCalled();
     expect(setTaskPriority).not.toHaveBeenCalled();
     expect(setTaskLabels).not.toHaveBeenCalled();
   });
@@ -1339,12 +1340,15 @@ describe("TodoPage — Today", () => {
 // now, so this describe block exercises the sheet through the
 // More-actions "Deadline…" item instead, the door that still reaches it.
 describe("TodoPage — scheduling", () => {
+  // Issue #376 removed the More-actions "Deadline…" item that used to
+  // open this sheet from Inbox — `Y` (Priority) is the only door left, so
+  // that's what this test uses to reach it now.
   it("closing the sheet leaves no Task being scheduled", async () => {
     renderTodoPage(inboxContext([task({ id: "a", content: "call mum" })]));
 
-    await waitFor(() => expect(screen.getByText("call mum")).toBeInTheDocument());
-    fireEvent.pointerDown(screen.getByRole("button", { name: 'More actions for "call mum"' }));
-    fireEvent.click(screen.getByRole("menuitem", { name: /^Deadline/ }));
+    const title = await screen.findByRole("button", { name: "call mum" });
+    title.focus();
+    fireEvent.keyDown(document, { key: "y" });
     // `LazyTaskScheduleSheet` resolves its `import()` asynchronously
     // (lazy-task-schedule-sheet.ts's own header comment) — wait for the
     // dialog to actually mount before dismissing it.

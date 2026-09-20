@@ -1,8 +1,8 @@
 import { hasTime } from "@meologue/core";
 import { format } from "date-fns";
 
-// `day` is always YYYY-MM-DD here (Task.date's own all-day shape, or
-// Task.deadline, which is always date-only). Parsed with the local
+// `day` is always YYYY-MM-DD here (Task.date's own all-day shape).
+// Parsed with the local
 // three-argument `Date` constructor, never `new Date(day)` —
 // lib/local-day-key.ts's own header comment (home of `localDayKey`/
 // `parseDayKey`, the identical conversion pair) names exactly the trap

@@ -64,7 +64,6 @@ function renderTree(overrides: Partial<Parameters<typeof TaskTree>[0]> = {}) {
     onComplete: vi.fn(),
     onCompleteForever: vi.fn(),
     onRequestDelete: vi.fn(),
-    onOpenSchedule: vi.fn(),
     reorderTask: vi.fn(),
     setTaskParent: vi.fn(async () => {}),
     listTaskChildren: vi.fn(async () => []),

@@ -47,7 +47,7 @@ import { TaskSchedulePopover } from "@/components/todo/task-schedule-popover";
 import { taskTitleText } from "@/components/todo/task-title-text";
 import { SWIPE_TARGET_ATTRIBUTE } from "@/hooks/use-swipe-actions";
 import { useTaskDateState } from "@/hooks/use-task-date-state";
-import { formatDay, formatTaskDate } from "@/lib/format-task-date";
+import { formatTaskDate } from "@/lib/format-task-date";
 import { localDayKey } from "@/lib/local-day-key";
 import { projectNameFor } from "@/lib/project-name";
 import type { QuickAddAutocompleteOptions } from "@/lib/quick-add-autocomplete";
@@ -77,14 +77,6 @@ export interface TaskRowContentProps {
   onCompleteForever: () => void;
   onUncomplete?: () => void;
   onRequestDelete: () => void;
-  /**
-   * Opens the shared `TaskScheduleSheet` (Deadline and Priority) — narrowed
-   * by issue #253, which moved Date onto its own anchored
-   * `TaskSchedulePopover` instance (`scheduleOpen`/`onScheduleOpenChange`
-   * above) rather than the sheet's own "Pick a date" button. This prop is
-   * now reached only from `TaskCommandMenu`'s "Deadline…" item.
-   */
-  onOpenSchedule: () => void;
   isDropTarget: boolean;
   isNestTarget: boolean;
   /** See `TaskRow`'s own `isDragging` doc comment (TaskRowProps) — forwarded straight through, unchanged. */
@@ -145,7 +137,6 @@ export function TaskRowContent({
   onCompleteForever,
   onUncomplete,
   onRequestDelete,
-  onOpenSchedule,
   isDropTarget,
   isNestTarget,
   isDragging = false,
@@ -236,7 +227,6 @@ export function TaskRowContent({
   const descriptionFirstLine = task.description?.split("\n")[0] ?? "";
   const hasMetadata =
     (dateDisplay !== null && !suppressDateBadge) ||
-    task.deadline !== null ||
     isRecurring ||
     resolvedLabels.length > 0 ||
     (projectName !== null && !suppressProjectBadge) ||
@@ -468,7 +458,6 @@ export function TaskRowContent({
                 </span>
               )
             )}
-            {task.deadline !== null && <span>Due {formatDay(task.deadline)}</span>}
             {resolvedLabels.map((label) => (
               <LabelBadge key={label.id} label={label} />
             ))}
@@ -551,8 +540,9 @@ export function TaskRowContent({
           reach" — while #178's full command set (Edit, Date, Priority,
           Deadline, Labels, Move to…, Copy link, Delete) had nowhere else to
           go on a phone. It has one now: #302's detail sheet renders Date,
-          Priority, Deadline, Labels and Project as inline attribute fields
-          in its own body, and its own `⋮` overflow carries Copy link,
+          Priority, Labels and Project as inline attribute fields (Deadline
+          too, until issue #376 removed its own field from that list) in
+          its own body, and its own `⋮` overflow carries Copy link,
           Complete forever and Delete — the same three actions this menu's
           own Copy-link/Delete items duplicate. "Edit" here just calls
           `onOpenDetail`, the identical destination the title button already
@@ -584,8 +574,9 @@ export function TaskRowContent({
       </button>
       {/*
         Issue #253: Todoist's own scheduler — an anchored popover, not the
-        bottom sheet this button used to open (`onOpenSchedule`, now reached
-        only from Deadline/Priority). One `TaskSchedulePopover` instance per
+        bottom sheet this button used to open (`TaskScheduleSheet`, reached
+        from this row only via its now-removed "Deadline…" command-menu
+        item — issue #376). One `TaskSchedulePopover` instance per
         row (`scheduleOpen`/`onScheduleOpenChange`'s own doc comment above),
         anchored to this very button — a plain `<button>`, not `<Button>`
         (ui/button.tsx): Radix's `asChild` clones this element and attaches
@@ -658,7 +649,6 @@ export function TaskRowContent({
         }
         onOpenDetail={() => detailActions.onOpenDetail(task)}
         onOpenDate={() => onScheduleOpenChange(true)}
-        onOpenSchedule={onOpenSchedule}
         onSetPriority={(priority) => detailActions.onSetPriority(task.id, priority)}
         onSetProject={(projectId) => detailActions.onSetProject(task.id, projectId)}
         onSetLabels={(labelIds) => detailActions.onSetLabels(task.id, labelIds)}

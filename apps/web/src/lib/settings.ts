@@ -358,8 +358,8 @@ function writeStoredFormatBarVisible(visible: boolean): void {
  * meaning from ordinary words with no marker the reader typed on purpose
  * — that type's own doc comment names this exactly as the family Todoist's
  * "Create **monthly** report" false positive belongs to. Sigil-marked
- * tokens (`#project`, `@label`, `p1`, `!reminder`, `{deadline}`,
- * `for 45min`, a leading `* `, `//`) are unaffected either way: a reader
+ * tokens (`#project`, `@label`, `p1`, `!reminder`, `for 45min`, a leading
+ * `* `, `//`) are unaffected either way: a reader
  * who typed an explicit marker asked for that word to mean something, so
  * there is no false-positive risk this setting exists to let them turn
  * off.

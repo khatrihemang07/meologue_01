@@ -8,13 +8,15 @@
  * that calls `onSetDate` once per overdue Task — that whole path is what
  * lives here now.
  *
- * Reschedules only ever `onSetDate`, never `onSetDeadline`: a Deadline is
- * the hard cutoff a Task must still be *done* by (CONTEXT.md's Deadline
- * entry), and moving it because a reader hasn't gotten to the Task yet
- * would quietly relax the one field that isn't supposed to move for that
- * reason. A Task overdue purely by a passed Deadline, with no `date` at
- * all, gets one from this action the same as any other — that's what
- * actually clears it from Overdue.
+ * Reschedules only ever `onSetDate` — there is no `onSetDeadline` to call
+ * even if it wanted to (issue #376 removed it): a Deadline was always the
+ * hard cutoff a Task must still be *done* by (CONTEXT.md's Deadline
+ * entry, kept for D12's own record even now nothing reads the field), and
+ * moving one because a reader hadn't gotten to the Task yet would have
+ * quietly relaxed the one field that wasn't supposed to move for that
+ * reason. Issue #375 already stopped a passed Deadline putting an undated
+ * Task in Overdue at all, so every Task this action ever sees carries a
+ * real `date` for it to move.
  *
  * No `initialDate` passed to the underlying `DatePickerSheet` — a bulk
  * move across Tasks with different original dates has no single "current"

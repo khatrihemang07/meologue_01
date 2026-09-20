@@ -19,16 +19,24 @@ import type {
 import { firstOccurrence } from "@meologue/core";
 
 /**
- * Every `QuickAddTokenKind` the parser recognises but Task
- * (../../packages/core/src/task-types.ts) has no field for yet:
- * `uncompletable`/`description`/`reminder` are recognised for #170's own
- * sake (QuickAddResult's own doc comments say as much for each —
- * `reminder`'s own field comment names it explicitly: "Task has no field
- * to persist this in yet") with storage left for whichever later ticket
- * adds it. `Task.date`'s own doc comment already lists "reminders" among
- * what a Date will eventually drive, which is a forward-looking mention,
- * not a field that exists today — checked directly against
- * task-types.ts itself, not assumed from that comment's own wording.
+ * Every `QuickAddTokenKind` the parser recognises but this app never turns
+ * into a stored field: `uncompletable`/`description`/`reminder` because
+ * Task (../../packages/core/src/task-types.ts) has no field for them yet
+ * (QuickAddResult's own doc comments say as much for each — `reminder`'s
+ * own field comment names it explicitly: "Task has no field to persist
+ * this in yet") with storage left for whichever later ticket adds it.
+ * `Task.date`'s own doc comment already lists "reminders" among what a
+ * Date will eventually drive, which is a forward-looking mention, not a
+ * field that exists today — checked directly against task-types.ts
+ * itself, not assumed from that comment's own wording.
+ *
+ * `deadline` sits here for the opposite reason: `Task.deadline` is a real,
+ * already-stored field (kept, unread — D12), but issue #376 removed every
+ * UI surface that could ever apply a parsed one, so `taskFieldsFromQuickAdd`
+ * below no longer resolves it into anything a caller acts on. The parser
+ * itself is untouched (issue #377's own job), so `{24 sept}` still
+ * tokenises as `"deadline"` today — this is the one place that stops
+ * treating that token as meaningful.
  *
  * `project`/`section` used to sit in this set too, since issue #171
  * sequenced Project/Section storage apart from the parser itself ("each
@@ -40,8 +48,8 @@ import { firstOccurrence } from "@meologue/core";
  * stripped from `content` exactly like every other supported token,
  * the same way a recognised date or `@label` already was.
  *
- * The point of naming the three still here rather than leaving them to
- * fall out of `content` silently: a recognised, non-demoted token's span
+ * The point of naming these four here rather than leaving them to fall
+ * out of `content` silently: a recognised, non-demoted token's span
  * is always removed from `QuickAddResult.content` (../../packages/core/src/
  * quick-add/parse-quick-add.ts's `buildContent`) — correct for a field
  * this app actually stores (the reader sees the words move from the
@@ -77,6 +85,15 @@ const UNSUPPORTED_TOKEN_KINDS: ReadonlySet<QuickAddTokenKind> = new Set([
   "uncompletable",
   "description",
   "reminder",
+  // Issue #376: Deadline lost every UI surface that could apply it —
+  // `QuickAddTaskFields` no longer carries the field at all (below) — but
+  // the parser (`../../packages/core/src/quick-add/rules.ts`) still
+  // recognises `{24 sept}` as a "deadline" token today (issue #377's own
+  // removal of that rule hasn't landed yet). Routed through here for the
+  // identical reason `reminder` already is: a recognised-but-unapplied
+  // token's raw text has to survive in `content` rather than vanish with
+  // nothing to show for it.
+  "deadline",
 ]);
 
 /**
@@ -153,7 +170,6 @@ const AFTER_DAYS_PATTERN = /^after\s+(\d+)\s+days?$/i;
 export interface QuickAddTaskFields {
   content: string;
   date: string | null;
-  deadline: string | null;
   priority: number;
   /** `../../packages/core/src/task-types.ts`'s `Task.dateString` — the canonical recurrence phrase (see `RECURRENCE_WORD_TO_PHRASE` above), or `null` for a Task that doesn't repeat. */
   dateString: string | null;
@@ -323,7 +339,6 @@ export function taskFieldsFromQuickAdd(
     // own doc comment: "the string is the truth, the computed date is a
     // consequence of it").
     date: recurrence.dateString !== null ? recurrence.date : result.date,
-    deadline: result.deadline,
     priority: result.priority,
     dateString: recurrence.dateString,
     labelNames: result.labelNames,
@@ -338,7 +353,7 @@ export function taskFieldsFromQuickAdd(
  * number isn't enough): `null` when `result.tokens` holds no `"priority"`
  * entry at all, the same stored value `taskFieldsFromQuickAdd` already
  * computed otherwise. Every other field is identical — a rename resolves
- * a date, a deadline, a recurrence and `@label`s exactly the way adding a
+ * a date, a recurrence and `@label`s exactly the way adding a
  * Task does, task-title-commit.ts's own guards are what decide whether a
  * `null` here (or on any other field) means "leave the Task's existing
  * value alone," not this function.

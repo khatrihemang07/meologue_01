@@ -81,7 +81,6 @@ function renderMenu(overrides: Partial<Parameters<typeof TaskCommandMenu>[0]> = 
     trigger: <button type="button">More</button>,
     onOpenDetail: vi.fn(),
     onOpenDate: vi.fn(),
-    onOpenSchedule: vi.fn(),
     onSetPriority: vi.fn(),
     onSetProject: vi.fn(),
     onSetLabels: vi.fn(),
@@ -168,10 +167,10 @@ describe("TaskCommandMenu", () => {
     expect(onOpenDetail).toHaveBeenCalledTimes(1);
   });
 
-  // Issue #253: Date and Deadline now open genuinely different surfaces —
-  // Date the row's own anchored `TaskSchedulePopover` instance
-  // (`onOpenDate`), Deadline the shared `TaskScheduleSheet` (`onOpenSchedule`,
-  // unchanged) — where before this ticket both opened the identical sheet.
+  // Issue #253: Date opens the row's own anchored `TaskSchedulePopover`
+  // instance (`onOpenDate`) rather than the shared `TaskScheduleSheet` —
+  // Deadline used to open that sheet through `onOpenSchedule`, but issue
+  // #376 removed the "Deadline…" item (and `onOpenSchedule`) entirely.
   //
   // Issue #255: `onOpenDate` no longer fires synchronously from `onSelect`
   // — it now waits for this menu's own `onCloseAutoFocus`, which only
@@ -180,26 +179,22 @@ describe("TaskCommandMenu", () => {
   // jsdom runs no real CSS animation, so `Presence` resolves quickly, but
   // still asynchronously — hence `waitFor` rather than a synchronous
   // assertion right after the click.
-  it("Date opens the row's own scheduler popover through onOpenDate, not onOpenSchedule", async () => {
+  it("Date opens the row's own scheduler popover through onOpenDate", async () => {
     const onOpenDate = vi.fn();
-    const onOpenSchedule = vi.fn();
-    renderMenu({ onOpenDate, onOpenSchedule });
+    renderMenu({ onOpenDate });
 
     fireEvent.click(screen.getByRole("menuitem", { name: /^Date/ }));
 
     await waitFor(() => expect(onOpenDate).toHaveBeenCalledTimes(1));
-    expect(onOpenSchedule).not.toHaveBeenCalled();
   });
 
-  it("Deadline still opens the shared TaskScheduleSheet through onOpenSchedule", () => {
-    const onOpenDate = vi.fn();
-    const onOpenSchedule = vi.fn();
-    renderMenu({ onOpenDate, onOpenSchedule });
+  // Issue #376's own acceptance criterion: no surface offers to set, edit,
+  // clear or display a deadline — this menu no longer has a "Deadline…"
+  // item at all, not merely one wired to nothing.
+  it("has no Deadline item", () => {
+    renderMenu();
 
-    fireEvent.click(screen.getByRole("menuitem", { name: /^Deadline/ }));
-
-    expect(onOpenSchedule).toHaveBeenCalledTimes(1);
-    expect(onOpenDate).not.toHaveBeenCalled();
+    expect(screen.queryByRole("menuitem", { name: /^Deadline/ })).not.toBeInTheDocument();
   });
 
   it("Priority's own submenu writes the stored (inverted) value, never the UI number", () => {

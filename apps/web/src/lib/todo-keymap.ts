@@ -109,14 +109,17 @@ export const TODO_KEY_BINDINGS: readonly TodoKeyBinding[] = [
     when: "task-focused",
     keys: ["c"],
   },
-  // `T`/`D`/`Y` below all target Todoist's own three separate pickers —
-  // `D`/`Y` (Deadline/Priority) still open the one shared
-  // `TaskScheduleSheet` that holds both (`task-schedule-sheet.tsx`'s own
-  // header comment). `T` (Date) no longer does: issue #253 moved Date onto
-  // its own anchored `TaskSchedulePopover`, reached via `OPEN_SCHEDULE_
-  // EVENT` below rather than `use-todo-keymap.ts`'s `onOpenSchedule`
-  // (`OPEN_SCHEDULE_EVENT`'s own doc comment has the fuller fan-in
-  // reasoning).
+  // `T`/`Y` below target two of Todoist's own separate pickers — `Y`
+  // still opens the shared `TaskScheduleSheet` (`task-schedule-sheet.tsx`'s
+  // own header comment), which held Deadline alongside Priority until
+  // issue #376 removed Deadline's picker from it; `Y` now opens it for
+  // Priority alone. `T` (Date) opens something else entirely: issue #253
+  // moved Date onto its own anchored `TaskSchedulePopover`, reached via
+  // `OPEN_SCHEDULE_EVENT` below rather than `use-todo-keymap.ts`'s
+  // `onOpenSchedule` (`OPEN_SCHEDULE_EVENT`'s own doc comment has the
+  // fuller fan-in reasoning). `D`/`Shift+D` (Set/Remove deadline) were
+  // issue #376's own keyboard-shortcut removal — Deadline has no picker
+  // left for either to open or clear.
   {
     id: "set-date",
     section: "Edit task",
@@ -130,20 +133,6 @@ export const TODO_KEY_BINDINGS: readonly TodoKeyBinding[] = [
     label: "Remove date",
     when: "task-focused",
     keys: ["shift+t"],
-  },
-  {
-    id: "set-deadline",
-    section: "Edit task",
-    label: "Set deadline…",
-    when: "task-focused",
-    keys: ["d"],
-  },
-  {
-    id: "remove-deadline",
-    section: "Edit task",
-    label: "Remove deadline",
-    when: "task-focused",
-    keys: ["shift+d"],
   },
   {
     id: "set-priority",

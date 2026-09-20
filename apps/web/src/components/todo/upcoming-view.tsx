@@ -19,8 +19,7 @@ export interface UpcomingViewProps {
   /** Shift+Click on a recurring Task's checkbox, or its touch-reachable button — "Complete and archive recurring task," ending the series. */
   onCompleteForever: (id: string, content: string) => void;
   onRequestDelete: (id: string) => void;
-  onOpenSchedule: (id: string) => void;
-  /** The Overdue section's own bulk Reschedule button calls this — see `overdue-reschedule-action.tsx`'s own doc comment on why `onSetDate` and never `onSetDeadline`. */
+  /** The Overdue section's own bulk Reschedule button calls this — see `overdue-reschedule-action.tsx`'s own doc comment on why `onSetDate` alone. */
   onSetDate: (id: string, date: string | null) => void;
 }
 
@@ -30,7 +29,6 @@ export function UpcomingView({
   onComplete,
   onCompleteForever,
   onRequestDelete,
-  onOpenSchedule,
   onSetDate,
 }: UpcomingViewProps) {
   // Issue #303: reuses `use-swipe-actions.ts`'s shared recogniser —
@@ -168,7 +166,6 @@ export function UpcomingView({
                     onComplete={() => onComplete(task.id, task.content, task.dateString)}
                     onCompleteForever={() => onCompleteForever(task.id, task.content)}
                     onRequestDelete={() => onRequestDelete(task.id)}
-                    onOpenSchedule={() => onOpenSchedule(task.id)}
                   />
                 ))}
               </ul>
@@ -204,7 +201,6 @@ export function UpcomingView({
                       onComplete={() => onComplete(task.id, task.content, task.dateString)}
                       onCompleteForever={() => onCompleteForever(task.id, task.content)}
                       onRequestDelete={() => onRequestDelete(task.id)}
-                      onOpenSchedule={() => onOpenSchedule(task.id)}
                     />
                   ))}
                 </ul>

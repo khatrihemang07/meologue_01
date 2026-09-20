@@ -12,13 +12,13 @@ export interface DraftPrioritySheetProps {
 
 /**
  * `TaskScheduleSheet`'s Priority section, alone, in a sheet of its own —
- * the draft-coupled sibling issue #372's Step 4 asks for. Deliberately
- * carries no Deadline section: Deadline is a Task-only concept a Quick
- * Add draft has no chip for (`task-schedule-chips.tsx`'s own header
- * comment: "never something typed into an Entry" — Todo's `TaskScheduleSheet`
- * is where Deadline lives, and that stays unchanged, above), so once
- * Deadline is gone there is nothing left in this sheet to be Task-coupled
- * about.
+ * the draft-coupled sibling issue #372's Step 4 asks for. Carries no
+ * Deadline section for the identical reason `task-schedule-chips.tsx`'s
+ * own header comment gives for its own omission ("never something typed
+ * into an Entry" — Deadline was a Task-only concept even while
+ * `TaskScheduleSheet` still held a picker for it, above) — and issue
+ * #376 removed that picker from `TaskScheduleSheet` entirely besides, so
+ * there is nothing left in either sheet to be Task-coupled about.
  *
  * Fully prop-driven — no `Task` import anywhere in this file, the same
  * "no coupling" contract `TaskSchedulePopover`/`TaskTimeDialog` already

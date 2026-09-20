@@ -415,16 +415,11 @@ export function describeEventLine(
           ? { lead: `Set the date${on}`, subject, detail: `to ${value}` }
           : { lead: `Changed the date${on}`, subject, detail: `to ${value}` };
       }
-      if ("deadline" in extra) {
-        const on = onThisTask ? "" : " on";
-        if (extra.deadline === null) {
-          return { lead: `Removed the deadline${on}`, subject };
-        }
-        const value = formatDateValue(extra.deadline as string);
-        return extra.lastDeadline == null
-          ? { lead: `Set the deadline${on}`, subject, detail: `to ${value}` }
-          : { lead: `Changed the deadline${on}`, subject, detail: `to ${value}` };
-      }
+      // Issue #376: no surface writes `extra.deadline` anymore (use-tasks.ts
+      // no longer has a `setTaskDeadline` mutation to record it from), so
+      // this branch is gone — falls through to the generic "Updated" below
+      // for any Event an old build already recorded with it, rather than
+      // naming Deadline in copy no reader can act on anymore.
       if ("priority" in extra) {
         return { lead: onThisTask ? "Changed the priority" : "Changed the priority of", subject };
       }

@@ -6,9 +6,10 @@
  * `@meologue/core`'s quick-add grammar (`packages/core/src/quick-add/`)
  * resolves a date/time token and a priority token, and Todo's own
  * `QuickAddTaskFields` (`lib/quick-add-task.ts`) carries no Deadline
- * field at all — Deadline is a Todo-only concept a reader sets from
- * `TaskScheduleSheet`, never something typed into an Entry. That is why
- * this component omits Deadline and the recurrence-rule line
+ * field at all — Deadline had no surface left to set one from even before
+ * this component existed (issue #376 removed `TaskScheduleSheet`'s own
+ * half of it), and was never something typed into an Entry regardless.
+ * That is why this component omits Deadline and the recurrence-rule line
  * `task-row.tsx`'s own schedule badge also shows: those were never part
  * of what a checkbox in an Entry promised to carry back.
  *

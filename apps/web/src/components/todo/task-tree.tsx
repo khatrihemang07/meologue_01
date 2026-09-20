@@ -98,7 +98,6 @@ export interface TaskTreeProps {
   onComplete: (task: Task) => void;
   onCompleteForever: (task: Task) => void;
   onRequestDelete: (task: Task) => void;
-  onOpenSchedule: (task: Task) => void;
   onMoveToSection?: (taskId: string, sectionId: string | null) => void;
   reorderTask: (id: string, orderKey: string) => void;
   setTaskParent: (id: string, parentId: string | null) => Promise<void>;
@@ -132,7 +131,6 @@ export function TaskTree({
   onComplete,
   onCompleteForever,
   onRequestDelete,
-  onOpenSchedule,
   onMoveToSection,
   reorderTask,
   setTaskParent,
@@ -594,7 +592,6 @@ export function TaskTree({
             onComplete={onComplete}
             onCompleteForever={onCompleteForever}
             onRequestDelete={onRequestDelete}
-            onOpenSchedule={onOpenSchedule}
             onMoveToSection={onMoveToSection}
             onHandlePointerDown={handlePointerDown(task.id)}
             onHandlePointerMove={handlePointerMove}
@@ -640,7 +637,6 @@ export function TaskTree({
                 onCompleteForever={() => onCompleteForever(task)}
                 onUncomplete={() => onUncomplete?.(task)}
                 onRequestDelete={() => onRequestDelete(task)}
-                onOpenSchedule={() => onOpenSchedule(task)}
                 onMoveToSection={
                   onMoveToSection && ((sectionId) => onMoveToSection(task.id, sectionId))
                 }
@@ -683,7 +679,6 @@ interface TaskTreeRowProps {
   onComplete: (task: Task) => void;
   onCompleteForever: (task: Task) => void;
   onRequestDelete: (task: Task) => void;
-  onOpenSchedule: (task: Task) => void;
   onMoveToSection?: (taskId: string, sectionId: string | null) => void;
   onHandlePointerDown: (event: PointerEvent<HTMLButtonElement>) => void;
   onHandlePointerMove: (event: PointerEvent<HTMLElement>) => void;
@@ -723,7 +718,6 @@ function TaskTreeRow({
   onComplete,
   onCompleteForever,
   onRequestDelete,
-  onOpenSchedule,
   onMoveToSection,
   onHandlePointerDown,
   onHandlePointerMove,
@@ -792,7 +786,6 @@ function TaskTreeRow({
       onComplete={() => onComplete(task)}
       onCompleteForever={() => onCompleteForever(task)}
       onRequestDelete={() => onRequestDelete(task)}
-      onOpenSchedule={() => onOpenSchedule(task)}
       sectionOptions={sectionOptions}
       onMoveToSection={onMoveToSection && ((sectionId) => onMoveToSection(task.id, sectionId))}
       onHandlePointerDown={onHandlePointerDown}
@@ -819,7 +812,6 @@ function TaskTreeRow({
           onComplete={onComplete}
           onCompleteForever={onCompleteForever}
           onRequestDelete={onRequestDelete}
-          onOpenSchedule={onOpenSchedule}
           onMoveToSection={onMoveToSection}
           reorderTask={reorderTask}
           setTaskParent={setTaskParent}

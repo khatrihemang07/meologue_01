@@ -60,11 +60,14 @@ function defaultPromotionContext(): ComposerPromotionContext {
  * Composer highlights recognised tokens... so it files itself" (issue
  * #173's own acceptance criterion) actually means, and it wins instead
  * — this is `??`, not an unconditional overwrite, on purpose.
- * `deadline`/`priority`/`dateString`/`labelIds` all carry the
- * parse's own resolved values unconditionally, the identical fields
- * `todo-page.tsx`'s own `handleAdd` already writes from
- * `taskFieldsFromQuickAdd` for the add field — Promotion is that same
- * parse, not a second, poorer one.
+ * `priority`/`dateString`/`labelIds` all carry the parse's own resolved
+ * values unconditionally, the identical fields `todo-page.tsx`'s own
+ * `handleAdd` already writes from `taskFieldsFromQuickAdd` for the add
+ * field — Promotion is that same parse, not a second, poorer one.
+ * `deadline` isn't among them: issue #376 removed it from
+ * `QuickAddTaskFields` (and every UI surface that could apply one), so
+ * `promotedTaskToTask` below always writes `null`, the same way
+ * `use-tasks.ts`'s own `addTask` now does.
  *
  * Module-scope and exported, not a closure inside `useHistory` (issue
  * #174) — `backfill-tasks.ts` needs the identical capture-date rule for
@@ -108,7 +111,9 @@ export function promotedTaskToTask(
     syncedAt: null,
     deletedAt: null,
     date: promoted.date ?? entryDayKey(capturedAt, deviceUtcOffsetMinutes()),
-    deadline: promoted.deadline,
+    // Always `null` — see this function's own header comment on why
+    // `PromotedTask` carries no `deadline` field to read one from.
+    deadline: null,
     priority: promoted.priority,
     labelIds,
     dateString: promoted.dateString,

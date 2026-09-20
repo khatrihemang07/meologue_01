@@ -138,15 +138,6 @@ export interface TaskRowProps {
    */
   onCompleteForever: () => void;
   onRequestDelete: () => void;
-  /**
-   * Opens the schedule picker (issue #169's `TaskScheduleSheet`) for this
-   * Task — every one of Date/Deadline/Priority is reachable from
-   * here, in both Inbox and Today, since both render this same row. See
-   * this ticket's own brief: "pickers, not text parsing," and this is the
-   * one door onto them a reader always has, regardless of which view
-   * they're looking at a Task from.
-   */
-  onOpenSchedule: () => void;
   /** Whether this row is the drop target of an in-progress drag — draws the "the dragged row lands here" line. Meaningless, and always `false`, on a row with no drag handlers (see below). */
   isDropTarget?: boolean;
   /**
@@ -310,7 +301,6 @@ export function TaskRow({
   onCompleteForever,
   onUncomplete,
   onRequestDelete,
-  onOpenSchedule,
   isDropTarget = false,
   isNestTarget = false,
   depth = 1,
@@ -551,7 +541,6 @@ export function TaskRow({
         onCompleteForever={onCompleteForever}
         onUncomplete={onUncomplete}
         onRequestDelete={onRequestDelete}
-        onOpenSchedule={onOpenSchedule}
         isDropTarget={isDropTarget}
         isNestTarget={isNestTarget}
         isDragging={isDragging}

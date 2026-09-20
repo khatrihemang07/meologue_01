@@ -844,17 +844,28 @@ describe("TaskDetailView", () => {
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 
-  // Issue #253: Deadline and Priority still open the identical shared
-  // schedule sheet; Date left it for its own anchored `TaskSchedulePopover`
-  // instance instead — see the next test.
-  it("Deadline and Priority open the identical shared schedule sheet", () => {
+  // Issue #253: Priority still opens the shared schedule sheet; Date left
+  // it for its own anchored `TaskSchedulePopover` instance instead — see
+  // the next test. Deadline used to open the identical sheet too, until
+  // issue #376 removed its own field from the sidebar entirely — see
+  // "renders no Deadline attribute" below.
+  it("Priority opens the shared schedule sheet", () => {
     const onOpenSchedule = vi.fn();
     renderView({ onOpenSchedule });
 
-    fireEvent.click(screen.getByRole("button", { name: "Deadline" }));
     fireEvent.click(screen.getByRole("button", { name: "Priority" }));
 
-    expect(onOpenSchedule).toHaveBeenCalledTimes(2);
+    expect(onOpenSchedule).toHaveBeenCalledTimes(1);
+  });
+
+  // Issue #376's own acceptance criterion: no surface offers to set,
+  // edit, clear or display a deadline — this sidebar no longer has a
+  // Deadline attribute at all, on a Task with or without a deadline
+  // value, not merely one that's unset.
+  it("renders no Deadline attribute, on a Task with or without a deadline value", () => {
+    renderView({ task: task({ deadline: "2026-09-10" }) });
+
+    expect(screen.queryByText("Deadline")).not.toBeInTheDocument();
   });
 
   // Issue #253: Date anchors its own `TaskSchedulePopover` instance
@@ -888,15 +899,13 @@ describe("TaskDetailView", () => {
     expect(onSetDate).toHaveBeenCalledWith("1", expect.any(String));
   });
 
-  it("an unset Date/Deadline/Priority renders a pill; once set, each is promoted into its own row", () => {
+  it("an unset Date/Priority renders a pill; once set, each is promoted into its own row", () => {
     renderView({
       task: task({ date: "2026-09-03", priority: 4 }), // stored 4 is UI P1.
     });
 
     // Date is set — a promoted row naming its value, not a bare pill.
     expect(screen.getByRole("button", { name: /Date.*3 Sep/s })).toBeInTheDocument();
-    // Deadline is still unset — a pill, exactly the word "Deadline".
-    expect(screen.getByRole("button", { name: "Deadline" })).toBeInTheDocument();
     // Priority is set — a promoted row naming P1.
     expect(screen.getByRole("button", { name: /Priority.*P1/s })).toBeInTheDocument();
   });

@@ -21,7 +21,6 @@ import { taskFieldsForRename } from "@/lib/quick-add-task";
 export interface TaskTitleCommitSetters {
   renameTask: (id: string, content: string) => void;
   setTaskDate: (id: string, date: string | null) => void;
-  setTaskDeadline: (id: string, deadline: string | null) => void;
   setTaskPriority: (id: string, priority: number) => void;
   // `options.now` (itself `localDayKey(new Date())` in both real callers —
   // composer-page.tsx's and todo-page.tsx's own `commitRename` wrappers)
@@ -70,10 +69,6 @@ export async function commitTaskTitle(
   // clear.
   if (fields.date !== null && fields.date !== task.date) {
     setters.setTaskDate(task.id, fields.date);
-  }
-
-  if (fields.deadline !== null && fields.deadline !== task.deadline) {
-    setters.setTaskDeadline(task.id, fields.deadline);
   }
 
   // `resolveRecurrence` (quick-add-task.ts) returns `null` both when no

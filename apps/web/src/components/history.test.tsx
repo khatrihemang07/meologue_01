@@ -146,7 +146,6 @@ function buildTaskReferenceContext(
     setLabelColour: vi.fn(),
     removeLabel: vi.fn(),
     removeProject: vi.fn(),
-    setTaskDeadline: vi.fn(),
     setTaskPriority: vi.fn(),
     setTaskLabels: vi.fn(),
     setTaskDescription: vi.fn(),

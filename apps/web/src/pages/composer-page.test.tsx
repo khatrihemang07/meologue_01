@@ -137,7 +137,6 @@ const readyContext: EntryStoreOutletContext = {
   reorderTaskToday: vi.fn(),
   removeTask: vi.fn(),
   setTaskDate: vi.fn(),
-  setTaskDeadline: vi.fn(),
   setTaskPriority: vi.fn(),
   setTaskDateString: vi.fn(),
   setTaskLabels: vi.fn(),
@@ -246,7 +245,6 @@ describe("ComposerPage", () => {
       reorderTaskToday: vi.fn(),
       removeTask: vi.fn(),
       setTaskDate: vi.fn(),
-      setTaskDeadline: vi.fn(),
       setTaskPriority: vi.fn(),
       setTaskDateString: vi.fn(),
       setTaskLabels: vi.fn(),
@@ -341,7 +339,6 @@ describe("ComposerPage", () => {
       reorderTaskToday: vi.fn(),
       removeTask: vi.fn(),
       setTaskDate: vi.fn(),
-      setTaskDeadline: vi.fn(),
       setTaskPriority: vi.fn(),
       setTaskDateString: vi.fn(),
       setTaskLabels: vi.fn(),
@@ -443,7 +440,6 @@ describe("ComposerPage", () => {
       reorderTaskToday: vi.fn(),
       removeTask: vi.fn(),
       setTaskDate: vi.fn(),
-      setTaskDeadline: vi.fn(),
       setTaskPriority: vi.fn(),
       setTaskDateString: vi.fn(),
       setTaskLabels: vi.fn(),
@@ -565,7 +561,6 @@ describe("ComposerPage", () => {
       reorderTaskToday: vi.fn(),
       removeTask: vi.fn(),
       setTaskDate: vi.fn(),
-      setTaskDeadline: vi.fn(),
       setTaskPriority: vi.fn(),
       setTaskDateString: vi.fn(),
       setTaskLabels: vi.fn(),
@@ -732,7 +727,6 @@ describe("ComposerPage", () => {
         reorderTaskToday: vi.fn(),
         removeTask: vi.fn(),
         setTaskDate: vi.fn(),
-        setTaskDeadline: vi.fn(),
         setTaskPriority: vi.fn(),
         setTaskDateString: vi.fn(),
         setTaskLabels: vi.fn(),
@@ -854,7 +848,6 @@ describe("ComposerPage", () => {
         reorderTaskToday: vi.fn(),
         removeTask: vi.fn(),
         setTaskDate: vi.fn(),
-        setTaskDeadline: vi.fn(),
         setTaskPriority: vi.fn(),
         setTaskDateString: vi.fn(),
         setTaskLabels: vi.fn(),
@@ -979,7 +972,6 @@ describe("ComposerPage", () => {
         reorderTaskToday: vi.fn(),
         removeTask: vi.fn(),
         setTaskDate: vi.fn(),
-        setTaskDeadline: vi.fn(),
         setTaskPriority: vi.fn(),
         setTaskDateString: vi.fn(),
         setTaskLabels: vi.fn(),
@@ -1101,7 +1093,6 @@ describe("ComposerPage", () => {
           reorderTaskToday: vi.fn(),
           removeTask: vi.fn(),
           setTaskDate: vi.fn(),
-          setTaskDeadline: vi.fn(),
           setTaskPriority: vi.fn(),
           setTaskDateString: vi.fn(),
           setTaskLabels: vi.fn(),
@@ -2113,10 +2104,13 @@ describe("ComposerPage — rename resolves recognised phrases (issue #247)", () 
     expect(setTaskPriority).toHaveBeenCalledWith(taskId, 4); // p1 UI == stored 4.
   });
 
-  it("leaves an existing Date, Deadline, Priority and Labels untouched when a rename contains no recognised phrase", async () => {
+  // Issue #376 removed `setTaskDeadline` (no surface can set one anymore),
+  // so a Task carrying a restored `deadline` value is included here only
+  // to prove the rename path still tolerates it without throwing — not
+  // because anything could still act on it.
+  it("leaves an existing Date, Priority and Labels untouched when a rename contains no recognised phrase", async () => {
     const renameTask = vi.fn();
     const setTaskDate = vi.fn();
-    const setTaskDeadline = vi.fn();
     const setTaskPriority = vi.fn();
     const setTaskLabels = vi.fn();
     renderComposerPage(
@@ -2133,7 +2127,6 @@ describe("ComposerPage — rename resolves recognised phrases (issue #247)", () 
         ],
         renameTask,
         setTaskDate,
-        setTaskDeadline,
         setTaskPriority,
         setTaskLabels,
       },
@@ -2149,7 +2142,6 @@ describe("ComposerPage — rename resolves recognised phrases (issue #247)", () 
 
     await waitFor(() => expect(renameTask).toHaveBeenCalledWith(taskId, "buy plain oat milk"));
     expect(setTaskDate).not.toHaveBeenCalled();
-    expect(setTaskDeadline).not.toHaveBeenCalled();
     expect(setTaskPriority).not.toHaveBeenCalled();
     expect(setTaskLabels).not.toHaveBeenCalled();
   });
