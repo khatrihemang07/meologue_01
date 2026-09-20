@@ -315,6 +315,120 @@ describe("TaskTitleEditor — #/@ autocomplete popup", () => {
 });
 
 // ---------------------------------------------------------------------------
+// commitKeymap — Mod-Enter (issue #411, defect 2)
+// ---------------------------------------------------------------------------
+
+/**
+ * Issue #411: `Ctrl+Enter`/`Cmd+Enter` did nothing — a capture-phase
+ * keydown logger (that ticket's own report) showed the keydown reaching
+ * the editor `defaultPrevented: false`, so this was a missing binding,
+ * not a swallowed event. `commitKeymap` (task-title-editor.tsx) bound
+ * only `Enter`/`Shift-Enter`.
+ *
+ * `prosemirror-keymap`'s own `Mod-` shorthand (node_modules/prosemirror-
+ * keymap/dist/index.js) resolves to `Cmd-` on Mac and `Ctrl-` elsewhere,
+ * decided ONCE at that module's own import time from `navigator.platform`
+ * — confirmed directly by reading the installed 1.2.3 source rather than
+ * assumed, per this ticket's own instruction. jsdom's own
+ * `navigator.platform` is `""` (confirmed directly, not assumed either),
+ * which that module's `mac` check reads as non-Mac — so in THIS test
+ * environment, `Mod-Enter` always normalises to `Ctrl-Enter`, never
+ * `Meta-Enter`, regardless of what a real Mac would do. A jsdom test can
+ * therefore prove Ctrl+Enter submits (below), but cannot prove `Mod-`
+ * itself resolves to `Meta-Enter` on a real Mac — that half is
+ * established by reading `prosemirror-keymap`'s source, not by a test
+ * that runs here, and needs re-confirming in a real macOS browser pass.
+ *
+ * `commitKeymap` therefore binds `Cmd-Enter` explicitly too (normalises
+ * to `Meta-Enter` unconditionally, on every platform, independent of the
+ * `mac` detection above) alongside `Mod-Enter` — the one binding is what
+ * `Mod-` alone already covers per-platform; the other is what makes
+ * Cmd+Enter provable in jsdom at all, rather than resting solely on an
+ * assumption this suite cannot exercise. On a real Mac the two collide
+ * (both normalise to `Meta-Enter`) and the later registration simply
+ * wins — both point at `commit()`, so nothing behavioural depends on
+ * which one "wins" that collision.
+ */
+describe("buildTitlePlugins — commitKeymap Mod-Enter", () => {
+  let view: EditorView | undefined;
+  let host: HTMLDivElement | undefined;
+
+  afterEach(() => {
+    view?.destroy();
+    host?.remove();
+    view = undefined;
+    host = undefined;
+  });
+
+  function mount(text: string): { view: EditorView; commit: () => void; cancel: () => void } {
+    const commit = vi.fn();
+    const cancel = vi.fn();
+    const doc = titleDocFromText(text);
+    const state = EditorState.create({
+      schema: taskTitleSchema,
+      doc,
+      selection: Selection.atEnd(doc),
+      plugins: buildTitlePlugins({ placeholder: undefined, extraPlugins: [], commit, cancel }),
+    });
+    host = document.createElement("div");
+    document.body.appendChild(host);
+    view = new EditorView({ mount: host }, { state });
+    return { view, commit, cancel };
+  }
+
+  function pressKeyWithModifiers(
+    target: EditorView,
+    key: string,
+    modifiers: { ctrlKey?: boolean; metaKey?: boolean },
+  ): KeyboardEvent {
+    const event = new KeyboardEvent("keydown", {
+      key,
+      bubbles: true,
+      cancelable: true,
+      ...modifiers,
+    });
+    target.dom.dispatchEvent(event);
+    return event;
+  }
+
+  it("plain Enter still commits (regression guard — this suite's own baseline)", () => {
+    const { view: editorView, commit } = mount("hello");
+
+    const event = pressKeyWithModifiers(editorView, "Enter", {});
+
+    expect(event.defaultPrevented).toBe(true);
+    expect(commit).toHaveBeenCalledTimes(1);
+  });
+
+  it("Ctrl+Enter commits — the real `Mod-Enter` binding, exercised as jsdom's own non-Mac `navigator.platform` resolves it", () => {
+    const { view: editorView, commit } = mount("hello");
+
+    const event = pressKeyWithModifiers(editorView, "Enter", { ctrlKey: true });
+
+    expect(event.defaultPrevented).toBe(true);
+    expect(commit).toHaveBeenCalledTimes(1);
+  });
+
+  it("Cmd+Enter (metaKey) commits — the explicit `Cmd-Enter` binding, which does not depend on platform detection at all", () => {
+    const { view: editorView, commit } = mount("hello");
+
+    const event = pressKeyWithModifiers(editorView, "Enter", { metaKey: true });
+
+    expect(event.defaultPrevented).toBe(true);
+    expect(commit).toHaveBeenCalledTimes(1);
+  });
+
+  it("bare Ctrl or Cmd with no Enter does nothing — only the Enter combination submits", () => {
+    const { view: editorView, commit } = mount("hello");
+
+    pressKeyWithModifiers(editorView, "Control", {});
+    pressKeyWithModifiers(editorView, "Meta", {});
+
+    expect(commit).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
 // linkInputRule (issue #373) — typed `[text](url)` becomes a live link
 // ---------------------------------------------------------------------------
 

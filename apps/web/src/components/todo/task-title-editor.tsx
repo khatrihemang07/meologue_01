@@ -382,6 +382,31 @@ export function buildTitlePlugins(options: {
       options.commit();
       return true;
     },
+    // Issue #411: Ctrl+Enter/Cmd+Enter did nothing — a capture-phase
+    // keydown logger showed the keystroke reaching this editor
+    // `defaultPrevented: false`, so this was a missing binding, not a
+    // swallowed event. `prosemirror-keymap`'s own `Mod-` shorthand
+    // (verified against the installed 1.2.3 source, not assumed)
+    // resolves to `Cmd-` on Mac and `Ctrl-` elsewhere, decided once at
+    // that module's own import time from `navigator.platform` — so
+    // `Mod-Enter` alone is enough for both, on a real browser. `Cmd-
+    // Enter` is bound too, explicitly, because that per-platform
+    // resolution is exactly what jsdom cannot exercise (`navigator.
+    // platform` is `""` there, read as non-Mac, so `Mod-Enter` only ever
+    // normalises to `Ctrl-Enter` in this suite): binding `Cmd-Enter`
+    // directly — it always normalises to `Meta-Enter`, independent of
+    // platform detection — is what makes Cmd+Enter provable by a jsdom
+    // test at all, not just assumed correct from reading prosemirror-
+    // keymap's source. On a real Mac the two bindings collide (both
+    // normalise to `Meta-Enter`); harmless, since both call `commit()`.
+    "Mod-Enter": () => {
+      options.commit();
+      return true;
+    },
+    "Cmd-Enter": () => {
+      options.commit();
+      return true;
+    },
     Escape: () => {
       options.cancel();
       return true;
