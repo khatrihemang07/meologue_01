@@ -168,13 +168,11 @@ describe("AddTaskForm", () => {
     expect(await getInput()).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Cancel" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "More actions" })).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Add task", exact: true })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Add task" })).not.toBeInTheDocument();
 
     fireEvent.change(await getInput(), { target: { value: "buy milk" } });
 
-    expect(
-      await screen.findByRole("button", { name: "Add task", exact: true }),
-    ).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: "Add task" })).toBeInTheDocument();
   });
 
   it("calls onAdd with the parsed fields on Add, and stays open, empty and focused", async () => {
@@ -220,7 +218,7 @@ describe("AddTaskForm", () => {
     // Whitespace-only still reads as empty (`composer.value.trim()`) —
     // the submit control stays absent from the DOM, so this submits
     // through the editor's own commit keymap (Enter) instead of a click.
-    expect(screen.queryByRole("button", { name: "Add task", exact: true })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Add task" })).not.toBeInTheDocument();
     fireEvent.keyDown(input, { key: "Enter" });
 
     expect(onAdd).not.toHaveBeenCalled();
@@ -279,11 +277,11 @@ describe("AddTaskForm", () => {
     render(<AddTaskForm onAdd={vi.fn()} disabled={false} />);
     await reveal();
 
-    expect(screen.queryByRole("button", { name: "Add task", exact: true })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Add task" })).not.toBeInTheDocument();
 
     fireEvent.change(await getInput(), { target: { value: "buy milk" } });
 
-    const submit = await screen.findByRole("button", { name: "Add task", exact: true });
+    const submit = await screen.findByRole("button", { name: "Add task" });
     expect(submit).toBeInTheDocument();
     expect(submit).not.toBeDisabled();
   });

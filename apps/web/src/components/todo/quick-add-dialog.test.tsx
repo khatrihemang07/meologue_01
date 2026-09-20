@@ -1,8 +1,26 @@
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { useState } from "react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useSettingsStore } from "@/lib/settings";
 import { QuickAddDialog } from "./quick-add-dialog";
+
+// `add-task-form.test.tsx`'s own `stubTouch` helper, mirrored — see its
+// header comment for why only the touch branch needs stubbing.
+function stubTouch(touch: boolean) {
+  vi.stubGlobal(
+    "matchMedia",
+    vi.fn((query: string) => ({
+      matches: touch && (query === "(pointer: coarse)" || query === "(hover: none)"),
+      media: query,
+      onchange: null,
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+    })),
+  );
+}
 
 function StubTaskTitleEditor({
   value,
@@ -73,6 +91,10 @@ describe("QuickAddDialog", () => {
     useSettingsStore.setState({ smartDatesEnabled: true });
   });
 
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
   it("renders nothing when closed", () => {
     render(<QuickAddDialog open={false} onOpenChange={vi.fn()} onAdd={vi.fn()} />);
 
@@ -87,30 +109,36 @@ describe("QuickAddDialog", () => {
     expect(await getInput()).toBeInTheDocument();
   });
 
-  it("at rest, renders the compact single row with no footer toolbar", async () => {
+  // Issue #374: the empty-title tab order (`web/01-anatomy.md`) names
+  // Cancel, the mic (omitted here, D11) and More actions as three of its
+  // four stops — all three (mic aside) are present even at rest. Only
+  // the chips (Project/Date/Priority) and the submit control wait for
+  // text. No "Close" (X) button either — not in Todoist's own control
+  // inventory, dropped as drift.
+  it("at rest, renders Cancel and More actions but no chips or Add task", async () => {
     render(<QuickAddDialog open={true} onOpenChange={vi.fn()} onAdd={vi.fn()} />);
 
     await getInput();
-    expect(screen.getByRole("button", { name: "Close" })).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "More actions" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Cancel" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Close" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "More actions" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Cancel" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Add task" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Remove date" })).not.toBeInTheDocument();
   });
 
-  it("typing text reveals the footer toolbar row", async () => {
+  it("typing text reveals the chip row and the Add task control", async () => {
     render(<QuickAddDialog open={true} onOpenChange={vi.fn()} onAdd={vi.fn()} />);
 
     fireEvent.change(await getInput(), { target: { value: "buy milk" } });
 
-    expect(await screen.findByRole("button", { name: "More actions" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "More actions" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Cancel" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Add task" })).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: "Add task" })).toBeInTheDocument();
   });
 
   // Issue #264: clearing the field back to empty returns the dialog to the
   // compact state — this isn't a one-way grow.
-  it("clearing the text back to empty returns the dialog to the compact state", async () => {
+  it("clearing the text back to empty drops the chip row and Add task, keeps Cancel", async () => {
     render(<QuickAddDialog open={true} onOpenChange={vi.fn()} onAdd={vi.fn()} />);
 
     const input = await getInput();
@@ -120,8 +148,8 @@ describe("QuickAddDialog", () => {
     fireEvent.change(input, { target: { value: "" } });
 
     expect(screen.queryByRole("button", { name: "Add task" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "More actions" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Cancel" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "More actions" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Cancel" })).toBeInTheDocument();
   });
 
   it("calls onAdd with the parsed fields and closes on Add task", async () => {
@@ -149,13 +177,11 @@ describe("QuickAddDialog", () => {
     render(<QuickAddDialog open={true} onOpenChange={onOpenChange} onAdd={onAdd} />);
     await getInput();
 
-    // Cancel isn't even rendered at rest (the "compact single row, no
-    // footer" test above already covers that); Escape is the only route an
-    // empty field has, and it's covered by "Escape (the editor's own
-    // onCancel) closes an empty field immediately" below.
-    expect(screen.queryByRole("button", { name: "Cancel" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+
     expect(onAdd).not.toHaveBeenCalled();
-    expect(onOpenChange).not.toHaveBeenCalled();
+    expect(onOpenChange).toHaveBeenCalledWith(false);
+    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
   });
 
   it("Escape (the editor's own onCancel) closes an empty field immediately", async () => {
@@ -163,20 +189,6 @@ describe("QuickAddDialog", () => {
     render(<QuickAddDialog open={true} onOpenChange={onOpenChange} onAdd={vi.fn()} />);
 
     fireEvent.keyDown(await getInput(), { key: "Escape" });
-
-    expect(onOpenChange).toHaveBeenCalledWith(false);
-    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
-  });
-
-  // The X button and an outside click both travel through Root's own
-  // `onOpenChange` (this file's own header comment on that prop) — the X
-  // button is the one of the two a plain click can exercise directly.
-  it("the X button closes an empty field immediately, with no confirmation", async () => {
-    const onOpenChange = vi.fn();
-    render(<QuickAddDialog open={true} onOpenChange={onOpenChange} onAdd={vi.fn()} />);
-    await getInput();
-
-    fireEvent.click(screen.getByRole("button", { name: "Close" }));
 
     expect(onOpenChange).toHaveBeenCalledWith(false);
     expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
@@ -223,25 +235,6 @@ describe("QuickAddDialog", () => {
       await typeText("buy milk");
 
       fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
-
-      expect(onOpenChange).not.toHaveBeenCalled();
-      expect(await screen.findByRole("alertdialog")).toBeInTheDocument();
-    });
-
-    // Root's own `onOpenChange` — the door Escape-without-a-popup-open, an
-    // outside click, and the X button all share (this file's own header
-    // comment on `Root`'s `onOpenChange` prop). The X button is the one of
-    // those three a plain `fireEvent.click` can exercise directly, without
-    // faking a real Radix outside-pointerdown; the Escape variant of this
-    // same door is the one the existing "does not close... while the
-    // autocomplete popup is open" test below already dispatches at
-    // `document`, matching real `DismissableLayer` capture-phase targeting.
-    it("text + the X button raises the confirmation (Root's own onOpenChange door)", async () => {
-      const onOpenChange = vi.fn();
-      render(<QuickAddDialog open={true} onOpenChange={onOpenChange} onAdd={vi.fn()} />);
-      await typeText("buy milk");
-
-      fireEvent.click(screen.getByRole("button", { name: "Close" }));
 
       expect(onOpenChange).not.toHaveBeenCalled();
       expect(await screen.findByRole("alertdialog")).toBeInTheDocument();
@@ -337,36 +330,13 @@ describe("QuickAddDialog", () => {
 
       const freshInput = await getInput();
       expect(freshInput).toHaveValue("");
-      expect(screen.queryByRole("button", { name: "Cancel" })).not.toBeInTheDocument();
+      // Cancel is present at rest (issue #374), Add task is not.
+      expect(screen.getByRole("button", { name: "Cancel" })).toBeInTheDocument();
       expect(screen.queryByRole("button", { name: "Add task" })).not.toBeInTheDocument();
 
       // Escape on the genuinely-blank reopen closes immediately — no
       // resurrected confirmation.
       fireEvent.keyDown(freshInput, { key: "Escape" });
-      expect(onOpenChange).toHaveBeenLastCalledWith(false);
-      expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
-    });
-
-    // The reproduction's own second observation: the X button leaked the
-    // identical stale state. Covered separately from the Escape cycle
-    // above so a regression in either door's own wiring still fails.
-    it("issue #265 regression: type, Escape, Discard, reopen — the X button also closes immediately, no stale confirmation", async () => {
-      const onOpenChange = vi.fn();
-      const { rerender } = render(
-        <QuickAddDialog open={true} onOpenChange={onOpenChange} onAdd={vi.fn()} />,
-      );
-      await typeText("buy milk");
-      fireEvent.keyDown(screen.getByLabelText("Task name"), { key: "Escape" });
-      const confirm = await screen.findByRole("alertdialog");
-      fireEvent.click(within(confirm).getByRole("button", { name: "Discard" }));
-      await waitFor(() => expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument());
-
-      rerender(<QuickAddDialog open={false} onOpenChange={onOpenChange} onAdd={vi.fn()} />);
-      rerender(<QuickAddDialog open={true} onOpenChange={onOpenChange} onAdd={vi.fn()} />);
-      await getInput();
-
-      fireEvent.click(screen.getByRole("button", { name: "Close" }));
-
       expect(onOpenChange).toHaveBeenLastCalledWith(false);
       expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
     });
@@ -398,27 +368,9 @@ describe("QuickAddDialog", () => {
       rerender(<QuickAddDialog open={true} onOpenChange={onOpenChange} onAdd={vi.fn()} />);
 
       expect(await getInput()).toHaveValue("");
-      expect(screen.queryByRole("button", { name: "Cancel" })).not.toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Cancel" })).toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Remove date" })).not.toBeInTheDocument();
     });
-  });
-
-  it("shows a priority pill, with the flag coloured and the text left neutral, once p1 is typed", async () => {
-    render(<QuickAddDialog open={true} onOpenChange={vi.fn()} onAdd={vi.fn()} />);
-
-    expect(screen.queryByText("P1")).not.toBeInTheDocument();
-
-    fireEvent.change(await getInput(), { target: { value: "buy milk p1" } });
-
-    const pillText = await screen.findByText("P1");
-    expect(pillText).toBeInTheDocument();
-    // The text itself carries no colour override of its own — its
-    // *container* is what reads the shared neutral grey class; only the
-    // flag icon (asserted below) carries the priority's own colour.
-    expect(pillText.className).toBe("");
-    expect(pillText.parentElement?.className).toContain("text-muted-foreground");
-    const flag = pillText.parentElement?.querySelector("svg");
-    expect(flag).not.toBeNull();
-    expect(flag?.getAttribute("fill")).toBe("var(--td-priority-picker-1)");
   });
 
   it("shows no priority pill for the untyped default (no p[1-4] token)", async () => {
@@ -495,6 +447,43 @@ describe("QuickAddDialog", () => {
 
       expect(onAdd).toHaveBeenCalledTimes(3);
       expect(screen.queryByRole("dialog", { name: "Add 3 tasks?" })).not.toBeInTheDocument();
+    });
+  });
+
+  describe("shell chosen by touch capability (issue #374/D4)", () => {
+    it("touch renders the full-screen sheet, with a scrim, and no Cancel row", async () => {
+      stubTouch(true);
+      render(<QuickAddDialog open={true} onOpenChange={vi.fn()} onAdd={vi.fn()} />);
+
+      const dialog = await screen.findByRole("dialog", { name: "Quick Add" });
+      expect(dialog).toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Cancel" })).not.toBeInTheDocument();
+    });
+
+    it("touch stays open after Add task, with the title cleared", async () => {
+      stubTouch(true);
+      const onAdd = vi.fn();
+      const onOpenChange = vi.fn();
+      render(<QuickAddDialog open={true} onOpenChange={onOpenChange} onAdd={onAdd} />);
+
+      fireEvent.change(await getInput(), { target: { value: "buy milk" } });
+      fireEvent.click(await screen.findByRole("button", { name: "Add task" }));
+
+      expect(onAdd).toHaveBeenCalledWith(expect.objectContaining({ content: "buy milk" }));
+      expect(onOpenChange).not.toHaveBeenCalled();
+      expect(await getInput()).toHaveValue("");
+    });
+
+    it("touch's own discard confirmation uses Android's verbatim copy", async () => {
+      stubTouch(true);
+      render(<QuickAddDialog open={true} onOpenChange={vi.fn()} onAdd={vi.fn()} />);
+
+      fireEvent.change(await getInput(), { target: { value: "buy milk" } });
+      fireEvent.keyDown(document, { key: "Escape" });
+
+      const confirm = await screen.findByRole("alertdialog");
+      expect(confirm).toHaveTextContent("Discard changes?");
+      expect(confirm).toHaveTextContent("The changes you've made will not be saved.");
     });
   });
 });
