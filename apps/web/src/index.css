@@ -357,10 +357,13 @@
   /* A recognised natural-language match (README's own "one fact that
      shapes the rebuild") — an inline-block span, not a text colour, hence
      radius and padding tokens alongside the background. Left exactly as
-     it was (still the DARK-theme value, in `:root` too) — this token also
-     feeds `--td-nav-active-pill` below, an unrelated surface issue #374
-     has no reason to repaint. The Quick Add/rename highlight pill's own
-     LIGHT-theme value is `--td-quick-add-highlight-*`, just below. */
+     it was (still the DARK-theme value, in `:root` too) on purpose:
+     `web/07-native-colours.md` shows the light "Todoist" theme's own
+     highlight pill is actually `#fde7d8`/`rgb(32,32,32)` text, not this
+     value — a real, known drift this ticket does NOT fix, because this
+     token also feeds `--td-nav-active-pill` below (an unrelated surface),
+     and re-pointing it here would silently repaint that too. Flagged in
+     this ticket's own report as deferred, not silently left. */
   --td-recognition-background: rgb(111, 38, 37);
   /* A token rather than the literal white the rule below carried, per ADR
      0069's own second rule: everything Todoist has and this palette has no
