@@ -67,6 +67,67 @@ nb_parse_args() {
 }
 
 # ---------------------------------------------------------------------------
+# Build parallelism
+# ---------------------------------------------------------------------------
+
+# `cargo tauri build`'s Rust compile is the heaviest step either macOS build
+# script runs, and cargo's own default — one job per core — is tuned for CPU
+# count, not the RAM those jobs actually need. On the machine this repo is
+# built on, 8 cores and 8GB, that default OOM-killed a release build outright;
+# capping it at 2 jobs completed the same build fine. That is the ONE data
+# point this repo has, not a curve anyone walked, so the divisor below is
+# calibrated to REPRODUCE that single observation (floor(8/3) = 2) — it is a
+# rule of thumb, not a measured law, and CARGO_BUILD_JOBS remains the escape
+# hatch for a machine this guess is wrong for.
+#
+# Both callers are macOS-only already (Xcode CLT, codesign, hdiutil all
+# assume it), so reading `sysctl` directly here is consistent with the rest
+# of this file, not a new platform assumption.
+#
+# An explicit CARGO_BUILD_JOBS in the environment always wins, untouched —
+# this only ever picks a default, never overrides a choice someone already
+# made.
+#
+# If hw.memsize or hw.ncpu is missing or does not parse as a positive
+# integer, this falls back to 1 rather than cargo's per-core default: an
+# unknown machine gets the SAFE answer, not the fast one. Guessing too high
+# risks reproducing the exact OOM this function exists to prevent; guessing
+# too low only costs time.
+#
+# Usage: nb_cargo_job_cap   (exports CARGO_BUILD_JOBS as a side effect)
+nb_cargo_job_cap() {
+  if [ -n "${CARGO_BUILD_JOBS:-}" ]; then
+    nb_say "CARGO_BUILD_JOBS=$CARGO_BUILD_JOBS already set in the environment — leaving it alone"
+    return 0
+  fi
+
+  local mem_bytes ncpu mem_gb jobs
+  mem_bytes=$(sysctl -n hw.memsize 2>/dev/null)
+  ncpu=$(sysctl -n hw.ncpu 2>/dev/null)
+
+  # Reject anything that is not purely digits (empty, missing, or sysctl
+  # printing something unparseable) rather than let arithmetic below fail
+  # confusingly or, worse, succeed on garbage.
+  case $mem_bytes in ''|*[!0-9]*) mem_bytes= ;; esac
+  case $ncpu in ''|*[!0-9]*) ncpu= ;; esac
+
+  if [ -z "$mem_bytes" ] || [ -z "$ncpu" ] || [ "$ncpu" -lt 1 ]; then
+    export CARGO_BUILD_JOBS=1
+    nb_say "could not read hw.memsize/hw.ncpu from sysctl — defaulting CARGO_BUILD_JOBS=1"
+    return 0
+  fi
+
+  mem_gb=$((mem_bytes / 1024 / 1024 / 1024))
+  jobs=$((mem_gb / 3))
+  [ "$jobs" -lt 1 ] && jobs=1
+  [ "$jobs" -gt "$ncpu" ] && jobs=$ncpu
+
+  export CARGO_BUILD_JOBS=$jobs
+  nb_say "CARGO_BUILD_JOBS=$CARGO_BUILD_JOBS (derived from ${mem_gb}GB memory, ${ncpu} cores)"
+  return 0
+}
+
+# ---------------------------------------------------------------------------
 # Artifact report
 # ---------------------------------------------------------------------------
 

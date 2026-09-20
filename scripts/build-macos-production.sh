@@ -102,9 +102,11 @@ nb_say "cargo tauri build"
 # the piped command is what keeps `set -e`/`pipefail` from aborting the
 # script before this can look at the result, and `${PIPESTATUS[0]}` recovers
 # `cargo tauri build`'s own exit code rather than `tee`'s.
-# Two jobs, not cargo's default of one per core: an 8-job release build was
-# OOM-killed on this 8GB machine. Overridable for a bigger one.
-export CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-2}"
+# Caps parallelism to what this machine's memory can actually feed the
+# compiler — see nb_cargo_job_cap in scripts/lib/native-build.sh for the OOM
+# this reproduces and why the formula is a calibrated guess, not a measured
+# one.
+nb_cargo_job_cap
 _tauri_started_at=$(date +%s)
 _tauri_log=$(mktemp)
 trap 'rm -f "$_tauri_log"' EXIT
