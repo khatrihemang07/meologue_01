@@ -209,6 +209,48 @@ describe("TaskRow", () => {
     expect(titleButton.querySelector("code")?.textContent).toBe("code");
   });
 
+  // Issue #398: a saved title's `[text](url)` renders as a live link, not
+  // the raw bracket syntax — `task-title-text.test.tsx` covers the
+  // renderer itself in isolation; this proves `TaskRowContent` actually
+  // calls it for a real Task.
+  it("renders a saved [text](url) title as a live link", () => {
+    const onOpenDetail = vi.fn();
+    renderRow({
+      task: task({ content: "Read [my article](https://example.com/post)" }),
+      detailActions: {
+        projects: [],
+        labels: [],
+        onOpenDetail,
+        onSetPriority: vi.fn(),
+        onSetDate: vi.fn(),
+        onSetDateString: vi.fn(),
+        datesWithTasks: new Map(),
+        onSetProject: vi.fn(),
+        onSetLabels: vi.fn(),
+        onCopyLink: vi.fn(),
+        onRename: vi.fn(),
+        commentCountFor: vi.fn(() => 0),
+      },
+    });
+
+    const link = screen.getByRole("link", { name: "my article" });
+    expect(link).toHaveAttribute("href", "https://example.com/post");
+    expect(link).toHaveAttribute("target", "_blank");
+    expect(link).toHaveAttribute("rel", "noopener noreferrer");
+    // Still sits inside the row's own title button (not a query by
+    // accessible NAME here — a browser's accname computation doesn't
+    // preserve the space between a plain-text run and a following
+    // element's own text the way `textContent` does, so "Read " + "my
+    // article" collapses to "Readmy article" for that purpose even though
+    // the rendered text, asserted below, has the space).
+    const titleButton = link.closest("button");
+    expect(titleButton).toHaveAttribute("data-row-nav-target");
+    expect(titleButton).toHaveTextContent("Read my article");
+
+    fireEvent.click(link);
+    expect(onOpenDetail).not.toHaveBeenCalled();
+  });
+
   it("keeps aria-labels as the raw, unrendered title — aria-labels are unrecorded", () => {
     renderRow({ task: task({ content: "ZZ probe **bold** _em_ `code`" }) });
 

@@ -282,6 +282,27 @@ describe("TaskDetailView", () => {
     expect(await screen.findByLabelText("Task name")).toHaveValue("ZZ probe **bold** _em_ `code`");
   });
 
+  // Issue #398: a saved title's `[text](url)` renders as a live link at
+  // rest, not the raw bracket syntax.
+  it("renders a saved [text](url) title as a live link, and clicking it doesn't start editing", () => {
+    renderView({ task: task({ content: "Read [my article](https://example.com/post)" }) });
+
+    const link = screen.getByRole("link", { name: "my article" });
+    expect(link).toHaveAttribute("href", "https://example.com/post");
+    expect(link).toHaveAttribute("target", "_blank");
+    expect(link).toHaveAttribute("rel", "noopener noreferrer");
+    expect(screen.getByTestId("task-detail-title")).toHaveTextContent("Read my article");
+
+    fireEvent.click(link);
+
+    // Clicking the link must not ALSO start title editing — the title
+    // `div`'s own `onClick` (task-detail-view.tsx's own comment) is what
+    // "still opens the editor" above proves fires on an ordinary click;
+    // this proves the link's own `stopPropagation` keeps it from firing
+    // too.
+    expect(screen.queryByLabelText("Task name")).not.toBeInTheDocument();
+  });
+
   it("names the task in its own Activity lines, and counts only lines it shows", async () => {
     const base = {
       deviceId: "device-a",

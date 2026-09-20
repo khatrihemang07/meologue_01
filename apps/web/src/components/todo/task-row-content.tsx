@@ -44,6 +44,7 @@ import { LazyTaskTitleEditor } from "@/components/todo/lazy-task-title-editor";
 import { TaskCommandMenu } from "@/components/todo/task-command-menu";
 import type { TaskDetailActions } from "@/components/todo/task-row";
 import { TaskSchedulePopover } from "@/components/todo/task-schedule-popover";
+import { taskTitleText } from "@/components/todo/task-title-text";
 import { SWIPE_TARGET_ATTRIBUTE } from "@/hooks/use-swipe-actions";
 import { useTaskDateState } from "@/hooks/use-task-date-state";
 import { formatDay, formatTaskDate } from "@/lib/format-task-date";
@@ -444,7 +445,7 @@ export function TaskRowContent({
             )}
             data-row-nav-target
           >
-            {inlineProse(task.content)}
+            {taskTitleText(task.content)}
           </button>
         )}
         {task.description !== null && (
