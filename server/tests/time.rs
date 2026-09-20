@@ -302,6 +302,45 @@ async fn rejects_a_sqlite_file_that_is_not_an_activity_recording_database(pool: 
 }
 
 #[sqlx::test]
+async fn rejects_the_right_table_carrying_the_wrong_columns(pool: PgPool) {
+    // The failure a table-name check alone cannot see: a database that really
+    // does have `ZMANAGEDACTIVITY` but not the columns the importer reads out
+    // of it — a different Toggl schema version, or another application that
+    // happens to use the name. Saving it would produce a configured source
+    // that imports nothing while looking perfectly healthy in Settings.
+    //
+    // This case is why `validate_source` names every mapped column rather than
+    // probing the table: with the probe reduced to `select 1 from <table>`,
+    // this test is the only one in the file that goes red.
+    let dir = scratch_dir("right-table-wrong-columns");
+    let path = dir.join("old-schema.sqlite");
+    let connection = Connection::open(&path).unwrap();
+    connection
+        .execute_batch(
+            "create table ZMANAGEDACTIVITY (
+               Z_PK integer primary key, ZID blob, ZSTART timestamp, ZEND timestamp)",
+        )
+        .unwrap();
+    connection.close().unwrap();
+
+    let (status, body) = create_source(
+        &pool,
+        "Old Toggl",
+        "toggl_activity",
+        &path.to_string_lossy(),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert!(
+        String::from_utf8_lossy(&body).contains("Toggl Activity Recording"),
+        "unhelpful rejection: {}",
+        String::from_utf8_lossy(&body)
+    );
+    assert_eq!(sources_in_table(&pool).await, 0);
+}
+
+#[sqlx::test]
 async fn rejects_a_path_that_does_not_exist(pool: PgPool) {
     let (status, body) = create_source(
         &pool,
@@ -332,9 +371,12 @@ async fn rejects_a_blank_name_and_an_unsupported_adapter_kind(pool: PgPool) {
     let (blank, _) = create_source(&pool, "   ", "toggl_activity", &path).await;
     assert_eq!(blank, StatusCode::BAD_REQUEST);
 
-    // Clockify's adapter is issue #420. Until it exists, claiming its kind has
-    // to fail rather than be quietly imported by the Toggl reader.
-    let (wrong_kind, _) = create_source(&pool, "Clockify", "clockify_auto_tracker", &path).await;
+    // A kind no adapter answers to. Since #420 there are two real kinds, so
+    // this names one that is not either rather than one not yet built —
+    // otherwise the case would quietly become "a Clockify database was offered
+    // as Toggl", which `rejects_each_provider_database_offered_as_the_other`
+    // covers separately.
+    let (wrong_kind, _) = create_source(&pool, "RescueTime", "rescuetime", &path).await;
     assert_eq!(wrong_kind, StatusCode::BAD_REQUEST);
 
     assert_eq!(sources_in_table(&pool).await, 0);
@@ -926,4 +968,348 @@ async fn reads_committed_wal_data_and_leaves_the_source_files_alone(pool: PgPool
         wal_before,
         "the Server checkpointed or truncated the source WAL"
     );
+}
+
+// ---------------------------------------------------------------------------
+// Clockify Desktop's Auto Tracker (issue #420)
+// ---------------------------------------------------------------------------
+
+/// One `ZCDAUTOTRACKERITEM` row.
+///
+/// `idle_seconds` is Clockify's own shape and deliberately not a flag: it
+/// counts idle seconds *inside* the record, where Toggl's `ZISIDLE` marks the
+/// record itself. The neutral `idle` boolean has to come out right from both.
+struct AutoTrackerItem<'a> {
+    id: &'a str,
+    started: TimestampValue,
+    ended: Option<TimestampValue>,
+    name: &'a str,
+    description: Option<&'a str>,
+    idle_seconds: f64,
+    icon: &'a [u8],
+}
+
+/// Core Data keeps these columns as REAL in Toggl's database and as INTEGER in
+/// Clockify's — measured on both installs. The importer reads them as `f64`
+/// either way, so the fixtures have to be able to write either.
+enum TimestampValue {
+    Real(f64),
+    Integer(i64),
+}
+
+impl rusqlite::ToSql for TimestampValue {
+    fn to_sql(&self) -> rusqlite::Result<rusqlite::types::ToSqlOutput<'_>> {
+        match self {
+            Self::Real(value) => value.to_sql(),
+            Self::Integer(value) => value.to_sql(),
+        }
+    }
+}
+
+/// Writes a Clockify Desktop Auto Tracker database matching the real schema
+/// column for column, including `ZID` being TEXT where Toggl's is a BLOB and
+/// `ZICONDATA` carrying a binary app icon.
+fn write_clockify_db(path: &Path, rows: &[AutoTrackerItem<'_>]) {
+    let connection = Connection::open(path).unwrap();
+    connection
+        .execute_batch(
+            "create table ZCDAUTOTRACKERITEM (
+               Z_PK integer primary key, Z_ENT integer, Z_OPT integer,
+               ZITEMNO integer, ZTIMEENTRYADDED integer,
+               ZIDLETIME float,
+               ZTIMEENDED timestamp, ZTIMESTARTED timestamp,
+               ZCOLOR varchar, ZICONID varchar, ZID varchar,
+               ZITEMDESCRIPTION varchar, ZITEMURL varchar, ZNAME varchar,
+               ZICONDATA blob)",
+        )
+        .unwrap();
+    for (index, row) in rows.iter().enumerate() {
+        connection
+            .execute(
+                "insert into ZCDAUTOTRACKERITEM
+                   (Z_ENT, Z_OPT, ZITEMNO, ZTIMEENTRYADDED, ZIDLETIME, ZTIMEENDED,
+                    ZTIMESTARTED, ZCOLOR, ZICONID, ZID, ZITEMDESCRIPTION, ZITEMURL,
+                    ZNAME, ZICONDATA)
+                 values (2, ?1, ?1, 0, ?2, ?3, ?4, '#aabbcc', 'icon', ?5, ?6, 'https://example.test', ?7, ?8)",
+                rusqlite::params![
+                    index as i64 + 1,
+                    row.idle_seconds,
+                    row.ended.as_ref(),
+                    &row.started,
+                    row.id,
+                    row.description,
+                    row.name,
+                    row.icon,
+                ],
+            )
+            .unwrap();
+    }
+    connection.close().unwrap();
+}
+
+async fn create_clockify_source(pool: &PgPool, name: &str, path: &Path) -> Uuid {
+    let (status, bytes) =
+        create_source(pool, name, "clockify_auto_tracker", &path.to_string_lossy()).await;
+    assert_eq!(
+        status,
+        StatusCode::CREATED,
+        "creating {name} failed: {}",
+        String::from_utf8_lossy(&bytes)
+    );
+    let value: Value = serde_json::from_slice(&bytes).unwrap();
+    Uuid::parse_str(value["id"].as_str().unwrap()).unwrap()
+}
+
+#[sqlx::test]
+async fn maps_every_clockify_field_onto_the_same_provider_neutral_interval(pool: PgPool) {
+    let dir = scratch_dir("clockify-mapping");
+    let path = dir.join("clockify.sqlite");
+    write_clockify_db(
+        &path,
+        &[
+            AutoTrackerItem {
+                // 24 hex characters, the shape the real database stores.
+                id: "68cf0a1b2c3d4e5f60718293",
+                started: TimestampValue::Real(MORNING_START),
+                ended: Some(TimestampValue::Real(MORNING_END)),
+                name: "Figma",
+                description: Some("Time lanes — exploration"),
+                idle_seconds: 0.0,
+                icon: &[0xde, 0xad, 0xbe, 0xef],
+            },
+            // Integers, which is how the real install stores them, and no
+            // description at all.
+            AutoTrackerItem {
+                id: "68cf0a1b2c3d4e5f60718294",
+                started: TimestampValue::Integer(AFTERNOON_START as i64),
+                ended: Some(TimestampValue::Integer(AFTERNOON_END as i64)),
+                name: "Slack",
+                description: None,
+                idle_seconds: 34.0,
+                icon: &[],
+            },
+        ],
+    );
+
+    let source = create_clockify_source(&pool, "Clockify", &path).await;
+    wait_for_intervals(&pool, source, 2).await;
+
+    let (status, intervals) = list_intervals(&pool, DAY, Some(source)).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(labels(&intervals), vec!["Figma", "Slack"]);
+
+    let first = &intervals[0];
+    // TEXT identity survives as itself — it is not hex-encoded the way Toggl's
+    // BLOB is, which is the whole reason identity is read by storage class.
+    assert_eq!(first["provider_record_id"], "68cf0a1b2c3d4e5f60718293");
+    assert_eq!(first["label"], "Figma");
+    assert_eq!(first["detail"], "Time lanes — exploration");
+    assert_eq!(first["source_kind"], "clockify_auto_tracker");
+    assert_eq!(first["source_name"], "Clockify");
+    assert_eq!(
+        first["started_at"], "2026-03-15T09:30:00.250Z",
+        "a REAL Core Data timestamp must keep its sub-second part"
+    );
+    assert_eq!(first["idle"], false);
+
+    let second = &intervals[1];
+    assert_eq!(second["detail"], Value::Null);
+    assert_eq!(
+        second["started_at"], "2026-03-15T14:00:00Z",
+        "an INTEGER Core Data timestamp must convert the same way a REAL one does"
+    );
+    assert_eq!(
+        second["idle"], true,
+        "Clockify reports idleness as a count of seconds, not a flag"
+    );
+}
+
+#[sqlx::test]
+async fn preserves_clockify_icon_blobs_through_the_same_lossless_encoding(pool: PgPool) {
+    let dir = scratch_dir("clockify-icon");
+    let path = dir.join("clockify.sqlite");
+    write_clockify_db(
+        &path,
+        &[AutoTrackerItem {
+            id: "68cf0a1b2c3d4e5f60718295",
+            started: TimestampValue::Integer(MORNING_START as i64),
+            ended: Some(TimestampValue::Integer(MORNING_END as i64)),
+            name: "Figma",
+            description: None,
+            idle_seconds: 0.0,
+            icon: &[0x00, 0xff, 0x01],
+        }],
+    );
+
+    let source = create_clockify_source(&pool, "Clockify", &path).await;
+    wait_for_intervals(&pool, source, 1).await;
+    let (_, intervals) = list_intervals(&pool, DAY, Some(source)).await;
+    let id = intervals[0]["id"].as_str().unwrap();
+
+    // The daily response must not carry the icon — app icons repeat on every
+    // record of the same application, which is exactly the payload a dense day
+    // must not drag down with it.
+    assert!(!intervals[0].as_object().unwrap().contains_key("raw_row"));
+
+    let (_, detail) = interval_detail(&pool, id).await;
+    let raw = &detail["raw_row"];
+    assert_eq!(
+        raw["ZICONDATA"],
+        json!({ "type": "blob", "base64": "AP8B" })
+    );
+    // And Clockify's own columns are kept whole, not just the mapped six.
+    assert_eq!(raw["ZCOLOR"], json!({ "type": "text", "value": "#aabbcc" }));
+    assert_eq!(
+        raw["ZITEMURL"],
+        json!({ "type": "text", "value": "https://example.test" })
+    );
+    assert_eq!(raw["ZIDLETIME"], json!({ "type": "real", "value": 0.0 }));
+}
+
+#[sqlx::test]
+async fn rejects_each_provider_database_offered_as_the_other(pool: PgPool) {
+    let dir = scratch_dir("cross-kind");
+    let toggl = dir.join("toggl.sqlite");
+    let clockify = dir.join("clockify.sqlite");
+    write_toggl_db(&toggl, &[]);
+    write_clockify_db(&clockify, &[]);
+
+    // Validation names every column the importer will later read, so a
+    // same-shaped-but-different database fails at Settings rather than being
+    // saved and then importing nothing.
+    let (toggl_as_clockify, _) = create_source(
+        &pool,
+        "Wrong",
+        "clockify_auto_tracker",
+        &toggl.to_string_lossy(),
+    )
+    .await;
+    assert_eq!(toggl_as_clockify, StatusCode::BAD_REQUEST);
+
+    let (clockify_as_toggl, body) = create_source(
+        &pool,
+        "Wrong",
+        "toggl_activity",
+        &clockify.to_string_lossy(),
+    )
+    .await;
+    assert_eq!(clockify_as_toggl, StatusCode::BAD_REQUEST);
+    assert!(
+        String::from_utf8_lossy(&body).contains("Toggl Activity Recording"),
+        "the rejection should name the kind that was asked for: {}",
+        String::from_utf8_lossy(&body)
+    );
+
+    assert_eq!(sources_in_table(&pool).await, 0);
+}
+
+#[sqlx::test]
+async fn both_adapters_import_the_same_clock_period_without_merging_either(pool: PgPool) {
+    // Two recorders watching the same stretch of a day are two pieces of
+    // evidence. Neither may absorb, reorder away or outrank the other, and the
+    // timeline has to be able to tell which lane a record belongs to.
+    let dir = scratch_dir("two-providers");
+    let toggl = dir.join("toggl.sqlite");
+    let clockify = dir.join("clockify.sqlite");
+    write_toggl_db(
+        &toggl,
+        &[Activity {
+            id: &[0x80],
+            start: MORNING_START,
+            end: Some(MORNING_END),
+            filename: "Xcode",
+            title: Some("seen by Toggl"),
+            idle: 0,
+            client: &[],
+        }],
+    );
+    write_clockify_db(
+        &clockify,
+        &[AutoTrackerItem {
+            id: "68cf0a1b2c3d4e5f60718296",
+            // Deliberately the identical clock period.
+            started: TimestampValue::Real(MORNING_START),
+            ended: Some(TimestampValue::Real(MORNING_END)),
+            name: "Xcode",
+            description: Some("seen by Clockify"),
+            idle_seconds: 0.0,
+            icon: &[],
+        }],
+    );
+
+    let toggl_source = create_toggl_source(&pool, "Toggl Track", &toggl).await;
+    let clockify_source = create_clockify_source(&pool, "Clockify Desktop", &clockify).await;
+    wait_for_intervals(&pool, toggl_source, 1).await;
+    wait_for_intervals(&pool, clockify_source, 1).await;
+
+    let (_, all) = list_intervals(&pool, DAY, None).await;
+    let rows = all.as_array().unwrap();
+    assert_eq!(rows.len(), 2, "one recorder swallowed the other's record");
+
+    // Every row names its own lane, so a client can split the day into lanes
+    // without a second request to resolve source ids.
+    let mut lanes: Vec<(&str, &str, &str)> = rows
+        .iter()
+        .map(|row| {
+            (
+                row["source_name"].as_str().unwrap(),
+                row["source_kind"].as_str().unwrap(),
+                row["detail"].as_str().unwrap(),
+            )
+        })
+        .collect();
+    lanes.sort_unstable();
+    assert_eq!(
+        lanes,
+        vec![
+            (
+                "Clockify Desktop",
+                "clockify_auto_tracker",
+                "seen by Clockify"
+            ),
+            ("Toggl Track", "toggl_activity", "seen by Toggl"),
+        ]
+    );
+    assert!(rows.iter().all(|row| row["source_enabled"] == true));
+
+    // And each lane is still separately addressable.
+    let (_, only_clockify) = list_intervals(&pool, DAY, Some(clockify_source)).await;
+    assert_eq!(only_clockify.as_array().unwrap().len(), 1);
+    assert_eq!(only_clockify[0]["source_name"], "Clockify Desktop");
+}
+
+#[sqlx::test]
+async fn leaves_a_clockify_item_that_is_still_recording_out_of_the_timeline(pool: PgPool) {
+    let dir = scratch_dir("clockify-open");
+    let path = dir.join("clockify.sqlite");
+    write_clockify_db(
+        &path,
+        &[
+            AutoTrackerItem {
+                id: "68cf0a1b2c3d4e5f60718297",
+                started: TimestampValue::Integer(MORNING_START as i64),
+                ended: Some(TimestampValue::Integer(MORNING_END as i64)),
+                name: "Closed",
+                description: None,
+                idle_seconds: 0.0,
+                icon: &[],
+            },
+            AutoTrackerItem {
+                id: "68cf0a1b2c3d4e5f60718298",
+                started: TimestampValue::Integer(AFTERNOON_START as i64),
+                ended: None,
+                name: "Still recording",
+                description: None,
+                idle_seconds: 0.0,
+                icon: &[],
+            },
+        ],
+    );
+
+    let source = create_clockify_source(&pool, "Clockify", &path).await;
+    let settled = wait_for_intervals(&pool, source, 1).await;
+
+    assert_eq!(settled, 1);
+    let (_, intervals) = list_intervals(&pool, DAY, Some(source)).await;
+    assert_eq!(labels(&intervals), vec!["Closed"]);
 }

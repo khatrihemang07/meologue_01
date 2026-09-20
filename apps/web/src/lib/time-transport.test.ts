@@ -26,18 +26,19 @@ describe("Time transport", () => {
     expect(fetchMock).toHaveBeenCalledWith("https://time.example/v1/time/sources");
   });
 
-  it("scopes a daily interval request to its selected source", async () => {
+  // Since issue #420 a day is fetched once across every source rather than
+  // once per source: each interval carries its own source attribution, so one
+  // request is enough to build every lane.
+  it("asks for a whole day rather than one source's slice of it", async () => {
     useSettingsStore.getState().setServerUrl("https://time.example");
     const intervals: ActivityInterval[] = [];
     const fetchMock = vi.fn(async () => ({ ok: true, status: 200, json: async () => intervals }));
     vi.stubGlobal("fetch", fetchMock);
 
-    await expect(listActivityIntervals("2026-09-20", "toggl")).resolves.toEqual({
+    await expect(listActivityIntervals("2026-09-20")).resolves.toEqual({
       ok: true,
       intervals,
     });
-    expect(fetchMock).toHaveBeenCalledWith(
-      "https://time.example/v1/time/intervals?day=2026-09-20&source_id=toggl",
-    );
+    expect(fetchMock).toHaveBeenCalledWith("https://time.example/v1/time/intervals?day=2026-09-20");
   });
 });

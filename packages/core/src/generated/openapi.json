@@ -619,6 +619,9 @@
           "400": {
             "description": ""
           },
+          "409": {
+            "description": ""
+          },
           "423": {
             "description": ""
           }
@@ -630,13 +633,18 @@
     "schemas": {
       "ActivityInterval": {
         "type": "object",
+        "description": "One immutable stretch of activity, in provider-neutral terms.\n\nThe source's name, kind and enabled flag are carried on every interval\nrather than being left for the client to join: a timeline showing several\nlanes needs to name each lane's recorder, and an archived source's rows\nstill have to be identifiable on the days they cover long after the source\nstopped importing (issue #423).",
         "required": [
           "id",
           "source_id",
+          "source_name",
+          "source_kind",
+          "source_enabled",
           "provider_record_id",
           "started_at",
           "ended_at",
-          "label"
+          "label",
+          "idle"
         ],
         "properties": {
           "detail": {
@@ -653,15 +661,28 @@
             "type": "string",
             "format": "uuid"
           },
+          "idle": {
+            "type": "boolean",
+            "description": "Whether the recorder reported idleness on this record. This is\ndeliberately weaker than \"the whole interval was idle\": Toggl stores a\nflag and Clockify stores a count of idle seconds inside the record, and\ncollapsing both to a boolean is the most the two honestly share. The\nexact provider value is in `raw_row` on the single-interval route."
+          },
           "label": {
             "type": "string"
           },
           "provider_record_id": {
             "type": "string"
           },
+          "source_enabled": {
+            "type": "boolean"
+          },
           "source_id": {
             "type": "string",
             "format": "uuid"
+          },
+          "source_kind": {
+            "type": "string"
+          },
+          "source_name": {
+            "type": "string"
           },
           "started_at": {
             "type": "string",

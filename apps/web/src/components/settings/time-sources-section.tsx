@@ -8,17 +8,23 @@ import { useServerReachable, useSyncEnabled } from "@/lib/settings";
 import { createTimeSource, listTimeSources, type TimeSource } from "@/lib/time-transport";
 
 /**
- * Server-owned recorder configuration. This first source form names Toggl
- * Activity Recording explicitly; Clockify and source lifecycle controls are
- * follow-up slices, rather than pretending their adapters exist today.
+ * Server-owned recorder configuration.
+ *
+ * The adapter kind is chosen explicitly rather than guessed from the path.
+ * Both supported databases are Core Data SQLite files with similar-looking
+ * paths, and guessing wrong would mean a source that saves happily and then
+ * imports nothing — the Server validates the file against the kind that was
+ * asked for, so the kind has to be the user's answer, not an inference.
  */
 export function TimeSourcesSection() {
   const syncEnabled = useSyncEnabled();
   const serverReachable = useServerReachable();
   const queryClient = useQueryClient();
   const [name, setName] = useState("");
+  const [kind, setKind] = useState<SourceKindId>("toggl_activity");
   const [path, setPath] = useState("");
   const [status, setStatus] = useState<string | null>(null);
+  const selectedKind = SOURCE_KINDS.find((option) => option.id === kind) ?? SOURCE_KINDS[0];
   const sourcesQuery = useQuery({
     queryKey: TIME_SOURCES_QUERY_KEY,
     queryFn: listTimeSources,
@@ -67,7 +73,7 @@ export function TimeSourcesSection() {
             onSubmit={(event) => {
               event.preventDefault();
               setStatus(null);
-              void createMutation.mutateAsync({ name, kind: "toggl_activity", path });
+              void createMutation.mutateAsync({ name, kind, path });
             }}
           >
             <div className="flex flex-col gap-1">
@@ -84,14 +90,31 @@ export function TimeSourcesSection() {
               />
             </div>
             <div className="flex flex-col gap-1">
-              <label htmlFor="toggl-database-path" className="text-sm">
-                Toggl database path
+              <label htmlFor="time-source-kind" className="text-sm">
+                Recorder
+              </label>
+              <select
+                id="time-source-kind"
+                value={kind}
+                onChange={(event) => setKind(event.target.value as SourceKindId)}
+                className="h-11 rounded-md border border-border bg-background px-3 text-sm"
+              >
+                {SOURCE_KINDS.map((option) => (
+                  <option key={option.id} value={option.id}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="flex flex-col gap-1">
+              <label htmlFor="time-source-path" className="text-sm">
+                {selectedKind.pathLabel}
               </label>
               <Input
-                id="toggl-database-path"
+                id="time-source-path"
                 value={path}
                 onChange={(event) => setPath(event.target.value)}
-                placeholder="~/Library/Group Containers/…/DatabaseModel.sqlite"
+                placeholder={selectedKind.placeholder}
                 required
                 className="h-11"
               />
@@ -114,6 +137,33 @@ export function TimeSourcesSection() {
   );
 }
 
+/** The adapter kinds the Server accepts, and what each one asks the user for. */
+const SOURCE_KINDS = [
+  {
+    id: "toggl_activity",
+    label: "Toggl Track — Activity Recording",
+    pathLabel: "Toggl database path",
+    placeholder: "~/Library/Group Containers/…/DatabaseModel.sqlite",
+  },
+  {
+    id: "clockify_auto_tracker",
+    label: "Clockify Desktop — Auto Tracker",
+    pathLabel: "Clockify database path",
+    placeholder: "~/Library/Application Support/Clockify Desktop/Clockify_….sqlite",
+  },
+] as const satisfies readonly {
+  id: string;
+  label: string;
+  pathLabel: string;
+  placeholder: string;
+}[];
+
+type SourceKindId = (typeof SOURCE_KINDS)[number]["id"];
+
+function kindLabel(kind: string): string {
+  return SOURCE_KINDS.find((option) => option.id === kind)?.label ?? kind;
+}
+
 function ConfiguredSources({ query, pending }: { query: unknown; pending: boolean }) {
   if (pending) {
     return <p className="text-muted-foreground text-sm">Loading configured sources…</p>;
@@ -131,9 +181,12 @@ function ConfiguredSources({ query, pending }: { query: unknown; pending: boolea
   return (
     <ul aria-label="Configured Time sources" className="flex flex-col gap-1 text-sm">
       {query.sources.map((source) => (
-        <li key={source.id}>
-          {source.name}
-          {!source.enabled && " (archived)"}
+        <li key={source.id} className="flex flex-col">
+          <span>
+            {source.name}
+            {!source.enabled && " (archived)"}
+          </span>
+          <span className="text-muted-foreground text-xs">{kindLabel(source.kind)}</span>
         </li>
       ))}
     </ul>

@@ -1,4 +1,29 @@
-//! Server-owned Time source configuration and Toggl Activity import.
+//! Server-owned Time source configuration and Activity import.
+//!
+//! Two recorders are supported: Toggl Track's Activity Recording database and
+//! Clockify Desktop's Auto Tracker. Both are Core Data SQLite files living on
+//! the same machine as the Server, and everything that differs between them is
+//! collected in one place — `SourceKind::adapter` — so a third recorder is a
+//! new variant and a new `Adapter`, not a new branch in the import loop.
+//!
+//! What the two providers actually store was read off this machine's own
+//! installs rather than inferred:
+//!
+//! | | Toggl | Clockify |
+//! |---|---|---|
+//! | table | `ZMANAGEDACTIVITY` | `ZCDAUTOTRACKERITEM` |
+//! | identity | `ZID`, a **BLOB** | `ZID`, **TEXT** (24 hex chars) |
+//! | start / end | `ZSTART` / `ZEND`, REAL | `ZTIMESTARTED` / `ZTIMEENDED`, INTEGER |
+//! | label | `ZFILENAME` | `ZNAME` |
+//! | detail | `ZTITLE` | `ZITEMDESCRIPTION` |
+//! | idle | `ZISIDLE`, a flag | `ZIDLETIME`, idle **seconds** |
+//!
+//! Two of those differences are the reason the seam is shaped this way. The
+//! identity column has the same name in both but a different storage class, so
+//! identity is read through `provider_identity` rather than as a fixed Rust
+//! type. And the timestamps are REAL in one and INTEGER in the other despite
+//! both being Core Data seconds, so they are read as `f64` — which rusqlite
+//! widens an INTEGER into — rather than matched on storage class.
 
 use std::path::{Path, PathBuf};
 
@@ -19,6 +44,88 @@ use crate::ConfigLocked;
 
 const APPLE_EPOCH: i64 = 978_307_200;
 
+// ---------------------------------------------------------------------------
+// The adapter seam
+// ---------------------------------------------------------------------------
+
+/// Which recorder a Time source reads.
+///
+/// Stored as its wire string in `time_sources.kind`, where a check constraint
+/// holds it to exactly these values — an unknown kind would be a source row
+/// nothing could ever import.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SourceKind {
+    TogglActivity,
+    ClockifyAutoTracker,
+}
+
+/// Where one provider keeps each field of an Activity interval.
+///
+/// Only column names live here. Everything about *how* a value is read —
+/// identity storage class, Core Data conversion, idle normalization — is
+/// shared, because those turned out not to vary per provider once the real
+/// databases were looked at.
+struct Adapter {
+    /// The table holding one row per observed stretch of activity.
+    table: &'static str,
+    /// Both providers happen to name this `ZID`; it is spelled out rather than
+    /// hard-coded so a provider that does not is a one-line change here.
+    identity: &'static str,
+    started: &'static str,
+    ended: &'static str,
+    label: &'static str,
+    detail: &'static str,
+    idle: &'static str,
+    /// What a failed schema probe should tell the user, in their words.
+    describes: &'static str,
+}
+
+impl SourceKind {
+    pub fn from_wire(value: &str) -> Option<Self> {
+        match value {
+            "toggl_activity" => Some(Self::TogglActivity),
+            "clockify_auto_tracker" => Some(Self::ClockifyAutoTracker),
+            _ => None,
+        }
+    }
+
+    pub fn as_wire(self) -> &'static str {
+        match self {
+            Self::TogglActivity => "toggl_activity",
+            Self::ClockifyAutoTracker => "clockify_auto_tracker",
+        }
+    }
+
+    fn adapter(self) -> Adapter {
+        match self {
+            Self::TogglActivity => Adapter {
+                table: "ZMANAGEDACTIVITY",
+                identity: "ZID",
+                started: "ZSTART",
+                ended: "ZEND",
+                label: "ZFILENAME",
+                detail: "ZTITLE",
+                idle: "ZISIDLE",
+                describes: "a Toggl Activity Recording database",
+            },
+            Self::ClockifyAutoTracker => Adapter {
+                table: "ZCDAUTOTRACKERITEM",
+                identity: "ZID",
+                started: "ZTIMESTARTED",
+                ended: "ZTIMEENDED",
+                label: "ZNAME",
+                detail: "ZITEMDESCRIPTION",
+                idle: "ZIDLETIME",
+                describes: "a Clockify Desktop Auto Tracker database",
+            },
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Wire shapes
+// ---------------------------------------------------------------------------
+
 #[derive(Debug, Clone, Serialize, sqlx::FromRow, ToSchema)]
 pub struct TimeSource {
     pub id: Uuid,
@@ -35,15 +142,31 @@ pub struct CreateTimeSource {
     pub path: String,
 }
 
+/// One immutable stretch of activity, in provider-neutral terms.
+///
+/// The source's name, kind and enabled flag are carried on every interval
+/// rather than being left for the client to join: a timeline showing several
+/// lanes needs to name each lane's recorder, and an archived source's rows
+/// still have to be identifiable on the days they cover long after the source
+/// stopped importing (issue #423).
 #[derive(Debug, Clone, Serialize, sqlx::FromRow, ToSchema)]
 pub struct ActivityInterval {
     pub id: Uuid,
     pub source_id: Uuid,
+    pub source_name: String,
+    pub source_kind: String,
+    pub source_enabled: bool,
     pub provider_record_id: String,
     pub started_at: DateTime<Utc>,
     pub ended_at: DateTime<Utc>,
     pub label: String,
     pub detail: Option<String>,
+    /// Whether the recorder reported idleness on this record. This is
+    /// deliberately weaker than "the whole interval was idle": Toggl stores a
+    /// flag and Clockify stores a count of idle seconds inside the record, and
+    /// collapsing both to a boolean is the most the two honestly share. The
+    /// exact provider value is in `raw_row` on the single-interval route.
+    pub idle: bool,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -59,6 +182,47 @@ pub struct IntervalQuery {
     pub source_id: Option<Uuid>,
 }
 
+/// Every interval column the daily timeline serves, joined to its source.
+///
+/// A macro rather than a `const` so the queries below can be assembled with
+/// `concat!` into `&'static str`s: sqlx 0.9 refuses SQL built at runtime, and
+/// that refusal is worth keeping rather than waiving with an assertion for a
+/// string that is entirely literal anyway.
+///
+/// `raw_row` is absent on purpose and not by omission: a dense day would drag
+/// every provider's binary payload down with it, so the raw evidence is served
+/// only by the single-interval route.
+macro_rules! interval_columns {
+    () => {
+        "i.id, i.source_id, s.name as source_name, s.kind as source_kind, \
+         s.enabled as source_enabled, i.provider_record_id, i.started_at, \
+         i.ended_at, i.label, i.detail, i.idle"
+    };
+}
+
+/// Overlap, not containment: a stretch of work that ran past midnight belongs
+/// to both days it covers rather than being truncated out of one.
+const LIST_INTERVALS_SQL: &str = concat!(
+    "select ",
+    interval_columns!(),
+    " from activity_intervals i join time_sources s on s.id = i.source_id \
+      where i.started_at < $2 and i.ended_at > $1 \
+        and ($3::uuid is null or i.source_id = $3) \
+      order by i.started_at"
+);
+
+const INTERVAL_DETAIL_SQL: &str = concat!(
+    "select ",
+    interval_columns!(),
+    ", i.raw_row \
+      from activity_intervals i join time_sources s on s.id = i.source_id \
+      where i.id = $1"
+);
+
+// ---------------------------------------------------------------------------
+// Validation
+// ---------------------------------------------------------------------------
+
 fn canonical_source_path(value: &str) -> Result<PathBuf, String> {
     let expanded = if value == "~" || value.starts_with("~/") {
         let home = std::env::var("HOME").map_err(|_| "cannot expand ~ without HOME")?;
@@ -69,7 +233,11 @@ fn canonical_source_path(value: &str) -> Result<PathBuf, String> {
     std::fs::canonicalize(&expanded).map_err(|_| "source database is unreadable".to_string())
 }
 
-fn validate_toggl(path: &Path) -> Result<(), String> {
+/// Opens a provider database the way every read of it opens: read-only, so the
+/// Server can never checkpoint, vacuum or otherwise rewrite a file another
+/// application owns, and with a busy timeout because that application is
+/// normally running and writing while this reads.
+fn open_read_only(path: &Path) -> Result<Connection, String> {
     let connection = Connection::open_with_flags(
         path,
         OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
@@ -78,14 +246,37 @@ fn validate_toggl(path: &Path) -> Result<(), String> {
     connection
         .busy_timeout(std::time::Duration::from_secs(2))
         .map_err(|_| "source database is busy".to_string())?;
+    Ok(connection)
+}
+
+/// Proves the file really is the provider database it claims to be, before a
+/// row is written. Naming every column the importer will later read is what
+/// makes this a schema check rather than a "does a table with this name exist"
+/// check — a same-named table with different columns fails here rather than
+/// importing nothing and looking healthy.
+fn validate_source(kind: SourceKind, path: &Path) -> Result<(), String> {
+    let adapter = kind.adapter();
+    let connection = open_read_only(path)?;
+    let wrong_shape = || format!("source database is not {}", adapter.describes);
     let mut statement = connection
-        .prepare("select ZID, ZSTART, ZEND, ZFILENAME, ZTITLE from ZMANAGEDACTIVITY limit 1")
-        .map_err(|_| "source database is not a Toggl Activity Recording database".to_string())?;
-    statement
-        .exists([])
-        .map_err(|_| "source database is not a Toggl Activity Recording database".to_string())?;
+        .prepare(&format!(
+            "select {}, {}, {}, {}, {}, {} from {} limit 1",
+            adapter.identity,
+            adapter.started,
+            adapter.ended,
+            adapter.label,
+            adapter.detail,
+            adapter.idle,
+            adapter.table,
+        ))
+        .map_err(|_| wrong_shape())?;
+    statement.exists([]).map_err(|_| wrong_shape())?;
     Ok(())
 }
+
+// ---------------------------------------------------------------------------
+// Handlers
+// ---------------------------------------------------------------------------
 
 #[utoipa::path(get, path = "/v1/time/sources", responses((status = 200, body = [TimeSource])))]
 pub async fn list_sources_handler(
@@ -98,7 +289,7 @@ pub async fn list_sources_handler(
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
 }
 
-#[utoipa::path(post, path = "/v1/time/sources", request_body = CreateTimeSource, responses((status = 201, body = TimeSource), (status = 400), (status = 423)))]
+#[utoipa::path(post, path = "/v1/time/sources", request_body = CreateTimeSource, responses((status = 201, body = TimeSource), (status = 400), (status = 409), (status = 423)))]
 pub async fn create_source_handler(
     State(pool): State<PgPool>,
     State(ConfigLocked(locked)): State<ConfigLocked>,
@@ -107,18 +298,22 @@ pub async fn create_source_handler(
     if locked {
         return Err((StatusCode::LOCKED, "Server configuration is locked".into()));
     }
-    if input.name.trim().is_empty() || input.kind != "toggl_activity" {
-        return Err((
-            StatusCode::BAD_REQUEST,
-            "name and toggl_activity kind are required".into(),
-        ));
+    let name = input.name.trim();
+    if name.is_empty() {
+        return Err((StatusCode::BAD_REQUEST, "a source name is required".into()));
     }
+    let kind = SourceKind::from_wire(&input.kind).ok_or((
+        StatusCode::BAD_REQUEST,
+        "unsupported Time source kind".to_string(),
+    ))?;
+
     let path = canonical_source_path(&input.path).map_err(|e| (StatusCode::BAD_REQUEST, e))?;
-    validate_toggl(&path).map_err(|e| (StatusCode::BAD_REQUEST, e))?;
+    validate_source(kind, &path).map_err(|e| (StatusCode::BAD_REQUEST, e))?;
+
     let source = TimeSource {
         id: Uuid::new_v4(),
-        name: input.name.trim().to_owned(),
-        kind: input.kind,
+        name: name.to_owned(),
+        kind: kind.as_wire().to_owned(),
         path: path.to_string_lossy().into_owned(),
         enabled: true,
     };
@@ -136,23 +331,42 @@ pub async fn create_source_handler(
                 "a Time source already uses this path".into(),
             )
         })?;
-    let import_source = source.clone();
-    let import_pool = pool.clone();
+
+    spawn_import(pool, source.id, kind, source.path.clone());
+    Ok((StatusCode::CREATED, Json(source)))
+}
+
+/// Queues the all-history import for a newly configured source without making
+/// the Settings request wait for it. Two recorders can be configured back to
+/// back and neither blocks the other; the `(source_id, provider_record_id)`
+/// uniqueness boundary is what keeps repeated runs from duplicating.
+fn spawn_import(pool: PgPool, source_id: Uuid, kind: SourceKind, path: String) {
     tokio::spawn(async move {
-        // SQLite work stays on a blocking worker; inserts use the async
-        // Postgres pool after the worker returns, never Handle::current().
-        let rows = tokio::task::spawn_blocking({
-            let path = import_source.path.clone();
-            move || read_toggl(&path)
-        })
-        .await
-        .unwrap_or_default();
-        for (provider_record_id, started_at, ended_at, label, detail, raw_row) in rows {
-            let _ = sqlx::query("insert into activity_intervals (id,source_id,provider_record_id,started_at,ended_at,label,detail,raw_row) values ($1,$2,$3,$4,$5,$6,$7,$8) on conflict (source_id,provider_record_id) do nothing")
-                .bind(Uuid::new_v4()).bind(import_source.id).bind(provider_record_id).bind(started_at).bind(ended_at).bind(label).bind(detail).bind(raw_row).execute(&import_pool).await;
+        // SQLite work stays on a blocking worker; the inserts use the async
+        // Postgres pool after that worker returns, never `Handle::current()`.
+        let rows = tokio::task::spawn_blocking(move || read_source(kind, &path))
+            .await
+            .unwrap_or_default();
+        for row in rows {
+            let _ = sqlx::query(
+                "insert into activity_intervals \
+                 (id, source_id, provider_record_id, started_at, ended_at, label, detail, idle, raw_row) \
+                 values ($1,$2,$3,$4,$5,$6,$7,$8,$9) \
+                 on conflict (source_id, provider_record_id) do nothing",
+            )
+            .bind(Uuid::new_v4())
+            .bind(source_id)
+            .bind(row.provider_record_id)
+            .bind(row.started_at)
+            .bind(row.ended_at)
+            .bind(row.label)
+            .bind(row.detail)
+            .bind(row.idle)
+            .bind(row.raw_row)
+            .execute(&pool)
+            .await;
         }
     });
-    Ok((StatusCode::CREATED, Json(source)))
 }
 
 #[utoipa::path(get, path = "/v1/time/intervals", params(IntervalQuery), responses((status = 200, body = [ActivityInterval])))]
@@ -164,22 +378,24 @@ pub async fn list_intervals_handler(
         NaiveDate::parse_from_str(&query.day, "%Y-%m-%d").map_err(|_| StatusCode::BAD_REQUEST)?;
     let start = Utc.from_utc_datetime(&day.and_hms_opt(0, 0, 0).unwrap());
     let end = start + Duration::days(1);
-    sqlx::query_as("select id,source_id,provider_record_id,started_at,ended_at,label,detail from activity_intervals where started_at < $2 and ended_at > $1 and ($3::uuid is null or source_id=$3) order by started_at")
-        .bind(start).bind(end).bind(query.source_id).fetch_all(&pool).await.map(Json).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
+
+    sqlx::query_as(LIST_INTERVALS_SQL)
+        .bind(start)
+        .bind(end)
+        .bind(query.source_id)
+        .fetch_all(&pool)
+        .await
+        .map(Json)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
 }
 
 /// The single-interval route's own row. `ActivityIntervalDetail` cannot be
 /// queried directly because `#[serde(flatten)]` puts the normalized fields one
-/// level down, while the table stores them and `raw_row` side by side.
+/// level down, while the query returns them and `raw_row` side by side.
 #[derive(sqlx::FromRow)]
 struct IntervalDetailRow {
-    id: Uuid,
-    source_id: Uuid,
-    provider_record_id: String,
-    started_at: DateTime<Utc>,
-    ended_at: DateTime<Utc>,
-    label: String,
-    detail: Option<String>,
+    #[sqlx(flatten)]
+    interval: ActivityInterval,
     raw_row: Value,
 }
 
@@ -188,35 +404,56 @@ pub async fn interval_detail_handler(
     State(pool): State<PgPool>,
     AxumPath(id): AxumPath<Uuid>,
 ) -> Result<Json<ActivityIntervalDetail>, StatusCode> {
-    let row: Option<IntervalDetailRow> = sqlx::query_as(
-        "select id, source_id, provider_record_id, started_at, ended_at, label, detail, raw_row \
-         from activity_intervals where id = $1",
-    )
-    .bind(id)
-    .fetch_optional(&pool)
-    .await
-    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let row: Option<IntervalDetailRow> = sqlx::query_as(INTERVAL_DETAIL_SQL)
+        .bind(id)
+        .fetch_optional(&pool)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     row.map(|row| {
         Json(ActivityIntervalDetail {
-            interval: ActivityInterval {
-                id: row.id,
-                source_id: row.source_id,
-                provider_record_id: row.provider_record_id,
-                started_at: row.started_at,
-                ended_at: row.ended_at,
-                label: row.label,
-                detail: row.detail,
-            },
+            interval: row.interval,
             raw_row: row.raw_row,
         })
     })
     .ok_or(StatusCode::NOT_FOUND)
 }
 
+// ---------------------------------------------------------------------------
+// Reading a provider database
+// ---------------------------------------------------------------------------
+
+/// One provider record, normalized but not yet stored.
+struct ImportedInterval {
+    provider_record_id: String,
+    started_at: DateTime<Utc>,
+    ended_at: DateTime<Utc>,
+    label: String,
+    detail: Option<String>,
+    idle: bool,
+    raw_row: Value,
+}
+
 fn uuid_hex(value: &[u8]) -> String {
     value.iter().map(|byte| format!("{byte:02x}")).collect()
 }
+
+/// The provider's own identifier for a record, as a string, whatever SQLite
+/// storage class it happens to be kept in. Toggl stores a BLOB and Clockify
+/// stores 24 hex characters of text; both have to survive into a stable
+/// external identity, because that identity is half of the uniqueness boundary
+/// that makes re-importing idempotent.
+fn provider_identity(value: ValueRef<'_>) -> Option<String> {
+    match value {
+        ValueRef::Text(bytes) => Some(String::from_utf8_lossy(bytes).into_owned()),
+        ValueRef::Blob(bytes) => Some(uuid_hex(bytes)),
+        ValueRef::Integer(number) => Some(number.to_string()),
+        // A record with no identity cannot be deduplicated, so it is skipped
+        // rather than imported under a made-up one.
+        ValueRef::Real(_) | ValueRef::Null => None,
+    }
+}
+
 fn apple_timestamp(seconds: f64) -> Option<DateTime<Utc>> {
     Utc.timestamp_opt(
         APPLE_EPOCH + seconds.trunc() as i64,
@@ -224,6 +461,7 @@ fn apple_timestamp(seconds: f64) -> Option<DateTime<Utc>> {
     )
     .single()
 }
+
 fn raw_value(value: ValueRef<'_>) -> Value {
     match value {
         ValueRef::Null => json!({"type":"null"}),
@@ -233,6 +471,7 @@ fn raw_value(value: ValueRef<'_>) -> Value {
         ValueRef::Blob(v) => json!({"type":"blob","base64":base64(v)}),
     }
 }
+
 fn base64(bytes: &[u8]) -> String {
     const T: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut out = String::new();
@@ -256,26 +495,22 @@ fn base64(bytes: &[u8]) -> String {
     out
 }
 
-type TogglRow = (
-    String,
-    DateTime<Utc>,
-    DateTime<Utc>,
-    String,
-    Option<String>,
-    Value,
-);
-
-fn read_toggl(path: &str) -> Vec<TogglRow> {
-    let Ok(connection) = Connection::open_with_flags(
-        path,
-        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
-    ) else {
+/// Reads every closed record out of one provider database.
+///
+/// A record still being recorded has no end yet, and is left for a later
+/// import rather than being given one — an importer that treated a missing end
+/// as "now" would mint an interval that changed length every time it was read.
+fn read_source(kind: SourceKind, path: &str) -> Vec<ImportedInterval> {
+    let adapter = kind.adapter();
+    let Ok(connection) = open_read_only(Path::new(path)) else {
         return vec![];
     };
-    let _ = connection.busy_timeout(std::time::Duration::from_secs(2));
-    let Ok(mut statement) =
-        connection.prepare("select * from ZMANAGEDACTIVITY where ZEND is not null")
-    else {
+    // `select *` rather than the six mapped columns: the whole row is kept as
+    // evidence, including the columns nothing has found a use for yet.
+    let Ok(mut statement) = connection.prepare(&format!(
+        "select * from {} where {} is not null",
+        adapter.table, adapter.ended
+    )) else {
         return vec![];
     };
     let columns: Vec<String> = statement
@@ -283,31 +518,39 @@ fn read_toggl(path: &str) -> Vec<TogglRow> {
         .iter()
         .map(ToString::to_string)
         .collect();
+
     let Ok(rows) = statement.query_map([], |row| {
         let raw = columns
             .iter()
             .enumerate()
-            .map(|(i, column)| Ok((column.clone(), raw_value(row.get_ref(i)?))))
+            .map(|(index, column)| Ok((column.clone(), raw_value(row.get_ref(index)?))))
             .collect::<rusqlite::Result<Map<String, Value>>>()?;
-        let id: Vec<u8> = row.get("ZID")?;
-        let start: f64 = row.get("ZSTART")?;
-        let end: f64 = row.get("ZEND")?;
-        let label: String = row.get("ZFILENAME")?;
-        let detail: Option<String> = row.get("ZTITLE")?;
-        Ok((uuid_hex(&id), start, end, label, detail, Value::Object(raw)))
+        Ok((
+            provider_identity(row.get_ref(adapter.identity)?),
+            row.get::<_, f64>(adapter.started)?,
+            row.get::<_, f64>(adapter.ended)?,
+            row.get::<_, String>(adapter.label)?,
+            row.get::<_, Option<String>>(adapter.detail)?,
+            // Toggl's flag and Clockify's idle-seconds count read the same way
+            // here: anything non-zero means the recorder reported idleness.
+            row.get::<_, Option<f64>>(adapter.idle)?.unwrap_or(0.0) != 0.0,
+            Value::Object(raw),
+        ))
     }) else {
         return vec![];
     };
+
     rows.flatten()
-        .filter_map(|(provider, start, end, label, detail, raw)| {
-            (end > start).then_some((
-                provider,
-                apple_timestamp(start)?,
-                apple_timestamp(end)?,
+        .filter_map(|(identity, start, end, label, detail, idle, raw_row)| {
+            (end > start).then_some(ImportedInterval {
+                provider_record_id: identity?,
+                started_at: apple_timestamp(start)?,
+                ended_at: apple_timestamp(end)?,
                 label,
                 detail,
-                raw,
-            ))
+                idle,
+                raw_row,
+            })
         })
         .collect()
 }
@@ -327,5 +570,28 @@ mod tests {
     #[test]
     fn encodes_binary_raw_values_without_loss() {
         assert_eq!(base64(&[0, 255, 1]), "AP8B");
+    }
+
+    #[test]
+    fn reads_a_provider_identity_out_of_either_storage_class() {
+        // Toggl keeps a BLOB here and Clockify keeps text, so both have to
+        // land on a stable string without the caller knowing which it got.
+        assert_eq!(
+            provider_identity(ValueRef::Blob(&[0xaa, 0x0b])),
+            Some("aa0b".to_string())
+        );
+        assert_eq!(
+            provider_identity(ValueRef::Text(b"68cf0a1b2c3d4e5f60718293")),
+            Some("68cf0a1b2c3d4e5f60718293".to_string())
+        );
+        assert_eq!(provider_identity(ValueRef::Null), None);
+    }
+
+    #[test]
+    fn every_wire_kind_round_trips_through_its_adapter() {
+        for kind in [SourceKind::TogglActivity, SourceKind::ClockifyAutoTracker] {
+            assert_eq!(SourceKind::from_wire(kind.as_wire()), Some(kind));
+        }
+        assert_eq!(SourceKind::from_wire("rescuetime"), None);
     }
 }

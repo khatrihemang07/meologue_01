@@ -29,15 +29,19 @@ export async function listTimeSources(): Promise<TimeSourcesResult> {
 }
 
 /**
- * GET /v1/time/intervals for one Server day and, until multi-source lanes
- * arrive, one selected source. `day` stays a floating YYYY-MM-DD value: the
- * Server owns the timezone boundary rather than the client inferring UTC.
+ * GET /v1/time/intervals for one day, across every source.
+ *
+ * `day` is a floating YYYY-MM-DD: which calendar boundary it names is the
+ * Server's to decide, and issue #424 is what moves that from UTC to the
+ * Server's configured timezone.
+ *
+ * Deliberately unfiltered by source. Every interval carries its own source
+ * name, kind and enabled flag, so one request is enough to build every lane —
+ * and the response never carries raw provider rows, which is what makes
+ * fetching a whole dense day cheap enough to do this way (issue #419).
  */
-export async function listActivityIntervals(
-  day: string,
-  sourceId: string,
-): Promise<ActivityIntervalsResult> {
-  const parameters = new URLSearchParams({ day, source_id: sourceId });
+export async function listActivityIntervals(day: string): Promise<ActivityIntervalsResult> {
+  const parameters = new URLSearchParams({ day });
   const response = await serverRequest(`/v1/time/intervals?${parameters}`);
   if (response === null) {
     return { ok: false, reason: "unreachable" };

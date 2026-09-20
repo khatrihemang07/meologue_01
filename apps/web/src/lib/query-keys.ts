@@ -21,11 +21,16 @@ export const CONFIG_QUERY_KEY = ["config"] as const;
 
 // Time is Server-owned rather than a Sync stream. Its two reads have their
 // own prefix so creating a source can invalidate both the source list and
-// whichever single-source daily timeline is currently open.
+// whichever day's timeline is currently open.
 export const TIME_SOURCES_QUERY_KEY = ["time", "sources"] as const;
 
-export function activityIntervalsQueryKey(day: string, sourceId: string) {
-  return ["time", "intervals", day, sourceId] as const;
+// Keyed by day alone, not by source. Since issue #420 the Time page fetches
+// the whole day once and splits it into one lane per recorder on the client:
+// a key per source would mean one request per lane and a separate cache entry
+// for each, which is a worse deal for a response that already carries its
+// source attribution and never carries raw provider rows.
+export function activityIntervalsQueryKey(day: string) {
+  return ["time", "intervals", day] as const;
 }
 
 /**

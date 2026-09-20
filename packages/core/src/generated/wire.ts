@@ -400,16 +400,36 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /**
+         * @description One immutable stretch of activity, in provider-neutral terms.
+         *
+         *     The source's name, kind and enabled flag are carried on every interval
+         *     rather than being left for the client to join: a timeline showing several
+         *     lanes needs to name each lane's recorder, and an archived source's rows
+         *     still have to be identifiable on the days they cover long after the source
+         *     stopped importing (issue #423).
+         */
         ActivityInterval: {
             detail?: string | null;
             /** Format: date-time */
             ended_at: string;
             /** Format: uuid */
             id: string;
+            /**
+             * @description Whether the recorder reported idleness on this record. This is
+             *     deliberately weaker than "the whole interval was idle": Toggl stores a
+             *     flag and Clockify stores a count of idle seconds inside the record, and
+             *     collapsing both to a boolean is the most the two honestly share. The
+             *     exact provider value is in `raw_row` on the single-interval route.
+             */
+            idle: boolean;
             label: string;
             provider_record_id: string;
+            source_enabled: boolean;
             /** Format: uuid */
             source_id: string;
+            source_kind: string;
+            source_name: string;
             /** Format: date-time */
             started_at: string;
         };
@@ -2217,6 +2237,12 @@ export interface operations {
                 };
             };
             400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };
