@@ -163,4 +163,43 @@ describe("useQuickAddComposer", () => {
       expect(result.current.pendingPasteLines).toBeNull();
     });
   });
+
+  // Issue #374: `web/01-anatomy.md`'s own captured pool — the placeholder
+  // rotates through example strings on each fresh open, never per
+  // keystroke.
+  describe("placeholder", () => {
+    it("advances only on a closed->open transition, not on every render", () => {
+      const { result, rerender } = renderHook(
+        ({ open }: { open: boolean }) => useQuickAddComposer({ onAdd: vi.fn(), open }),
+        { initialProps: { open: false } },
+      );
+      const first = result.current.placeholder;
+
+      // Re-rendering with `open` unchanged (still `false`) must not
+      // advance it — this is the "not per keystroke" half of the rule,
+      // exercised the only way a hook-level test can: a render with
+      // nothing that should count as a transition.
+      rerender({ open: false });
+      expect(result.current.placeholder).toBe(first);
+
+      rerender({ open: true });
+      const second = result.current.placeholder;
+      expect(second).not.toBe(first);
+
+      // Staying open (typing) must not advance it further.
+      rerender({ open: true });
+      expect(result.current.placeholder).toBe(second);
+
+      rerender({ open: false });
+      rerender({ open: true });
+      const third = result.current.placeholder;
+      expect(third).not.toBe(second);
+    });
+
+    it("stays on the pool's first entry for a caller with no open/closed concept at all", () => {
+      const { result } = renderHook(() => useQuickAddComposer({ onAdd: vi.fn() }));
+
+      expect(result.current.placeholder).toBe("Submit essay on AI by Thursday p1");
+    });
+  });
 });
