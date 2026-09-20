@@ -576,4 +576,50 @@ describe("TimePage", () => {
 
     expect(await screen.findByRole("button", { name: "Refresh now" })).toBeEnabled();
   });
+
+  it("survives a run finishing, and re-reads the day it imported into", async () => {
+    // The transition no other test here made: running -> idle. Handling it
+    // during render called `setMessage` on every subsequent render and React
+    // tore the page down with "Too many re-renders" — which only showed up
+    // when a real import finished in a real browser.
+    useSettingsStore.setState({ serverUrl: "https://server.example", capabilities: SUPPORTED });
+    let running = true;
+    let intervalRequests = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        const parsed = new URL(url);
+        if (parsed.pathname === "/v1/time/refresh" && init?.method === "POST") {
+          return { ok: true, status: 202, json: async () => ({ queued: 1 }) };
+        }
+        if (parsed.pathname === "/v1/time/sources") {
+          const state = running ? "running" : "idle";
+          // The next poll sees the run finished.
+          running = false;
+          return { ok: true, status: 200, json: async () => [sourceFixture({ state })] };
+        }
+        if (parsed.pathname === "/v1/time/intervals") {
+          intervalRequests += 1;
+          return { ok: true, status: 200, json: async () => [] };
+        }
+        return { ok: false, status: 404, json: async () => ({}) };
+      }),
+    );
+
+    renderPage();
+
+    // While the run is in flight the action says so and cannot start another.
+    expect(await screen.findByRole("button", { name: "Importing…" })).toBeDisabled();
+
+    // Once it ends the page is still alive, says so, and has re-read the day
+    // the run may have imported into.
+    expect(await screen.findByRole("button", { name: "Refresh now" })).toBeEnabled();
+    expect(await screen.findByText("Import finished.")).toBeInTheDocument();
+    await waitFor(() => expect(intervalRequests).toBeGreaterThan(1));
+
+    // And it settles: no render loop, so the message does not keep churning.
+    const settled = intervalRequests;
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(intervalRequests).toBe(settled);
+  });
 });

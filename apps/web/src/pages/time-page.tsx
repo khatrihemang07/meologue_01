@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { addDays, format, isToday, parseISO } from "date-fns";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router";
 import { BackToChats } from "@/components/back-to-chats";
 import { ServerUnreachableBanner } from "@/components/server-unreachable-banner";
@@ -281,11 +281,20 @@ function RefreshRow({
   // A finished run may have imported records into the day being looked at, so
   // the timeline has to be re-read — but only once the run is actually over,
   // not on every poll while it is still inserting.
-  const previouslyRunning = usePrevious(running);
-  if (previouslyRunning && !running) {
-    void queryClient.invalidateQueries({ queryKey: ["time", "intervals"] });
-    setMessage("Import finished.");
-  }
+  //
+  // In an effect, keyed on a ref, and NOT during render. Doing this during
+  // render calls `setMessage` on every render once the run has ended, which
+  // is an infinite loop: React tore the page down with "Too many re-renders"
+  // the first time a real import finished. No unit test caught it because
+  // none of them moved a source from running back to idle.
+  const wasRunning = useRef(running);
+  useEffect(() => {
+    if (wasRunning.current && !running) {
+      void queryClient.invalidateQueries({ queryKey: ["time", "intervals"] });
+      setMessage("Import finished.");
+    }
+    wasRunning.current = running;
+  }, [running, queryClient]);
 
   return (
     <div className="flex flex-col gap-1">
@@ -379,18 +388,6 @@ function refreshFailureCopy(
     case "locked":
       return "This Server's configuration is locked, so imports can't be started here.";
   }
-}
-
-/** The previous render's value, for spotting the moment a run ends. */
-function usePrevious<T>(value: T): T | undefined {
-  const [pair, setPair] = useState<{ previous: T | undefined; current: T }>({
-    previous: undefined,
-    current: value,
-  });
-  if (pair.current !== value) {
-    setPair({ previous: pair.current, current: value });
-  }
-  return pair.previous;
 }
 
 /**
