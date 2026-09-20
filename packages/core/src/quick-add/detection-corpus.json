@@ -240,6 +240,33 @@
     ]
   },
   {
+    "input": "March forward",
+    "matches": [
+      {
+        "text": "March",
+        "matchId": "1 Mar 2027"
+      }
+    ]
+  },
+  {
+    "input": "May I call him",
+    "matches": [
+      {
+        "text": "May",
+        "matchId": "1 May 2027"
+      }
+    ]
+  },
+  {
+    "input": "I saw him in August",
+    "matches": [
+      {
+        "text": "in August",
+        "matchId": "1 Aug 2027"
+      }
+    ]
+  },
+  {
     "input": "p1 at the start",
     "matches": [
       {

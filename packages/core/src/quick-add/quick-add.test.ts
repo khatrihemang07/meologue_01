@@ -93,6 +93,16 @@ describe("dates", () => {
     ["buy milk 3 days from now", "2026-09-05"],
     // Issue #382: "end of month" — the current month's own last day.
     ["buy milk end of month", "2026-09-30"],
+    // Issue #410's positive control: a day-qualified month ("March 15")
+    // must still resolve via the ordinary monthFirst reading above, not
+    // get shadowed by the new bare-month rule (./date-rules.ts's
+    // matchAbsoluteDate, "Bare month name" section) added right below it
+    // for the same month word — day 1 of March is not what's typed here.
+    // Not a measured Todoist row (no raw capture exists for this exact
+    // string); the day+month reading itself is already covered
+    // elsewhere in this table and the corpus, this row only guards
+    // against the new rule regressing it.
+    ["buy milk March 15", "2027-03-15"],
   ])("%s", (input, expectedDate) => {
     it(`resolves to ${expectedDate}`, () => {
       expect(parse(input).date).toBe(expectedDate);
