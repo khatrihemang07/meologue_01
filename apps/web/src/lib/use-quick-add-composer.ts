@@ -45,6 +45,22 @@ export interface QuickAddComposer {
   };
   /** The live options (`now`/`smartDates`) this render's parse used — exposed so a caller previewing the parse (`quick-add-dialog.tsx`) reads the identical values `commit` itself will use, rather than recomputing its own `now`. */
   options: QuickAddOptions;
+  /**
+   * Non-null exactly while `MultiLinePasteDialog` should be open — the
+   * pasted lines, verbatim, `TaskTitleEditor`'s own `onMultiLinePaste`
+   * callback below populates this. A caller renders the dialog fed by
+   * this and the three functions below; nothing else needs to know a
+   * multi-line paste happened at all.
+   */
+  pendingPasteLines: readonly string[] | null;
+  /** `TaskTitleEditor`'s own `onMultiLinePaste` prop. */
+  onMultiLinePaste: (lines: string[]) => void;
+  /** "Add N tasks" (the dialog's default): one Task per line, in the order pasted, each through `commit` — the identical path a normal Enter uses, called once per line rather than a second way to create a Task. */
+  confirmSplitPaste: () => void;
+  /** "Merge to single task": one Task, its title every pasted line joined with a single space — the exact text this field silently produced before #373, now an explicit, opt-in choice rather than the only outcome. */
+  confirmMergePaste: () => void;
+  /** Cancel, Escape, or an outside click on the dialog — creates nothing, discards the pending lines. */
+  cancelPendingPaste: () => void;
 }
 
 /**
@@ -59,6 +75,7 @@ export function useQuickAddComposer(options: UseQuickAddComposerOptions): QuickA
   const [value, setValue] = useState("");
   const [seed, setSeed] = useState("");
   const [resetKey, setResetKey] = useState(0);
+  const [pendingPasteLines, setPendingPasteLines] = useState<readonly string[] | null>(null);
   const smartDates = useSettingsStore((state) => state.smartDatesEnabled);
 
   const optionsRef = useRef<QuickAddOptions>({ now: localDayKey(new Date()), smartDates });
@@ -101,6 +118,38 @@ export function useQuickAddComposer(options: UseQuickAddComposerOptions): QuickA
     setResetKey((key) => key + 1);
   }
 
+  function onMultiLinePaste(lines: string[]) {
+    setPendingPasteLines(lines);
+  }
+
+  function confirmSplitPaste() {
+    const lines = pendingPasteLines;
+    setPendingPasteLines(null);
+    if (lines === null) {
+      return;
+    }
+    // One `commit` call per line — the exact same path a normal Enter
+    // takes, including its own "nothing to add" skip for a token-only
+    // line (`commit`'s own comment above). Not a second way to create a
+    // Task, per this ticket's own instruction.
+    for (const line of lines) {
+      commit(line);
+    }
+  }
+
+  function confirmMergePaste() {
+    const lines = pendingPasteLines;
+    setPendingPasteLines(null);
+    if (lines === null) {
+      return;
+    }
+    commit(lines.join(" "));
+  }
+
+  function cancelPendingPaste() {
+    setPendingPasteLines(null);
+  }
+
   return {
     value,
     setValue,
@@ -116,5 +165,10 @@ export function useQuickAddComposer(options: UseQuickAddComposerOptions): QuickA
       onCreateLabel: options.onCreateLabel,
     },
     options: optionsRef.current,
+    pendingPasteLines,
+    onMultiLinePaste,
+    confirmSplitPaste,
+    confirmMergePaste,
+    cancelPendingPaste,
   };
 }

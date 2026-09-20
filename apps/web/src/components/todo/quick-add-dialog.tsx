@@ -2,6 +2,7 @@ import { parseQuickAdd, uiPriorityOf } from "@meologue/core";
 import { X } from "lucide-react";
 import { Suspense, useEffect, useRef, useState } from "react";
 import { LazyTaskTitleEditor } from "@/components/todo/lazy-task-title-editor";
+import { MultiLinePasteDialog } from "@/components/todo/multiline-paste-dialog";
 import { ConfirmDialog } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import {
@@ -154,6 +155,12 @@ export function QuickAddDialog({
   useEffect(() => {
     if (open) {
       composer.remount("");
+      // Issue #373's own version of the identical #265 leak this effect
+      // already exists to close: a multi-line paste dialog left pending
+      // (dismissed some other way than its own Cancel/confirm, however
+      // unlikely given it's modal) must not reappear the next time this
+      // dialog opens.
+      composer.cancelPendingPaste();
     }
   }, [open]);
 
@@ -278,6 +285,7 @@ export function QuickAddDialog({
                     autocompleteOpenRef.current = isOpen;
                   }}
                   closeAutocompleteRef={closeAutocompleteRef}
+                  onMultiLinePaste={composer.onMultiLinePaste}
                 />
               </Suspense>
             </div>
@@ -341,6 +349,13 @@ export function QuickAddDialog({
               </div>
             </div>
           )}
+
+          <MultiLinePasteDialog
+            lines={composer.pendingPasteLines}
+            onConfirmSplit={composer.confirmSplitPaste}
+            onConfirmMerge={composer.confirmMergePaste}
+            onCancel={composer.cancelPendingPaste}
+          />
 
           <ConfirmDialog
             open={discardConfirmOpen}

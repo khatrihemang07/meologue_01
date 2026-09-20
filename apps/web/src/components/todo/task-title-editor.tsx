@@ -1,5 +1,6 @@
 import { baseKeymap } from "prosemirror-commands";
 import { history, redo, undo } from "prosemirror-history";
+import { InputRule, inputRules } from "prosemirror-inputrules";
 import { keymap } from "prosemirror-keymap";
 import type { Node as PMNode } from "prosemirror-model";
 import { Fragment, Schema, Slice } from "prosemirror-model";
@@ -23,41 +24,227 @@ import { cn } from "@/lib/utils";
  * (and any test that wants to build a title `Node` directly, the way
  * `composer-editor.test.ts` builds `entrySchema` nodes without mounting a
  * view) can type against the identical schema this editor actually runs.
+ *
+ * Issue #373 gives this editor its first mark ever — `link`, with an
+ * `href` attribute — for typed `[text](url)`. Verified before landing:
+ * none of the pre-#373 tests assert mark-emptiness, and `doc` needs no
+ * explicit `marks` property of its own to allow it (`NodeSpec.marks`'
+ * own default, per prosemirror-model: a node with inline content, which
+ * `doc` has directly here, allows every mark in the schema unless told
+ * otherwise). `inclusive: false` is what keeps typing right after a link,
+ * at its own end boundary, from silently continuing the link — the same
+ * property every rich editor gives a hyperlink mark and withholds from
+ * `strong`/`em` (this schema has neither, but it's why a future one
+ * shouldn't copy this default without thinking about it).
  */
 export const taskTitleSchema = new Schema({
   nodes: {
     doc: { content: "text*" },
     text: { inline: true },
   },
+  marks: {
+    link: {
+      attrs: { href: {} },
+      inclusive: false,
+      parseDOM: [
+        {
+          tag: "a[href]",
+          getAttrs: (dom) => ({ href: (dom as HTMLElement).getAttribute("href") }),
+        },
+      ],
+      toDOM: (mark) => ["a", { href: mark.attrs.href as string, rel: "noopener noreferrer" }, 0],
+    },
+  },
 });
 
-/** A title `Node` seeded with `text` — empty text becomes an empty `doc`, never a zero-length text node (ProseMirror disallows those outright). */
-export function titleDocFromText(text: string): PMNode {
-  return taskTitleSchema.node("doc", null, text.length === 0 ? [] : [taskTitleSchema.text(text)]);
-}
+/**
+ * `[text](url)` runs inside an already-typed title, recognised on LOAD the
+ * same way `linkInputRule` below recognises one as it's typed — the two
+ * halves of #373's round-trip: `titleDocFromText` reads this syntax back
+ * into a live mark, `titleTextFromDoc` writes it back out. Two groups
+ * (text, then url), the identical shape `linkInputRule` matches against,
+ * kept as one pattern so the reader and the writer can't drift apart.
+ */
+const TITLE_MARKDOWN_LINK = /\[([^\]\n]+)\]\(([^)\n]+)\)/g;
 
-/** The plain text a title document holds — the inverse of `titleDocFromText`, and all `dispatchTransaction`/the commit keymap below ever need to hand back to a caller. */
-export function titleTextFromDoc(doc: PMNode): string {
-  return doc.textContent;
+/**
+ * A title `Node` seeded with `text` — empty text becomes an empty `doc`,
+ * never a zero-length text node (ProseMirror disallows those outright).
+ *
+ * Issue #373: `Task.title` is stored as a plain string, unchanged — a
+ * `[text](url)` link is stored as that literal markdown text, not as
+ * separate mark metadata the storage layer would have to know about. This
+ * is the "read" half of the round trip that keeps it that way: every seed
+ * (a fresh rename, reopening the detail view, reloading the add field
+ * after a remount) is re-scanned for the markdown link syntax and turned
+ * back into a live mark here, so the mark surviving a save-then-reopen
+ * cycle costs nothing but re-running this same parse — `titleTextFromDoc`
+ * below is the inverse that makes the round trip whole.
+ */
+export function titleDocFromText(text: string): PMNode {
+  if (text.length === 0) {
+    return taskTitleSchema.node("doc", null, []);
+  }
+  const linkType = taskTitleSchema.marks.link;
+  const nodes: PMNode[] = [];
+  let cursor = 0;
+  TITLE_MARKDOWN_LINK.lastIndex = 0;
+  let match = TITLE_MARKDOWN_LINK.exec(text);
+  while (match !== null) {
+    const linkText = match[1];
+    const href = match[2];
+    if (
+      linkText !== undefined &&
+      href !== undefined &&
+      linkText.trim() !== "" &&
+      href.trim() !== ""
+    ) {
+      if (match.index > cursor) {
+        nodes.push(taskTitleSchema.text(text.slice(cursor, match.index)));
+      }
+      nodes.push(taskTitleSchema.text(linkText, [linkType.create({ href })]));
+      cursor = match.index + match[0].length;
+    }
+    match = TITLE_MARKDOWN_LINK.exec(text);
+  }
+  if (cursor < text.length) {
+    nodes.push(taskTitleSchema.text(text.slice(cursor)));
+  }
+  return taskTitleSchema.node("doc", null, nodes);
 }
 
 /**
- * Collapses a paste to one line. Clipboard HTML with block structure
- * (a copied paragraph, a multi-line plain-text paste) has nowhere to go
- * in a schema with no block node at all — left to ProseMirror's own
- * default parsing, the block boundaries would simply vanish and
- * concatenate two words with no separator between them ("line onetwo",
- * not "line one two"). `textBetween`'s own `blockSeparator` argument is
- * exactly the tool for turning "a boundary the schema can't represent"
- * into "a space," which is what a reader pasting multi-line text into a
- * single-line field would actually want.
+ * The plain text a title document holds — the inverse of `titleDocFromText`,
+ * and all `dispatchTransaction`/the commit keymap below ever need to hand
+ * back to a caller. A `link`-marked run is written back out as
+ * `[text](href)`, not as its bare display text: `doc.textContent` alone
+ * would silently drop the href the moment a link left this editor, which
+ * is exactly the "keeps stored data plain AND round-trippable" property
+ * issue #373 asks for — the stored string carries everything the mark
+ * carried, in the same syntax that produces it again on the way back in.
  */
-function transformPasted(slice: Slice): Slice {
-  const text = slice.content.textBetween(0, slice.content.size, " ", " ");
-  if (text.length === 0) {
-    return Slice.empty;
-  }
-  return new Slice(Fragment.from(taskTitleSchema.text(text)), 0, 0);
+export function titleTextFromDoc(doc: PMNode): string {
+  const linkType = taskTitleSchema.marks.link;
+  let result = "";
+  doc.forEach((node) => {
+    const linkMark = linkType.isInSet(node.marks);
+    result +=
+      linkMark !== undefined
+        ? `[${node.text ?? ""}](${linkMark.attrs.href as string})`
+        : (node.text ?? "");
+  });
+  return result;
+}
+
+/**
+ * `[text](url)` -> a live `link` mark on `text`, with the whole `](url)`
+ * run deleted along with the opening `[`. `composer-editor.ts`'s own
+ * `markInputRule` is NOT reusable here (that file's module comment on why
+ * a hand-written replacement exists at all): it takes exactly one capture
+ * group and applies a mark to it verbatim, symmetric delimiters on both
+ * sides. This rule has two groups feeding two DIFFERENT things — `text`
+ * becomes the marked content, `url` becomes the mark's own `href` — and
+ * the url has to be deleted outright, not merely trimmed off like a
+ * delimiter pair, since none of it survives into the document itself
+ * (`titleTextFromDoc` reconstructs it from the mark's `href` attr later,
+ * not from anything left behind in the text).
+ *
+ * Fires on typing only, never on paste (issue #373's own asymmetry,
+ * matching Todoist): `inputRules()`'s plugin only ever calls a rule from
+ * `handleTextInput`, which a paste never goes through — `transformPasted`
+ * below is a completely separate code path that only ever inserts plain
+ * text, so a pasted `[text](url)` string is untouched, unaffected by this
+ * rule entirely.
+ *
+ * Exported so a test can exercise it directly through its own `match`/
+ * `handler` pair (`InputRule`'s `@internal`-tagged but runtime-real
+ * properties — `composer-editor.test.ts`'s own header comment has the
+ * full reasoning for why that's the seam, jsdom having no way to drive
+ * `handleTextInput` itself) — `task-title-editor.test.tsx`'s own suite is
+ * that test.
+ */
+export function linkInputRule(): InputRule {
+  return new InputRule(/\[([^\]]+)\]\(([^)]+)\)$/, (state, match, start, end) => {
+    const text = match[1];
+    const href = match[2];
+    if (text === undefined || href === undefined || text.trim() === "" || href.trim() === "") {
+      return null;
+    }
+    const textOffset = match[0].indexOf(text);
+    if (textOffset < 0) {
+      return null;
+    }
+    const tr = state.tr;
+    const textStart = start + textOffset;
+    const textEnd = textStart + text.length;
+    // Deletes the trailing `](url)` run whole — positions before `text`
+    // are unaffected by this first deletion, so it's safe to do before
+    // trimming the leading `[` next.
+    if (textEnd < end) {
+      tr.delete(textEnd, end);
+    }
+    if (textStart > start) {
+      tr.delete(start, textStart);
+    }
+    const markEnd = start + text.length;
+    tr.addMark(start, markEnd, taskTitleSchema.marks.link.create({ href }));
+    // Without this, typing immediately after the closing `)` would carry
+    // the link mark onto the next character too — `link`'s own
+    // `inclusive: false` (this file's own doc comment on the schema)
+    // already stops that for ordinary typing at the boundary, but the
+    // input rule's own `addMark` call above sets a STORED mark for this
+    // exact transaction that `inclusive` doesn't reach; this clears it.
+    tr.removeStoredMark(taskTitleSchema.marks.link);
+    return tr;
+  });
+}
+
+/**
+ * Collapses a paste to one line, UNLESS `getOnMultiLinePaste` is supplied
+ * and the paste actually holds more than one real (non-blank) line — in
+ * which case this defers to that callback instead and inserts nothing
+ * (issue #373's "Add N tasks?" confirmation, `multiline-paste-dialog.tsx`).
+ * A `Slice` transform can't open a dialog itself, so this is the seam that
+ * hands the decision to a caller that can: `TaskTitleEditor`'s own
+ * `onMultiLinePaste` prop, read live through a ref the same way every
+ * other callback here is (this file's own "latest callback ref" comment).
+ *
+ * `undefined` (no callback supplied — every rename/detail-view caller,
+ * which has no "create N tasks" concept to defer to) keeps this editor's
+ * pre-#373 behaviour exactly: silently collapse to one line, regardless
+ * of how many lines were pasted. Only a caller that opts in gets the
+ * dialog at all.
+ *
+ * Clipboard HTML with block structure (a copied paragraph, a multi-line
+ * plain-text paste) has nowhere to go in a schema with no block node at
+ * all — left to ProseMirror's own default parsing, the block boundaries
+ * would simply vanish and concatenate two words with no separator between
+ * them ("line onetwo", not "line one two"). `textBetween`'s own
+ * `blockSeparator` argument is exactly the tool for turning "a boundary
+ * the schema can't represent" into a real line break, which is what lets
+ * the two paths below tell a genuine multi-line paste apart from a single
+ * line assembled out of several inline blocks.
+ */
+function transformPasted(getOnMultiLinePaste: () => ((lines: string[]) => void) | undefined) {
+  return (slice: Slice): Slice => {
+    const text = slice.content.textBetween(0, slice.content.size, "\n", "\n");
+    if (text.length === 0) {
+      return Slice.empty;
+    }
+    const onMultiLinePaste = getOnMultiLinePaste();
+    if (onMultiLinePaste !== undefined) {
+      const lines = text
+        .split("\n")
+        .map((line) => line.trim())
+        .filter((line) => line.length > 0);
+      if (lines.length > 1) {
+        onMultiLinePaste(lines);
+        return Slice.empty;
+      }
+    }
+    const collapsed = slice.content.textBetween(0, slice.content.size, " ", " ");
+    return new Slice(Fragment.from(taskTitleSchema.text(collapsed)), 0, 0);
+  };
 }
 
 function placeholderPlugin(text: string | undefined): Plugin {
@@ -151,6 +338,22 @@ export interface TaskTitleEditorProps {
    * `"close"` meta once state is already `null`).
    */
   closeAutocompleteRef?: React.RefObject<(() => void) | null>;
+  /**
+   * Issue #373: fires instead of the ordinary collapse-to-one-line paste
+   * behaviour when a paste actually holds more than one non-blank line —
+   * `transformPasted`'s own doc comment has the full reasoning for why a
+   * `Slice` transform defers to this rather than deciding itself. Read
+   * live through a ref, the same "latest callback" pattern every other
+   * prop here uses, not a mount-time seed: unlike `extraPlugins`, nothing
+   * about which callback is current needs to survive past the render that
+   * supplied it.
+   *
+   * Omitted entirely by every rename/detail-view caller, which has no
+   * "create N tasks from N lines" concept to defer to — only
+   * `add-task-form.tsx`/`quick-add-dialog.tsx` (through
+   * `use-quick-add-composer.ts`) supply this.
+   */
+  onMultiLinePaste?: (lines: string[]) => void;
 }
 
 /**
@@ -251,6 +454,12 @@ export function buildTitlePlugins(options: {
     historyKeymap,
     ...options.extraPlugins,
     keymap(baseKeymap),
+    // Issue #373: `inputRules()` only ever hooks `handleTextInput`, a prop
+    // no other plugin here defines, so its position relative to the
+    // keymaps above carries no ordering risk the way `handleKeyDown`
+    // registration order does — placed here, after `baseKeymap`, purely to
+    // match `composer-editor.ts`'s own `buildComposerPlugins` precedent.
+    inputRules({ rules: [linkInputRule()] }),
     placeholderPlugin(options.placeholder),
   ];
 }
@@ -280,6 +489,7 @@ export function TaskTitleEditor({
   autocomplete,
   onAutocompleteOpenChange,
   closeAutocompleteRef,
+  onMultiLinePaste,
 }: TaskTitleEditorProps) {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const viewRef = useRef<EditorView | null>(null);
@@ -309,6 +519,8 @@ export function TaskTitleEditor({
   autocompleteRef.current = autocomplete;
   const onAutocompleteOpenChangeRef = useRef(onAutocompleteOpenChange);
   onAutocompleteOpenChangeRef.current = onAutocompleteOpenChange;
+  const onMultiLinePasteRef = useRef(onMultiLinePaste);
+  onMultiLinePasteRef.current = onMultiLinePaste;
 
   // Drives the React-rendered listbox (`quick-add-autocomplete-listbox.tsx`)
   // — the one piece of state this otherwise fully-imperative component
@@ -388,7 +600,7 @@ export function TaskTitleEditor({
             ...(placeholder !== undefined ? { placeholder } : {}),
           };
         },
-        transformPasted,
+        transformPasted: transformPasted(() => onMultiLinePasteRef.current),
         dispatchTransaction: (tr) => {
           const current = viewRef.current;
           if (current === null) {

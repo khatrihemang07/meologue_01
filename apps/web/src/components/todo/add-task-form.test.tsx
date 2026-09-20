@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import { useEffect, useRef, useState } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useSettingsStore } from "@/lib/settings";
@@ -36,6 +36,7 @@ function StubTaskTitleEditor({
   ariaLabel,
   placeholder,
   autoFocus = true,
+  onMultiLinePaste,
 }: {
   value: string;
   onChange?: (value: string) => void;
@@ -44,6 +45,7 @@ function StubTaskTitleEditor({
   ariaLabel?: string;
   placeholder?: string;
   autoFocus?: boolean;
+  onMultiLinePaste?: (lines: string[]) => void;
 }) {
   const [text, setText] = useState(value);
   const ref = useRef<HTMLInputElement>(null);
@@ -54,24 +56,41 @@ function StubTaskTitleEditor({
     }
   }, []);
   return (
-    <input
-      ref={ref}
-      aria-label={ariaLabel ?? "Task name"}
-      placeholder={placeholder}
-      value={text}
-      onChange={(event) => {
-        setText(event.target.value);
-        onChange?.(event.target.value);
-      }}
-      onKeyDown={(event) => {
-        if (event.key === "Enter") {
-          onCommit(text);
-        }
-        if (event.key === "Escape") {
-          onCancel();
-        }
-      }}
-    />
+    <>
+      <input
+        ref={ref}
+        aria-label={ariaLabel ?? "Task name"}
+        placeholder={placeholder}
+        value={text}
+        onChange={(event) => {
+          setText(event.target.value);
+          onChange?.(event.target.value);
+        }}
+        onKeyDown={(event) => {
+          if (event.key === "Enter") {
+            onCommit(text);
+          }
+          if (event.key === "Escape") {
+            onCancel();
+          }
+        }}
+      />
+      {/*
+        The real editor's own `transformPasted` decides whether a paste is
+        multi-line (task-title-editor.test.tsx's own suite covers THAT
+        decision with a real DOM paste event, against the real component).
+        This stub only needs to prove `onMultiLinePaste` reaches this
+        editor at all — `add-task-form.tsx`'s own wiring — so it stands in
+        with a plain button a test can click directly, the same "stub
+        proves the prop reaches here" shape `onCommit`/`onCancel` above
+        already use via Enter/Escape.
+      */}
+      {onMultiLinePaste !== undefined && (
+        <button type="button" onClick={() => onMultiLinePaste(["Task A", "Task B", "Task C"])}>
+          Simulate multi-line paste
+        </button>
+      )}
+    </>
   );
 }
 
@@ -297,6 +316,66 @@ describe("AddTaskForm", () => {
       expect(input).toHaveFocus();
       expect(input).toHaveValue("buy milk");
       expect(screen.getByRole("button", { name: "Cancel" })).toBeInTheDocument();
+    });
+  });
+
+  /**
+   * Issue #373: the actual multi-line SPLIT/parse behaviour is tested in
+   * `task-title-editor.test.tsx` (the real paste mechanics) and
+   * `use-quick-add-composer.test.ts` (the real commit-per-line logic) —
+   * both below `TaskTitleEditor`, which this file's own header comment
+   * explains is deliberately mocked out here. This is the one link those
+   * two don't cover: that `AddTaskForm` actually wires `onMultiLinePaste`
+   * through to the editor and renders `MultiLinePasteDialog` fed by the
+   * real `useQuickAddComposer` state, end to end.
+   */
+  describe("multi-line paste wiring", () => {
+    it("a multi-line paste opens the confirmation dialog, and Split calls onAdd once per line", async () => {
+      const onAdd = vi.fn();
+      render(<AddTaskForm onAdd={onAdd} disabled={false} />);
+      await reveal();
+
+      fireEvent.click(screen.getByRole("button", { name: "Simulate multi-line paste" }));
+
+      const dialog = await screen.findByRole("dialog");
+      expect(within(dialog).getByText("Add 3 tasks?")).toBeInTheDocument();
+      expect(onAdd).not.toHaveBeenCalled();
+
+      fireEvent.click(within(dialog).getByRole("button", { name: "Add 3 tasks" }));
+
+      expect(onAdd).toHaveBeenCalledTimes(3);
+      expect(onAdd).toHaveBeenNthCalledWith(1, expect.objectContaining({ content: "Task A" }));
+      expect(onAdd).toHaveBeenNthCalledWith(3, expect.objectContaining({ content: "Task C" }));
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    });
+
+    it("Merge to single task calls onAdd once, with every line joined", async () => {
+      const onAdd = vi.fn();
+      render(<AddTaskForm onAdd={onAdd} disabled={false} />);
+      await reveal();
+
+      fireEvent.click(screen.getByRole("button", { name: "Simulate multi-line paste" }));
+      const dialog = await screen.findByRole("dialog");
+      fireEvent.click(within(dialog).getByRole("checkbox", { name: "Merge to single task" }));
+      fireEvent.click(within(dialog).getByRole("button", { name: "Add task" }));
+
+      expect(onAdd).toHaveBeenCalledTimes(1);
+      expect(onAdd).toHaveBeenCalledWith(
+        expect.objectContaining({ content: "Task A Task B Task C" }),
+      );
+    });
+
+    it("Cancel creates nothing", async () => {
+      const onAdd = vi.fn();
+      render(<AddTaskForm onAdd={onAdd} disabled={false} />);
+      await reveal();
+
+      fireEvent.click(screen.getByRole("button", { name: "Simulate multi-line paste" }));
+      const dialog = await screen.findByRole("dialog");
+      fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+
+      expect(onAdd).not.toHaveBeenCalled();
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     });
   });
 });

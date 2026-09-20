@@ -18,11 +18,14 @@
  * a keystroke, and `undo`/`redo` invoked directly via a capturing
  * `dispatch`.
  */
+import { cleanup, render, screen } from "@testing-library/react";
 import { redo, undo } from "prosemirror-history";
+import type { InputRule } from "prosemirror-inputrules";
+import type { Node as PMNode } from "prosemirror-model";
 import type { Transaction } from "prosemirror-state";
 import { EditorState, Selection } from "prosemirror-state";
 import { EditorView } from "prosemirror-view";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { AutocompleteEntry } from "@/lib/quick-add-autocomplete";
 import {
   quickAddAutocompletePlugin,
@@ -30,6 +33,8 @@ import {
 } from "@/lib/quick-add-autocomplete";
 import {
   buildTitlePlugins,
+  linkInputRule,
+  TaskTitleEditor,
   taskTitleSchema,
   titleDocFromText,
   titleTextFromDoc,
@@ -306,5 +311,295 @@ describe("TaskTitleEditor — #/@ autocomplete popup", () => {
 
     type(editorView, " ");
     expect(quickAddAutocompletePluginKey.getState(editorView.state)).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// linkInputRule (issue #373) — typed `[text](url)` becomes a live link
+// ---------------------------------------------------------------------------
+
+/**
+ * `linkInputRule`'s own doc comment has the full "fires on typing only"
+ * story; this section is about HOW that's tested. `prosemirror-inputrules`
+ * only ever runs a rule from `handleTextInput`, which fires from a real
+ * DOM text-input/composition event — jsdom cannot originate one (this
+ * file's own "DOM node identity" suite already leans on that gap for
+ * Backspace; `composer-editor.test.ts`'s own module comment has the fuller
+ * account, including the exact failure mode: an atomic `insertText(fullString)`
+ * call does NOT reliably go through the same path a real keystroke does —
+ * `.scratch/todoist-add-todo/web/02-detection-corpus.md` measured this
+ * directly against the live Todoist app: pasting-in `"[text](url)"` in one
+ * call produced an EMPTY editor, while retyping the identical string one
+ * character at a time produced the live link). So, like
+ * `composer-editor.test.ts`, this calls the rule's own `match`/`handler`
+ * pair directly — `InputRule`'s two properties actually assigned at
+ * runtime by its constructor despite being `@internal`-tagged in its
+ * public `.d.ts` — rather than trusting a mounted view's `insertText` to
+ * exercise it. A live, real-keystroke round trip belongs in `apps/e2e`.
+ */
+interface InspectableInputRule {
+  readonly match: RegExp;
+  readonly handler: (
+    state: EditorState,
+    match: RegExpMatchArray,
+    start: number,
+    end: number,
+  ) => Transaction | null;
+}
+
+function inspect(rule: InputRule): InspectableInputRule {
+  return rule as unknown as InspectableInputRule;
+}
+
+/**
+ * Types `text` onto the end of `doc`, one character at a time, running
+ * `linkInputRule()`'s own `match`/`handler` after each one — the identical
+ * technique `composer-editor.test.ts`'s own `typeAt` uses, simplified for
+ * this schema's flat `text*` content: no paragraph wrapper means a
+ * document position already IS a plain-text offset (this file's own "DOM
+ * node identity" suite: `selection.from` reads `3` after typing `"tod"`),
+ * so there's no block-start resolution to do first.
+ */
+function typeCharByChar(doc: PMNode, text: string): PMNode {
+  let state = EditorState.create({
+    schema: taskTitleSchema,
+    doc,
+    selection: Selection.atEnd(doc),
+  });
+  const rule = inspect(linkInputRule());
+  for (const ch of text) {
+    const pos = state.selection.from;
+    const textBefore = state.doc.textBetween(0, pos) + ch;
+    const match = rule.match.exec(textBefore);
+    const tr =
+      match !== null
+        ? (rule.handler(state, match, pos - (match[0].length - ch.length), pos) ??
+          state.tr.insertText(ch, pos))
+        : state.tr.insertText(ch, pos);
+    state = state.apply(tr);
+  }
+  return state.doc;
+}
+
+describe("linkInputRule (issue #373)", () => {
+  it("typing [text](url) produces a live link, brackets consumed", () => {
+    const doc = typeCharByChar(titleDocFromText(""), "[Todoist](https://todoist.com)");
+
+    expect(doc.textContent).toBe("Todoist");
+    expect(titleTextFromDoc(doc)).toBe("[Todoist](https://todoist.com)");
+    const linkMark = taskTitleSchema.marks.link.isInSet(doc.firstChild?.marks ?? []);
+    expect(linkMark?.attrs.href).toBe("https://todoist.com");
+  });
+
+  it("fires mid-sentence too, not only at the start", () => {
+    const doc = typeCharByChar(titleDocFromText("Read "), "[this](https://example.com)");
+
+    expect(doc.textContent).toBe("Read this");
+    expect(titleTextFromDoc(doc)).toBe("Read [this](https://example.com)");
+  });
+
+  it("the link mark does not leak onto the next typed character", () => {
+    const linked = typeCharByChar(titleDocFromText(""), "[Todoist](https://todoist.com)");
+    const doc = typeCharByChar(linked, "!");
+
+    expect(doc.textContent).toBe("Todoist!");
+    const lastChar = doc.lastChild;
+    expect(lastChar?.text).toBe("!");
+    expect(taskTitleSchema.marks.link.isInSet(lastChar?.marks ?? [])).toBeUndefined();
+  });
+
+  it("does not fire on an empty link text or an empty url", () => {
+    const emptyText = typeCharByChar(titleDocFromText(""), "[](https://example.com)");
+    expect(emptyText.textContent).toBe("[](https://example.com)");
+
+    const emptyHref = typeCharByChar(titleDocFromText(""), "[Todoist]()");
+    expect(emptyHref.textContent).toBe("[Todoist]()");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// titleDocFromText / titleTextFromDoc round trip (issue #373)
+// ---------------------------------------------------------------------------
+
+describe("titleDocFromText / titleTextFromDoc round trip (issue #373)", () => {
+  it("re-parses an already-stored [text](url) back into a live link", () => {
+    const doc = titleDocFromText("Read [my article](https://example.com/post)");
+
+    expect(doc.textContent).toBe("Read my article");
+    const linkNode = doc.child(1);
+    const linkMark = taskTitleSchema.marks.link.isInSet(linkNode.marks);
+    expect(linkNode.text).toBe("my article");
+    expect(linkMark?.attrs.href).toBe("https://example.com/post");
+  });
+
+  it("round-trips byte-for-byte through titleTextFromDoc", () => {
+    const original = "Read [my article](https://example.com/post) before lunch";
+    expect(titleTextFromDoc(titleDocFromText(original))).toBe(original);
+  });
+
+  it("leaves plain text with no bracket syntax completely untouched", () => {
+    const original = "buy milk tomorrow";
+    const doc = titleDocFromText(original);
+    expect(doc.marks?.length ?? 0).toBe(0);
+    expect(titleTextFromDoc(doc)).toBe(original);
+  });
+
+  it("does not convert a malformed or empty-part link on load either — same rule as typing", () => {
+    const original = "See [](https://example.com) and [Todoist]()";
+    expect(titleTextFromDoc(titleDocFromText(original))).toBe(original);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Paste behaviour (issue #373): a URL pastes as plain text; a multi-line
+// paste defers to `onMultiLinePaste` instead of silently collapsing.
+// ---------------------------------------------------------------------------
+
+/**
+ * jsdom implements neither method AT ALL on `Range` (verified directly —
+ * `"getClientRects" in document.createRange()` is `false`) — mounting the
+ * real `TaskTitleEditor` below and dispatching a real transaction reaches
+ * `EditorView.coordsAtPos` (`prosemirror-view`'s own `scrollToSelection`,
+ * called from `updateState` after every dispatch). `task-row-
+ * recognition.test.tsx`/`task-detail-view-recognition.test.tsx` both carry
+ * this identical shim for the identical reason; repeated here rather than
+ * shared, matching those two files' own precedent of not sharing it with
+ * each other.
+ */
+beforeAll(() => {
+  if (typeof Range.prototype.getClientRects !== "function") {
+    Range.prototype.getClientRects = (): DOMRectList => [] as unknown as DOMRectList;
+  }
+  if (typeof Range.prototype.getBoundingClientRect !== "function") {
+    Range.prototype.getBoundingClientRect = (): DOMRect =>
+      ({
+        x: 0,
+        y: 0,
+        top: 0,
+        left: 0,
+        right: 0,
+        bottom: 0,
+        width: 0,
+        height: 0,
+        toJSON() {
+          return this;
+        },
+      }) as DOMRect;
+  }
+});
+
+/**
+ * Dispatches a real `paste` DOM event carrying only `text/plain` —
+ * `prosemirror-view`'s own `editHandlers.paste` reads `clipboardData`
+ * directly and applies `view.someProp("transformPasted")` through an
+ * ordinary transaction, never through the DOM's own Selection/Range APIs
+ * or a `handleTextInput`-style event jsdom can't originate — verified
+ * working in this codebase already by `task-row-recognition.test.tsx`'s
+ * and `task-detail-view-recognition.test.tsx`'s own identical helper,
+ * copied here rather than shared (same reasoning those two files give for
+ * not sharing it with each other).
+ */
+function pasteText(target: HTMLElement, text: string): Event {
+  const event = new Event("paste", { bubbles: true, cancelable: true });
+  Object.defineProperty(event, "clipboardData", {
+    value: { getData: (type: string) => (type === "text/plain" ? text : "") },
+  });
+  target.dispatchEvent(event);
+  return event;
+}
+
+/**
+ * Mounts the REAL `TaskTitleEditor` component (not a hand-built
+ * `EditorView`) — the only way to exercise `transformPasted`'s own
+ * "read `onMultiLinePaste` through a live ref" wiring, rather than a
+ * re-implementation of it that would only prove the re-implementation
+ * works. `render`/`fireEvent` mirror `task-row-recognition.test.tsx`'s own
+ * approach to the identical component, one layer down (no `TaskRow`
+ * wrapper needed for this file's own purposes).
+ */
+function mountEditor(onMultiLinePaste?: (lines: string[]) => void): HTMLElement {
+  render(
+    <TaskTitleEditor
+      value=""
+      onCommit={() => {}}
+      onCancel={() => {}}
+      onMultiLinePaste={onMultiLinePaste}
+    />,
+  );
+  const editor = screen.getByRole("textbox", { name: "Task name" });
+  return editor;
+}
+
+describe("paste behaviour (issue #373)", () => {
+  afterEach(() => {
+    cleanup();
+  });
+
+  it("a pasted URL stays plain text — no link mark, unaffected by linkInputRule", () => {
+    const editor = mountEditor();
+
+    pasteText(editor, "https://example.com");
+
+    expect(editor.textContent).toBe("https://example.com");
+    expect(editor.querySelector("a")).toBeNull();
+  });
+
+  it("a pasted [text](url) string stays literal — the input rule never sees a paste", () => {
+    const editor = mountEditor();
+
+    pasteText(editor, "[Todoist](https://todoist.com)");
+
+    expect(editor.textContent).toBe("[Todoist](https://todoist.com)");
+    expect(editor.querySelector("a")).toBeNull();
+  });
+
+  it("a single-line paste with no onMultiLinePaste supplied inserts it directly, unchanged", () => {
+    const editor = mountEditor();
+
+    pasteText(editor, "buy milk");
+
+    expect(editor.textContent).toBe("buy milk");
+  });
+
+  it("a multi-line paste with no onMultiLinePaste supplied collapses to one line — the pre-#373 rename/detail-view behaviour, untouched", () => {
+    const editor = mountEditor(undefined);
+
+    pasteText(editor, "Task A\nTask B\nTask C");
+
+    expect(editor.textContent).toBe("Task A Task B Task C");
+  });
+
+  it("a multi-line paste with onMultiLinePaste supplied inserts NOTHING and defers to the callback with every line", () => {
+    const onMultiLinePaste = vi.fn();
+    const editor = mountEditor(onMultiLinePaste);
+
+    pasteText(editor, "Task A\nTask B\nTask C");
+
+    expect(onMultiLinePaste).toHaveBeenCalledTimes(1);
+    expect(onMultiLinePaste).toHaveBeenCalledWith(["Task A", "Task B", "Task C"]);
+    // The field is left exactly as it was before the paste — the dialog,
+    // not this field, is what shows the pasted lines.
+    expect(editor.textContent).toBe("");
+  });
+
+  it("a single-line paste still inserts normally even with onMultiLinePaste supplied", () => {
+    const onMultiLinePaste = vi.fn();
+    const editor = mountEditor(onMultiLinePaste);
+
+    pasteText(editor, "buy milk");
+
+    expect(onMultiLinePaste).not.toHaveBeenCalled();
+    expect(editor.textContent).toBe("buy milk");
+  });
+
+  it("blank lines in the pasted text don't count towards the multi-line decision", () => {
+    const onMultiLinePaste = vi.fn();
+    const editor = mountEditor(onMultiLinePaste);
+
+    // One real line, padded with blank ones — not "3 tasks."
+    pasteText(editor, "\nbuy milk\n\n");
+
+    expect(onMultiLinePaste).not.toHaveBeenCalled();
+    expect(editor.textContent).toBe("buy milk");
   });
 });
