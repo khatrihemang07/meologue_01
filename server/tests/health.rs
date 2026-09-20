@@ -5,8 +5,8 @@ use anyhow::Result;
 use async_trait::async_trait;
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
-use http_body_util::BodyExt;
 use chrono_tz::Tz;
+use http_body_util::BodyExt;
 use meologue_server::digest::DigestState;
 use meologue_server::llm::{ChatMessage, ChatReply, LlmClient};
 use meologue_server::reflect::ReflectState;
@@ -220,6 +220,7 @@ async fn it_answers_with_no_database_available_and_a_flag_off() {
     assert_eq!(body["capabilities"]["digest"], true);
     assert_eq!(body["capabilities"]["embeddings"], true);
     assert_eq!(body["capabilities"]["todo"], true);
+    assert_eq!(body["capabilities"]["time"], true);
 }
 
 #[tokio::test]
@@ -268,6 +269,7 @@ async fn it_reports_every_capability_off_when_unconfigured() {
     // rather than only true whenever something else happens to be
     // configured too.
     assert_eq!(capabilities["todo"], true);
+    assert_eq!(capabilities["time"], true);
 }
 
 #[tokio::test]
@@ -284,6 +286,7 @@ async fn it_reports_reflect_and_digest_on_with_no_embed_client() {
     assert_eq!(capabilities["digest"], true);
     assert_eq!(capabilities["embeddings"], false);
     assert_eq!(capabilities["todo"], true);
+    assert_eq!(capabilities["time"], true);
 }
 
 #[tokio::test]
@@ -299,4 +302,5 @@ async fn it_reports_embeddings_on_only_once_an_embed_client_resolved() {
     assert_eq!(capabilities["digest"], false);
     assert_eq!(capabilities["embeddings"], true);
     assert_eq!(capabilities["todo"], true);
+    assert_eq!(capabilities["time"], true);
 }

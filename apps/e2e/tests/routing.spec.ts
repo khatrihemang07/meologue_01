@@ -42,18 +42,18 @@ test("/settings loads directly, survives a hard reload, and Back reaches a worki
   await expect(page.getByText(body)).toBeVisible();
 });
 
-// ADR 0036's headline shape: `/` is a list of exactly five rows you navigate
+// ADR 0090's headline shape: `/` is a list of exactly six rows you navigate
 // away from, and opening one is a full-bleed push. The count is asserted
 // here for the same reason the retired `nav.test.tsx` asserted it — every
 // ADR since 0018 kept it at four, inside Material 3's three-to-five bound,
 // until issue #168's Todo (ADR 0047) actually reached the fifth slot ADR
 // 0036 declined to give Reflect's Sessions.
-test("the root screen is a list of five destinations, each of which opens", async ({ page }) => {
+test("the root screen is a list of six destinations, each of which opens", async ({ page }) => {
   await page.setViewportSize(NARROW);
   await page.goto("/");
 
   const rows = page.getByRole("navigation", { name: "Chats" }).getByRole("link");
-  await expect(rows).toHaveCount(5);
+  await expect(rows).toHaveCount(6);
 
   for (const [name, url] of [
     ["Composer", "/composer"],
@@ -62,6 +62,7 @@ test("the root screen is a list of five destinations, each of which opens", asyn
     // `/todo` itself redirects to `/todo/inbox` (App.tsx) — the URL this
     // opens onto, not the row's own `to`.
     ["Todo", "/todo/inbox"],
+    ["Time", "/time"],
     ["Settings", "/settings"],
   ] as const) {
     await page.goto("/");
@@ -102,9 +103,9 @@ test("/ is not a dead end at the wide breakpoint", async ({ page }) => {
   await page.setViewportSize({ width: 1200, height: 900 });
   await page.goto("/");
 
-  // The pane beside this column already renders the five rows — this is
+  // The pane beside this column already renders the six rows — this is
   // the assertion that the content column is not a second copy of them.
-  await expect(page.getByRole("navigation", { name: "Chats" }).getByRole("link")).toHaveCount(5);
+  await expect(page.getByRole("navigation", { name: "Chats" }).getByRole("link")).toHaveCount(6);
 
   const body = uniqueEntryBody("wide-root");
   await openDestination(page, "Composer");
@@ -193,7 +194,9 @@ test("the theme is on the document before the app bundle runs", async ({ page })
 // spec's original second EntryStoreLayout child) on the way to Settings and
 // back, so this still exercises a round trip through two different pages
 // nested under the layout plus the sibling Settings route outside it.
-test("routing between /, /reflect and /settings does not reopen the store", async ({ page }) => {
+test("routing between /, /reflect, /time and /settings does not reopen the store", async ({
+  page,
+}) => {
   const body = uniqueEntryBody("round-trip");
   await page.goto("/composer");
   await sendEntry(page, body);
@@ -201,6 +204,10 @@ test("routing between /, /reflect and /settings does not reopen the store", asyn
 
   await openDestination(page, "Reflect");
   await expect(page).toHaveURL("/reflect");
+
+  await openDestination(page, "Time");
+  await expect(page).toHaveURL("/time");
+  await expect(page.getByText(/No Time sources are enabled yet/i)).toBeVisible();
 
   await openDestination(page, "Composer");
   await expect(page).toHaveURL("/composer");

@@ -19,6 +19,15 @@ export const MODELS_QUERY_KEY = ["models"] as const;
 // key) refetch the same write without a second round trip of its own.
 export const CONFIG_QUERY_KEY = ["config"] as const;
 
+// Time is Server-owned rather than a Sync stream. Its two reads have their
+// own prefix so creating a source can invalidate both the source list and
+// whichever single-source daily timeline is currently open.
+export const TIME_SOURCES_QUERY_KEY = ["time", "sources"] as const;
+
+export function activityIntervalsQueryKey(day: string, sourceId: string) {
+  return ["time", "intervals", day, sourceId] as const;
+}
+
 /**
  * Digest's keys (issue #71), kept here rather than inline in
  * `digest-page.tsx`/`digest-reader-page.tsx` the way Reflection's own keys

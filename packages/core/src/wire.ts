@@ -52,6 +52,13 @@ export type WireResolvedField = components["schemas"]["ResolvedField"];
 export type WireFeatureConfig = components["schemas"]["FeatureConfig"];
 export type WireSource = components["schemas"]["Source"];
 export type WireTogglePatch = components["schemas"]["TogglePatch"];
+// Time's Server-owned source configuration and immutable observations. Keep
+// these as generated-schema aliases so every client shares the server's
+// field names, optionality and future adapter kinds.
+export type WireTimeSource = components["schemas"]["TimeSource"];
+export type WireCreateTimeSource = components["schemas"]["CreateTimeSource"];
+export type WireActivityInterval = components["schemas"]["ActivityInterval"];
+export type WireActivityIntervalDetail = components["schemas"]["ActivityIntervalDetail"];
 // Issue #198's own web-side follow-up: `GET /v1/backup` streams raw bytes
 // (no schema to alias — apps/web's server-backup-transport.ts reads the
 // response body directly), but `POST /v1/restore` and its rebuild

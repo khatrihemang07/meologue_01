@@ -98,17 +98,17 @@ describe("SettingsPage", () => {
     expect(screen.getByRole("link", { name: "Back to chats" })).toHaveAttribute("href", "/");
   });
 
-  // Issue #202's own reorganisation: five topics, Appearance/Composer/AI/
-  // Sync/Data, each rendered in that order. This is a page-level assertion
-  // rather than something any one topic section's own test file can pin —
-  // it's a fact about how settings-page.tsx composes them, not about any
-  // one of them individually.
-  it("renders the five topic sections in order — Appearance, Composer, AI, Sync, Data", () => {
+  // Issue #202's own reorganisation, extended by #418's Time sources topic:
+  // Appearance/Composer/AI/Sync/Time sources/Data, each rendered in that
+  // order. This is a page-level assertion rather than something any one topic
+  // section's own test file can pin — it's a fact about how settings-page.tsx
+  // composes them, not about any one of them individually.
+  it("renders the six topic sections in order — Appearance, Composer, AI, Sync, Time sources, Data", () => {
     renderPage();
 
     const headings = screen
       .getAllByRole("heading", { level: 2 })
       .map((heading) => heading.textContent);
-    expect(headings).toEqual(["Appearance", "Composer", "AI", "Sync", "Data"]);
+    expect(headings).toEqual(["Appearance", "Composer", "AI", "Sync", "Time sources", "Data"]);
   });
 });

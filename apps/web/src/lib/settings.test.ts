@@ -450,12 +450,13 @@ describe("settings store", () => {
       expect(useSettingsStore.getState().hiddenDestinations).toEqual(new Set(["digest"]));
     });
 
-    it("offers exactly the four hideable Destinations — Settings is never among them", () => {
+    it("offers exactly the five hideable Destinations — Settings is never among them", () => {
       expect(HIDEABLE_DESTINATIONS.map((destination) => destination.id)).toEqual([
         "composer",
         "reflect",
         "digest",
         "todo",
+        "time",
       ]);
     });
 
@@ -537,7 +538,13 @@ describe("settings store", () => {
   // Issue #133.
   describe("capabilities", () => {
     it("round-trips a written capability report, in the store and in storage", () => {
-      const capabilities = { reflect: true, digest: false, embeddings: true, todo: true };
+      const capabilities = {
+        reflect: true,
+        digest: false,
+        embeddings: true,
+        todo: true,
+        time: true,
+      };
 
       useSettingsStore.getState().setCapabilities(capabilities);
 
@@ -550,7 +557,7 @@ describe("settings store", () => {
     it("clears the stored report when set back to null (unknown)", () => {
       useSettingsStore
         .getState()
-        .setCapabilities({ reflect: true, digest: true, embeddings: true, todo: true });
+        .setCapabilities({ reflect: true, digest: true, embeddings: true, todo: true, time: true });
 
       useSettingsStore.getState().setCapabilities(null);
 
@@ -562,7 +569,13 @@ describe("settings store", () => {
       vi.spyOn(localStorage, "setItem").mockImplementation(() => {
         throw new Error("storage unavailable");
       });
-      const capabilities = { reflect: false, digest: true, embeddings: false, todo: true };
+      const capabilities = {
+        reflect: false,
+        digest: true,
+        embeddings: false,
+        todo: true,
+        time: true,
+      };
 
       expect(() => useSettingsStore.getState().setCapabilities(capabilities)).not.toThrow();
       expect(useSettingsStore.getState().capabilities).toEqual(capabilities);
@@ -571,7 +584,13 @@ describe("settings store", () => {
 
   describe("refreshCapabilities", () => {
     it("stores the server's capability report and marks the server reachable", async () => {
-      const capabilities = { reflect: true, digest: false, embeddings: false, todo: true };
+      const capabilities = {
+        reflect: true,
+        digest: false,
+        embeddings: false,
+        todo: true,
+        time: true,
+      };
       vi.stubGlobal(
         "fetch",
         vi.fn(async () => healthResponse(capabilities)),
@@ -595,7 +614,7 @@ describe("settings store", () => {
       useSettingsStore.getState().setServerUrl("https://server.example");
       useSettingsStore
         .getState()
-        .setCapabilities({ reflect: true, digest: true, embeddings: true, todo: true });
+        .setCapabilities({ reflect: true, digest: true, embeddings: true, todo: true, time: true });
 
       await refreshCapabilities();
 
@@ -608,7 +627,13 @@ describe("settings store", () => {
     // quiet for a moment says nothing about what it could serve the last
     // time it answered.
     it("marks the server unreachable on a network failure, without touching a known capability report", async () => {
-      const capabilities = { reflect: true, digest: true, embeddings: false, todo: true };
+      const capabilities = {
+        reflect: true,
+        digest: true,
+        embeddings: false,
+        todo: true,
+        time: true,
+      };
       useSettingsStore.getState().setServerUrl("https://server.example");
       useSettingsStore.getState().setCapabilities(capabilities);
       vi.stubGlobal(
@@ -629,7 +654,7 @@ describe("settings store", () => {
       vi.stubGlobal("fetch", fetchMock);
       useSettingsStore
         .getState()
-        .setCapabilities({ reflect: true, digest: true, embeddings: true, todo: true });
+        .setCapabilities({ reflect: true, digest: true, embeddings: true, todo: true, time: true });
       useSettingsStore.getState().setServerReachable(false);
 
       await refreshCapabilities();

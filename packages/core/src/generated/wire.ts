@@ -348,10 +348,74 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/time/intervals": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["list_intervals_handler"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/time/intervals/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["interval_detail_handler"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/time/sources": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["list_sources_handler"];
+        put?: never;
+        post: operations["create_source_handler"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        ActivityInterval: {
+            detail?: string | null;
+            /** Format: date-time */
+            ended_at: string;
+            /** Format: uuid */
+            id: string;
+            label: string;
+            provider_record_id: string;
+            /** Format: uuid */
+            source_id: string;
+            /** Format: date-time */
+            started_at: string;
+        };
+        ActivityIntervalDetail: components["schemas"]["ActivityInterval"] & {
+            raw_row: unknown;
+        };
         /**
          * @description The Comment-shaped sibling of `TaskInput` — `task_id` is a plain
          *     required `Uuid`, unvalidated against `tasks` for the identical reason
@@ -447,6 +511,11 @@ export interface components {
              *     a second endpoint.
              */
             unembedded_entries: number;
+        };
+        CreateTimeSource: {
+            kind: string;
+            name: string;
+            path: string;
         };
         /**
          * @description The wire shape of one Digest — everything a client needs to render it
@@ -774,11 +843,17 @@ export interface components {
          *       Tasks" (an old build, protocol 4 behaviour) apart from "this Server
          *       has Tasks but nothing configured to talk about them," which no other
          *       field here can distinguish.
+         *     - `time` is **unconditionally `true`** for this generation of the
+         *       Server. Time's source configuration may be empty, but an empty source
+         *       list is a useful, supported state rather than an absent feature. Older
+         *       Servers omit this field altogether, which lets Devices distinguish the
+         *       two through the generated wire contract.
          */
         HealthCapabilities: {
             digest: boolean;
             embeddings: boolean;
             reflect: boolean;
+            time: boolean;
             todo: boolean;
         };
         HealthResponse: {
@@ -1572,6 +1647,14 @@ export interface components {
              */
             updated_at: string;
         };
+        TimeSource: {
+            enabled: boolean;
+            /** Format: uuid */
+            id: string;
+            kind: string;
+            name: string;
+            path: string;
+        };
         /**
          * @description The wire value one tri-state toggle field of a `PATCH /v1/config` body
          *     carries when the caller actually names it. Deliberately not
@@ -2037,6 +2120,109 @@ export interface operations {
             };
             /** @description protocol_version is outside the range this server understands */
             426: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    list_intervals_handler: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                day: string;
+                source_id: string | null;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ActivityInterval"][];
+                };
+            };
+        };
+    };
+    interval_detail_handler: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ActivityIntervalDetail"];
+                };
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    list_sources_handler: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TimeSource"][];
+                };
+            };
+        };
+    };
+    create_source_handler: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateTimeSource"];
+            };
+        };
+        responses: {
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TimeSource"];
+                };
+            };
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            423: {
                 headers: {
                     [name: string]: unknown;
                 };

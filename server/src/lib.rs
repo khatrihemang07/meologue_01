@@ -12,6 +12,7 @@ pub mod reflect;
 pub mod sessions;
 pub mod settings;
 pub mod sync;
+pub mod time;
 
 use std::path::Path;
 use std::time::Duration;
@@ -563,6 +564,15 @@ pub fn router_with_everything(
         .route(
             "/v1/config",
             get(settings::get_config_handler).patch(settings::patch_config_handler),
+        )
+        .route(
+            "/v1/time/sources",
+            get(time::list_sources_handler).post(time::create_source_handler),
+        )
+        .route("/v1/time/intervals", get(time::list_intervals_handler))
+        .route(
+            "/v1/time/intervals/{id}",
+            get(time::interval_detail_handler),
         );
 
     if reflect.is_some() {

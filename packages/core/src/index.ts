@@ -148,8 +148,11 @@ export {
 export type { Entry } from "./types";
 export { isAtLeastAsNewAs, isStrictlyNewerThan } from "./updated-at";
 export type {
+  WireActivityInterval,
+  WireActivityIntervalDetail,
   WireConfigPatch,
   WireConfigResponse,
+  WireCreateTimeSource,
   WireDigest,
   WireDigestResponse,
   WireFeatureConfig,
@@ -165,5 +168,6 @@ export type {
   WireSessionSummary,
   WireSessionTurn,
   WireSource,
+  WireTimeSource,
   WireTogglePatch,
 } from "./wire";

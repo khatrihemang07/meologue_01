@@ -111,12 +111,31 @@ Send is what the user does; the Entry is what results.
 ### Destination
 
 One of the app's top-level views, reachable directly by its own URL and listed as a row on the
-root screen: Composer, Reflection, Digest, Todo, and Settings (ADR 0036, ADR 0049). Settings is a
+root screen: Composer, Reflection, Digest, Todo, Time, and Settings (ADR 0036, ADR 0049, ADR 0090). Settings is a
 Destination like the others even though it configures the app rather than showing Entries.
 
 Back leaves a Destination and returns to the root screen (ADR 0079). Moving between a
 Destination's own views, or between the dates one of them covers, is not leaving it — so it is
 not something Back undoes. Back is for screens, not for state within one.
+
+### Time
+
+The Server-backed Destination for reviewing what was recorded during a day. Time does not create
+or change an Entry, and visiting it does not stop a Device's ordinary Sync; it reads Activity
+intervals the Server owns. A Server that supports Time may have no enabled Time source yet, which
+is an empty state rather than a missing Destination.
+
+### Activity interval
+
+One immutable stretch of activity observed by a Time source, with a start and end, a source, a
+label, and optional detail. An Activity interval is evidence from a recorder, not a Task, Entry,
+or assertion the user wrote.
+
+### Time source
+
+A configured recorder the Server imports Activity intervals from. A Time source belongs to the
+Server, not to a Device: adding, archiving, or refreshing one changes the one shared account of
+recorded activity rather than a Device's local History.
 
 ### Composer
 
