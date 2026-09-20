@@ -62,6 +62,22 @@
  * class before this; #314 closes the one *reachable-but-unobserved* gap
  * the type's own shape still allowed.
  *
+ * **Issue #383 moves `QuickAddOptions.now` off this brand and onto
+ * `LocalDateTimeKey` below.** `RecurrenceReference.now` stays exactly
+ * `LocalDayKey` — the recurrence engine has no time-of-day concept at
+ * all, deliberately (a rule's own `time` field is a separate, optional
+ * clause the parser attaches, not something `now` ever carries) — but
+ * the quick-add parser gained one: "noon" typed after noon has already
+ * passed today has to know *when* "today" is, not just *which day* it
+ * is, to decide whether that means today or tomorrow. A caller that
+ * needs both (`task-schedule-popover.tsx`'s own `resolveSchedulePreview`,
+ * which calls both `parseQuickAdd` and `firstOccurrence` against the
+ * identical instant) derives the `LocalDayKey` from its own
+ * `LocalDateTimeKey` by slicing the leading 10 characters — the two
+ * brands share that prefix by construction, so the day is never a
+ * second, independently-resolved value that could disagree with the
+ * time.
+ *
  * **Why `completedAt` (the instant `advanceRecurring` also takes) is NOT
  * branded.** Issue #300 raises this as worth considering — the two
  * parameters are adjacent and both `string` today, so swapping them
@@ -125,4 +141,68 @@ export function mustParseLocalDayKey(value: string): LocalDayKey {
     throw new Error(`not a YYYY-MM-DD local day key: ${JSON.stringify(value)}`);
   }
   return parsed;
+}
+
+/**
+ * `LocalDateTimeKey` — a branded `YYYY-MM-DDTHH:MM` string naming a
+ * floating calendar day AND a time of day together, always both (issue
+ * #383's own criterion: "every caller passes a real time of day; nothing
+ * silently defaults to midnight"). This is `QuickAddOptions.now`'s own
+ * type as of #383 — `LocalDayKey`'s sibling, not a replacement for it:
+ * `RecurrenceReference.now` and every `TaskStore` `today` parameter stay
+ * `LocalDayKey`, deliberately (this type's own header comment, above,
+ * explains why the recurrence engine has no time-of-day concept to gain).
+ *
+ * Not `Task.date`'s own encoding (`../task-fields.ts`'s `DATE_PATTERN`,
+ * re-exported as plain `string` there): that field is *optionally*
+ * timed — `YYYY-MM-DD` alone is a valid all-day value — because an
+ * all-day Task genuinely has no time of its own. `now` is never "all
+ * day": there is always a real clock reading behind it, so requiring the
+ * `T`-suffix in the type (rather than leaving it optional the way
+ * `Task.date` must) is what makes "forgot to pass a real time" a compile
+ * error instead of a value that quietly means midnight forever.
+ *
+ * The one real producer is `apps/web`'s `localDateTimeKey()`
+ * (`lib/local-day-key.ts`, alongside `localDayKey()` itself) — this
+ * module's own `parseLocalDateTimeKey`/`mustParseLocalDateTimeKey` are the
+ * explicit-parse boundary for a value read back from storage rather than
+ * freshly read off a clock, mirroring `LocalDayKey`'s own two-producer
+ * shape exactly.
+ */
+export type LocalDateTimeKey = string & { readonly __brand: "LocalDateTimeKey" };
+
+const DATE_TIME_KEY_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/;
+
+/** The runtime check behind `parseLocalDateTimeKey`/`mustParseLocalDateTimeKey` — `isLocalDayKey`'s own sibling, requiring the `THH:MM` suffix that type deliberately refuses. No calendar-validity check here either, for the identical reason `isLocalDayKey`'s own comment gives. */
+export function isLocalDateTimeKey(value: string): value is LocalDateTimeKey {
+  return DATE_TIME_KEY_PATTERN.test(value);
+}
+
+/** `parseLocalDayKey`'s own sibling for `LocalDateTimeKey` — a boundary that receives a `string` it cannot prove already carries a time (a value read back off a wire payload or out of storage) converts it here rather than casting. `null`, not a throw, for input that didn't come from a caller who already validated it. */
+export function parseLocalDateTimeKey(value: string): LocalDateTimeKey | null {
+  return isLocalDateTimeKey(value) ? value : null;
+}
+
+/** `mustParseLocalDayKey`'s own sibling — a caller that already knows `value` is `YYYY-MM-DDTHH:MM`-shaped and would rather fail loudly than thread a `| null` through. Throws rather than returning `undefined`-through-`LocalDateTimeKey`, which would defeat the brand. */
+export function mustParseLocalDateTimeKey(value: string): LocalDateTimeKey {
+  const parsed = parseLocalDateTimeKey(value);
+  if (parsed === null) {
+    throw new Error(`not a YYYY-MM-DDTHH:MM local date-time key: ${JSON.stringify(value)}`);
+  }
+  return parsed;
+}
+
+/**
+ * `LocalDateTimeKey` -> the `LocalDayKey` sharing its leading 10
+ * characters — the one place this conversion happens, so every caller
+ * that needs both a quick-add `now` and a recurrence `now` for the
+ * identical instant (`task-schedule-popover.tsx`'s own
+ * `resolveSchedulePreview`, `apps/web`'s `commitTaskTitle`/
+ * `taskFieldsFromQuickAdd`) derives the day from the time rather than
+ * resolving two independent values that could disagree. Safe without a
+ * `null` case: every `LocalDateTimeKey` is, by its own brand, already
+ * `YYYY-MM-DD` for its first 10 characters.
+ */
+export function localDayKeyOf(dateTime: LocalDateTimeKey): LocalDayKey {
+  return dateTime.slice(0, 10) as LocalDayKey;
 }

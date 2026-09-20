@@ -1,5 +1,5 @@
 import type { QuickAddSpan } from "@meologue/core";
-import { mustParseLocalDayKey } from "@meologue/core";
+import { mustParseLocalDateTimeKey } from "@meologue/core";
 import { baseKeymap } from "prosemirror-commands";
 import { keymap } from "prosemirror-keymap";
 import { EditorState, Selection } from "prosemirror-state";
@@ -14,7 +14,7 @@ import {
   remapWithdrawnSpans,
 } from "./todo-quick-add-recognition";
 
-const NOW = mustParseLocalDayKey("2026-09-10");
+const NOW = mustParseLocalDateTimeKey("2026-09-10T00:00");
 
 describe("remapWithdrawnSpans", () => {
   it("returns the same spans, unchanged, when the text hasn't changed", () => {

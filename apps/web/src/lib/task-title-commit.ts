@@ -15,7 +15,7 @@
  * rendered row or detail view.
  */
 import type { LocalDayKey, QuickAddOptions, Task } from "@meologue/core";
-import { parseLocalDayKey, parseQuickAdd } from "@meologue/core";
+import { localDayKeyOf, parseQuickAdd } from "@meologue/core";
 import { taskFieldsForRename } from "@/lib/quick-add-task";
 
 export interface TaskTitleCommitSetters {
@@ -76,21 +76,16 @@ export async function commitTaskTitle(
   // mean "don't touch" here too, since a failed parse must not clear an
   // existing repeat rule.
   //
-  // `options.now` is `QuickAddOptions`'s own plain `string` (deliberately
-  // not branded — see `packages/core/src/local-day-key.ts`'s own header
-  // comment for why), but every real caller already builds it from
-  // `localDayKey(new Date())`, so it is always well-formed here. This is
-  // the "explicit parse" boundary issue #300 names as `LocalDayKey`'s
-  // other legitimate producer, not an `as LocalDayKey` cast standing in
-  // for validation that never happened: `parseLocalDayKey` actually checks
-  // the shape, and the (never-expected-in-practice) `null` branch simply
-  // skips the write rather than forwarding a value the brand can't vouch
-  // for.
+  // `setTaskDateString`'s own `today` parameter is `LocalDayKey`
+  // (unaffected by issue #383 — `TaskStore` has no time-of-day concept),
+  // while `options.now` is `QuickAddOptions`'s own `LocalDateTimeKey`
+  // since that issue. `localDayKeyOf` derives the day from the instant
+  // rather than resolving two independent values that could disagree —
+  // no `null` case to guard here any more: every `LocalDateTimeKey`
+  // already carries a well-formed day as its own leading 10 characters,
+  // by the brand's own construction, so there is nothing left to fail.
   if (fields.dateString !== null && fields.dateString !== task.dateString) {
-    const today = parseLocalDayKey(options.now);
-    if (today !== null) {
-      setters.setTaskDateString(task.id, fields.dateString, today);
-    }
+    setters.setTaskDateString(task.id, fields.dateString, localDayKeyOf(options.now));
   }
 
   // Already the STORED priority (taskFieldsForRename's own doc comment) —

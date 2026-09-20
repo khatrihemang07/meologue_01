@@ -1,7 +1,7 @@
 import type { QuickAddOptions } from "@meologue/core";
 import { parseQuickAdd } from "@meologue/core";
 import { useRef, useState } from "react";
-import { localDayKey } from "@/lib/local-day-key";
+import { localDateTimeKey } from "@/lib/local-day-key";
 import type { AutocompleteEntry } from "@/lib/quick-add-autocomplete";
 import { type QuickAddTaskFields, taskFieldsFromQuickAdd } from "@/lib/quick-add-task";
 import { useSettingsStore } from "@/lib/settings";
@@ -78,8 +78,8 @@ export function useQuickAddComposer(options: UseQuickAddComposerOptions): QuickA
   const [pendingPasteLines, setPendingPasteLines] = useState<readonly string[] | null>(null);
   const smartDates = useSettingsStore((state) => state.smartDatesEnabled);
 
-  const optionsRef = useRef<QuickAddOptions>({ now: localDayKey(new Date()), smartDates });
-  optionsRef.current = { now: localDayKey(new Date()), smartDates };
+  const optionsRef = useRef<QuickAddOptions>({ now: localDateTimeKey(new Date()), smartDates });
+  optionsRef.current = { now: localDateTimeKey(new Date()), smartDates };
 
   const projectsRef = useRef<readonly AutocompleteEntry[]>(options.projects ?? []);
   projectsRef.current = options.projects ?? [];

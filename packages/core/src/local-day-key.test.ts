@@ -1,8 +1,12 @@
 import { describe, expect, it } from "vitest";
 import {
+  isLocalDateTimeKey,
   isLocalDayKey,
+  type LocalDateTimeKey,
   type LocalDayKey,
+  mustParseLocalDateTimeKey,
   mustParseLocalDayKey,
+  parseLocalDateTimeKey,
   parseLocalDayKey,
 } from "./local-day-key";
 import type { QuickAddOptions } from "./quick-add/types";
@@ -26,6 +30,27 @@ describe("isLocalDayKey/parseLocalDayKey/mustParseLocalDayKey", () => {
   it("rejects a malformed string outright, rather than throwing only on the instant shape", () => {
     expect(parseLocalDayKey("not a day")).toBeNull();
     expect(() => mustParseLocalDayKey("")).toThrow();
+  });
+});
+
+describe("isLocalDateTimeKey/parseLocalDateTimeKey/mustParseLocalDateTimeKey (issue #383)", () => {
+  it("accepts a floating YYYY-MM-DDTHH:MM instant", () => {
+    expect(isLocalDateTimeKey("2026-09-15T13:06")).toBe(true);
+    expect(parseLocalDateTimeKey("2026-09-15T13:06")).toBe("2026-09-15T13:06");
+    expect(mustParseLocalDateTimeKey("2026-09-15T13:06")).toBe("2026-09-15T13:06");
+  });
+
+  it("rejects a bare LocalDayKey — the exact regression #383 introduces: a day alone is no longer a valid `now`", () => {
+    expect(isLocalDateTimeKey("2026-09-15")).toBe(false);
+    expect(parseLocalDateTimeKey("2026-09-15")).toBeNull();
+    expect(() => mustParseLocalDateTimeKey("2026-09-15")).toThrow();
+  });
+
+  it("rejects a UTC instant (seconds/milliseconds/Z) — HH:MM only, no more and no less", () => {
+    const instant = "2026-09-14T18:46:18.000Z";
+    expect(isLocalDateTimeKey(instant)).toBe(false);
+    expect(parseLocalDateTimeKey(instant)).toBeNull();
+    expect(() => mustParseLocalDateTimeKey(instant)).toThrow();
   });
 });
 
@@ -97,7 +122,7 @@ function acceptOptions(_options: QuickAddOptions): void {}
  * `apps/web/src/components/todo/task-schedule-popover.tsx` was under
  * concurrent rework (#303) — their own construction sites live entirely
  * inside that one file. Verified by hand for this change (see the commit
- * body): reverting either field's `now` from `LocalDayKey` back to
+ * body): reverting `RecurrenceReference.now` from `LocalDayKey` back to
  * `string` turns every `@ts-expect-error` below into an "unused
  * '@ts-expect-error' directive" error under `tsc -b --noEmit`, the same
  * mutation-verification #300's own test above records.
@@ -106,7 +131,7 @@ function acceptOptions(_options: QuickAddOptions): void {}
  * is deliberately ill-typed application code, checked by `tsc -b
  * --noEmit` and never actually executed.
  */
-it.skip("compile-only: RecurrenceReference.now and QuickAddOptions.now reject a raw string or a UTC instant (issue #314)", () => {
+it.skip("compile-only: RecurrenceReference.now rejects a raw string or a UTC instant (issue #314)", () => {
   const rawToday: string = "2026-09-15";
   const utcInstant: string = new Date().toISOString();
   const validDay: LocalDayKey = mustParseLocalDayKey("2026-09-15");
@@ -129,11 +154,38 @@ it.skip("compile-only: RecurrenceReference.now and QuickAddOptions.now reject a 
 
   // The one legitimate producer — no cast, no `@ts-expect-error` — compiles.
   acceptReference({ dueDate: null, now: validDay });
+});
 
-  // @ts-expect-error — QuickAddOptions.now requires LocalDayKey, not a bare string.
+/**
+ * Issue #383's own mutation test, the `QuickAddOptions.now` half #314's
+ * test above used to cover before this issue moved that field off
+ * `LocalDayKey` entirely — see `./local-day-key.ts`'s own header comment
+ * ("Issue #383 moves QuickAddOptions.now off this brand and onto
+ * LocalDateTimeKey below") for why the two fields no longer share one
+ * brand, and therefore no longer share one test. Verified by hand for
+ * this change: reverting `QuickAddOptions.now` from `LocalDateTimeKey`
+ * back to `LocalDayKey` turns every `@ts-expect-error` below into an
+ * "unused directive" error, `it.skip` for the identical never-executed
+ * reason the blocks above use.
+ */
+it.skip("compile-only: QuickAddOptions.now rejects a raw string, a UTC instant, or a bare LocalDayKey (issue #383)", () => {
+  const rawToday: string = "2026-09-15";
+  const utcInstant: string = new Date().toISOString();
+  const validDay: LocalDayKey = mustParseLocalDayKey("2026-09-15");
+  const validDateTime: LocalDateTimeKey = mustParseLocalDateTimeKey("2026-09-15T13:06");
+
+  // @ts-expect-error — QuickAddOptions.now requires LocalDateTimeKey, not a bare string.
   acceptOptions({ now: rawToday });
-  // @ts-expect-error — QuickAddOptions.now: a UTC instant is not a LocalDayKey.
+  // @ts-expect-error — QuickAddOptions.now: a UTC instant is not a LocalDateTimeKey.
   acceptOptions({ now: utcInstant });
-  // The one legitimate producer — no cast, no `@ts-expect-error` — compiles.
+  // The regression #383 itself introduces: a day alone — the *previous*
+  // brand this field accepted — is no longer enough. "Nothing silently
+  // defaults to midnight" (the issue's own acceptance criterion) is what
+  // this line proves: a caller that only has a day, not a real clock
+  // reading, cannot compile at all, rather than quietly resolving to
+  // `T00:00`.
+  // @ts-expect-error — QuickAddOptions.now requires LocalDateTimeKey, not LocalDayKey.
   acceptOptions({ now: validDay });
+  // The one legitimate producer — no cast, no `@ts-expect-error` — compiles.
+  acceptOptions({ now: validDateTime });
 });

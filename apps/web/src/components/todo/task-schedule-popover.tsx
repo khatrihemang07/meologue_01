@@ -1,5 +1,5 @@
-import type { LocalDayKey, QuickAddToken } from "@meologue/core";
-import { firstOccurrence, parseQuickAdd, parseRecurrence } from "@meologue/core";
+import type { LocalDateTimeKey, QuickAddToken } from "@meologue/core";
+import { firstOccurrence, localDayKeyOf, parseQuickAdd, parseRecurrence } from "@meologue/core";
 import { addDays, format, nextMonday, nextSaturday } from "date-fns";
 import {
   CalendarDays,
@@ -18,7 +18,7 @@ import { Button, buttonVariants } from "@/components/ui/button";
 import { Calendar } from "@/components/ui/calendar";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Sheet, SheetContent, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
-import { localDayKey, parseDayKey } from "@/lib/local-day-key";
+import { localDateTimeKey, localDayKey, parseDayKey } from "@/lib/local-day-key";
 import { touchOnlyDevice } from "@/lib/pointer";
 import { resolveRecurrencePhrase } from "@/lib/quick-add-task";
 import { cn } from "@/lib/utils";
@@ -34,7 +34,7 @@ interface SchedulePreview {
 
 function resolveSchedulePreview(
   text: string,
-  now: LocalDayKey,
+  now: LocalDateTimeKey,
   dueDate: string | null,
 ): SchedulePreview | null {
   const trimmed = text.trim();
@@ -47,7 +47,10 @@ function resolveSchedulePreview(
   );
   if (recurrenceToken !== undefined) {
     const phrase = resolveRecurrencePhrase(recurrenceToken.raw);
-    const outcome = firstOccurrence(phrase, { dueDate, now });
+    // firstOccurrence (../../../packages/core/src/recurrence) takes only
+    // the day — that engine has no time-of-day concept of its own to
+    // gain from issue #383, unlike parseQuickAdd just above.
+    const outcome = firstOccurrence(phrase, { dueDate, now: localDayKeyOf(now) });
     if (outcome.kind !== "occurrence") {
       return null;
     }
@@ -347,7 +350,8 @@ export function TaskSchedulePopover({
   }, [open]);
 
   const nowKey = localDayKey(now);
-  const preview = resolveSchedulePreview(typed, nowKey, dateDay);
+  const nowDateTimeKey = localDateTimeKey(now);
+  const preview = resolveSchedulePreview(typed, nowDateTimeKey, dateDay);
 
   function commitDay(day: string | null) {
     onPickDay(day);
@@ -407,7 +411,7 @@ export function TaskSchedulePopover({
    * The scheduler deliberately stays open in that branch.
    */
   function handleCustomRepeatSave(phrase: string) {
-    const resolved = resolveSchedulePreview(phrase, nowKey, dateDay);
+    const resolved = resolveSchedulePreview(phrase, nowDateTimeKey, dateDay);
     if (resolved?.dateString != null) {
       commitRepeatPhrase(resolved.dateString, resolved.day);
       return;

@@ -1,4 +1,4 @@
-import { mustParseLocalDayKey, parseQuickAdd } from "@meologue/core";
+import { mustParseLocalDateTimeKey, parseQuickAdd } from "@meologue/core";
 import { describe, expect, it } from "vitest";
 import {
   appendWords,
@@ -8,7 +8,7 @@ import {
   literalTimeText,
 } from "./draft-chip-text";
 
-const now = mustParseLocalDayKey("2026-01-01");
+const now = mustParseLocalDateTimeKey("2026-01-01T00:00");
 
 describe("literalDateText", () => {
   it("formats a day as 'd MMM yyyy', with the year included", () => {

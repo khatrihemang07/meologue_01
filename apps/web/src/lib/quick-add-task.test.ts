@@ -1,8 +1,14 @@
-import { mustParseLocalDayKey, parseQuickAdd } from "@meologue/core";
+import { mustParseLocalDateTimeKey, parseQuickAdd } from "@meologue/core";
 import { describe, expect, it } from "vitest";
 import { taskFieldsForRename, taskFieldsFromQuickAdd } from "./quick-add-task";
 
-const NOW = mustParseLocalDayKey("2026-09-02"); // Wednesday.
+const NOW = mustParseLocalDateTimeKey("2026-09-02T00:00"); // Wednesday, midnight.
+// A recognised recurrence's own `result.date` (../../packages/core's
+// `firstOccurrence`) is day-only — `RecurrenceReference.now` has no
+// time-of-day of its own to gain from issue #383 — so an assertion
+// comparing against "today" needs the day alone, not `NOW`'s own
+// `LocalDateTimeKey` shape.
+const NOW_DAY = "2026-09-02";
 
 function fields(input: string, options: { smartDates?: boolean } = {}) {
   const parseOptions = { now: NOW, ...options };
@@ -88,7 +94,7 @@ describe("taskFieldsFromQuickAdd", () => {
       const result = fields("pay rent monthly");
 
       expect(result.dateString).toBe("every month");
-      expect(result.date).toBe(NOW);
+      expect(result.date).toBe(NOW_DAY);
     });
 
     it("every bare word in en.ts's recurrenceWords table maps to a phrase firstOccurrence accepts", () => {
@@ -239,7 +245,7 @@ describe("taskFieldsFromQuickAdd", () => {
         // "every! 10 days" is no different — so a Task just given this
         // recurrence is due today, not ten days out. The ten-day interval
         // is what the *next* occurrence steps by, after completion.
-        expect(result.date).toBe(NOW);
+        expect(result.date).toBe(NOW_DAY);
       });
 
       it("carries the number through unchanged for a different N", () => {
@@ -258,7 +264,7 @@ describe("taskFieldsFromQuickAdd", () => {
         const result = fields("pay rent 27 Jan after 10 days");
 
         expect(result.dateString).toBe("every! 10 days");
-        expect(result.date).toBe(NOW);
+        expect(result.date).toBe(NOW_DAY);
       });
 
       it("smartDates off suppresses the phrase exactly as it does every other eager rule", () => {

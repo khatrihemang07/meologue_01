@@ -1,5 +1,5 @@
 import type { QuickAddOptions } from "@meologue/core";
-import { mustParseLocalDayKey } from "@meologue/core";
+import { mustParseLocalDateTimeKey } from "@meologue/core";
 import { describe, expect, it } from "vitest";
 import { entryMarkdownToDocument } from "./entry-document";
 import { formatTaskReference } from "./inline-markdown";
@@ -18,7 +18,7 @@ function sequentialMintId() {
 // Fixed and Wednesday, matching packages/core/src/quick-add/quick-add.test.ts's
 // own `NOW` — every date expectation below is worked out against this exact
 // value, not against whatever the parser happens to compute.
-const NOW = mustParseLocalDayKey("2026-09-02");
+const NOW = mustParseLocalDateTimeKey("2026-09-02T00:00");
 const OPTIONS: QuickAddOptions = { now: NOW, smartDates: true };
 
 describe("promoteBareCheckboxes", () => {
