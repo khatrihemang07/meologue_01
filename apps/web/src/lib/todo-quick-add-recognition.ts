@@ -221,6 +221,43 @@ export function quickAddRecognitionPlugin(
         event.preventDefault();
         return true;
       },
+      // Issue #371: porting only the *technique* of `composer-editor.ts`'s
+      // `checklistHighlightPlugin.handleClick` — find the token at the
+      // clicked position, dispatch, `return false` so ProseMirror still
+      // resolves the click and places the caret there itself (confirmed on
+      // a real device: a click both cancels the highlight AND leaves
+      // `selection.isCollapsed`, the same as an ordinary click would).
+      //
+      // NOT porting that plugin's demotion *model*. It keys a demotion by
+      // `tokenSignature` — text-and-kind — so demoting one "Monday" would
+      // demote every later "Monday" too (D14/#371's own ticket calls this
+      // out explicitly). This plugin's `apply` above already keys by the
+      // edited region's own span instead, and nothing measured about
+      // Todoist supports the stronger, signature-keyed claim, so this stays
+      // on the existing model — `{start, end}` is exactly the meta shape
+      // Backspace already sets above, so `apply()` needs no change at all.
+      handleClick(view, pos) {
+        const { state } = view;
+        const withdrawn = quickAddRecognitionPluginKey.getState(state) ?? [];
+        const matches = computeQuickAddMatches(state.doc.textContent, getOptions(), withdrawn);
+        // Exclusive end (`pos < match.end`), matching Backspace's own
+        // boundary above and `quick-add-highlight.ts`'s `tokenAtOffset`
+        // precedent: a click exactly past a match's last character reads
+        // as "just after the word," not "inside" it.
+        const active = matches.find(
+          (match) => !match.withdrawn && pos >= match.start && pos < match.end,
+        );
+        if (active === undefined) {
+          return false;
+        }
+        view.dispatch(
+          view.state.tr.setMeta(quickAddRecognitionPluginKey, {
+            start: active.start,
+            end: active.end,
+          }),
+        );
+        return false;
+      },
     },
   });
 }
