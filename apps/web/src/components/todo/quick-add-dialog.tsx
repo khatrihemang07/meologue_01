@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { ConfirmDialog } from "@/components/ui/alert-dialog";
-import { Dialog, DialogContent, DialogPortal, DialogTitle } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { touchOnlyDevice } from "@/lib/pointer";
 import type { AutocompleteEntry } from "@/lib/quick-add-autocomplete";
 import type { QuickAddTaskFields } from "@/lib/quick-add-task";
@@ -172,7 +172,7 @@ export function QuickAddDialog({
       touch={touch}
       placeholder={composer.placeholder}
       datesWithTasks={datesWithTasks}
-      ambientProjectName={ambientProjectName}
+      ambientProjectName={touch ? "Inbox" : ambientProjectName}
       onCancel={requestDismiss}
       onAutocompleteOpenChange={(isOpen) => {
         autocompleteOpenRef.current = isOpen;
@@ -201,19 +201,17 @@ export function QuickAddDialog({
         // enough to host the Radix primitive correctly); `QuickAddInlineCard`
         // underneath is the actual visible card.
         <Dialog open={open} onOpenChange={handleOpenChange}>
-          <DialogPortal>
-            <DialogContent
-              open={open}
-              ref={contentRef}
-              aria-label="Quick Add"
-              data-testid="quick-add"
-              className="static outline-hidden"
-              onEscapeKeyDown={handleEscapeKeyDown}
-            >
-              <DialogTitle className="sr-only">Quick Add</DialogTitle>
-              <QuickAddInlineCard>{content}</QuickAddInlineCard>
-            </DialogContent>
-          </DialogPortal>
+          <DialogContent
+            open={open}
+            ref={contentRef}
+            aria-label="Quick Add"
+            data-testid="quick-add"
+            className="static outline-hidden"
+            onEscapeKeyDown={handleEscapeKeyDown}
+          >
+            <DialogTitle className="sr-only">Quick Add</DialogTitle>
+            <QuickAddInlineCard>{content}</QuickAddInlineCard>
+          </DialogContent>
         </Dialog>
       )}
 

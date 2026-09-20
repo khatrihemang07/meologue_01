@@ -821,14 +821,17 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
   // name would already get.
   async function handleAdd(fields: QuickAddTaskFields) {
     const labelIds = await resolveLabelIds(fields.labelNames);
+    const touch = touchOnlyDevice();
+    const inheritedProjectId = touch ? null : captureProjectId;
+    const inheritedDate = touch ? null : captureDate;
     const projectId =
-      fields.projectName !== null ? await resolveProjectId(fields.projectName) : captureProjectId;
+      fields.projectName !== null ? await resolveProjectId(fields.projectName) : inheritedProjectId;
     const sectionId =
       fields.sectionName !== null && projectId !== null
         ? await resolveSectionId(projectId, fields.sectionName)
         : null;
     addTask(fields.content, {
-      date: fields.date ?? captureDate,
+      date: fields.date ?? inheritedDate,
       priority: fields.priority,
       dateString: fields.dateString,
       labelIds,
@@ -844,7 +847,7 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
     // itself, because this is the one place that already knows the
     // REAL, resolved `projectId` — a typed `#project` override included
     // — rather than the dialog re-deriving it a second way.
-    if (touchOnlyDevice()) {
+    if (touch) {
       const landedProjectName = projectId === null ? "Inbox" : projectNameFor(projects, projectId);
       toast(`Added to "${landedProjectName}"`, {
         action: {

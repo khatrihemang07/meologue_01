@@ -78,14 +78,11 @@ export function AddTaskForm({
     onCreateProject,
     onCreateLabel,
     open,
-    // No `onCommitted` here, deliberately: it used to collapse the
-    // composer back to the quiet row after a real Add (issue #260
-    // Defect 1 reversed that). `composer.commit()` itself already clears
-    // `value`/`seed` and bumps `resetKey`, which remounts a fresh, empty,
-    // autofocused editor with its chips reset — exactly flow-12 S1's
-    // observed "stayed mounted, EMPTY, and focused" behaviour, and
-    // exactly D4's touch-side "stays open… title cleared, chips reset"
-    // rule too, with nothing further needed from this component.
+    onCommitted: () => {
+      if (!touch) {
+        setOpen(false);
+      }
+    },
   });
 
   function collapse() {
@@ -128,7 +125,7 @@ export function AddTaskForm({
       touch={touch}
       placeholder={composer.placeholder}
       datesWithTasks={datesWithTasks}
-      ambientProjectName={ambientProjectName}
+      ambientProjectName={touch ? "Inbox" : ambientProjectName}
       onCancel={collapse}
     />
   );

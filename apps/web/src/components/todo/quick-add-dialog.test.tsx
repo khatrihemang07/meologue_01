@@ -102,10 +102,13 @@ describe("QuickAddDialog", () => {
   });
 
   it("opens as role=dialog aria-label=Quick Add, with the Task name editor, at rest", async () => {
-    render(<QuickAddDialog open={true} onOpenChange={vi.fn()} onAdd={vi.fn()} />);
+    const { container } = render(
+      <QuickAddDialog open={true} onOpenChange={vi.fn()} onAdd={vi.fn()} />,
+    );
 
     const dialog = await screen.findByRole("dialog", { name: "Quick Add" });
     expect(dialog).toBeInTheDocument();
+    expect(container).toContainElement(dialog);
     expect(await getInput()).toBeInTheDocument();
   });
 

@@ -175,7 +175,7 @@ describe("AddTaskForm", () => {
     expect(await screen.findByRole("button", { name: "Add task" })).toBeInTheDocument();
   });
 
-  it("calls onAdd with the parsed fields on Add, and stays open, empty and focused", async () => {
+  it("calls onAdd with the parsed fields on Add, then collapses on non-touch", async () => {
     const onAdd = vi.fn();
     render(<AddTaskForm onAdd={onAdd} disabled={false} />);
     await reveal();
@@ -187,11 +187,8 @@ describe("AddTaskForm", () => {
     expect(onAdd).toHaveBeenCalledWith(
       expect.objectContaining({ content: "buy milk", date: null, priority: 1, labelNames: [] }),
     );
-    const secondInput = await getInput();
-    expect(secondInput).not.toBe(firstInput);
-    expect(secondInput).toHaveValue("");
-    expect(secondInput).toHaveFocus();
-    expect(screen.getByRole("button", { name: "Cancel" })).toBeInTheDocument();
+    expect(screen.queryByLabelText("Task name")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Add task" })).toBeInTheDocument();
   });
 
   it("calls onAdd with the parsed fields on Enter, the editor's own commit keymap", async () => {
@@ -464,6 +461,28 @@ describe("AddTaskForm", () => {
       // Touch drops the row-level Cancel button (`quick-add-content.tsx`'s
       // own header comment on D11's "no Cancel row" reading).
       expect(screen.queryByRole("button", { name: "Cancel" })).not.toBeInTheDocument();
+    });
+
+    it("touch stays open after Add and resets its Project chip to Inbox", async () => {
+      stubTouch(true);
+      const onAdd = vi.fn();
+      render(
+        <AddTaskForm
+          onAdd={onAdd}
+          disabled={false}
+          ambientProjectName="Groceries"
+        />,
+      );
+      await reveal();
+
+      expect(screen.getByRole("button", { name: "Select project" })).toHaveTextContent("Inbox");
+      fireEvent.change(await getInput(), { target: { value: "buy milk" } });
+      fireEvent.click(screen.getByRole("button", { name: "Add task" }));
+
+      expect(onAdd).toHaveBeenCalled();
+      expect(await getInput()).toHaveValue("");
+      expect(screen.getByRole("button", { name: "Select project" })).toHaveTextContent("Inbox");
+      expect(screen.getByRole("button", { name: "Set date" })).toHaveTextContent("Date");
     });
   });
 });
