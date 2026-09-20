@@ -2201,3 +2201,189 @@ async fn a_source_reports_no_run_state_when_nothing_is_running(pool: PgPool) {
         "run state is memory, not a column: a Server that restarted has nothing queued"
     );
 }
+
+// ---------------------------------------------------------------------------
+// The nightly run and its catch-up (issue #422)
+// ---------------------------------------------------------------------------
+
+use chrono::NaiveDate;
+use meologue_server::time::{ImportRuns, catch_up_if_missed, run_scheduled_import};
+
+fn server_tz() -> chrono_tz::Tz {
+    meologue_server::period::server_timezone()
+}
+
+/// The Server-local date `days_ago` days before now — the shape the schedule
+/// reasons in, built here rather than pinned to a UTC date so these tests mean
+/// the same thing under whatever `MEOLOGUE_TZ` a checkout configures.
+fn local_date(days_ago: i64) -> NaiveDate {
+    chrono::Utc::now().with_timezone(&server_tz()).date_naive() - chrono::Duration::days(days_ago)
+}
+
+async fn scheduled_day_of(pool: &PgPool, source: Uuid) -> Option<NaiveDate> {
+    sqlx::query_scalar("select last_scheduled_run_on from time_sources where id = $1")
+        .bind(source)
+        .fetch_one(pool)
+        .await
+        .unwrap()
+}
+
+#[sqlx::test]
+async fn a_scheduled_run_imports_and_records_the_night_it_was_for(pool: PgPool) {
+    let dir = scratch_dir("scheduled");
+    let path = dir.join("db.sqlite");
+    write_toggl_db(&path, &[one_activity(&[0xd1], "Xcode")]);
+    let source = create_toggl_source(&pool, "Toggl", &path).await;
+    wait_for_intervals(&pool, source, 1).await;
+
+    // A manual or initial import must NOT look like a completed daily run,
+    // or a Server would think a night had happened that never did.
+    assert_eq!(scheduled_day_of(&pool, source).await, None);
+
+    let runs = ImportRuns::default();
+    let night = local_date(0);
+    assert!(run_scheduled_import(&pool, &runs, night).await);
+
+    assert_eq!(scheduled_day_of(&pool, source).await, Some(night));
+    // And it went through the same import path, so the same statuses moved.
+    let status = source_status(&pool, source).await;
+    assert!(status["last_success_at"].is_string());
+    assert_eq!(status["last_inserted_count"], 0);
+}
+
+#[sqlx::test]
+async fn a_night_a_source_failed_stays_owed(pool: PgPool) {
+    // Recording a night that did not actually import would let one bad night
+    // be forgotten forever: the next startup would see the date and conclude
+    // there was nothing to catch up.
+    let dir = scratch_dir("failed-night");
+    let path = dir.join("db.sqlite");
+    write_toggl_db(&path, &[one_activity(&[0xd2], "Xcode")]);
+    let source = create_toggl_source(&pool, "Toggl", &path).await;
+    wait_for_intervals(&pool, source, 1).await;
+    std::fs::remove_file(&path).unwrap();
+
+    let runs = ImportRuns::default();
+    assert!(run_scheduled_import(&pool, &runs, local_date(0)).await);
+
+    assert_eq!(
+        scheduled_day_of(&pool, source).await,
+        None,
+        "a failed import recorded a night it never completed"
+    );
+    assert!(source_status(&pool, source).await["last_error"].is_string());
+}
+
+#[sqlx::test]
+async fn startup_catches_up_one_missed_night_and_then_stops(pool: PgPool) {
+    let dir = scratch_dir("catch-up");
+    let path = dir.join("db.sqlite");
+    write_toggl_db(&path, &[one_activity(&[0xd3], "Xcode")]);
+    let source = create_toggl_source(&pool, "Toggl", &path).await;
+    wait_for_intervals(&pool, source, 1).await;
+
+    // Several nights missed — the Server was off for a week.
+    sqlx::query("update time_sources set last_scheduled_run_on = $2 where id = $1")
+        .bind(source)
+        .bind(local_date(7))
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    let runs = ImportRuns::default();
+    let now = chrono::Utc::now();
+    assert!(
+        catch_up_if_missed(&pool, &runs, server_tz(), now).await,
+        "a week of missed nights should be caught up"
+    );
+    let caught_up_to = scheduled_day_of(&pool, source).await;
+    assert!(caught_up_to > Some(local_date(7)));
+
+    // Starting again immediately must not run a second time: one pass over
+    // the source already found everything a per-night loop would have.
+    assert!(
+        !catch_up_if_missed(&pool, &runs, server_tz(), now).await,
+        "a repeated startup ran a second catch-up"
+    );
+    assert_eq!(scheduled_day_of(&pool, source).await, caught_up_to);
+}
+
+#[sqlx::test]
+async fn startup_does_nothing_when_last_night_already_ran(pool: PgPool) {
+    let dir = scratch_dir("no-catch-up");
+    let path = dir.join("db.sqlite");
+    write_toggl_db(&path, &[one_activity(&[0xd4], "Xcode")]);
+    let source = create_toggl_source(&pool, "Toggl", &path).await;
+    wait_for_intervals(&pool, source, 1).await;
+
+    // Recorded as of today, which is at or after the night most recently due
+    // however far through the day it currently is.
+    sqlx::query("update time_sources set last_scheduled_run_on = $2 where id = $1")
+        .bind(source)
+        .bind(local_date(0))
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    let runs = ImportRuns::default();
+    assert!(!catch_up_if_missed(&pool, &runs, server_tz(), chrono::Utc::now()).await);
+}
+
+#[sqlx::test]
+async fn a_server_with_no_enabled_sources_has_no_night_to_catch_up(pool: PgPool) {
+    // Otherwise a Server that has never been given a recorder would queue a
+    // catch-up run over nothing on every single startup.
+    let runs = ImportRuns::default();
+    assert!(!catch_up_if_missed(&pool, &runs, server_tz(), chrono::Utc::now()).await);
+
+    let dir = scratch_dir("archived-only");
+    let path = dir.join("db.sqlite");
+    write_toggl_db(&path, &[one_activity(&[0xd5], "Xcode")]);
+    let source = create_toggl_source(&pool, "Toggl", &path).await;
+    wait_for_intervals(&pool, source, 1).await;
+    patch_source(&pool, source, json!({ "enabled": false }), false).await;
+
+    assert!(
+        !catch_up_if_missed(&pool, &runs, server_tz(), chrono::Utc::now()).await,
+        "an archived source is not a missed night"
+    );
+}
+
+#[sqlx::test]
+async fn a_manual_refresh_never_counts_as_a_completed_daily_run(pool: PgPool) {
+    // The two triggers share everything except this. If Refresh now stamped
+    // the scheduled date, pressing it once would silence the catch-up for a
+    // night that never actually ran.
+    let dir = scratch_dir("manual-vs-scheduled");
+    let path = dir.join("db.sqlite");
+    write_toggl_db(&path, &[one_activity(&[0xd6], "Xcode")]);
+    let source = create_toggl_source(&pool, "Toggl", &path).await;
+    wait_for_intervals(&pool, source, 1).await;
+
+    let shared = app(&pool, false);
+    assert_eq!(post_refresh(shared).await.0, StatusCode::ACCEPTED);
+    wait_for_attempts(&pool, source, 2).await;
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    assert_eq!(
+        scheduled_day_of(&pool, source).await,
+        None,
+        "a manual refresh recorded itself as the night's run"
+    );
+}
+
+#[sqlx::test]
+async fn a_nightly_tick_is_skipped_while_another_run_is_in_flight(pool: PgPool) {
+    // The run already happening reads the same databases, and the next tick
+    // is a day away — queueing a second would only race the first's writes.
+    let runs = ImportRuns::default();
+    assert!(
+        runs.try_start(vec![Uuid::new_v4()]),
+        "the slot should be free"
+    );
+
+    assert!(
+        !run_scheduled_import(&pool, &runs, local_date(0)).await,
+        "a nightly tick started alongside a run already in flight"
+    );
+}

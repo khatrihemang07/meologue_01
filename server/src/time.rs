@@ -32,6 +32,8 @@ use axum::{
     extract::{Path as AxumPath, Query, State},
     http::StatusCode,
 };
+#[cfg(test)]
+use chrono::Timelike as _;
 use chrono::{DateTime, Duration, LocalResult, NaiveDate, NaiveDateTime, TimeZone, Utc};
 use chrono_tz::Tz;
 use rusqlite::{Connection, OpenFlags, types::ValueRef};
@@ -143,17 +145,16 @@ pub struct TimeSource {
     pub last_inserted_count: i32,
     pub last_warning_count: i32,
     pub last_error: Option<String>,
+    /// The Server-local day this source last completed a *scheduled* import
+    /// for (issue #422). Only the nightly and catch-up triggers write it, so
+    /// it is what tells a completed daily run apart from a manual or initial
+    /// one — `last_success_at` moves on all of them.
+    pub last_scheduled_run_on: Option<NaiveDate>,
     /// Where this source is in the run happening *now*, which is memory, not
     /// a column: a Server restart has no queued sources, and persisting
     /// "running" would leave a source stuck that way after a crash.
     #[sqlx(skip)]
     pub state: SourceRunState,
-}
-
-impl Default for SourceRunState {
-    fn default() -> Self {
-        Self::Idle
-    }
 }
 
 /// The columns `time_sources` actually stores, for the queries that read one.
@@ -163,7 +164,7 @@ impl Default for SourceRunState {
 macro_rules! source_columns {
     () => {
         "id, name, kind, path, enabled, last_attempt_at, last_success_at, \
-         last_inserted_count, last_warning_count, last_error"
+         last_inserted_count, last_warning_count, last_error, last_scheduled_run_on"
     };
 }
 
@@ -399,6 +400,7 @@ pub async fn create_source_handler(
         last_inserted_count: 0,
         last_warning_count: 0,
         last_error: None,
+        last_scheduled_run_on: None,
         state: SourceRunState::Queued,
     };
     sqlx::query("insert into time_sources (id,name,kind,path,enabled) values ($1,$2,$3,$4,$5)")
@@ -538,9 +540,13 @@ fn spawn_import(pool: PgPool, source_id: Uuid, kind: SourceKind, path: String) {
 // ---------------------------------------------------------------------------
 
 /// Where a source is in the current refresh run, if there is one.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, ToSchema)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, ToSchema)]
 #[serde(rename_all = "kebab-case")]
 pub enum SourceRunState {
+    /// The default, and what a Server that has just started reports: run
+    /// state is memory, so nothing is queued or running until something
+    /// queues it.
+    #[default]
     Idle,
     Queued,
     Running,
@@ -606,6 +612,77 @@ impl ImportRuns {
     }
 }
 
+// ---------------------------------------------------------------------------
+// The nightly run (issue #422)
+// ---------------------------------------------------------------------------
+
+/// When the nightly import happens, in the Server's own timezone.
+///
+/// One minute before midnight, so a day's activity is imported while that day
+/// is still the one the Server would call "today".
+const NIGHTLY_HOUR: u32 = 23;
+const NIGHTLY_MINUTE: u32 = 59;
+
+/// The next nightly run strictly after `now`.
+///
+/// Strictly after, so a worker that wakes exactly on the boundary schedules
+/// tomorrow rather than immediately re-running tonight — that loop is how a
+/// scheduler ends up importing the same day over and over.
+pub fn next_nightly_run(now: DateTime<Utc>, tz: Tz) -> DateTime<Utc> {
+    let local_today = now.with_timezone(&tz).date_naive();
+    for offset in 0..3 {
+        let candidate = nightly_instant(local_today + Duration::days(offset), tz);
+        if candidate > now {
+            return candidate;
+        }
+    }
+    // Unreachable for any real zone; never returning a past instant matters
+    // more than the exact value, because a past instant means no sleep at all.
+    now + Duration::days(1)
+}
+
+/// 23:59 on `day` in `tz`, as an instant.
+fn nightly_instant(day: NaiveDate, tz: Tz) -> DateTime<Utc> {
+    let naive = day
+        .and_hms_opt(NIGHTLY_HOUR, NIGHTLY_MINUTE, 0)
+        .expect("23:59 is a valid time");
+    match tz.from_local_datetime(&naive) {
+        LocalResult::Single(at) => at.with_timezone(&Utc),
+        // Ambiguous: the clock reads 23:59 twice tonight. The first is the
+        // one that keeps the run inside the day it is importing.
+        LocalResult::Ambiguous(first, _) => first.with_timezone(&Utc),
+        // Skipped: a zone that jumps across 23:59. Run at the first instant
+        // that exists after it rather than not at all.
+        LocalResult::None => first_existing_instant(naive, tz),
+    }
+}
+
+/// The most recent Server-local day whose nightly run should already have
+/// happened by `now`.
+fn last_due_day(now: DateTime<Utc>, tz: Tz) -> NaiveDate {
+    let local = now.with_timezone(&tz);
+    let today = local.date_naive();
+    if local >= nightly_instant(today, tz).with_timezone(&tz) {
+        today
+    } else {
+        today - Duration::days(1)
+    }
+}
+
+/// Whether startup should queue one catch-up import.
+///
+/// True when the night that has already passed never ran — the Server was
+/// stopped or asleep across it. Several missed nights still answer `true`
+/// once and are caught up by a single run, because the importer always
+/// rescans the whole source and deduplicates: there is nothing a per-missed-day
+/// loop would find that one pass does not.
+pub fn needs_catch_up(last_scheduled_on: Option<NaiveDate>, now: DateTime<Utc>, tz: Tz) -> bool {
+    match last_scheduled_on {
+        None => true,
+        Some(last) => last < last_due_day(now, tz),
+    }
+}
+
 #[derive(Debug, Serialize, ToSchema)]
 pub struct RefreshAccepted {
     /// How many enabled sources this run will import, in order.
@@ -643,21 +720,123 @@ pub async fn refresh_handler(
     }
 
     let queued = enabled.len();
-    tokio::spawn(async move {
-        // Serial, deliberately: two sources importing at once would contend
-        // for the same Postgres pool and, worse, make "which source is
-        // running" unanswerable.
-        for (id, kind, path) in enabled {
-            let Some(kind) = SourceKind::from_wire(&kind) else {
-                continue;
-            };
-            runs.begin(id);
-            import_source(&pool, id, kind, path).await;
-        }
-        runs.finish();
-    });
+    tokio::spawn(async move { run_enabled_sources(&pool, &runs, enabled, None).await });
 
     Ok((StatusCode::ACCEPTED, Json(RefreshAccepted { queued })))
+}
+
+/// Every enabled source, imported one after another.
+///
+/// The one path all four triggers share — creating a source, Refresh now, the
+/// nightly run and startup catch-up — so deduplication, error isolation and
+/// the statuses a Device reads are identical however the run began (#422).
+///
+/// Serial, deliberately: two sources importing at once would contend for the
+/// same Postgres pool and, worse, make "which source is running" unanswerable.
+///
+/// `scheduled_for` is `Some` only for the nightly and catch-up triggers. It is
+/// what stamps `last_scheduled_run_on`, and so what lets a completed daily run
+/// be told apart from a manual or initial import.
+async fn run_enabled_sources(
+    pool: &PgPool,
+    runs: &ImportRuns,
+    sources: Vec<(Uuid, String, String)>,
+    scheduled_for: Option<NaiveDate>,
+) {
+    for (id, kind, path) in sources {
+        let Some(kind) = SourceKind::from_wire(&kind) else {
+            continue;
+        };
+        runs.begin(id);
+        let outcome = import_source(pool, id, kind, path).await;
+        // Only a source that actually imported has run for that day. One that
+        // failed stays behind, so the next startup still counts the night as
+        // missed and catches it up rather than recording a night that did not
+        // happen.
+        if let (Some(day), None) = (scheduled_for, outcome.error.as_ref()) {
+            let _ = sqlx::query("update time_sources set last_scheduled_run_on = $2 where id = $1")
+                .bind(id)
+                .bind(day)
+                .execute(pool)
+                .await;
+        }
+    }
+    runs.finish();
+}
+
+/// Lists the sources a run would import, in the order it would import them.
+async fn enabled_sources(pool: &PgPool) -> Vec<(Uuid, String, String)> {
+    sqlx::query_as("select id, kind, path from time_sources where enabled order by created_at")
+        .fetch_all(pool)
+        .await
+        .unwrap_or_default()
+}
+
+/// Imports every enabled source and records the night it was for.
+///
+/// Returns `false` when a run was already in flight. A nightly tick that lands
+/// while someone is pressing Refresh now is skipped rather than queued: the
+/// run already happening reads the same databases, and the next tick is a day
+/// away.
+pub async fn run_scheduled_import(pool: &PgPool, runs: &ImportRuns, day: NaiveDate) -> bool {
+    let sources = enabled_sources(pool).await;
+    if !runs.try_start(sources.iter().map(|(id, _, _)| *id).collect()) {
+        return false;
+    }
+    run_enabled_sources(pool, runs, sources, Some(day)).await;
+    true
+}
+
+/// Runs one catch-up if the night that has already passed never happened.
+///
+/// Several missed nights still produce exactly one run: the importer rescans
+/// the whole source and deduplicates, so there is nothing a per-missed-day
+/// loop would find that one pass does not.
+pub async fn catch_up_if_missed(
+    pool: &PgPool,
+    runs: &ImportRuns,
+    tz: Tz,
+    now: DateTime<Utc>,
+) -> bool {
+    let oldest: Option<Option<NaiveDate>> =
+        sqlx::query_scalar("select min(last_scheduled_run_on) from time_sources where enabled")
+            .fetch_optional(pool)
+            .await
+            .ok()
+            .flatten();
+    // No enabled sources at all is nothing to catch up, not a missed night.
+    let has_sources: i64 = sqlx::query_scalar("select count(*) from time_sources where enabled")
+        .fetch_one(pool)
+        .await
+        .unwrap_or(0);
+    if has_sources == 0 {
+        return false;
+    }
+    if !needs_catch_up(oldest.flatten(), now, tz) {
+        return false;
+    }
+    run_scheduled_import(pool, runs, last_due_day(now, tz)).await
+}
+
+/// The long-lived worker that runs the nightly import.
+///
+/// Sleeps until the next 23:59 in the Server's timezone, computed fresh each
+/// time round rather than by adding twenty-four hours: on a daylight-saving
+/// day those differ by an hour, and the drift compounds.
+pub fn spawn_nightly_worker(pool: PgPool, runs: ImportRuns, tz: Tz) {
+    tokio::spawn(async move {
+        // Startup catch-up first, so a Server that was off across last night
+        // does not wait until tonight to notice.
+        catch_up_if_missed(&pool, &runs, tz, Utc::now()).await;
+        loop {
+            let now = Utc::now();
+            let next = next_nightly_run(now, tz);
+            let wait = (next - now).to_std().unwrap_or(std::time::Duration::ZERO);
+            tokio::time::sleep(wait).await;
+            let day = last_due_day(Utc::now(), tz);
+            run_scheduled_import(&pool, &runs, day).await;
+        }
+    });
 }
 
 #[utoipa::path(patch, path = "/v1/time/sources/{id}", request_body = UpdateTimeSource, params(("id" = Uuid, Path)), responses((status = 200, body = TimeSource), (status = 400), (status = 404), (status = 409), (status = 423)))]
@@ -1247,6 +1426,148 @@ mod tests {
                 day += Duration::days(1);
             }
         }
+    }
+
+    /// An instant stated as a wall clock in a zone, for the schedule tests.
+    fn at(zone: &str, y: i32, m: u32, d: u32, hour: u32, minute: u32) -> DateTime<Utc> {
+        let tz: Tz = zone.parse().unwrap();
+        tz.from_local_datetime(
+            &NaiveDate::from_ymd_opt(y, m, d)
+                .unwrap()
+                .and_hms_opt(hour, minute, 0)
+                .unwrap(),
+        )
+        .earliest()
+        .unwrap()
+        .with_timezone(&Utc)
+    }
+
+    fn local_string(instant: DateTime<Utc>, zone: &str) -> String {
+        let tz: Tz = zone.parse().unwrap();
+        instant
+            .with_timezone(&tz)
+            .format("%Y-%m-%d %H:%M")
+            .to_string()
+    }
+
+    #[test]
+    fn the_nightly_run_is_one_minute_before_the_servers_own_midnight() {
+        // Not UTC's midnight: a Server in Asia/Kolkata importing at 23:59 UTC
+        // would be importing at 05:29 the following morning, local — the
+        // middle of the day it had already called tomorrow.
+        let zone = "Asia/Kolkata";
+        let next = next_nightly_run(at(zone, 2026, 3, 15, 10, 0), zone.parse().unwrap());
+        assert_eq!(local_string(next, zone), "2026-03-15 23:59");
+    }
+
+    #[test]
+    fn waking_exactly_on_the_boundary_schedules_tomorrow_not_now() {
+        // `next` is strictly after `now`. A worker that returned the instant
+        // it just woke on would re-run the same night in a tight loop.
+        let zone = "UTC";
+        let boundary = at(zone, 2026, 3, 15, 23, 59);
+        let next = next_nightly_run(boundary, zone.parse().unwrap());
+        assert!(next > boundary);
+        assert_eq!(local_string(next, zone), "2026-03-16 23:59");
+    }
+
+    #[test]
+    fn a_daylight_saving_night_still_gets_exactly_one_run() {
+        // Computed fresh each time round rather than by adding 24 hours: on a
+        // 23- or 25-hour day those differ, and the drift compounds until the
+        // "nightly" run lands in the afternoon.
+        for zone in ["Europe/London", "America/New_York", "America/Santiago"] {
+            let tz: Tz = zone.parse().unwrap();
+            let mut now = at(zone, 2026, 3, 1, 12, 0);
+            let mut seen = Vec::new();
+            for _ in 0..400 {
+                let next = next_nightly_run(now, tz);
+                assert!(next > now, "{zone} scheduled a run in the past");
+                let local = next.with_timezone(&tz);
+                seen.push(local.date_naive());
+                assert_eq!(
+                    (local.hour(), local.minute()),
+                    (23, 59),
+                    "{zone} drifted off 23:59 at {local}"
+                );
+                now = next;
+            }
+            // One run per day, never two for the same date and never a
+            // skipped one.
+            let mut dates = seen.clone();
+            dates.dedup();
+            assert_eq!(dates.len(), seen.len(), "{zone} ran the same night twice");
+            for pair in seen.windows(2) {
+                assert_eq!(
+                    pair[1],
+                    pair[0] + Duration::days(1),
+                    "{zone} skipped a night between {} and {}",
+                    pair[0],
+                    pair[1]
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_server_that_was_off_across_last_night_catches_up_once() {
+        let zone = "Asia/Kolkata";
+        let tz: Tz = zone.parse().unwrap();
+        let morning = at(zone, 2026, 3, 16, 9, 0);
+        let yesterday = NaiveDate::from_ymd_opt(2026, 3, 15).unwrap();
+
+        // Last night ran: nothing to catch up.
+        assert!(!needs_catch_up(Some(yesterday), morning, tz));
+        // It did not: catch up.
+        assert!(needs_catch_up(
+            Some(yesterday - Duration::days(1)),
+            morning,
+            tz
+        ));
+        // Several nights missed is still one catch-up, not one per night —
+        // the importer rescans and deduplicates, so one pass finds everything.
+        assert!(needs_catch_up(
+            Some(yesterday - Duration::days(30)),
+            morning,
+            tz
+        ));
+        // A source that has never had a scheduled run has one owing.
+        assert!(needs_catch_up(None, morning, tz));
+    }
+
+    #[test]
+    fn restarting_after_tonights_run_does_not_run_it_again() {
+        // The night of the 15th has already happened by 23:59:30 on the 15th,
+        // so a Server restarted at 23:59:40 must not import it a second time.
+        let zone = "UTC";
+        let tz: Tz = zone.parse().unwrap();
+        let tonight = NaiveDate::from_ymd_opt(2026, 3, 15).unwrap();
+        let after = at(zone, 2026, 3, 15, 23, 59) + Duration::seconds(40);
+
+        assert!(!needs_catch_up(Some(tonight), after, tz));
+        // And restarting repeatedly keeps answering the same way.
+        assert!(!needs_catch_up(
+            Some(tonight),
+            after + Duration::minutes(1),
+            tz
+        ));
+    }
+
+    #[test]
+    fn before_tonights_run_the_night_that_is_owed_is_yesterdays() {
+        // At 10:00 the run due is last night's, not tonight's — a Server
+        // started this morning has not missed anything yet today.
+        let zone = "UTC";
+        let tz: Tz = zone.parse().unwrap();
+        let yesterday = NaiveDate::from_ymd_opt(2026, 3, 14).unwrap();
+        let morning = at(zone, 2026, 3, 15, 10, 0);
+
+        assert!(!needs_catch_up(Some(yesterday), morning, tz));
+        assert!(needs_catch_up(
+            Some(yesterday - Duration::days(1)),
+            morning,
+            tz
+        ));
     }
 
     #[test]

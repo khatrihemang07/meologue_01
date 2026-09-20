@@ -384,6 +384,10 @@ pub fn router_with_digests(
     digest: Option<digest::DigestState>,
 ) -> Router {
     router_with_everything(
+        // Tests and the narrower constructors get a guard of their own: a
+        // process-wide one would let one test's refresh block another's,
+        // since every `#[sqlx::test]` in a file shares one process.
+        time::ImportRuns::default(),
         pool,
         static_dir,
         embed_tx,
@@ -424,6 +428,10 @@ pub fn router_with_settings(
     mode: settings::InstanceMode,
 ) -> Router {
     router_with_everything(
+        // Tests and the narrower constructors get a guard of their own: a
+        // process-wide one would let one test's refresh block another's,
+        // since every `#[sqlx::test]` in a file shares one process.
+        time::ImportRuns::default(),
         pool,
         static_dir,
         embed_tx,
@@ -459,6 +467,10 @@ pub fn router_with_backup(
     embed_model: Option<String>,
 ) -> Router {
     router_with_everything(
+        // Tests and the narrower constructors get a guard of their own: a
+        // process-wide one would let one test's refresh block another's,
+        // since every `#[sqlx::test]` in a file shares one process.
+        time::ImportRuns::default(),
         pool,
         static_dir,
         embed_tx,
@@ -495,6 +507,10 @@ pub fn router_with_flags(
     flags: settings::RuntimeFlags,
 ) -> Router {
     router_with_everything(
+        // Tests and the narrower constructors get a guard of their own: a
+        // process-wide one would let one test's refresh block another's,
+        // since every `#[sqlx::test]` in a file shares one process.
+        time::ImportRuns::default(),
         pool,
         static_dir,
         embed_tx,
@@ -529,6 +545,7 @@ pub fn router_with_flags(
 // suite has to update when a new capability arrives.
 #[allow(clippy::too_many_arguments)]
 pub fn router_with_everything(
+    import_runs: time::ImportRuns,
     pool: PgPool,
     static_dir: impl AsRef<Path>,
     embed_tx: Option<Sender<Uuid>>,
@@ -692,7 +709,7 @@ pub fn router_with_everything(
             mode,
             flags,
             timezone: period::server_timezone(),
-            import_runs: time::ImportRuns::default(),
+            import_runs,
         })
         .fallback_service(app_shell)
         .layer(axum::middleware::from_fn(metrics::track_metrics))

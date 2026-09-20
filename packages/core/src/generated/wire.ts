@@ -1724,6 +1724,14 @@ export interface components {
             last_error?: string | null;
             /** Format: int32 */
             last_inserted_count: number;
+            /**
+             * Format: date
+             * @description The Server-local day this source last completed a *scheduled* import
+             *     for (issue #422). Only the nightly and catch-up triggers write it, so
+             *     it is what tells a completed daily run apart from a manual or initial
+             *     one — `last_success_at` moves on all of them.
+             */
+            last_scheduled_run_on?: string | null;
             /** Format: date-time */
             last_success_at?: string | null;
             /** Format: int32 */

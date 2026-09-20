@@ -68,6 +68,7 @@ function sourceFixture(overrides: Record<string, unknown>) {
     last_inserted_count: 0,
     last_warning_count: 0,
     last_error: null,
+    last_scheduled_run_on: null,
     state: "idle",
     ...overrides,
   };
@@ -554,6 +555,9 @@ describe("TimePage", () => {
     expect(status.getByText(/3 record\(s\) skipped/)).toBeInTheDocument();
     expect(status.getByText(/Last run failed — source database is unreadable/)).toBeInTheDocument();
     expect(status.getByText("running")).toBeInTheDocument();
+    // The nightly run is reported separately from the last success: any
+    // trigger moves the success, but only a completed daily run moves this.
+    expect(status.getAllByText(/no nightly run yet/)).toHaveLength(2);
 
     // While a run is in flight the action says so and cannot start a second.
     expect(screen.getByRole("button", { name: "Importing…" })).toBeDisabled();

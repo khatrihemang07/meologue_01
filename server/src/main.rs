@@ -79,7 +79,8 @@ async fn main() -> anyhow::Result<()> {
         .with_span_events(tracing_subscriber::fmt::format::FmtSpan::CLOSE)
         .init();
 
-    let database_url = env::var("DATABASE_URL").unwrap_or_else(|_| DEFAULT_DATABASE_URL.to_string());
+    let database_url =
+        env::var("DATABASE_URL").unwrap_or_else(|_| DEFAULT_DATABASE_URL.to_string());
     let pool = PgPoolOptions::new().connect(&database_url).await?;
     sqlx::migrate!().run(&pool).await?;
 
@@ -189,11 +190,13 @@ async fn main() -> anyhow::Result<()> {
     // the resolved chat/embed configuration rather than the raw env one.
     let digest_tz = resolved_settings.timezone();
     let digest_worker_config = llm_config.digest_worker_config();
-    let digest_state = digest_worker_config.clone().map(|chat_client| digest::DigestState {
-        chat_client,
-        tz: digest_tz,
-        context_window,
-    });
+    let digest_state = digest_worker_config
+        .clone()
+        .map(|chat_client| digest::DigestState {
+            chat_client,
+            tz: digest_tz,
+            context_window,
+        });
     if let Some(chat_client) = digest_worker_config {
         tokio::spawn(digest::run(
             pool.clone(),
@@ -265,7 +268,18 @@ async fn main() -> anyhow::Result<()> {
     // combined) — see `router_with_everything`'s own doc comment for why
     // neither the backup fields nor the settings/flags fields get folded
     // into a narrower call here.
+    // The nightly import worker and the Router share one run guard, so a
+    // scheduled run and a reader pressing "Refresh now" cannot both be
+    // importing the same sources at once (issues #421/#422).
+    let import_runs = meologue_server::time::ImportRuns::default();
+    meologue_server::time::spawn_nightly_worker(
+        pool.clone(),
+        import_runs.clone(),
+        meologue_server::period::server_timezone(),
+    );
+
     let app = meologue_server::router_with_everything(
+        import_runs,
         pool,
         static_dir,
         embed_tx,
@@ -305,7 +319,9 @@ async fn main() -> anyhow::Result<()> {
     // ever read it.
     println!("Instance: {}", mode.as_str());
     if settings_locked {
-        println!("Config: locked to environment (MEOLOGUE_CONFIG_LOCK is set) — stored settings are ignored.");
+        println!(
+            "Config: locked to environment (MEOLOGUE_CONFIG_LOCK is set) — stored settings are ignored."
+        );
     }
     println!("Server URL for Settings: http://localhost:{port}");
     // A loopback bind makes every address below unreachable, so they must not be
@@ -320,7 +336,7 @@ async fn main() -> anyhow::Result<()> {
     }
     if !loopback
         && let Some(identity) =
-        tailscale_json(&["status", "--json"]).and_then(|status| tailscale_identity(&status))
+            tailscale_json(&["status", "--json"]).and_then(|status| tailscale_identity(&status))
     {
         println!(
             "Tailscale MagicDNS URL for Settings: http://{}:{port}",

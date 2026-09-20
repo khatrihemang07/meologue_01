@@ -354,6 +354,14 @@ function SourceStatusLine({ source }: { source: TimeSource }) {
     <span className="text-muted-foreground">
       Last success {succeeded} · {source.last_inserted_count} new
       {source.last_warning_count > 0 && <> · {source.last_warning_count} record(s) skipped</>}
+      {/* The nightly run is named separately from the last success because
+          they answer different questions: any trigger moves the success, but
+          only a completed daily run moves this (issue #422). */}
+      {source.last_scheduled_run_on ? (
+        <> · nightly run for {source.last_scheduled_run_on}</>
+      ) : (
+        <> · no nightly run yet</>
+      )}
     </span>
   );
 }

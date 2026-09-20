@@ -2635,6 +2635,14 @@
             "type": "integer",
             "format": "int32"
           },
+          "last_scheduled_run_on": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date",
+            "description": "The Server-local day this source last completed a *scheduled* import\nfor (issue #422). Only the nightly and catch-up triggers write it, so\nit is what tells a completed daily run apart from a manual or initial\none — `last_success_at` moves on all of them."
+          },
           "last_success_at": {
             "type": [
               "string",
