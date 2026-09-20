@@ -1,5 +1,5 @@
 import type { Task } from "@meologue/core";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { swipeDown, swipeLeft } from "@/test/swipe";
 import { UpcomingView } from "./upcoming-view";
@@ -85,7 +85,9 @@ beforeAll(async () => {
     tasks: [task({ id: "warm-lazy-schedule-popover", content: "warm task", date: "2026-09-01" })],
   });
   swipeLeft(rowBox("warm task"));
-  await new Promise((resolve) => setTimeout(resolve, 50));
+  await waitFor(() => expect(screen.getByTestId("scheduler-view")).toBeInTheDocument(), {
+    timeout: 5000,
+  });
   cleanup();
 });
 

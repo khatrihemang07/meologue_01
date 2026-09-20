@@ -737,13 +737,20 @@ describe("TaskRow", () => {
     // The trigger renders in both the `fallback` and the loaded
     // `LazyTaskSchedulePopover` — only the loaded one is clickable
     // (`fallback`'s own copy is `disabled`), so this waits for the real
-    // button before firing the click `waitFor` below still needs.
-    await waitFor(() =>
-      expect(screen.getByRole("button", { name: 'Date "call mum"' })).toBeEnabled(),
+    // button before firing the click `waitFor` below still needs. A longer
+    // explicit timeout than the 1,000ms default: this suite's own
+    // `--maxWorkers=2` full run showed this specific `import()` occasionally
+    // outlast the default under load (machine's own load-sensitivity, this
+    // repo's `uptime`-before-`vitest` convention exists for).
+    await waitFor(
+      () => expect(screen.getByRole("button", { name: 'Date "call mum"' })).toBeEnabled(),
+      { timeout: 5000 },
     );
     fireEvent.click(screen.getByRole("button", { name: 'Date "call mum"' }));
 
-    await waitFor(() => expect(screen.getByTestId("scheduler-view")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByTestId("scheduler-view")).toBeInTheDocument(), {
+      timeout: 5000,
+    });
   });
 
   // Issue #253: the More-actions "Date…" item is a second entry point onto
