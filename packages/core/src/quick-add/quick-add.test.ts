@@ -406,6 +406,147 @@ describe("tokens", () => {
     });
   });
 
+  // Issue #388: `#Name`/`/Section`/`@label`/`%label` match only names that
+  // exist, once a caller actually supplies a name list — `QuickAddOptions.
+  // projectNames`'s own doc comment has the full `undefined`-means-
+  // permissive contract every case group below exercises from a different
+  // angle. The plain "#project"/"/section"/"@label / %label" describe
+  // blocks above are the permissive-path spec and are deliberately left
+  // untouched by this issue — every one of them calls `parse` with no name
+  // list, so they keep asserting pre-#388 behaviour on purpose.
+  describe("existence-check against a supplied name list (issue #388)", () => {
+    describe("#project", () => {
+      it("matches a single-word name exactly, case-insensitively", () => {
+        const result = parse("buy milk #home", { projectNames: ["Home"] });
+        expect(result.projectName).toBe("Home");
+        expect(result.content).toBe("buy milk");
+      });
+
+      it("matches a multi-word name as one exact span — the ticket's own headline case", () => {
+        const result = parse("Test #Aurora migration", { projectNames: ["Aurora migration"] });
+        expect(result.projectName).toBe("Aurora migration");
+        expect(result.content).toBe("Test");
+      });
+
+      it("a case-insensitive multi-word match still resolves to the list's own casing", () => {
+        const result = parse("Test #aurora MIGRATION", { projectNames: ["Aurora migration"] });
+        expect(result.projectName).toBe("Aurora migration");
+      });
+
+      it("a partial prefix of a known multi-word name does not match — stays literal, no dropdown interaction happens here", () => {
+        const result = parse("Test #Aurora", { projectNames: ["Aurora migration"] });
+        expect(result.projectName).toBeNull();
+        expect(result.content).toBe("Test #Aurora");
+      });
+
+      it("an unknown name against a non-empty list does not match", () => {
+        const result = parse("Test #Nonexistent", { projectNames: ["Home", "Work"] });
+        expect(result.projectName).toBeNull();
+        expect(result.content).toBe("Test #Nonexistent");
+      });
+
+      it("an empty list matches nothing — 'no known Projects yet,' not 'match anything'", () => {
+        const result = parse("Test #Anything", { projectNames: [] });
+        expect(result.projectName).toBeNull();
+        expect(result.content).toBe("Test #Anything");
+      });
+
+      it("a shorter name that's a prefix of a longer one doesn't win by accident — longest match wins", () => {
+        const result = parse("Test #Aurora migration", {
+          projectNames: ["Aurora", "Aurora migration"],
+        });
+        expect(result.projectName).toBe("Aurora migration");
+        expect(result.content).toBe("Test");
+      });
+
+      it("a real name followed immediately by more word characters doesn't match (word-boundary check)", () => {
+        const result = parse("Test #Homework", { projectNames: ["Home"] });
+        expect(result.projectName).toBeNull();
+        expect(result.content).toBe("Test #Homework");
+      });
+
+      // The regression case Option A's own trade-off names: `undefined`
+      // (the field left out entirely) must never silently start meaning
+      // "no restriction" again — it means "no lookup available," and
+      // `projectNames: []` is how a caller spells "I checked, there's
+      // nothing" instead.
+      it("no list supplied at all behaves exactly like the permissive describe block above, not like an empty list", () => {
+        const result = parse("buy milk #Home");
+        expect(result.projectName).toBe("Home");
+      });
+    });
+
+    describe("@label / %label", () => {
+      it("matches only a known label, case-insensitively, either sigil", () => {
+        expect(parse("buy milk @urgent", { labelNames: ["Urgent"] }).labelNames).toEqual([
+          "Urgent",
+        ]);
+        expect(parse("buy milk %urgent", { labelNames: ["Urgent"] }).labelNames).toEqual([
+          "Urgent",
+        ]);
+      });
+
+      it("an unknown label against a supplied list doesn't match", () => {
+        const result = parse("buy milk @unknown", { labelNames: ["urgent", "home"] });
+        expect(result.labelNames).toEqual([]);
+        expect(result.content).toBe("buy milk @unknown");
+      });
+    });
+
+    describe("/section, scoped to the active project", () => {
+      const sectionNamesByProject = new Map<string, readonly string[]>([
+        ["aurora migration", ["Before cutover", "Cutover night", "After cutover"]],
+        // A deliberate name collision with a *different* Project's own
+        // Section — proves the scoping is real (keyed by Project), not
+        // just "the only Section in the whole test carries that name."
+        ["other project", ["Cutover night"]],
+      ]);
+
+      it("resolves against the typed #project's own sections, not a same-named Section on a different Project", () => {
+        const result = parse("Test #Aurora migration /Cutover night", {
+          projectNames: ["Aurora migration", "Other project"],
+          sectionNamesByProject,
+        });
+        expect(result.projectName).toBe("Aurora migration");
+        expect(result.sectionName).toBe("Cutover night");
+        expect(result.content).toBe("Test");
+      });
+
+      it("a Section real on a different Project doesn't match the typed Project's own scope", () => {
+        const result = parse("Test #Aurora migration /Nonexistent here", {
+          projectNames: ["Aurora migration", "Other project"],
+          sectionNamesByProject,
+        });
+        expect(result.sectionName).toBeNull();
+      });
+
+      it("with no #project typed, falls back to activeProjectName", () => {
+        const result = parse("Test /Cutover night", {
+          projectNames: ["Aurora migration"],
+          sectionNamesByProject,
+          activeProjectName: "Aurora migration",
+        });
+        expect(result.projectName).toBeNull();
+        expect(result.sectionName).toBe("Cutover night");
+      });
+
+      it("with neither a typed #project nor an activeProjectName, matches nothing — 'nothing to do,' the same convention handleAdd already uses for a blank #project name", () => {
+        const result = parse("Test /Cutover night", { sectionNamesByProject });
+        expect(result.sectionName).toBeNull();
+      });
+
+      it("still refuses a digit right after / even on the exact-match path — protects a numeric date like 27/1/2026", () => {
+        const result = parse("buy milk 5/9/2026", {
+          projectNames: [],
+          sectionNamesByProject: new Map(),
+          activeProjectName: null,
+        });
+        expect(result.sectionName).toBeNull();
+        expect(result.date).toBe("2026-09-05");
+      });
+    });
+  });
+
   describe("p1-p4 — through storedPriorityOf, p1 is most urgent", () => {
     it.each<[string, number]>([
       ["buy milk p1", storedPriorityOf(1)],
