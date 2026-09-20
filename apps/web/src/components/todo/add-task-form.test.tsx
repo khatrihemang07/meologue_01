@@ -447,7 +447,7 @@ describe("AddTaskForm", () => {
   });
 
   describe("shell chosen by touch capability (issue #374/D4)", () => {
-    it("touch renders the full-screen sheet, still reachable through data-add-task-field", async () => {
+    it("touch renders the floating bottom card, still reachable through data-add-task-field", async () => {
       stubTouch(true);
       render(<AddTaskForm onAdd={vi.fn()} disabled={false} />);
       await reveal();
@@ -458,6 +458,8 @@ describe("AddTaskForm", () => {
       // queries `document.querySelector('[data-testid="quick-add"]')`.
       const marked = document.querySelector("[data-add-task-field]");
       expect(marked).toBeInTheDocument();
+      expect(marked?.className).toContain("bottom-0");
+      expect(marked?.className).toContain("rounded-[32px]");
       expect(within(marked as HTMLElement).getByLabelText("Task name")).toBeInTheDocument();
       // Touch drops the row-level Cancel button (`quick-add-content.tsx`'s
       // own header comment on D11's "no Cancel row" reading).

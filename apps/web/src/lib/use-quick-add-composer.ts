@@ -53,6 +53,10 @@ export interface UseQuickAddComposerOptions {
 export interface QuickAddComposer {
   value: string;
   setValue: (value: string) => void;
+  description: string;
+  setDescription: (value: string) => void;
+  descriptionOpen: boolean;
+  setDescriptionOpen: (open: boolean) => void;
   /** Bump this to remount `LazyTaskTitleEditor` (`key={resetKey}`) — `task-title-editor.tsx` seeds its document once, at mount, and never resyncs from a later `value` prop (that file's own doc comment), so clearing after a commit means a fresh instance, not an imperative clear. */
   resetKey: number;
   /** `LazyTaskTitleEditor`'s own `value` prop for the *next* mount (`key={resetKey}`) — `""` after a plain commit/reset, or whatever `remount` last seeded it with. Not the live text (`value` above is): this is only read once, at the moment a fresh editor instance mounts. */
@@ -102,6 +106,8 @@ export interface QuickAddComposer {
  */
 export function useQuickAddComposer(options: UseQuickAddComposerOptions): QuickAddComposer {
   const [value, setValue] = useState("");
+  const [description, setDescription] = useState("");
+  const [descriptionOpen, setDescriptionOpen] = useState(false);
   const [seed, setSeed] = useState("");
   const [resetKey, setResetKey] = useState(0);
   const [pendingPasteLines, setPendingPasteLines] = useState<readonly string[] | null>(null);
@@ -149,8 +155,13 @@ export function useQuickAddComposer(options: UseQuickAddComposerOptions): QuickA
     if (fields.content.trim() === "") {
       return;
     }
-    onAddRef.current(fields);
+    onAddRef.current({
+      ...fields,
+      description: description.trim() === "" ? null : description,
+    });
     setValue("");
+    setDescription("");
+    setDescriptionOpen(false);
     setSeed("");
     setResetKey((key) => key + 1);
     onCommittedRef.current?.();
@@ -197,6 +208,10 @@ export function useQuickAddComposer(options: UseQuickAddComposerOptions): QuickA
   return {
     value,
     setValue,
+    description,
+    setDescription,
+    descriptionOpen,
+    setDescriptionOpen,
     resetKey,
     seed,
     commit,

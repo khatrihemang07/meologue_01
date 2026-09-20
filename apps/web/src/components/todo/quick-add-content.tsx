@@ -5,6 +5,7 @@ import { DropdownMenu } from "radix-ui";
 import type * as React from "react";
 import { forwardRef, Suspense, useState } from "react";
 import { LazyTaskTitleEditor } from "@/components/todo/lazy-task-title-editor";
+import { LazyTaskDescriptionEditor } from "@/components/todo/lazy-task-description-editor";
 import { MultiLinePasteDialog } from "@/components/todo/multiline-paste-dialog";
 import { Button } from "@/components/ui/button";
 import { useDraftDateState } from "@/hooks/use-draft-date-state";
@@ -183,9 +184,9 @@ export function QuickAddContent({
   const projectDisplayName = parsed.projectName ?? ambientProjectName;
 
   return (
-    <div className="flex flex-col gap-1">
+    <div className="relative flex flex-col gap-1">
       <div className={EDITOR_ROW_CLASSES}>
-        <div className="min-w-0 flex-1">
+        <div className={cn("min-w-0 flex-1", !touch && !hasText && "pr-20")}>
           <Suspense fallback={<div className="h-8" />}>
             <LazyTaskTitleEditor
               key={composer.resetKey}
@@ -208,6 +209,19 @@ export function QuickAddContent({
         </div>
       </div>
 
+      {composer.descriptionOpen && (
+        <Suspense fallback={<div className="h-7" />}>
+          <LazyTaskDescriptionEditor
+            value={composer.description}
+            onChange={composer.setDescription}
+            onCancel={() => composer.setDescriptionOpen(false)}
+            placeholder="Description"
+            autoFocus={true}
+            className="min-h-7 text-sm leading-5 text-[color:var(--td-quick-add-title-color)] outline-none"
+          />
+        </Suspense>
+      )}
+
       {/*
         One row, split left/right (`web/01-anatomy.md`'s own numbered
         list reads as a single row: "+ More actions -> Project -> Date ->
@@ -217,7 +231,16 @@ export function QuickAddContent({
         chips only once there's text to attach them to (`web/01-anatomy.md`:
         "toolbar only renders once title is non-empty").
       */}
-      <div className={FOOTER_CLASSES}>
+      <div
+        className={cn(
+          FOOTER_CLASSES,
+          // The measured empty web card is 66px high: its controls share
+          // the title row. Once text exists, the chip/actions row moves
+          // below it and the card grows to the measured 97–114px range.
+          // Android always keeps its bottom controls row.
+          !touch && !hasText && "absolute top-0 right-0 mt-0",
+        )}
+      >
         <div className={cn("flex min-w-0 items-center gap-1", touch && "overflow-x-auto")}>
           <DropdownMenu.Root>
             <DropdownMenu.Trigger asChild>
@@ -241,6 +264,12 @@ export function QuickAddContent({
                 align="start"
                 className="z-[70] flex w-44 flex-col gap-0.5 rounded-lg border border-border bg-popover p-1 text-popover-foreground text-sm shadow-lg"
               >
+                <DropdownMenu.Item
+                  className="cursor-pointer rounded-md px-2 py-1.5 outline-hidden data-highlighted:bg-muted"
+                  onSelect={() => composer.setDescriptionOpen(true)}
+                >
+                  Description
+                </DropdownMenu.Item>
                 <DropdownMenu.Item
                   className="cursor-pointer rounded-md px-2 py-1.5 outline-hidden data-highlighted:bg-muted"
                   onSelect={() => setPriorityPickerOpen(true)}
@@ -269,10 +298,9 @@ export function QuickAddContent({
             </DropdownMenu.Portal>
           </DropdownMenu.Root>
 
-          {hasText && (
+          {(hasText || touch) && (
             <>
-              {/* Display-only — see this component's own `ambientProjectName` doc comment. */}
-              <Chip aria-label="Select project" className="cursor-default hover:bg-transparent">
+              <Chip aria-label="Select project" onClick={() => insertSigil("#")}>
                 {projectDisplayName}
               </Chip>
 

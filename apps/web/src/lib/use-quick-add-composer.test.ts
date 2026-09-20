@@ -41,6 +41,22 @@ describe("useQuickAddComposer", () => {
     expect(onCommitted).toHaveBeenCalledTimes(1);
   });
 
+  it("commits the explicit Description field with the task and clears it", () => {
+    const onAdd = vi.fn();
+    const { result } = renderHook(() => useQuickAddComposer({ onAdd }));
+
+    act(() => result.current.setDescription("Bring the **receipt**"));
+    act(() => result.current.commit("Return parcel"));
+
+    expect(onAdd).toHaveBeenCalledWith(
+      expect.objectContaining({
+        content: "Return parcel",
+        description: "Bring the **receipt**",
+      }),
+    );
+    expect(result.current.description).toBe("");
+  });
+
   it("does not call onAdd or onCommitted for a blank/token-only line", () => {
     const onAdd = vi.fn();
     const onCommitted = vi.fn();

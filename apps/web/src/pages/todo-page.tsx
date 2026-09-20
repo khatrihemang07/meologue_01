@@ -834,6 +834,7 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
       labelIds,
       projectId,
       sectionId,
+      description: fields.description,
     });
     // Issue #374/D4: touch's own Quick Add stays open after a real Add
     // (`quick-add-dialog.tsx`'s own header comment) — the "Added to…"

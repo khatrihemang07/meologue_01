@@ -106,6 +106,8 @@ export function QuickAddDialog({
   useEffect(() => {
     if (open) {
       composer.remount("");
+      composer.setDescription("");
+      composer.setDescriptionOpen(false);
       // Issue #373's own version of the identical #265 leak this effect
       // already exists to close: a multi-line paste dialog left pending
       // (dismissed some other way than its own Cancel/confirm, however
@@ -121,7 +123,7 @@ export function QuickAddDialog({
   // (`task-title-editor.tsx`'s `titleTextFromDoc`), never the DOM's, so
   // the placeholder decoration can never fake this into "non-empty"
   // (`prosemirror-placeholder-fakes-nonempty`).
-  const hasText = composer.value.trim() !== "";
+  const hasText = composer.value.trim() !== "" || composer.description.trim() !== "";
 
   const [discardConfirmOpen, setDiscardConfirmOpen] = useState(false);
   const discardConfirmedRef = useRef(false);

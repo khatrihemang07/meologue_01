@@ -451,12 +451,15 @@ describe("QuickAddDialog", () => {
   });
 
   describe("shell chosen by touch capability (issue #374/D4)", () => {
-    it("touch renders the full-screen sheet, with a scrim, and no Cancel row", async () => {
+    it("touch renders a bottom-anchored floating card over the full-screen scrim", async () => {
       stubTouch(true);
       render(<QuickAddDialog open={true} onOpenChange={vi.fn()} onAdd={vi.fn()} />);
 
       const dialog = await screen.findByRole("dialog", { name: "Quick Add" });
-      expect(dialog).toBeInTheDocument();
+      expect(dialog.className).toContain("inset-x-2");
+      expect(dialog.className).toContain("bottom-0");
+      expect(dialog.className).toContain("rounded-[32px]");
+      expect(dialog.className).not.toContain("inset-0");
       expect(screen.queryByRole("button", { name: "Cancel" })).not.toBeInTheDocument();
     });
 
