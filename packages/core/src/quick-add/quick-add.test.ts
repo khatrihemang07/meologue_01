@@ -378,6 +378,56 @@ describe("tokens", () => {
       expect(result.description).toBe("don't forget the eggs");
       expect(result.content).toBe("buy milk");
     });
+
+    // Issue #386, found while building the #364 corpus fixture: the URL's
+    // own `//` was read as this sigil, so everything after it — the rest
+    // of the URL — moved out of the title and into `description`.
+    it("leaves a URL's own // alone — the whole URL stays in the title, no description", () => {
+      const result = parse("Read https://example.com/post");
+      expect(result.description).toBeNull();
+      expect(result.content).toBe("Read https://example.com/post");
+      expect(result.tokens).toEqual([]);
+    });
+
+    it("still recognises an ordinary // description next to a URL-free sentence", () => {
+      const result = parse("Buy milk // from the corner shop");
+      expect(result.description).toBe("from the corner shop");
+      expect(result.content).toBe("Buy milk");
+    });
+
+    // Deliberately NOT guarded — see urlSpans's own doc comment in
+    // rules.ts for why a schemeless URL is out of scope for this fix.
+    // Documented here so a future reader finds a test, not a silent gap.
+    it("does NOT protect a schemeless URL's // — a known, deliberate gap", () => {
+      const result = parse("example.com//x");
+      expect(result.description).toBe("x");
+      expect(result.content).toBe("example.com");
+    });
+  });
+
+  // Issue #386's own regression: `matchDescription`'s old bug (claiming the
+  // whole remainder of the input) was incidentally masking this one too —
+  // `matchSection`'s `/` re-fired on a URL's own path segment once that bug
+  // was fixed, which would have put the URL right back to being mangled by
+  // a different rule.
+  describe("URLs survive sigil rules other than // too (issue #386)", () => {
+    it("a URL's own /path is not read as /section", () => {
+      const result = parse("Read https://example.com/post");
+      expect(result.sectionName).toBeNull();
+      expect(result.content).toBe("Read https://example.com/post");
+    });
+
+    it("a URL fragment is not read as #project", () => {
+      const result = parse("Read https://example.com/post#intro");
+      expect(result.projectName).toBeNull();
+      expect(result.content).toBe("Read https://example.com/post#intro");
+    });
+
+    it("an ordinary /section right after a URL-free word still works", () => {
+      const result = parse("file it /Work");
+      expect(result.sectionName).toBe("Work");
+      expect(result.content).toBe("file it");
+    });
   });
 });
 

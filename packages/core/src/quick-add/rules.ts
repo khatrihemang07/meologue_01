@@ -26,23 +26,73 @@ export function matchUncompletable(input: string): QuickAddToken[] {
   return [{ kind: "uncompletable", start: 0, end: match[0].length, raw: match[0] }];
 }
 
-/** `//description` — everything from the first `//` to the end of the input becomes the description text. */
-export function matchDescription(input: string): QuickAddToken[] {
-  const match = /\/\/(.*)$/s.exec(input);
-  if (match === null) {
-    return [];
+interface Span {
+  readonly start: number;
+  readonly end: number;
+}
+
+/**
+ * Every substring of `input` that looks like a URL — a scheme (RFC 3986: a
+ * letter, then letters/digits/`+`/`.`/`-`, then `:`) followed by `//` and a
+ * run of non-whitespace characters. `https://`, `http://`, `ftp://`, and so
+ * on.
+ *
+ * Issue #386's own finding was `matchDescription`'s `//` firing on a URL's
+ * own (`Read https://example.com/post` lost everything from the `//`
+ * onward as a "description," so the URL never survived in the title — #373
+ * needs the same "a URL in the title stays plain text" behaviour). But the
+ * identical problem exists for every OTHER sigil character a URL happens
+ * to contain — most concretely, `matchSection`'s `/` fires again on that
+ * same URL's own `/post`, which `matchDescription`'s old bug had been
+ * masking by (wrongly) claiming the whole remainder first. `urlSpans` is
+ * shared by `matchDescription` and `collectNamedMatches` (`#project`,
+ * `/section`, `@label`) rather than re-derived per rule, so a URL is
+ * protected from all of them the same way, not patched one at a time as
+ * each collision is separately noticed.
+ *
+ * Deliberately NOT handled: a schemeless URL (`example.com//x`). Telling a
+ * bare domain apart from ordinary text that happens to end in a dot before
+ * a sigil character (an abbreviation, an ellipsis) needs a much broader
+ * heuristic, and the risk of a new false positive there outweighs this one
+ * edge case — see `matchDescription`'s own test for the schemeless case,
+ * which documents the gap rather than silently reproducing it.
+ */
+function urlSpans(input: string): readonly Span[] {
+  const regex = /[a-zA-Z][a-zA-Z0-9+.-]*:\/\/\S*/g;
+  const spans: Span[] = [];
+  let match: RegExpExecArray | null = regex.exec(input);
+  while (match !== null) {
+    spans.push({ start: match.index, end: match.index + match[0].length });
+    match = regex.exec(input);
   }
-  const start = match.index;
-  return [
-    {
-      kind: "description",
-      start,
-      end: input.length,
-      raw: match[0],
-      // biome-ignore lint/style/noNonNullAssertion: the capture group is always present for a `.*` match, even on an empty string
-      text: match[1]!.trim(),
-    },
-  ];
+  return spans;
+}
+
+function isInsideUrl(index: number, spans: readonly Span[]): boolean {
+  return spans.some((span) => index >= span.start && index < span.end);
+}
+
+/** `//description` — everything from the first `//` to the end of the input becomes the description text, except a `//` that's a URL's own (see `urlSpans`'s own doc comment for why, and for the one case this deliberately doesn't handle). */
+export function matchDescription(input: string): QuickAddToken[] {
+  const spans = urlSpans(input);
+  const regex = /\/\//g;
+  let match: RegExpExecArray | null = regex.exec(input);
+  while (match !== null) {
+    if (!isInsideUrl(match.index, spans)) {
+      const start = match.index;
+      return [
+        {
+          kind: "description",
+          start,
+          end: input.length,
+          raw: input.slice(start),
+          text: input.slice(start + 2).trim(),
+        },
+      ];
+    }
+    match = regex.exec(input);
+  }
+  return [];
 }
 
 const WORD_NAME_PATTERN = "[\\p{L}\\p{N}_-]+";
@@ -89,8 +139,14 @@ function collectNamedMatches(
   regex: RegExp,
   kind: "project" | "section" | "label",
 ): QuickAddToken[] {
+  // `urlSpans`'s own doc comment: a URL's own `/`, `#` or `@` isn't this
+  // rule's sigil (issue #386, found via `matchSection`'s `/post` in a URL).
+  const spans = urlSpans(input);
   const tokens: QuickAddToken[] = [];
   for (const match of input.matchAll(regex)) {
+    if (isInsideUrl(match.index, spans)) {
+      continue;
+    }
     // biome-ignore lint/style/noNonNullAssertion: the pattern's one capture group always participates when the overall match succeeds
     const name = match[1]!;
     tokens.push({
