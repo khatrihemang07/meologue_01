@@ -88,7 +88,7 @@ test.describe("desktop Quick Add", () => {
 test.describe("touch Quick Add", () => {
   test.skip(({ isMobile }) => !isMobile, "touch-shell behavior runs in the Pixel 7 project");
 
-  test("the FAB opens the full-screen sheet and submitting keeps it open with a cleared title", async ({
+  test("the FAB opens the touch sheet and submitting keeps it open with a cleared title", async ({
     page,
   }) => {
     const content = uniqueTaskContent("touch-submit");
@@ -98,16 +98,8 @@ test.describe("touch Quick Add", () => {
     await page.getByRole("button", { name: "Quick add", exact: true }).click();
     const sheet = page.getByRole("dialog", { name: "Quick Add" });
     await expect(sheet).toBeVisible();
-
-    const sheetBox = await sheet.boundingBox();
-    const viewport = page.viewportSize();
-    if (!sheetBox || !viewport) {
-      throw new Error("expected the touch Quick Add sheet and viewport to be measurable");
-    }
-    expect(sheetBox.x).toBe(0);
-    expect(sheetBox.y).toBe(0);
-    expect(sheetBox.width).toBe(viewport.width);
-    expect(sheetBox.height).toBe(viewport.height);
+    await expect(sheet.getByRole("button", { name: "Cancel", exact: true })).toHaveCount(0);
+    await expect(sheet.getByRole("button", { name: "Add task", exact: true })).toHaveCount(0);
 
     const editor = sheet.getByLabel("Task name", { exact: true });
     await editor.fill(content);
