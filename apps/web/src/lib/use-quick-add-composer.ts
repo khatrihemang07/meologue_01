@@ -1,11 +1,14 @@
-import type { QuickAddOptions } from "@meologue/core";
+import type { QuickAddOptions, QuickAddSpan } from "@meologue/core";
 import { parseQuickAdd } from "@meologue/core";
 import { useEffect, useRef, useState } from "react";
 import { localDateTimeKey } from "@/lib/local-day-key";
 import type { AutocompleteEntry } from "@/lib/quick-add-autocomplete";
 import { type QuickAddTaskFields, taskFieldsFromQuickAdd } from "@/lib/quick-add-task";
 import { useSettingsStore } from "@/lib/settings";
-import { quickAddRecognitionPlugin } from "@/lib/todo-quick-add-recognition";
+import {
+  quickAddInsertedPlugin,
+  quickAddRecognitionPlugin,
+} from "@/lib/todo-quick-add-recognition";
 
 /**
  * `web/01-anatomy.md`'s own captured pool — the title field's placeholder
@@ -87,10 +90,27 @@ export interface QuickAddComposer {
   seed: string;
   /** `LazyTaskTitleEditor`'s own `onCommit` — Enter, Shift+Enter, or a caller's own submit button all funnel through this. */
   commit: (text: string) => void;
-  /** Forces a fresh editor instance seeded with `text` — the only way to change what's on screen, since `task-title-editor.tsx`'s own doc comment is explicit that a later `value` prop change is never resynced into an already-mounted document. `quick-add-dialog.tsx`'s "Remove date" is this hook's one caller today. */
-  remount: (text: string) => void;
+  /**
+   * Forces a fresh editor instance seeded with `text` — the only way to
+   * change what's on screen, since `task-title-editor.tsx`'s own doc
+   * comment is explicit that a later `value` prop change is never
+   * resynced into an already-mounted document. `quick-add-dialog.tsx`'s
+   * "Remove date" is one caller; `quick-add-content.tsx`'s own wrapper
+   * around `useDraftDateState`'s `onTextChange` is another.
+   *
+   * `insertedSpans` (issue #411, defect 3) — the span(s), within `text`,
+   * that were written by a picker rather than typed; seeds the freshly-
+   * mounted `quickAddInsertedPlugin`'s own initial state below, so the
+   * recognition plugin renders them plain instead of as a detected
+   * match. Defaults to none: every pre-#411 caller (a plain commit/reset,
+   * "Remove date") means "nothing here was just inserted."
+   */
+  remount: (text: string, insertedSpans?: readonly QuickAddSpan[]) => void;
   /** `LazyTaskTitleEditor`'s own `extraPlugins` — a fresh array every render is fine; that prop is read once, at mount (task-title-editor.tsx's own doc comment). */
-  extraPlugins: ReturnType<typeof quickAddRecognitionPlugin>[];
+  extraPlugins: [
+    ReturnType<typeof quickAddRecognitionPlugin>,
+    ReturnType<typeof quickAddInsertedPlugin>,
+  ];
   /** `LazyTaskTitleEditor`'s own `autocomplete` prop. */
   autocomplete: {
     getProjects: () => readonly AutocompleteEntry[];
@@ -133,6 +153,7 @@ export function useQuickAddComposer(options: UseQuickAddComposerOptions): QuickA
   const [description, setDescription] = useState("");
   const [descriptionOpen, setDescriptionOpen] = useState(false);
   const [seed, setSeed] = useState("");
+  const [seedInsertedSpans, setSeedInsertedSpans] = useState<readonly QuickAddSpan[]>([]);
   const [resetKey, setResetKey] = useState(0);
   const [pendingPasteLines, setPendingPasteLines] = useState<readonly string[] | null>(null);
   const [placeholderIndex, setPlaceholderIndex] = useState(0);
@@ -203,13 +224,15 @@ export function useQuickAddComposer(options: UseQuickAddComposerOptions): QuickA
     setDescription("");
     setDescriptionOpen(false);
     setSeed("");
+    setSeedInsertedSpans([]);
     setResetKey((key) => key + 1);
     onCommittedRef.current?.();
   }
 
-  function remount(text: string) {
+  function remount(text: string, insertedSpans: readonly QuickAddSpan[] = []) {
     setValue(text);
     setSeed(text);
+    setSeedInsertedSpans(insertedSpans);
     setResetKey((key) => key + 1);
   }
 
@@ -256,7 +279,10 @@ export function useQuickAddComposer(options: UseQuickAddComposerOptions): QuickA
     seed,
     commit,
     remount,
-    extraPlugins: [quickAddRecognitionPlugin(() => optionsRef.current)],
+    extraPlugins: [
+      quickAddRecognitionPlugin(() => optionsRef.current),
+      quickAddInsertedPlugin(seedInsertedSpans),
+    ],
     autocomplete: {
       getProjects: () => projectsRef.current,
       getLabels: () => labelsRef.current,

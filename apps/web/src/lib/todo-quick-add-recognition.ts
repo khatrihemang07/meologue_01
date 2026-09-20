@@ -97,17 +97,33 @@ export function matchIdForToken(token: QuickAddToken, resolvedDateTime: string |
   }
 }
 
-/** One recognised span, ready for either rendering (`withdrawn` picks the two-state style) or for building `data-match-id`. */
+/** One recognised span, ready for either rendering (`withdrawn`/`inserted` each pick their own style) or for building `data-match-id`. */
 export interface QuickAddRecognitionMatch extends QuickAddSpan {
   readonly kind: QuickAddTokenKind;
   readonly matchId: string;
   readonly withdrawn: boolean;
+  /**
+   * True when this span's exact `[start, end)` is in `insertedSpans` —
+   * issue #411's defect 3: a date chip's calendar picker writes literal
+   * words into the draft (`draft-chip-text.ts`'s own `literalDateText`,
+   * by design: "the title text is the single source of truth," no hidden
+   * metadata alongside it), and those words happen to be exactly what
+   * `date-rules.ts` recognises as an ordinary typed match too — so
+   * without this flag a picker-inserted date rendered as a fully
+   * highlighted, click-to-reject-able span, indistinguishable from
+   * something the reader actually typed. `insertedSpans` is transient
+   * render-only state (`quickAddInsertedPlugin`'s own doc comment),
+   * never stored in the text itself, so D1's "no hidden metadata" rule
+   * stays true even though this flag exists.
+   */
+  readonly inserted: boolean;
 }
 
 export function computeQuickAddMatches(
   text: string,
   options: QuickAddOptions,
   withdrawnSpans: readonly QuickAddSpan[],
+  insertedSpans: readonly QuickAddSpan[] = [],
 ): QuickAddRecognitionMatch[] {
   const natural = parseQuickAdd(text, options);
   return natural.tokens.map((token) => ({
@@ -116,6 +132,7 @@ export function computeQuickAddMatches(
     kind: token.kind,
     matchId: matchIdForToken(token, natural.date),
     withdrawn: withdrawnSpans.some((span) => span.start === token.start && span.end === token.end),
+    inserted: insertedSpans.some((span) => span.start === token.start && span.end === token.end),
   }));
 }
 
@@ -138,7 +155,67 @@ export const quickAddRecognitionPluginKey = new PluginKey<readonly QuickAddSpan[
   "todo-quick-add-recognition",
 );
 
+/**
+ * Issue #411's own plugin key for `quickAddInsertedPlugin` below — kept
+ * separate from `quickAddRecognitionPluginKey` (rather than folding
+ * "inserted" into that plugin's own withdrawn-span state) so every
+ * existing caller/test of `quickAddRecognitionPluginKey.getState` keeps
+ * reading exactly the withdrawn-span shape it always has; a caller that
+ * never mounts `quickAddInsertedPlugin` at all just sees `undefined` here
+ * (`?? []` at both read sites), the same as before this ticket.
+ */
+export const quickAddInsertedPluginKey = new PluginKey<readonly QuickAddSpan[]>(
+  "todo-quick-add-inserted",
+);
+
+/**
+ * Tracks the spans a caller seeds at construction as "picker-inserted,
+ * not typed" — `use-quick-add-composer.ts`'s own `remount(text,
+ * insertedSpans)` is the one real caller, feeding it the date/time/
+ * recurrence token span a date-chip pick just wrote (`quick-add-
+ * content.tsx`'s own wrapper around `useDraftDateState`'s `onTextChange`).
+ * `quickAddRecognitionPlugin`'s own `decorations` reads this plugin's
+ * state (via `quickAddInsertedPluginKey`) to render a match found inside
+ * one of these spans as a plain `data-match-inserted="true"` span instead
+ * of the ordinary highlighted-match treatment — `QuickAddRecognitionMatch.
+ * inserted`'s own doc comment has the full "why this exists" story.
+ *
+ * Remapped through edits with the identical `remapWithdrawnSpans` logic
+ * withdrawn spans use: typing inside or right up against an inserted
+ * span drops it, the same "no longer purely what the picker wrote"
+ * reasoning applies to typing there too. Never grows after `init` —
+ * unlike withdrawn spans (which accumulate via a later Backspace, through
+ * `tr.setMeta`), a picker insertion only ever happens as part of a full
+ * `composer.remount`, which tears this plugin instance down and builds a
+ * fresh one with its own new initial spans; there is no mid-session
+ * "insert more" event this plugin needs to react to.
+ */
+export function quickAddInsertedPlugin(
+  initial: readonly QuickAddSpan[] = [],
+): Plugin<readonly QuickAddSpan[]> {
+  return new Plugin<readonly QuickAddSpan[]>({
+    key: quickAddInsertedPluginKey,
+    state: {
+      init: (): readonly QuickAddSpan[] => initial,
+      apply(tr, previous, oldState, newState): readonly QuickAddSpan[] {
+        if (!tr.docChanged) {
+          return previous;
+        }
+        return remapWithdrawnSpans(oldState.doc.textContent, newState.doc.textContent, previous);
+      },
+    },
+  });
+}
+
 function decorationAttrs(match: QuickAddRecognitionMatch): Record<string, string> {
+  if (match.inserted) {
+    // Deliberately not `data-testid="natural-language-match"` and no
+    // `data-match-id` — issue #411's defect 3 is explicit that this must
+    // read as a DIFFERENT thing from a recognised match, not merely a
+    // withdrawn one (a withdrawn span still carries both of those). A
+    // plain literal the picker already wrote, nothing left to detect.
+    return { nodeName: "span", "data-match-inserted": "true" };
+  }
   const attrs: Record<string, string> = {
     nodeName: match.withdrawn ? "SPAN" : "span",
     "data-testid": "natural-language-match",
@@ -177,7 +254,13 @@ export function quickAddRecognitionPlugin(
     props: {
       decorations(state) {
         const withdrawn = quickAddRecognitionPluginKey.getState(state) ?? [];
-        const matches = computeQuickAddMatches(state.doc.textContent, getOptions(), withdrawn);
+        const inserted = quickAddInsertedPluginKey.getState(state) ?? [];
+        const matches = computeQuickAddMatches(
+          state.doc.textContent,
+          getOptions(),
+          withdrawn,
+          inserted,
+        );
         const decorations = matches.map((match) =>
           // `inclusiveStart`/`inclusiveEnd: false`, explicit rather than
           // relying on the library default — a real-browser defect found
@@ -205,8 +288,23 @@ export function quickAddRecognitionPlugin(
         }
         const caret = state.selection.from;
         const withdrawn = quickAddRecognitionPluginKey.getState(state) ?? [];
-        const matches = computeQuickAddMatches(state.doc.textContent, getOptions(), withdrawn);
-        const active = matches.find((match) => !match.withdrawn && match.end === caret);
+        const inserted = quickAddInsertedPluginKey.getState(state) ?? [];
+        const matches = computeQuickAddMatches(
+          state.doc.textContent,
+          getOptions(),
+          withdrawn,
+          inserted,
+        );
+        // `!match.inserted` too — a picker-inserted span already renders
+        // plain (`decorationAttrs`'s own `inserted` branch), so there is
+        // no highlight here for Backspace to cancel; without this guard
+        // this handler would still find it "active," dispatch a pointless
+        // withdrawal, and `preventDefault()` a keystroke that should have
+        // just deleted the character in front of the caret like any other
+        // plain text.
+        const active = matches.find(
+          (match) => !match.withdrawn && !match.inserted && match.end === caret,
+        );
         if (active === undefined) {
           return false;
         }
@@ -237,13 +335,22 @@ export function quickAddRecognitionPlugin(
       handleClick(view, pos) {
         const { state } = view;
         const withdrawn = quickAddRecognitionPluginKey.getState(state) ?? [];
-        const matches = computeQuickAddMatches(state.doc.textContent, getOptions(), withdrawn);
+        const inserted = quickAddInsertedPluginKey.getState(state) ?? [];
+        const matches = computeQuickAddMatches(
+          state.doc.textContent,
+          getOptions(),
+          withdrawn,
+          inserted,
+        );
         // Exclusive end (`pos < match.end`), matching Backspace's own
         // boundary above and `quick-add-highlight.ts`'s `tokenAtOffset`
         // precedent: a click exactly past a match's last character reads
-        // as "just after the word," not "inside" it.
+        // as "just after the word," not "inside" it. `!match.inserted`
+        // too, for the identical reason Backspace's own handler above
+        // excludes it: a picker-inserted span already renders plain, so
+        // there is nothing here for a click to reject.
         const active = matches.find(
-          (match) => !match.withdrawn && pos >= match.start && pos < match.end,
+          (match) => !match.withdrawn && !match.inserted && pos >= match.start && pos < match.end,
         );
         if (active === undefined) {
           return false;

@@ -9,6 +9,7 @@ import { taskTitleSchema, titleDocFromText } from "@/components/todo/task-title-
 import {
   computeQuickAddMatches,
   matchIdForToken,
+  quickAddInsertedPlugin,
   quickAddRecognitionPlugin,
   quickAddRecognitionPluginKey,
   remapWithdrawnSpans,
@@ -121,11 +122,11 @@ describe("matchIdForToken", () => {
 });
 
 describe("computeQuickAddMatches", () => {
-  it("recognises 'tod' as a fresh, non-withdrawn match", () => {
+  it("recognises 'tod' as a fresh, non-withdrawn, non-inserted match", () => {
     const matches = computeQuickAddMatches("tod", { now: NOW }, []);
 
     expect(matches).toEqual([
-      { start: 0, end: 3, kind: "date", matchId: "2026-09-10", withdrawn: false },
+      { start: 0, end: 3, kind: "date", matchId: "2026-09-10", withdrawn: false, inserted: false },
     ]);
   });
 
@@ -133,7 +134,7 @@ describe("computeQuickAddMatches", () => {
     const matches = computeQuickAddMatches("tod", { now: NOW }, [{ start: 0, end: 3 }]);
 
     expect(matches).toEqual([
-      { start: 0, end: 3, kind: "date", matchId: "2026-09-10", withdrawn: true },
+      { start: 0, end: 3, kind: "date", matchId: "2026-09-10", withdrawn: true, inserted: false },
     ]);
   });
 
@@ -150,7 +151,7 @@ describe("computeQuickAddMatches", () => {
     const afterBackspace = remapWithdrawnSpans("todx", "tod", afterTyping);
 
     expect(computeQuickAddMatches("tod", { now: NOW }, afterBackspace)).toEqual([
-      { start: 0, end: 3, kind: "date", matchId: "2026-09-10", withdrawn: false },
+      { start: 0, end: 3, kind: "date", matchId: "2026-09-10", withdrawn: false, inserted: false },
     ]);
   });
 
@@ -159,7 +160,7 @@ describe("computeQuickAddMatches", () => {
     const afterRetype = remapWithdrawnSpans("", "tod", afterClear);
 
     expect(computeQuickAddMatches("tod", { now: NOW }, afterRetype)).toEqual([
-      { start: 0, end: 3, kind: "date", matchId: "2026-09-10", withdrawn: false },
+      { start: 0, end: 3, kind: "date", matchId: "2026-09-10", withdrawn: false, inserted: false },
     ]);
   });
 
@@ -167,8 +168,61 @@ describe("computeQuickAddMatches", () => {
     const matches = computeQuickAddMatches("5pm", { now: NOW }, []);
 
     expect(matches).toEqual([
-      { start: 0, end: 3, kind: "time", matchId: "2026-09-10T17:00", withdrawn: false },
+      {
+        start: 0,
+        end: 3,
+        kind: "time",
+        matchId: "2026-09-10T17:00",
+        withdrawn: false,
+        inserted: false,
+      },
     ]);
+  });
+
+  // Issue #411, defect 3: a date chip's picker writes literal words that
+  // happen to be an ordinary recognisable match too — `insertedSpans`
+  // (the 4th, optional argument) is how a caller marks that span as
+  // "already written, not detected," independent of `withdrawnSpans`.
+  describe("insertedSpans (issue #411)", () => {
+    it("marks a match inserted once its exact span is in the inserted list", () => {
+      const matches = computeQuickAddMatches(
+        "10 Sep 2026",
+        { now: NOW },
+        [],
+        [{ start: 0, end: 11 }],
+      );
+
+      expect(matches).toEqual([
+        {
+          start: 0,
+          end: 11,
+          kind: "date",
+          matchId: "2026-09-10",
+          withdrawn: false,
+          inserted: true,
+        },
+      ]);
+    });
+
+    it("defaults to not-inserted when the 4th argument is omitted — every pre-#411 call site", () => {
+      const matches = computeQuickAddMatches("tod", { now: NOW }, []);
+      expect(matches[0]?.inserted).toBe(false);
+    });
+
+    it("a span outside the inserted list stays a fresh, non-inserted match", () => {
+      const matches = computeQuickAddMatches("tod", { now: NOW }, [], [{ start: 5, end: 8 }]);
+
+      expect(matches).toEqual([
+        {
+          start: 0,
+          end: 3,
+          kind: "date",
+          matchId: "2026-09-10",
+          withdrawn: false,
+          inserted: false,
+        },
+      ]);
+    });
   });
 });
 
@@ -417,7 +471,123 @@ describe("quickAddRecognitionPlugin — handleClick (issue #371, real clicks are
     const withdrawn = quickAddRecognitionPluginKey.getState(view.state) ?? [];
     const matches = computeQuickAddMatches(view.state.doc.textContent, { now: NOW }, withdrawn);
     expect(matches).toEqual([
-      { start: 0, end: 3, kind: "date", matchId: "2026-09-10", withdrawn: true },
+      { start: 0, end: 3, kind: "date", matchId: "2026-09-10", withdrawn: true, inserted: false },
     ]);
+  });
+});
+
+/**
+ * Issue #411, defect 3, at the real-DOM level — `computeQuickAddMatches`'s
+ * own "insertedSpans" describe block above proves the pure logic; this
+ * proves the actual rendered decoration a mounted editor produces once
+ * `quickAddInsertedPlugin` is registered alongside `quickAddRecognitionPlugin`,
+ * the identical two-plugin shape `use-quick-add-composer.ts`'s own
+ * `extraPlugins` wires up for real.
+ */
+describe("quickAddInsertedPlugin — DOM decoration (issue #411)", () => {
+  const mounted: Array<{ view: EditorView; host: HTMLDivElement }> = [];
+
+  afterEach(() => {
+    for (const { view, host } of mounted) {
+      view.destroy();
+      host.remove();
+    }
+    mounted.length = 0;
+  });
+
+  function mount(text: string, insertedSpans: readonly QuickAddSpan[]): EditorView {
+    const doc = titleDocFromText(text);
+    const state = EditorState.create({
+      schema: taskTitleSchema,
+      doc,
+      selection: Selection.atEnd(doc),
+      plugins: [
+        quickAddRecognitionPlugin(() => ({ now: NOW })),
+        quickAddInsertedPlugin(insertedSpans),
+        keymap(baseKeymap),
+      ],
+    });
+    const host = document.createElement("div");
+    document.body.appendChild(host);
+    const view = new EditorView({ mount: host }, { state });
+    mounted.push({ view, host });
+    return view;
+  }
+
+  it('a picker-inserted date renders data-match-inserted="true", plain — not data-highlighted-match, not natural-language-match', () => {
+    // The exact shape `literalDateText`/`appendWords` produce for a
+    // picked "Today": the whole draft IS the inserted span.
+    const view = mount("10 Sep 2026", [{ start: 0, end: 11 }]);
+
+    const host = view.dom.parentElement as HTMLDivElement;
+    const highlighted = host.querySelector("[data-highlighted-match]");
+    const natural = host.querySelector('[data-testid="natural-language-match"]');
+    const inserted = host.querySelector('[data-match-inserted="true"]');
+
+    expect(highlighted).toBeNull();
+    expect(natural).toBeNull();
+    expect(inserted).not.toBeNull();
+    expect((inserted as HTMLElement).textContent).toBe("10 Sep 2026");
+    expect((inserted as HTMLElement).className).toBe("");
+  });
+
+  it("typed text elsewhere in the same draft still highlights normally — only the inserted span is suppressed", () => {
+    // "p1" (priority) was typed by hand; "10 Sep 2026" is what the
+    // picker wrote at the end of the draft (span [6, 17)).
+    const view = mount("p1 10 Sep 2026", [{ start: 3, end: 14 }]);
+    const host = view.dom.parentElement as HTMLDivElement;
+
+    const highlighted = host.querySelectorAll("[data-highlighted-match]");
+    expect(highlighted).toHaveLength(1);
+    expect((highlighted[0] as HTMLElement).textContent).toBe("p1");
+
+    const inserted = host.querySelector('[data-match-inserted="true"]');
+    expect((inserted as HTMLElement).textContent).toBe("10 Sep 2026");
+  });
+
+  it("a Backspace right after an inserted span deletes a character normally, rather than merely cancelling a (non-existent) highlight", () => {
+    const view = mount("10 Sep 2026", [{ start: 0, end: 11 }]);
+
+    const event = new KeyboardEvent("keydown", {
+      key: "Backspace",
+      code: "Backspace",
+      keyCode: 8,
+      which: 8,
+      bubbles: true,
+      cancelable: true,
+    });
+    view.dom.dispatchEvent(event);
+
+    // Unhandled by this plugin (no highlight to cancel) — the event is
+    // NOT prevented, exactly like Backspace over ordinary plain text
+    // (`quickAddRecognitionPlugin`'s own DOM-identity suite above
+    // documents why: jsdom's contenteditable engine doesn't exist, so
+    // the actual character deletion is a real browser's/e2e's job, not
+    // this test's — only that the keystroke is left alone is asserted
+    // here).
+    expect(event.defaultPrevented).toBe(false);
+  });
+
+  it("editing right at the inserted span's own boundary drops it back into ordinary recognition — remapWithdrawnSpans' own touching rule, reused", () => {
+    const view = mount("10 Sep 2026", [{ start: 0, end: 11 }]);
+
+    // Type immediately after the inserted text — touches its own end,
+    // which remapWithdrawnSpans (reused for inserted spans too) treats
+    // as "no longer purely what the picker wrote."
+    view.dispatch(view.state.tr.insertText("!", 11));
+
+    const host = view.dom.parentElement as HTMLDivElement;
+    expect(host.querySelector('[data-match-inserted="true"]')).toBeNull();
+    // "10 Sep 2026!" still parses as the identical date (the trailing
+    // "!" doesn't break `matchAbsoluteDate`'s own word boundary) — so
+    // once the inserted marker is dropped, the span falls straight back
+    // into ordinary recognition and renders fully highlighted, exactly
+    // like any other typed date. That's the correct outcome, not a
+    // leftover: an edit at the boundary means the reader is now actively
+    // typing there, so the plain "already written, not detected" reading
+    // no longer applies.
+    const highlighted = host.querySelector("[data-highlighted-match]");
+    expect(highlighted).not.toBeNull();
+    expect((highlighted as HTMLElement).textContent).toBe("10 Sep 2026");
   });
 });
