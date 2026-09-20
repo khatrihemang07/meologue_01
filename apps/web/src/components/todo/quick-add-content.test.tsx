@@ -1,9 +1,13 @@
 import { fireEvent, render, screen } from "@testing-library/react";
+import { EditorState, Selection } from "prosemirror-state";
+import { EditorView } from "prosemirror-view";
 import { useState } from "react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { taskTitleSchema, titleDocFromText } from "@/components/todo/task-title-editor";
 import type { AutocompleteEntry } from "@/lib/quick-add-autocomplete";
 import type { QuickAddTaskFields } from "@/lib/quick-add-task";
 import { useSettingsStore } from "@/lib/settings";
+import type { QuickAddComposer } from "@/lib/use-quick-add-composer";
 import { useQuickAddComposer } from "@/lib/use-quick-add-composer";
 import { QuickAddContent } from "./quick-add-content";
 
@@ -67,9 +71,18 @@ function StubTaskDescriptionEditor({
   );
 }
 
-vi.mock("@/components/todo/task-title-editor", () => ({
-  TaskTitleEditor: StubTaskTitleEditor,
-}));
+// `TaskTitleEditor` itself is stubbed (this file's own header comment on
+// why no test here mounts the real ProseMirror editor) — but `import
+// Original` keeps `titleDocFromText`/`taskTitleSchema` real, since the
+// "date chip picker insertion" suite below needs them to build its own
+// throwaway `EditorView` from `composer.extraPlugins`.
+vi.mock("@/components/todo/task-title-editor", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/components/todo/task-title-editor")>();
+  return {
+    ...actual,
+    TaskTitleEditor: StubTaskTitleEditor,
+  };
+});
 
 vi.mock("@/components/todo/task-description-editor", () => ({
   TaskDescriptionEditor: StubTaskDescriptionEditor,
@@ -80,6 +93,19 @@ interface HarnessProps {
   onAdd?: (fields: QuickAddTaskFields) => void;
   ambientProjectName?: string;
   projects?: readonly AutocompleteEntry[];
+  /**
+   * Issue #411, defect 3's own DOM-decoration suite below: `StubTaskTitle
+   * Editor` above never mounts the real ProseMirror plugins, so there is
+   * no decorated DOM here to query directly. This callback hands the
+   * REAL `useQuickAddComposer` object out to a test on every render
+   * instead — the same real `extraPlugins` array (built from real
+   * `insertedSpans` state) `LazyTaskTitleEditor` would have received had
+   * it not been stubbed — so a test can mount those two plugins into its
+   * own throwaway `EditorView` and inspect the actual decoration a real
+   * mount would have produced, without needing the full lazy-loaded
+   * editor.
+   */
+  onComposer?: (composer: QuickAddComposer) => void;
 }
 
 /**
@@ -88,8 +114,15 @@ interface HarnessProps {
  * `add-task-form.tsx`), rather than a hand-built fake composer that could
  * silently drift from what either real wrapper hands it.
  */
-function Harness({ touch = false, onAdd = vi.fn(), ambientProjectName, projects }: HarnessProps) {
+function Harness({
+  touch = false,
+  onAdd = vi.fn(),
+  ambientProjectName,
+  projects,
+  onComposer,
+}: HarnessProps) {
   const composer = useQuickAddComposer({ onAdd, open: true, ambientProjectName, projects });
+  onComposer?.(composer);
   return (
     <QuickAddContent
       composer={composer}
@@ -305,6 +338,78 @@ describe("QuickAddContent", () => {
 
       expect(await getInput()).toHaveValue("buy milk");
       expect(screen.queryByRole("button", { name: "Remove date" })).not.toBeInTheDocument();
+    });
+  });
+
+  /**
+   * Issue #411, defect 3, end-to-end: driving the REAL "Set date" -> "Today"
+   * flow above through the REAL `useQuickAddComposer`, then mounting the
+   * REAL `composer.extraPlugins` it produced (recognition + inserted) into
+   * a throwaway `EditorView` seeded with `composer.value` to inspect the
+   * decoration a real (non-stubbed) `TaskTitleEditor` mount would have
+   * rendered. `todo-quick-add-recognition.test.ts`'s own "DOM decoration"
+   * suite already proves the plugin mechanism in isolation; this proves
+   * this component's own wiring (`remountFromDateChip` in quick-add-
+   * content.tsx) actually reaches it.
+   */
+  describe("date chip picker insertion is not a detected match (issue #411)", () => {
+    let view: EditorView | undefined;
+    let host: HTMLDivElement | undefined;
+
+    afterEach(() => {
+      view?.destroy();
+      host?.remove();
+      view = undefined;
+      host = undefined;
+    });
+
+    function decorationsFor(composer: QuickAddComposer): HTMLDivElement {
+      const doc = titleDocFromText(composer.value);
+      const state = EditorState.create({
+        schema: taskTitleSchema,
+        doc,
+        selection: Selection.atEnd(doc),
+        plugins: [...composer.extraPlugins],
+      });
+      host = document.createElement("div");
+      document.body.appendChild(host);
+      view = new EditorView({ mount: host }, { state });
+      return host;
+    }
+
+    it("picking 'Today' produces a plain data-match-inserted span, not a highlighted natural-language-match", async () => {
+      let latestComposer: QuickAddComposer | undefined;
+      render(<Harness onComposer={(composer) => (latestComposer = composer)} />);
+      typeText("buy milk");
+
+      fireEvent.click(await screen.findByRole("button", { name: "Set date" }));
+      fireEvent.click(await screen.findByRole("button", { name: "Today Thu" }));
+      await getInput(); // settles the "Today Thu" click's own re-render.
+
+      const composer = latestComposer as QuickAddComposer;
+      expect(composer.value).toBe("buy milk 10 Sep 2026");
+
+      const decoratedHost = decorationsFor(composer);
+      expect(decoratedHost.querySelector("[data-highlighted-match]")).toBeNull();
+      expect(decoratedHost.querySelector('[data-testid="natural-language-match"]')).toBeNull();
+      const inserted = decoratedHost.querySelector('[data-match-inserted="true"]');
+      expect(inserted).not.toBeNull();
+      expect((inserted as HTMLElement).textContent).toBe("10 Sep 2026");
+    });
+
+    it("typing the identical phrase by hand, with no picker involved, still highlights normally — this is only about HOW the words arrived", async () => {
+      let latestComposer: QuickAddComposer | undefined;
+      render(<Harness onComposer={(composer) => (latestComposer = composer)} />);
+      typeText("buy milk 10 Sep 2026");
+      await getInput();
+
+      const composer = latestComposer as QuickAddComposer;
+      const decoratedHost = decorationsFor(composer);
+
+      expect(decoratedHost.querySelector('[data-match-inserted="true"]')).toBeNull();
+      const highlighted = decoratedHost.querySelector("[data-highlighted-match]");
+      expect(highlighted).not.toBeNull();
+      expect((highlighted as HTMLElement).textContent).toBe("10 Sep 2026");
     });
   });
 

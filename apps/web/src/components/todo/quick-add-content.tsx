@@ -57,6 +57,22 @@ const SUBMIT_CLASSES =
 const EMPTY_DATES_WITH_TASKS: ReadonlyMap<string, number> = new Map();
 
 /**
+ * Issue #411, defect 3 — the token kinds `useDraftDateState`'s own three
+ * writers (`setScheduleDay`/`setScheduleTime`/`setScheduleRecurrence`)
+ * can put literal words for: the date chip's own family. `draft-chip-
+ * text.ts`'s own `literalDateText`/`literalTimeText` are written to be
+ * exactly what `date-rules.ts` recognises back — by design, so the
+ * preview/commit path re-parses them correctly — which is also exactly
+ * why, unguarded, they render as a fully highlighted, click-to-reject-
+ * able span indistinguishable from something the reader typed.
+ */
+const DATE_CHIP_TOKEN_KINDS: ReadonlySet<QuickAddToken["kind"]> = new Set([
+  "date",
+  "time",
+  "recurrence",
+]);
+
+/**
  * One toolbar/chip button — Todoist paints every chip (Project, Date,
  * Priority) and "More actions" the identical transparent-background,
  * neutral-text treatment (`web/07-native-colours.md`'s own table: no chip
@@ -129,6 +145,31 @@ export function QuickAddContent({
 
   const [priorityPickerOpen, setPriorityPickerOpen] = useState(false);
 
+  /**
+   * Issue #411, defect 3 — wraps `composer.remount` rather than handing
+   * it to `useDraftDateState` directly, so every date-chip write
+   * (`setScheduleDay`/`setScheduleTime`/`setScheduleRecurrence`, the
+   * hook's own three `onTextChange` callers) marks whatever it just
+   * wrote as picker-inserted, not detected. Re-parses the resulting text
+   * rather than computing the edit's own offset by hand — the identical
+   * "derive fresh from the current text, never patch incrementally"
+   * shape this codebase already uses throughout (`quick-add-highlight.
+   * ts`'s own header comment), and it sidesteps the real complexity a
+   * manual offset would have to get right: `useDraftDateState`'s own
+   * edits can move MULTIPLE spans in one call (a Recurrence's removal
+   * alongside a Date's replacement), so the written words' own final
+   * position in the string isn't simply the edit's original `start`.
+   * `parseQuickAdd` already has to run again for `preview` above every
+   * render anyway; this is one more call, not a new cost class.
+   */
+  function remountFromDateChip(nextText: string) {
+    const reparsed = parseQuickAdd(nextText, composer.options);
+    const insertedSpans = reparsed.tokens
+      .filter((token) => DATE_CHIP_TOKEN_KINDS.has(token.kind))
+      .map((token) => ({ start: token.start, end: token.end }));
+    composer.remount(nextText, insertedSpans);
+  }
+
   const dateState = useDraftDateState(
     composer.value,
     parsed.tokens,
@@ -140,7 +181,7 @@ export function QuickAddContent({
     // `localDayKeyOf`, rather than resolving two independently-computed
     // values that could disagree.
     localDayKeyOf(composer.options.now),
-    composer.remount,
+    remountFromDateChip,
   );
 
   const priorityToken = findToken(parsed.tokens, "priority");
