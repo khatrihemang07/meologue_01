@@ -78,6 +78,8 @@ export interface AddTaskOverrides {
    * meaningfully top-level to begin with.
    */
   parentId?: string | null;
+  /** Markdown entered in Quick Add's explicit Description field. */
+  description?: string | null;
 }
 
 export interface UseTasksResult {
@@ -443,13 +445,7 @@ export function useTasks(
       projectId: overrides.projectId ?? null,
       sectionId: overrides.sectionId ?? null,
       parentId: overrides.parentId ?? null,
-      // No Description yet (issue #180) — the same "nothing chosen yet"
-      // state every other never-overridden field above starts in; there
-      // is no AddTaskOverrides field for it, mirroring `parentId` above:
-      // a Description is something the reader adds once the Task already
-      // exists, in the Task's own detail view, not something the add
-      // field predicts on their behalf.
-      description: null,
+      description: overrides.description ?? null,
     });
   }
 

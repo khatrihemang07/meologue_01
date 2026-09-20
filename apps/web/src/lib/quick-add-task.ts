@@ -163,6 +163,8 @@ const AFTER_DAYS_PATTERN = /^after\s+(\d+)\s+days?$/i;
 
 export interface QuickAddTaskFields {
   content: string;
+  /** The separate Description editor's Markdown, or `null` when it was never opened/left empty. */
+  description: string | null;
   date: string | null;
   priority: number;
   /** `../../packages/core/src/task-types.ts`'s `Task.dateString` — the canonical recurrence phrase (see `RECURRENCE_WORD_TO_PHRASE` above), or `null` for a Task that doesn't repeat. */
@@ -327,6 +329,7 @@ export function taskFieldsFromQuickAdd(
   );
   return {
     content: contentKeepingUnsupported(input, result.tokens),
+    description: null,
     // A recognised recurrence's own computed first occurrence overrides
     // whatever plain date token (if any) also matched — "Create monthly
     // report" carries no separate date at all, so there's usually nothing

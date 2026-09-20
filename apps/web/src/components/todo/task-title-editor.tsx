@@ -234,7 +234,7 @@ function placeholderPlugin(text: string | undefined): Plugin {
         }
         const widget = document.createElement("span");
         widget.className =
-          "pointer-events-none select-none text-[length:var(--td-add-task-font-size)] text-[color:var(--td-add-task-placeholder)]";
+          "pointer-events-none select-none text-[length:var(--td-quick-add-placeholder-font-size)] text-[color:var(--td-quick-add-placeholder)]";
         widget.textContent = text;
         return DecorationSet.create(state.doc, [Decoration.widget(0, widget)]);
       },

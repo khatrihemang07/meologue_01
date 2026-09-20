@@ -36,6 +36,8 @@ import { useTodoSidebarLayout } from "@/hooks/use-wide-layout";
 import { commentCountForTask, commentsForTask } from "@/lib/comment-counts";
 import { writeLastTodoView } from "@/lib/last-todo-view";
 import { localDateTimeKey, localDayKey } from "@/lib/local-day-key";
+import { touchOnlyDevice } from "@/lib/pointer";
+import { projectNameFor } from "@/lib/project-name";
 import { sectionsQueryKey, tasksInProjectQueryKey } from "@/lib/query-keys";
 import type { QuickAddTaskFields } from "@/lib/quick-add-task";
 import { useSettingsStore } from "@/lib/settings";
@@ -427,6 +429,13 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
   // structural equivalent of that same bug.
   const captureDate = backgroundView.view === "today" ? localDayKey(new Date()) : null;
   const captureProjectId = backgroundView.view === "project" ? currentProjectId : null;
+  // Issue #374 — the Quick Add content's own display-only Project chip
+  // (`quick-add-content.tsx`'s own `ambientProjectName` doc comment):
+  // whatever `captureProjectId` above would file an untyped Add into,
+  // resolved to a name, or "Inbox" for the same "nothing ambient" case
+  // `captureProjectId === null` already means everywhere else in this file.
+  const ambientProjectName =
+    captureProjectId === null ? "Inbox" : projectNameFor(projects, captureProjectId);
 
   // Inbox's and a Project's own top-level Tasks (TaskStore.listByProject,
   // `null` meaning Inbox) — this component's own header comment on why
@@ -812,20 +821,42 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
   // name would already get.
   async function handleAdd(fields: QuickAddTaskFields) {
     const labelIds = await resolveLabelIds(fields.labelNames);
+    const touch = touchOnlyDevice();
+    const inheritedProjectId = touch ? null : captureProjectId;
+    const inheritedDate = touch ? null : captureDate;
     const projectId =
-      fields.projectName !== null ? await resolveProjectId(fields.projectName) : captureProjectId;
+      fields.projectName !== null ? await resolveProjectId(fields.projectName) : inheritedProjectId;
     const sectionId =
       fields.sectionName !== null && projectId !== null
         ? await resolveSectionId(projectId, fields.sectionName)
         : null;
     addTask(fields.content, {
-      date: fields.date ?? captureDate,
+      date: fields.date ?? inheritedDate,
       priority: fields.priority,
       dateString: fields.dateString,
       labelIds,
       projectId,
       sectionId,
+      description: fields.description,
     });
+    // Issue #374/D4: touch's own Quick Add stays open after a real Add
+    // (`quick-add-dialog.tsx`'s own header comment) — the "Added to…"
+    // toast with a way to jump there is what Android shows in its place
+    // (`android/05-interaction.md`'s own captured copy: `Added to
+    // "<project>"` + a tappable "Show"). Raised here, not by the dialog
+    // itself, because this is the one place that already knows the
+    // REAL, resolved `projectId` — a typed `#project` override included
+    // — rather than the dialog re-deriving it a second way.
+    if (touch) {
+      const landedProjectName = projectId === null ? "Inbox" : projectNameFor(projects, projectId);
+      toast(`Added to "${landedProjectName}"`, {
+        action: {
+          label: "Show",
+          onClick: () =>
+            navigate(projectId === null ? "/todo/inbox" : `/todo/projects/${projectId}`),
+        },
+      });
+    }
   }
 
   async function handleAddSection(name: string): Promise<void> {
@@ -1137,6 +1168,8 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
             labels={labels}
             onCreateProject={addProject}
             onCreateLabel={addLabel}
+            datesWithTasks={datesWithTasks}
+            ambientProjectName={ambientProjectName}
           />
         )}
 
@@ -1148,6 +1181,8 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
         labels={labels}
         onCreateProject={addProject}
         onCreateLabel={addLabel}
+        datesWithTasks={datesWithTasks}
+        ambientProjectName={ambientProjectName}
       />
 
       {schedulingTask !== null && (
