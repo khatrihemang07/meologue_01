@@ -1,5 +1,6 @@
 import { Suspense, useEffect, useState } from "react";
 import { LazyTaskTitleEditor } from "@/components/todo/lazy-task-title-editor";
+import { MultiLinePasteDialog } from "@/components/todo/multiline-paste-dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import type { AutocompleteEntry } from "@/lib/quick-add-autocomplete";
@@ -134,6 +135,7 @@ export function AddTaskForm({
           className={EDITOR_BOX_CLASSES}
           extraPlugins={composer.extraPlugins}
           autocomplete={composer.autocomplete}
+          onMultiLinePaste={composer.onMultiLinePaste}
         />
       </Suspense>
       <div className="flex justify-end gap-2">
@@ -149,6 +151,12 @@ export function AddTaskForm({
           Add task
         </Button>
       </div>
+      <MultiLinePasteDialog
+        lines={composer.pendingPasteLines}
+        onConfirmSplit={composer.confirmSplitPaste}
+        onConfirmMerge={composer.confirmMergePaste}
+        onCancel={composer.cancelPendingPaste}
+      />
     </div>
   );
 }

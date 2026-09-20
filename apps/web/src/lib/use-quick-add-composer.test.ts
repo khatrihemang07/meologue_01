@@ -82,4 +82,85 @@ describe("useQuickAddComposer", () => {
 
     expect(result.current.autocomplete.getProjects()).toEqual([{ id: "p2", name: "Home" }]);
   });
+
+  // Issue #373: multi-line paste, deferred to the dialog rather than
+  // silently split or merged.
+  describe("multi-line paste", () => {
+    it("onMultiLinePaste populates pendingPasteLines, and nothing is added yet", () => {
+      const onAdd = vi.fn();
+      const { result } = renderHook(() => useQuickAddComposer({ onAdd }));
+
+      act(() => {
+        result.current.onMultiLinePaste(["Task A", "Task B", "Task C"]);
+      });
+
+      expect(result.current.pendingPasteLines).toEqual(["Task A", "Task B", "Task C"]);
+      expect(onAdd).not.toHaveBeenCalled();
+    });
+
+    it("confirmSplitPaste calls onAdd once per line, through the same path a normal commit uses, then clears pendingPasteLines", () => {
+      const onAdd = vi.fn();
+      const { result } = renderHook(() => useQuickAddComposer({ onAdd }));
+
+      act(() => {
+        result.current.onMultiLinePaste(["buy milk", "call mom"]);
+      });
+      act(() => {
+        result.current.confirmSplitPaste();
+      });
+
+      expect(onAdd).toHaveBeenCalledTimes(2);
+      expect(onAdd).toHaveBeenNthCalledWith(1, expect.objectContaining({ content: "buy milk" }));
+      expect(onAdd).toHaveBeenNthCalledWith(2, expect.objectContaining({ content: "call mom" }));
+      expect(result.current.pendingPasteLines).toBeNull();
+    });
+
+    it("confirmSplitPaste skips a line that resolves to no content, same as a normal commit would", () => {
+      const onAdd = vi.fn();
+      const { result } = renderHook(() => useQuickAddComposer({ onAdd }));
+
+      act(() => {
+        result.current.onMultiLinePaste(["buy milk", "tomorrow"]);
+      });
+      act(() => {
+        result.current.confirmSplitPaste();
+      });
+
+      // "tomorrow" alone parses to empty content — `commit`'s own "nothing
+      // to add" skip, reused unchanged rather than re-implemented.
+      expect(onAdd).toHaveBeenCalledTimes(1);
+      expect(onAdd).toHaveBeenCalledWith(expect.objectContaining({ content: "buy milk" }));
+    });
+
+    it("confirmMergePaste calls onAdd once, with every line joined by a space", () => {
+      const onAdd = vi.fn();
+      const { result } = renderHook(() => useQuickAddComposer({ onAdd }));
+
+      act(() => {
+        result.current.onMultiLinePaste(["buy milk", "call mom"]);
+      });
+      act(() => {
+        result.current.confirmMergePaste();
+      });
+
+      expect(onAdd).toHaveBeenCalledTimes(1);
+      expect(onAdd).toHaveBeenCalledWith(expect.objectContaining({ content: "buy milk call mom" }));
+      expect(result.current.pendingPasteLines).toBeNull();
+    });
+
+    it("cancelPendingPaste calls onAdd zero times and clears pendingPasteLines", () => {
+      const onAdd = vi.fn();
+      const { result } = renderHook(() => useQuickAddComposer({ onAdd }));
+
+      act(() => {
+        result.current.onMultiLinePaste(["buy milk", "call mom"]);
+      });
+      act(() => {
+        result.current.cancelPendingPaste();
+      });
+
+      expect(onAdd).not.toHaveBeenCalled();
+      expect(result.current.pendingPasteLines).toBeNull();
+    });
+  });
 });

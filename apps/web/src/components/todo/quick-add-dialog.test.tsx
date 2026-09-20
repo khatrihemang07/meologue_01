@@ -11,6 +11,7 @@ function StubTaskTitleEditor({
   onCancel,
   onAutocompleteOpenChange,
   ariaLabel,
+  onMultiLinePaste,
 }: {
   value: string;
   onChange?: (value: string) => void;
@@ -18,6 +19,7 @@ function StubTaskTitleEditor({
   onCancel: () => void;
   onAutocompleteOpenChange?: (open: boolean) => void;
   ariaLabel?: string;
+  onMultiLinePaste?: (lines: string[]) => void;
 }) {
   const [text, setText] = useState(value);
   return (
@@ -44,6 +46,15 @@ function StubTaskTitleEditor({
       <button type="button" onClick={() => onAutocompleteOpenChange?.(false)}>
         close popup
       </button>
+      {/* Proves `QuickAddDialog`'s own `onMultiLinePaste` wiring reaches
+          this editor — `add-task-form.test.tsx`'s own identical stub
+          addition has the fuller reasoning; the real paste mechanics are
+          `task-title-editor.test.tsx`'s job, not this file's. */}
+      {onMultiLinePaste !== undefined && (
+        <button type="button" onClick={() => onMultiLinePaste(["Task A", "Task B", "Task C"])}>
+          Simulate multi-line paste
+        </button>
+      )}
     </div>
   );
 }
@@ -454,5 +465,36 @@ describe("QuickAddDialog", () => {
 
     // Radix's own dismissal now runs unopposed once the popup is closed.
     expect(onOpenChange).toHaveBeenCalledWith(false);
+  });
+
+  /**
+   * Issue #373: proves `QuickAddDialog` wires `onMultiLinePaste` through
+   * to the editor and renders `MultiLinePasteDialog` fed by the real
+   * `useQuickAddComposer` state — the real paste-detection mechanics and
+   * the real per-line commit logic each have their own full coverage
+   * elsewhere (`task-title-editor.test.tsx`, `use-quick-add-composer.
+   * test.ts`); this is only the wiring between them and this component.
+   */
+  describe("multi-line paste wiring", () => {
+    it("a multi-line paste opens the confirmation nested inside Quick Add, and confirming adds every line", async () => {
+      const onAdd = vi.fn();
+      render(<QuickAddDialog open={true} onOpenChange={vi.fn()} onAdd={onAdd} />);
+      await getInput();
+
+      fireEvent.click(screen.getByRole("button", { name: "Simulate multi-line paste" }));
+
+      const pasteDialog = await screen.findByRole("dialog", { name: "Add 3 tasks?" });
+      // The outer Quick Add dialog is still mounted underneath — a nested
+      // dialog, not a replacement — even though Radix marks it
+      // `aria-hidden` while the paste confirmation is the topmost one, the
+      // same way `task-schedule-popover.test.tsx`'s own comment on
+      // `within(scheduler-view)` describes for a modal Dialog's siblings.
+      expect(document.querySelector('[data-testid="quick-add"]')).toBeInTheDocument();
+
+      fireEvent.click(within(pasteDialog).getByRole("button", { name: "Add 3 tasks" }));
+
+      expect(onAdd).toHaveBeenCalledTimes(3);
+      expect(screen.queryByRole("dialog", { name: "Add 3 tasks?" })).not.toBeInTheDocument();
+    });
   });
 });
