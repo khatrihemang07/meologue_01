@@ -91,7 +91,7 @@ export default defineConfig({
     {
       name: "chromium-touch",
       use: { ...devices["Pixel 7"] },
-      testMatch: /composer-touch\.spec\.ts/,
+      testMatch: /(composer-touch|quick-add-parity)\.spec\.ts/,
     },
   ],
   // Two fully independent Servers, each against its own Postgres (ADR 0011):
