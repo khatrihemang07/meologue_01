@@ -125,6 +125,8 @@ describe("TaskTitleEditor — #/@ autocomplete popup", () => {
     labels?: AutocompleteEntry[];
     onCreateProject?: (name: string) => void;
     onCreateLabel?: (name: string) => void;
+    getSections?: (fullText: string) => readonly AutocompleteEntry[];
+    onCreateSection?: (fullText: string, name: string) => void;
     commit?: () => void;
     cancel?: () => void;
   }): { view: EditorView; commit: () => void; cancel: () => void } {
@@ -135,6 +137,8 @@ describe("TaskTitleEditor — #/@ autocomplete popup", () => {
       getLabels: () => options.labels ?? [],
       onCreateProject: options.onCreateProject,
       onCreateLabel: options.onCreateLabel,
+      getSections: options.getSections,
+      onCreateSection: options.onCreateSection,
     }));
     const doc = titleDocFromText(options.text ?? "");
     const state = EditorState.create({
@@ -311,6 +315,154 @@ describe("TaskTitleEditor — #/@ autocomplete popup", () => {
 
     type(editorView, " ");
     expect(quickAddAutocompletePluginKey.getState(editorView.state)).toBeNull();
+  });
+});
+
+describe("TaskTitleEditor — /section autocomplete popup (issue #388)", () => {
+  let view: EditorView | undefined;
+  let host: HTMLDivElement | undefined;
+
+  afterEach(() => {
+    view?.destroy();
+    host?.remove();
+    view = undefined;
+    host = undefined;
+  });
+
+  function mount(options: {
+    text?: string;
+    getSections?: (fullText: string) => readonly AutocompleteEntry[];
+    onCreateSection?: (fullText: string, name: string) => void;
+    commit?: () => void;
+    cancel?: () => void;
+  }): { view: EditorView; commit: () => void; cancel: () => void } {
+    const commit = options.commit ?? vi.fn();
+    const cancel = options.cancel ?? vi.fn();
+    const autocompletePlugin = quickAddAutocompletePlugin(() => ({
+      getProjects: () => [],
+      getLabels: () => [],
+      getSections: options.getSections,
+      onCreateSection: options.onCreateSection,
+    }));
+    const doc = titleDocFromText(options.text ?? "");
+    const state = EditorState.create({
+      schema: taskTitleSchema,
+      doc,
+      selection: Selection.atEnd(doc),
+      plugins: buildTitlePlugins({
+        placeholder: undefined,
+        extraPlugins: [],
+        commit,
+        cancel,
+        autocompletePlugin,
+      }),
+    });
+    host = document.createElement("div");
+    document.body.appendChild(host);
+    view = new EditorView({ mount: host }, { state });
+    return { view, commit, cancel };
+  }
+
+  function type(target: EditorView, text: string): void {
+    target.dispatch(target.state.tr.insertText(text, target.state.selection.from));
+  }
+
+  function pressKey(target: EditorView, keyName: string): KeyboardEvent {
+    const event = new KeyboardEvent("keydown", { key: keyName, bubbles: true, cancelable: true });
+    target.dom.dispatchEvent(event);
+    return event;
+  }
+
+  it("opens a listbox on '/', listing whatever getSections(fullText) returns", () => {
+    const getSections = vi.fn(() => [
+      { id: "s1", name: "Before cutover" },
+      { id: "s2", name: "Cutover night" },
+    ]);
+    const { view: editorView } = mount({ getSections });
+
+    type(editorView, "/");
+    const popup = quickAddAutocompletePluginKey.getState(editorView.state);
+    expect(popup?.sigil).toBe("/");
+    expect(popup?.options).toEqual([
+      { kind: "entry", entry: { id: "s1", name: "Before cutover" } },
+      { kind: "entry", entry: { id: "s2", name: "Cutover night" } },
+    ]);
+    // The live document text (`/`), not a caller-cached snapshot from
+    // before this keystroke — `AutocompleteSigil`'s own doc comment on
+    // why `getSections` takes text rather than reading a ref.
+    expect(getSections).toHaveBeenCalledWith("/");
+  });
+
+  it("passes the CURRENT full text on every keystroke — a typed #OtherProject earlier in the line is visible to getSections", () => {
+    const getSections = vi.fn((fullText: string) =>
+      fullText.includes("#Aurora migration") ? [{ id: "s1", name: "Cutover night" }] : [],
+    );
+    const { view: editorView } = mount({ text: "#Aurora migration ", getSections });
+
+    type(editorView, "/Cut");
+    expect(getSections).toHaveBeenLastCalledWith("#Aurora migration /Cut");
+    const popup = quickAddAutocompletePluginKey.getState(editorView.state);
+    expect(popup?.options).toEqual([{ kind: "entry", entry: { id: "s1", name: "Cutover night" } }]);
+  });
+
+  it("shows the 'Section not found' fallback and selecting it inserts the token and calls onCreateSection with the full text", () => {
+    const onCreateSection = vi.fn();
+    const { view: editorView } = mount({
+      getSections: () => [{ id: "s1", name: "Cutover night" }],
+      onCreateSection,
+    });
+
+    type(editorView, "/Newone");
+    const popup = quickAddAutocompletePluginKey.getState(editorView.state);
+    expect(popup?.options).toEqual([{ kind: "create", query: "Newone" }]);
+
+    pressKey(editorView, "Enter");
+    expect(onCreateSection).toHaveBeenCalledWith("/Newone", "Newone");
+    expect(editorView.state.doc.textContent).toBe("/Newone ");
+  });
+
+  it("selecting 'Create' with no onCreateSection hook still just inserts the token", () => {
+    const { view: editorView } = mount({ getSections: () => [] });
+
+    type(editorView, "/zzznope");
+    pressKey(editorView, "Enter");
+
+    expect(editorView.state.doc.textContent).toBe("/zzznope ");
+  });
+
+  it("mounts no popup at all when getSections is not wired — unlike '#'/'@', an unwired Section capability is not an empty listbox", () => {
+    const { view: editorView } = mount({});
+
+    type(editorView, "/");
+    expect(quickAddAutocompletePluginKey.getState(editorView.state)).toBeNull();
+  });
+
+  it("does not open once the character right after '/' is a digit — the digit-lookahead guard matchSection's own exact-match path enforces", () => {
+    const getSections = vi.fn(() => [{ id: "s1", name: "Cutover night" }]);
+    // A trailing space keeps the sigil's own left-boundary check (`#`/`@`
+    // share it too) from being the reason nothing opens here — this
+    // proves the NEW digit guard specifically, not that other rule.
+    const { view: editorView } = mount({ text: "Due ", getSections });
+
+    type(editorView, "/27");
+    expect(quickAddAutocompletePluginKey.getState(editorView.state)).toBeNull();
+  });
+
+  it("Enter/Tab/Arrow keys behave identically to '#'/'@' — the same generic keydown handling, not a parallel implementation", () => {
+    const { view: editorView } = mount({
+      getSections: () => [
+        { id: "s1", name: "Before cutover" },
+        { id: "s2", name: "Cutover night" },
+      ],
+    });
+
+    type(editorView, "/");
+    expect(quickAddAutocompletePluginKey.getState(editorView.state)?.activeIndex).toBe(0);
+    pressKey(editorView, "ArrowDown");
+    expect(quickAddAutocompletePluginKey.getState(editorView.state)?.activeIndex).toBe(1);
+    const tabEvent = pressKey(editorView, "Tab");
+    expect(tabEvent.defaultPrevented).toBe(true);
+    expect(editorView.state.doc.textContent).toBe("/Cutover night ");
   });
 });
 
