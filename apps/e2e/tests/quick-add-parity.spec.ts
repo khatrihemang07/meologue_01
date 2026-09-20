@@ -32,6 +32,17 @@ test.describe("desktop Quick Add", () => {
     const highlighted = editor.locator('[data-highlighted-match="true"]');
     await expect(highlighted).toHaveText("next week");
 
+    // Issue #374 removed `DialogPortal` from the non-touch shell
+    // (`quick-add-dialog.tsx`): this composer now renders in place inside
+    // `todo-page.tsx`'s own scrollable Shell (`shell.tsx`'s own
+    // `overflow-y-auto` pane) rather than under `document.body` as a
+    // fixed-position overlay. `boundingBox()`, unlike a locator's own
+    // `click()`, never scrolls its target into view first — on a Shell
+    // that already has scrolled content above the composer, an
+    // unscrolled read here would hand `page.mouse` coordinates for
+    // whatever happens to sit at that offset instead, silently turning
+    // this into a no-op click on the wrong element rather than a failure.
+    await highlighted.scrollIntoViewIfNeeded();
     const box = await highlighted.boundingBox();
     if (!box) {
       throw new Error("expected the highlighted natural-language match to have a box");
