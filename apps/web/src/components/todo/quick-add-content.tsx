@@ -302,7 +302,17 @@ export function QuickAddContent({
 
               <TaskSchedulePopover
                 trigger={
-                  <Chip aria-label={dateState.dateDay === null ? "Set date" : dateLabel}>
+                  <Chip
+                    aria-label={dateState.dateDay === null ? "Set date" : dateLabel}
+                    // `web/07-native-colours.md:47`: the date chip's own
+                    // radius is `8px 0 0 8px`, not the uniform 8px every
+                    // other chip gets — its right corners are square
+                    // because the "Remove date" button sits fused to its
+                    // right edge. Only apply that once the remove button
+                    // is actually there (`hasDate`); with no date set
+                    // there's nothing to fuse against.
+                    className={hasDate ? "rounded-r-none" : undefined}
+                  >
                     {dateLabel}
                   </Chip>
                 }

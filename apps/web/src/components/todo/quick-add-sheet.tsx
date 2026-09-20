@@ -16,7 +16,14 @@ export interface QuickAddSheetProps {
   onEscapeKeyDown?: (event: KeyboardEvent) => void;
   contentRef?: React.Ref<HTMLDivElement>;
   children: React.ReactNode;
-  /** `quick-add-inline-card.tsx`'s own `markAddTaskField` doc comment — the identical reason, for `add-task-form.tsx`'s touch path. */
+  /**
+   * Stamps this sheet's `DialogContent` with `data-add-task-field`, the
+   * same marker `add-task-form.tsx` puts on its own collapsed row and
+   * expanded card (`add-task-form.tsx:108,158`). `todo-keymap.ts` and
+   * the e2e `addTask` helper (`apps/e2e/tests/todo.spec.ts:35`) both
+   * locate the composer by that attribute; without it here, the touch
+   * sheet would be invisible to both.
+   */
   markAddTaskField?: boolean;
 }
 
