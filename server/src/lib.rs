@@ -569,6 +569,10 @@ pub fn router_with_everything(
             "/v1/time/sources",
             get(time::list_sources_handler).post(time::create_source_handler),
         )
+        .route(
+            "/v1/time/sources/{id}",
+            axum::routing::patch(time::update_source_handler),
+        )
         .route("/v1/time/intervals", get(time::list_intervals_handler))
         .route(
             "/v1/time/intervals/{id}",

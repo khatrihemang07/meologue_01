@@ -142,6 +142,22 @@ pub struct CreateTimeSource {
     pub path: String,
 }
 
+/// A change to one existing Time source. Every field is optional: this is a
+/// patch, and leaving one out means "leave it alone" rather than "clear it".
+///
+/// `kind` and `path` are only accepted until the source's first successful
+/// import (issue #423). After that they name the database a body of stored
+/// evidence actually came from, and repointing a source is how one recorder's
+/// history would quietly become another's — a different database is a new
+/// source.
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct UpdateTimeSource {
+    pub name: Option<String>,
+    pub enabled: Option<bool>,
+    pub kind: Option<String>,
+    pub path: Option<String>,
+}
+
 /// One immutable stretch of activity, in provider-neutral terms.
 ///
 /// The source's name, kind and enabled flag are carried on every interval
@@ -366,7 +382,128 @@ fn spawn_import(pool: PgPool, source_id: Uuid, kind: SourceKind, path: String) {
             .execute(&pool)
             .await;
         }
+        // Stamped only once, and only after the run finished, because this is
+        // what closes the window in which a source's kind and path may still
+        // be corrected (issue #423).
+        let _ = sqlx::query(
+            "update time_sources set first_imported_at = now() \
+             where id = $1 and first_imported_at is null",
+        )
+        .bind(source_id)
+        .execute(&pool)
+        .await;
     });
+}
+
+#[utoipa::path(patch, path = "/v1/time/sources/{id}", request_body = UpdateTimeSource, params(("id" = Uuid, Path)), responses((status = 200, body = TimeSource), (status = 400), (status = 404), (status = 409), (status = 423)))]
+pub async fn update_source_handler(
+    State(pool): State<PgPool>,
+    State(ConfigLocked(locked)): State<ConfigLocked>,
+    AxumPath(id): AxumPath<Uuid>,
+    Json(input): Json<UpdateTimeSource>,
+) -> Result<Json<TimeSource>, (StatusCode, String)> {
+    if locked {
+        return Err((StatusCode::LOCKED, "Server configuration is locked".into()));
+    }
+
+    let existing: Option<(TimeSource, Option<DateTime<Utc>>)> = sqlx::query_as::<
+        _,
+        (Uuid, String, String, String, bool, Option<DateTime<Utc>>),
+    >(
+        "select id, name, kind, path, enabled, first_imported_at from time_sources where id = $1",
+    )
+    .bind(id)
+    .fetch_optional(&pool)
+    .await
+    .map_err(|_| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "lookup failed".to_string(),
+        )
+    })?
+    .map(|(id, name, kind, path, enabled, first_imported_at)| {
+        (
+            TimeSource {
+                id,
+                name,
+                kind,
+                path,
+                enabled,
+            },
+            first_imported_at,
+        )
+    });
+    let (current, first_imported_at) =
+        existing.ok_or((StatusCode::NOT_FOUND, "no such Time source".to_string()))?;
+
+    let was_enabled = current.enabled;
+    let mut next = current.clone();
+
+    if let Some(name) = input.name.as_deref() {
+        let name = name.trim();
+        if name.is_empty() {
+            return Err((StatusCode::BAD_REQUEST, "a source name is required".into()));
+        }
+        // A name is a label, not an identity — renaming an archived recorder
+        // stays allowed however long ago it last imported.
+        next.name = name.to_owned();
+    }
+    if let Some(enabled) = input.enabled {
+        next.enabled = enabled;
+    }
+
+    let repointing = input.kind.is_some() || input.path.is_some();
+    if repointing {
+        if first_imported_at.is_some() {
+            return Err((
+                StatusCode::CONFLICT,
+                "this Time source has already imported; add a new source for a different database"
+                    .into(),
+            ));
+        }
+        if let Some(kind) = input.kind.as_deref() {
+            SourceKind::from_wire(kind).ok_or((
+                StatusCode::BAD_REQUEST,
+                "unsupported Time source kind".to_string(),
+            ))?;
+            next.kind = kind.to_owned();
+        }
+        if let Some(path) = input.path.as_deref() {
+            let path = canonical_source_path(path).map_err(|e| (StatusCode::BAD_REQUEST, e))?;
+            next.path = path.to_string_lossy().into_owned();
+        }
+        // Re-validated as a pair: a kind that was fine for the old path can be
+        // wrong for the new one, and vice versa.
+        let kind = SourceKind::from_wire(&next.kind).expect("stored kind is always a known kind");
+        validate_source(kind, Path::new(&next.path)).map_err(|e| (StatusCode::BAD_REQUEST, e))?;
+    }
+
+    sqlx::query(
+        "update time_sources set name = $2, kind = $3, path = $4, enabled = $5 where id = $1",
+    )
+    .bind(next.id)
+    .bind(&next.name)
+    .bind(&next.kind)
+    .bind(&next.path)
+    .bind(next.enabled)
+    .execute(&pool)
+    .await
+    .map_err(|_| {
+        (
+            StatusCode::CONFLICT,
+            "a Time source already uses this path".to_string(),
+        )
+    })?;
+
+    // Re-enabling resumes importing where the uniqueness boundary left off:
+    // the source keeps its identity, so everything already stored is skipped
+    // by `on conflict do nothing` and only what arrived meanwhile is inserted.
+    if next.enabled && !was_enabled {
+        let kind = SourceKind::from_wire(&next.kind).expect("stored kind is always a known kind");
+        spawn_import(pool, next.id, kind, next.path.clone());
+    }
+
+    Ok(Json(next))
 }
 
 #[utoipa::path(get, path = "/v1/time/intervals", params(IntervalQuery), responses((status = 200, body = [ActivityInterval])))]

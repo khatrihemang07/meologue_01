@@ -114,4 +114,101 @@ describe("TimeSourcesSection", () => {
     expect(configured.getByText("Desktop tracker")).toBeInTheDocument();
     expect(configured.getByText("Clockify Desktop — Auto Tracker")).toBeInTheDocument();
   });
+
+  it("archives a source and re-enables it, without ever offering to delete it", async () => {
+    // Issue #423: archival stops future imports, and there is deliberately no
+    // destructive action here — an Activity interval is evidence attributed to
+    // its source, so deleting the source would either orphan the evidence or
+    // take it with it.
+    useSettingsStore.getState().setServerUrl("https://time.example");
+    let enabled = true;
+    const patched: unknown[] = [];
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      if (init?.method === "PATCH") {
+        const body = JSON.parse(init.body as string);
+        patched.push({ url, body });
+        enabled = body.enabled;
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            id: "toggl-source",
+            name: "Work activity",
+            kind: "toggl_activity",
+            path: "/Users/me/Toggl.sqlite",
+            enabled,
+          }),
+        };
+      }
+      return {
+        ok: true,
+        status: 200,
+        json: async () => [
+          {
+            id: "toggl-source",
+            name: "Work activity",
+            kind: "toggl_activity",
+            path: "/Users/me/Toggl.sqlite",
+            enabled,
+          },
+        ],
+      };
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderSection();
+
+    fireEvent.click(await screen.findByRole("button", { name: "Archive Work activity" }));
+
+    const reEnable = await screen.findByRole("button", { name: "Re-enable Work activity" });
+    expect(screen.getByText(/Archived\. Its Activity stays/i)).toBeInTheDocument();
+    const configured = within(screen.getByRole("list", { name: "Configured Time sources" }));
+    expect(configured.getByText(/Work activity \(archived\)/)).toBeInTheDocument();
+
+    fireEvent.click(reEnable);
+    await screen.findByRole("button", { name: "Archive Work activity" });
+    expect(screen.getByText(/Re-enabled\. Importing anything recorded since/i)).toBeInTheDocument();
+
+    expect(patched).toEqual([
+      { url: "https://time.example/v1/time/sources/toggl-source", body: { enabled: false } },
+      { url: "https://time.example/v1/time/sources/toggl-source", body: { enabled: true } },
+    ]);
+    // Nothing on this surface can destroy a source or its evidence.
+    expect(screen.queryByRole("button", { name: /delete|remove/i })).not.toBeInTheDocument();
+  });
+
+  it("says so when the Server's configuration is locked", async () => {
+    // A locked Server keeps refusing however the form is filled in, so this
+    // has to read differently from "the Server rejected what you typed".
+    useSettingsStore.getState().setServerUrl("https://time.example");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_url: string, init?: RequestInit) => {
+        if (init?.method === "PATCH") {
+          return { ok: false, status: 423, json: async () => ({}) };
+        }
+        return {
+          ok: true,
+          status: 200,
+          json: async () => [
+            {
+              id: "toggl-source",
+              name: "Work activity",
+              kind: "toggl_activity",
+              path: "/Users/me/Toggl.sqlite",
+              enabled: true,
+            },
+          ],
+        };
+      }),
+    );
+
+    renderSection();
+
+    fireEvent.click(await screen.findByRole("button", { name: "Archive Work activity" }));
+
+    expect(await screen.findByText(/configuration is locked/i)).toBeInTheDocument();
+    // And the row is unchanged, rather than optimistically showing archived.
+    expect(screen.getByRole("button", { name: "Archive Work activity" })).toBeInTheDocument();
+  });
 });

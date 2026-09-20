@@ -396,6 +396,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/time/sources/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch: operations["update_source_handler"];
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -1690,6 +1706,22 @@ export interface components {
          * @enum {string}
          */
         TogglePatch: "unset" | "on" | "off";
+        /**
+         * @description A change to one existing Time source. Every field is optional: this is a
+         *     patch, and leaving one out means "leave it alone" rather than "clear it".
+         *
+         *     `kind` and `path` are only accepted until the source's first successful
+         *     import (issue #423). After that they name the database a body of stored
+         *     evidence actually came from, and repointing a source is how one recorder's
+         *     history would quietly become another's — a different database is a new
+         *     source.
+         */
+        UpdateTimeSource: {
+            enabled?: boolean | null;
+            kind?: string | null;
+            name?: string | null;
+            path?: string | null;
+        };
     };
     responses: never;
     parameters: never;
@@ -2237,6 +2269,55 @@ export interface operations {
                 };
             };
             400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            423: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    update_source_handler: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateTimeSource"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TimeSource"];
+                };
+            };
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };

@@ -13,7 +13,9 @@ use crate::sync::{
     LabelOutput, ProjectInput, ProjectOutput, SectionInput, SectionOutput, SyncRequest,
     SyncResponse, TaskInput, TaskOutput,
 };
-use crate::time::{ActivityInterval, ActivityIntervalDetail, CreateTimeSource, TimeSource};
+use crate::time::{
+    ActivityInterval, ActivityIntervalDetail, CreateTimeSource, TimeSource, UpdateTimeSource,
+};
 
 #[derive(OpenApi)]
 #[openapi(
@@ -35,6 +37,7 @@ use crate::time::{ActivityInterval, ActivityIntervalDetail, CreateTimeSource, Ti
         crate::settings::patch_config_handler,
         crate::time::list_sources_handler,
         crate::time::create_source_handler,
+        crate::time::update_source_handler,
         crate::time::list_intervals_handler,
         crate::time::interval_detail_handler,
     ),
@@ -75,6 +78,7 @@ use crate::time::{ActivityInterval, ActivityIntervalDetail, CreateTimeSource, Ti
         InstanceMode,
         TimeSource,
         CreateTimeSource,
+        UpdateTimeSource,
         ActivityInterval,
         ActivityIntervalDetail,
     ))

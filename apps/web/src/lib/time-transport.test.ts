@@ -1,6 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useSettingsStore } from "@/lib/settings";
-import { type ActivityInterval, listActivityIntervals, listTimeSources } from "./time-transport";
+import {
+  type ActivityInterval,
+  listActivityIntervals,
+  listTimeSources,
+  updateTimeSource,
+} from "./time-transport";
 
 describe("Time transport", () => {
   afterEach(() => {
@@ -40,5 +45,37 @@ describe("Time transport", () => {
       intervals,
     });
     expect(fetchMock).toHaveBeenCalledWith("https://time.example/v1/time/intervals?day=2026-09-20");
+  });
+
+  it("reads a 404 on the source route as a Server that cannot do this", async () => {
+    // Two different things answer 404 here — a Server that predates Time, and
+    // a source that is gone — and neither leaves this Device anything to do,
+    // so both collapse into one reason rather than a distinction no caller
+    // could act on.
+    useSettingsStore.getState().setServerUrl("https://time.example");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({ ok: false, status: 404, json: async () => ({}) })),
+    );
+
+    await expect(updateTimeSource("gone", { enabled: false })).resolves.toEqual({
+      ok: false,
+      reason: "not-supported",
+    });
+  });
+
+  it("reports an unreachable Server separately from one that refused", async () => {
+    useSettingsStore.getState().setServerUrl("https://time.example");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        throw new TypeError("Failed to fetch");
+      }),
+    );
+
+    await expect(updateTimeSource("toggl", { enabled: true })).resolves.toEqual({
+      ok: false,
+      reason: "unreachable",
+    });
   });
 });

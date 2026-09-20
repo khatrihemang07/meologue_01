@@ -5,7 +5,12 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { TIME_SOURCES_QUERY_KEY } from "@/lib/query-keys";
 import { useServerReachable, useSyncEnabled } from "@/lib/settings";
-import { createTimeSource, listTimeSources, type TimeSource } from "@/lib/time-transport";
+import {
+  createTimeSource,
+  listTimeSources,
+  type TimeSource,
+  updateTimeSource,
+} from "@/lib/time-transport";
 
 /**
  * Server-owned recorder configuration.
@@ -44,6 +49,33 @@ export function TimeSourcesSection() {
       setName("");
       setPath("");
       setStatus("Added. Importing activity in the background.");
+    },
+  });
+
+  // Archiving and re-enabling share one mutation: they are the same request
+  // with a different boolean, and the Server decides what each one means.
+  const enabledMutation = useMutation({
+    mutationFn: ({ id, enabled }: { id: string; enabled: boolean }) =>
+      updateTimeSource(id, { enabled }),
+    onSuccess: (result) => {
+      if (!result.ok) {
+        setStatus(updateFailureCopy(result.reason));
+        return;
+      }
+      queryClient.setQueryData(TIME_SOURCES_QUERY_KEY, (previous: unknown) => {
+        const sources = isSourcesResult(previous) ? previous.sources : [];
+        return {
+          ok: true as const,
+          sources: sources.map((source) =>
+            source.id === result.source.id ? result.source : source,
+          ),
+        };
+      });
+      setStatus(
+        result.source.enabled
+          ? "Re-enabled. Importing anything recorded since it was archived."
+          : "Archived. Its Activity stays on the days it already covered.",
+      );
     },
   });
 
@@ -130,7 +162,15 @@ export function TimeSourcesSection() {
             </div>
           </form>
           {status && <p className="text-muted-foreground text-sm">{status}</p>}
-          <ConfiguredSources query={sourcesQuery.data} pending={sourcesQuery.isPending} />
+          <ConfiguredSources
+            query={sourcesQuery.data}
+            pending={sourcesQuery.isPending}
+            onSetEnabled={(id, enabled) => {
+              setStatus(null);
+              void enabledMutation.mutateAsync({ id, enabled });
+            }}
+            pendingId={enabledMutation.isPending ? enabledMutation.variables?.id : undefined}
+          />
         </>
       )}
     </section>
@@ -164,7 +204,17 @@ function kindLabel(kind: string): string {
   return SOURCE_KINDS.find((option) => option.id === kind)?.label ?? kind;
 }
 
-function ConfiguredSources({ query, pending }: { query: unknown; pending: boolean }) {
+function ConfiguredSources({
+  query,
+  pending,
+  onSetEnabled,
+  pendingId,
+}: {
+  query: unknown;
+  pending: boolean;
+  onSetEnabled: (id: string, enabled: boolean) => void;
+  pendingId: string | undefined;
+}) {
   if (pending) {
     return <p className="text-muted-foreground text-sm">Loading configured sources…</p>;
   }
@@ -181,12 +231,28 @@ function ConfiguredSources({ query, pending }: { query: unknown; pending: boolea
   return (
     <ul aria-label="Configured Time sources" className="flex flex-col gap-1 text-sm">
       {query.sources.map((source) => (
-        <li key={source.id} className="flex flex-col">
-          <span>
-            {source.name}
-            {!source.enabled && " (archived)"}
+        <li key={source.id} className="flex items-center justify-between gap-3">
+          <span className="flex min-w-0 flex-col">
+            <span className="truncate">
+              {source.name}
+              {!source.enabled && " (archived)"}
+            </span>
+            <span className="truncate text-muted-foreground text-xs">{kindLabel(source.kind)}</span>
           </span>
-          <span className="text-muted-foreground text-xs">{kindLabel(source.kind)}</span>
+          {/* Archive, never delete (issue #423): a source's Activity intervals
+              are evidence attributed to it, so there is nothing here that can
+              destroy them. */}
+          <Button
+            type="button"
+            size="touch"
+            variant="outline"
+            className="shrink-0"
+            disabled={pendingId === source.id}
+            aria-label={`${source.enabled ? "Archive" : "Re-enable"} ${source.name}`}
+            onClick={() => onSetEnabled(source.id, !source.enabled)}
+          >
+            {source.enabled ? "Archive" : "Re-enable"}
+          </Button>
         </li>
       ))}
     </ul>
@@ -202,6 +268,21 @@ function isSourcesResult(value: unknown): value is { ok: true; sources: TimeSour
     "sources" in value &&
     Array.isArray(value.sources)
   );
+}
+
+function updateFailureCopy(
+  reason: "not-supported" | "unreachable" | "rejected" | "locked",
+): string {
+  switch (reason) {
+    case "not-supported":
+      return "This Server doesn't support changing Time sources yet.";
+    case "unreachable":
+      return "Couldn't reach the Server. Check that it's running and try again.";
+    case "locked":
+      return "This Server's configuration is locked, so its Time sources can't be changed here.";
+    case "rejected":
+      return "The Server refused that change.";
+  }
 }
 
 function createFailureCopy(reason: "not-supported" | "unreachable" | "rejected"): string {

@@ -170,4 +170,5 @@ export type {
   WireSource,
   WireTimeSource,
   WireTogglePatch,
+  WireUpdateTimeSource,
 } from "./wire";

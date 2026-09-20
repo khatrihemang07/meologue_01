@@ -1313,3 +1313,305 @@ async fn leaves_a_clockify_item_that_is_still_recording_out_of_the_timeline(pool
     let (_, intervals) = list_intervals(&pool, DAY, Some(source)).await;
     assert_eq!(labels(&intervals), vec!["Closed"]);
 }
+
+// ---------------------------------------------------------------------------
+// Source lifecycle: archive, re-enable, and when identity stops moving (#423)
+// ---------------------------------------------------------------------------
+
+async fn patch_source(pool: &PgPool, id: Uuid, body: Value, locked: bool) -> (StatusCode, Vec<u8>) {
+    send(
+        app(pool, locked),
+        Request::builder()
+            .method("PATCH")
+            .uri(format!("/v1/time/sources/{id}"))
+            .header("Content-Type", "application/json")
+            .body(Body::from(body.to_string()))
+            .unwrap(),
+    )
+    .await
+}
+
+async fn source_row(pool: &PgPool, id: Uuid) -> (String, String, String, bool) {
+    sqlx::query_as("select name, kind, path, enabled from time_sources where id = $1")
+        .bind(id)
+        .fetch_one(pool)
+        .await
+        .unwrap()
+}
+
+/// One closed record, so a fixture can be imported and then archived.
+fn one_activity<'a>(id: &'a [u8], filename: &'a str) -> Activity<'a> {
+    Activity {
+        id,
+        start: MORNING_START,
+        end: Some(MORNING_END),
+        filename,
+        title: None,
+        idle: 0,
+        client: &[],
+    }
+}
+
+#[sqlx::test]
+async fn archiving_a_source_keeps_its_intervals_and_their_attribution(pool: PgPool) {
+    // Archival stops future imports. It is not a delete, and there is no
+    // destructive delete in v1: the days a recorder already covered stay
+    // queryable, and stay identifiable as its work.
+    let dir = scratch_dir("archive");
+    let path = dir.join("db.sqlite");
+    write_toggl_db(&path, &[one_activity(&[0x90], "Xcode")]);
+
+    let source = create_toggl_source(&pool, "Retiring recorder", &path).await;
+    wait_for_intervals(&pool, source, 1).await;
+
+    let (status, body) = patch_source(&pool, source, json!({ "enabled": false }), false).await;
+    assert_eq!(status, StatusCode::OK, "{}", String::from_utf8_lossy(&body));
+    assert_eq!(source_row(&pool, source).await.3, false);
+
+    let (status, intervals) = list_intervals(&pool, DAY, Some(source)).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(labels(&intervals), vec!["Xcode"]);
+    assert_eq!(
+        intervals[0]["source_name"], "Retiring recorder",
+        "an archived source's rows must still name the recorder they came from"
+    );
+    assert_eq!(
+        intervals[0]["source_enabled"], false,
+        "and must say the source is no longer active, so a timeline can mark it historical"
+    );
+}
+
+#[sqlx::test]
+async fn re_enabling_resumes_importing_without_duplicating_what_is_already_stored(pool: PgPool) {
+    let dir = scratch_dir("re-enable");
+    let path = dir.join("db.sqlite");
+    write_toggl_db(&path, &[one_activity(&[0xa0], "Before archiving")]);
+
+    let source = create_toggl_source(&pool, "Toggl", &path).await;
+    wait_for_intervals(&pool, source, 1).await;
+    let before: Vec<String> =
+        sqlx::query_scalar("select id::text from activity_intervals where source_id = $1")
+            .bind(source)
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+
+    patch_source(&pool, source, json!({ "enabled": false }), false).await;
+
+    // The recorder kept running while the source was archived.
+    let connection = Connection::open(&path).unwrap();
+    insert_rows(
+        &connection,
+        &[Activity {
+            id: &[0xa1],
+            start: AFTERNOON_START,
+            end: Some(AFTERNOON_END),
+            filename: "While archived",
+            title: None,
+            idle: 0,
+            client: &[],
+        }],
+    );
+    connection.close().unwrap();
+
+    let (status, _) = patch_source(&pool, source, json!({ "enabled": true }), false).await;
+    assert_eq!(status, StatusCode::OK);
+    wait_for_intervals(&pool, source, 2).await;
+
+    let (_, intervals) = list_intervals(&pool, DAY, Some(source)).await;
+    assert_eq!(
+        labels(&intervals),
+        vec!["Before archiving", "While archived"]
+    );
+
+    // Resuming uses the existing source identity, so the uniqueness boundary
+    // still holds: what was already stored is skipped, not re-inserted under
+    // a new row id.
+    let after: Vec<String> = sqlx::query_scalar(
+        "select id::text from activity_intervals where source_id = $1 and label = 'Before archiving'",
+    )
+    .bind(source)
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        after, before,
+        "re-enabling rewrote evidence it should have skipped"
+    );
+}
+
+#[sqlx::test]
+async fn a_source_may_be_repointed_only_until_it_has_imported(pool: PgPool) {
+    let dir = scratch_dir("repoint");
+    let first = dir.join("first.sqlite");
+    let second = dir.join("second.sqlite");
+    write_toggl_db(&first, &[]);
+    write_toggl_db(&second, &[one_activity(&[0xb0], "Second database")]);
+
+    // An empty database still imports *successfully* — it simply has nothing
+    // to import. That is exactly why this cannot be derived from whether any
+    // intervals exist, and why `first_imported_at` is stored.
+    let source = create_toggl_source(&pool, "Mistyped", &first).await;
+    wait_for_first_import(&pool, source).await;
+
+    let (status, body) = patch_source(
+        &pool,
+        source,
+        json!({ "path": second.to_string_lossy() }),
+        false,
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert!(
+        String::from_utf8_lossy(&body).contains("new source"),
+        "the rejection should say what to do instead: {}",
+        String::from_utf8_lossy(&body)
+    );
+    assert_eq!(
+        source_row(&pool, source).await.2,
+        std::fs::canonicalize(&first).unwrap().to_string_lossy(),
+        "a refused repoint must not half-apply"
+    );
+}
+
+#[sqlx::test]
+async fn a_mistyped_path_can_be_corrected_before_the_first_import(pool: PgPool) {
+    // The other side of the rule above. Without this, a typo in Settings would
+    // mean a permanently dead source row that cannot be deleted either.
+    let dir = scratch_dir("correct");
+    let real = dir.join("real.sqlite");
+    write_toggl_db(&real, &[one_activity(&[0xb1], "Corrected")]);
+
+    // Created directly, so it has never imported — the state a source is in
+    // between being saved and its first run finishing.
+    let id = Uuid::new_v4();
+    sqlx::query("insert into time_sources (id,name,kind,path,enabled) values ($1,$2,$3,$4,true)")
+        .bind(id)
+        .bind("Typo")
+        .bind("toggl_activity")
+        .bind("/not/the/right/database.sqlite")
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    let (status, body) =
+        patch_source(&pool, id, json!({ "path": real.to_string_lossy() }), false).await;
+    assert_eq!(status, StatusCode::OK, "{}", String::from_utf8_lossy(&body));
+    assert_eq!(
+        source_row(&pool, id).await.2,
+        std::fs::canonicalize(&real).unwrap().to_string_lossy()
+    );
+}
+
+#[sqlx::test]
+async fn a_repoint_is_validated_against_the_kind_it_will_have(pool: PgPool) {
+    let dir = scratch_dir("repoint-validate");
+    let clockify = dir.join("clockify.sqlite");
+    write_clockify_db(&clockify, &[]);
+
+    let id = Uuid::new_v4();
+    sqlx::query("insert into time_sources (id,name,kind,path,enabled) values ($1,$2,$3,$4,true)")
+        .bind(id)
+        .bind("Toggl")
+        .bind("toggl_activity")
+        .bind("/not/yet/real.sqlite")
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    // Path alone, leaving the kind as Toggl: the Clockify database must be
+    // rejected against the kind the source will actually have.
+    let (rejected, _) = patch_source(
+        &pool,
+        id,
+        json!({ "path": clockify.to_string_lossy() }),
+        false,
+    )
+    .await;
+    assert_eq!(rejected, StatusCode::BAD_REQUEST);
+
+    // Both together: now it is a Clockify source reading a Clockify database.
+    let (accepted, body) = patch_source(
+        &pool,
+        id,
+        json!({ "kind": "clockify_auto_tracker", "path": clockify.to_string_lossy() }),
+        false,
+    )
+    .await;
+    assert_eq!(
+        accepted,
+        StatusCode::OK,
+        "{}",
+        String::from_utf8_lossy(&body)
+    );
+    let (_, kind, _, _) = source_row(&pool, id).await;
+    assert_eq!(kind, "clockify_auto_tracker");
+}
+
+#[sqlx::test]
+async fn renaming_stays_allowed_however_long_ago_a_source_imported(pool: PgPool) {
+    // A name is a label, not an identity. Locking it down with the path would
+    // leave an archived recorder stuck under whatever it was first called.
+    let dir = scratch_dir("rename");
+    let path = dir.join("db.sqlite");
+    write_toggl_db(&path, &[one_activity(&[0xc0], "Xcode")]);
+
+    let source = create_toggl_source(&pool, "Old name", &path).await;
+    wait_for_intervals(&pool, source, 1).await;
+
+    let (status, _) = patch_source(&pool, source, json!({ "name": "New name" }), false).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(source_row(&pool, source).await.0, "New name");
+
+    let (_, intervals) = list_intervals(&pool, DAY, Some(source)).await;
+    assert_eq!(intervals[0]["source_name"], "New name");
+
+    let (blank, _) = patch_source(&pool, source, json!({ "name": "  " }), false).await;
+    assert_eq!(blank, StatusCode::BAD_REQUEST);
+}
+
+#[sqlx::test]
+async fn lifecycle_changes_are_refused_while_configuration_is_locked(pool: PgPool) {
+    let dir = scratch_dir("locked-patch");
+    let path = dir.join("db.sqlite");
+    write_toggl_db(&path, &[one_activity(&[0xd0], "Xcode")]);
+    let source = create_toggl_source(&pool, "Toggl", &path).await;
+    wait_for_intervals(&pool, source, 1).await;
+
+    let (status, _) = patch_source(&pool, source, json!({ "enabled": false }), true).await;
+    assert_eq!(status, StatusCode::LOCKED);
+    assert_eq!(
+        source_row(&pool, source).await.3,
+        true,
+        "a locked Server must not half-apply the change it refused"
+    );
+
+    // Reading stays available while mutation is locked.
+    let (listed, _) = list_intervals(&pool, DAY, Some(source)).await;
+    assert_eq!(listed, StatusCode::OK);
+}
+
+#[sqlx::test]
+async fn patching_a_source_that_does_not_exist_is_a_404(pool: PgPool) {
+    let (status, _) = patch_source(&pool, Uuid::new_v4(), json!({ "enabled": false }), false).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+/// Waits for the spawned import to finish, which is what closes the window in
+/// which a source may still be repointed. Distinct from `wait_for_intervals`
+/// because a successful import can insert nothing at all.
+async fn wait_for_first_import(pool: &PgPool, source: Uuid) {
+    for _ in 0..400 {
+        let stamped: Option<Option<chrono::DateTime<chrono::Utc>>> =
+            sqlx::query_scalar("select first_imported_at from time_sources where id = $1")
+                .bind(source)
+                .fetch_optional(pool)
+                .await
+                .unwrap();
+        if stamped.flatten().is_some() {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    panic!("the import for {source} never recorded a first successful run");
+}

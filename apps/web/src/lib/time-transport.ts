@@ -1,9 +1,15 @@
-import type { WireActivityInterval, WireCreateTimeSource, WireTimeSource } from "@meologue/core";
+import type {
+  WireActivityInterval,
+  WireCreateTimeSource,
+  WireTimeSource,
+  WireUpdateTimeSource,
+} from "@meologue/core";
 import { serverRequest } from "@/lib/server-request";
 
 export type TimeSource = WireTimeSource;
 export type ActivityInterval = WireActivityInterval;
 export type CreateTimeSourceInput = WireCreateTimeSource;
+export type UpdateTimeSourceInput = WireUpdateTimeSource;
 
 export type TimeSourcesResult =
   | { ok: true; sources: TimeSource[] }
@@ -73,6 +79,47 @@ export async function createTimeSource(
   }
   if (response.status === 404) {
     return { ok: false, reason: "not-supported" };
+  }
+  if (!response.ok) {
+    return { ok: false, reason: "rejected" };
+  }
+  return { ok: true, source: (await response.json()) as TimeSource };
+}
+
+export type UpdateTimeSourceResult =
+  | { ok: true; source: TimeSource }
+  | { ok: false; reason: "not-supported" | "unreachable" | "rejected" | "locked" };
+
+/**
+ * PATCH /v1/time/sources/{id} — archive, re-enable or rename one source.
+ *
+ * There is no delete, deliberately (issue #423): archiving already stops
+ * future imports, and Activity intervals are evidence attributed to their
+ * source, so removing the source would either orphan them or take them with
+ * it. `locked` is separated from the other refusals because it is the one a
+ * reader can do nothing about from this Device — a Server whose configuration
+ * is locked will keep refusing however the form is filled in.
+ */
+export async function updateTimeSource(
+  id: string,
+  input: UpdateTimeSourceInput,
+): Promise<UpdateTimeSourceResult> {
+  const response = await serverRequest(`/v1/time/sources/${id}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+  if (response === null) {
+    return { ok: false, reason: "unreachable" };
+  }
+  if (response.status === 404) {
+    // A Server that predates Time answers 404 for the route itself, and one
+    // that has Time answers 404 for a source that is gone. Neither leaves
+    // anything for this Device to do, so both read as "not supported here".
+    return { ok: false, reason: "not-supported" };
+  }
+  if (response.status === 423) {
+    return { ok: false, reason: "locked" };
   }
   if (!response.ok) {
     return { ok: false, reason: "rejected" };

@@ -627,6 +627,59 @@
           }
         }
       }
+    },
+    "/v1/time/sources/{id}": {
+      "patch": {
+        "tags": [
+          "crate::time"
+        ],
+        "operationId": "update_source_handler",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateTimeSource"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TimeSource"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": ""
+          },
+          "404": {
+            "description": ""
+          },
+          "409": {
+            "description": ""
+          },
+          "423": {
+            "description": ""
+          }
+        }
+      }
     }
   },
   "components": {
@@ -2516,6 +2569,36 @@
           "on",
           "off"
         ]
+      },
+      "UpdateTimeSource": {
+        "type": "object",
+        "description": "A change to one existing Time source. Every field is optional: this is a\npatch, and leaving one out means \"leave it alone\" rather than \"clear it\".\n\n`kind` and `path` are only accepted until the source's first successful\nimport (issue #423). After that they name the database a body of stored\nevidence actually came from, and repointing a source is how one recorder's\nhistory would quietly become another's — a different database is a new\nsource.",
+        "properties": {
+          "enabled": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "kind": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "path": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
       }
     }
   }
