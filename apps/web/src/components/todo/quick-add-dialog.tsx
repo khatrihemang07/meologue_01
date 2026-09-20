@@ -1,3 +1,4 @@
+import type { Section } from "@meologue/core";
 import { useEffect, useRef, useState } from "react";
 import { ConfirmDialog } from "@/components/ui/alert-dialog";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
@@ -21,6 +22,10 @@ export interface QuickAddDialogProps {
   ambientProjectName?: string;
   /** Issue #388 — see `add-task-form.tsx`'s identically-named prop for the full reasoning; both surfaces share the same seam. */
   sectionNamesByProject?: ReadonlyMap<string, readonly string[]>;
+  /** Issue #388's remaining half — see `add-task-form.tsx`'s identically-named prop. */
+  listSections?: (projectId: string) => Promise<readonly Section[]>;
+  /** Issue #388's remaining half — see `add-task-form.tsx`'s identically-named prop. */
+  onCreateSection?: (projectId: string, name: string) => void;
 }
 
 /**
@@ -45,6 +50,8 @@ export function QuickAddDialog({
   datesWithTasks,
   ambientProjectName,
   sectionNamesByProject,
+  listSections,
+  onCreateSection,
 }: QuickAddDialogProps) {
   const touch = touchOnlyDevice();
 
@@ -82,6 +89,8 @@ export function QuickAddDialog({
     // display text.
     ambientProjectName: touch ? "Inbox" : ambientProjectName,
     sectionNamesByProject,
+    listSections,
+    onCreateSection,
     onCommitted: () => {
       if (!touch) {
         onOpenChange(false);

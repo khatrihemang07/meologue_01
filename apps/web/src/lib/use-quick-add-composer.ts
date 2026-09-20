@@ -1,4 +1,4 @@
-import type { QuickAddOptions, QuickAddSpan } from "@meologue/core";
+import type { QuickAddOptions, QuickAddSpan, Section } from "@meologue/core";
 import { parseQuickAdd } from "@meologue/core";
 import { useEffect, useRef, useState } from "react";
 import { localDateTimeKey } from "@/lib/local-day-key";
@@ -56,6 +56,27 @@ export interface UseQuickAddComposerOptions {
    * stop matching anything instead of staying permissive.
    */
   sectionNamesByProject?: ReadonlyMap<string, readonly string[]>;
+  /**
+   * Issue #388's remaining half — an on-demand fallback for whichever
+   * Project the composer's own live text currently has "active"
+   * (`resolveSectionNames`'s rule, `packages/core/src/quick-add/
+   * parse-quick-add.ts`: a typed `#OtherProject` in the same line if one
+   * won, else `ambientProjectName`) that ISN'T already covered by
+   * `sectionNamesByProject` above. `todo-page.tsx`'s own doc comment on
+   * building that Map is explicit that it only eagerly fetches the
+   * AMBIENT Project's own Sections — typing `#OtherProject /` had no
+   * Section list to offer either the parser or this popup. `ProjectStore.
+   * listSections` (`use-projects.ts`) is a local SQLite read, not a
+   * network round trip — this app's personal scale (`query-keys.ts`'s own
+   * "a personal Project list is small") is exactly why fetching it lazily
+   * here, keyed by whichever Project name the reader just typed, costs
+   * nothing worth avoiding by instead fetching every Project's Sections
+   * up front. Omitted entirely keeps `/section` scoped to only the
+   * ambient Project, this hook's pre-#388 behaviour past that point.
+   */
+  listSections?: (projectId: string) => Promise<readonly Section[]>;
+  /** Mirrors `onCreateProject`/`onCreateLabel` — `entry-store-layout.tsx`'s own `addSection(projectId, name)`, forwarded once this hook has resolved which Project is active. Omitted keeps the "Create" row inserting only the typed token, same as those two. */
+  onCreateSection?: (projectId: string, name: string) => void;
   /**
    * Fires once a commit actually added something — after `onAdd`, after
    * the field is cleared. Not fired for a blank/token-only line (the
@@ -117,6 +138,8 @@ export interface QuickAddComposer {
     getLabels: () => readonly AutocompleteEntry[];
     onCreateProject?: (name: string) => void;
     onCreateLabel?: (name: string) => void;
+    getSections?: (fullText: string) => readonly AutocompleteEntry[];
+    onCreateSection?: (fullText: string, name: string) => void;
   };
   /** The live options (`now`/`smartDates`) this render's parse used — exposed so a caller previewing the parse (`quick-add-dialog.tsx`) reads the identical values `commit` itself will use, rather than recomputing its own `now`. */
   options: QuickAddOptions;
@@ -178,6 +201,106 @@ export function useQuickAddComposer(options: UseQuickAddComposerOptions): QuickA
   const labelsRef = useRef<readonly AutocompleteEntry[]>(options.labels ?? []);
   labelsRef.current = options.labels ?? [];
 
+  // Issue #388's remaining half — `listSections`'s own doc comment above
+  // has the full reasoning for why this is fetched here, on demand, per
+  // Project name, rather than up front by `todo-page.tsx`. Deliberately
+  // NOT `@tanstack/react-query`: `listSections` is already a cheap local-
+  // store read on its own (that option's own doc comment), so a bare
+  // ref+state pair here is enough, and it avoids this hook — shared by
+  // both `add-task-form.tsx` and `quick-add-dialog.tsx` — taking on a
+  // `QueryClient` dependency that every one of its own existing tests
+  // would then need a `QueryClientProvider` wrapper just to satisfy.
+  // Keyed by lower-cased Project name, matching `sectionNamesByProject`'s
+  // own key convention exactly (`mergeSectionNames` below relies on it).
+  const fetchedSectionNamesRef = useRef<Map<string, readonly string[]>>(new Map());
+  const inFlightSectionFetchRef = useRef<Set<string>>(new Set());
+  const [sectionsFetchTick, setSectionsFetchTick] = useState(0);
+
+  // The identical "which Project is active" rule `packages/core`'s own
+  // `resolveSectionNames` applies (parse-quick-add.ts) — reusing
+  // `parseQuickAdd` itself rather than a second, hand-rolled scan for a
+  // `#project` token, so this can never disagree with what the parser
+  // itself would resolve for the SAME text. Computed fresh every render,
+  // same as everything else in this hook; `parseQuickAdd` is a cheap,
+  // pure regex scan over a short title, and `quick-add-content.tsx`
+  // already re-parses `value` once per render for its own preview, so
+  // this is a second cheap parse, not a new class of cost.
+  const typedProjectName = parseQuickAdd(value, {
+    now: localDateTimeKey(new Date()),
+    smartDates,
+    projectNames: projectsRef.current.map((project) => project.name),
+  }).projectName;
+  const effectiveProjectName = typedProjectName ?? options.ambientProjectName ?? null;
+  const effectiveProjectKey = effectiveProjectName === null ? null : effectiveProjectName.toLowerCase();
+
+  const listSectionsOption = options.listSections;
+  const callerSectionNamesByProject = options.sectionNamesByProject;
+  // biome-ignore lint/correctness/useExhaustiveDependencies: sectionsFetchTick is read only to re-run this effect once a fetch (or a local create) elsewhere changes what's already cached — it is a signal, not an input the fetch itself depends on.
+  useEffect(() => {
+    if (listSectionsOption === undefined || effectiveProjectKey === null) {
+      return;
+    }
+    if (callerSectionNamesByProject?.has(effectiveProjectKey)) {
+      return; // Already covered by the caller's own eager Map (the ambient Project, today).
+    }
+    if (
+      fetchedSectionNamesRef.current.has(effectiveProjectKey) ||
+      inFlightSectionFetchRef.current.has(effectiveProjectKey)
+    ) {
+      return;
+    }
+    const project = projectsRef.current.find(
+      (candidate) => candidate.name.toLowerCase() === effectiveProjectKey,
+    );
+    if (project === undefined) {
+      return;
+    }
+    inFlightSectionFetchRef.current.add(effectiveProjectKey);
+    listSectionsOption(project.id)
+      .then((sections) => {
+        fetchedSectionNamesRef.current.set(
+          effectiveProjectKey,
+          sections.map((section) => section.name),
+        );
+      })
+      .catch(() => {
+        // Nothing recognised for this Project yet; the guard above lets a
+        // later keystroke that lands on it again retry, since nothing was
+        // ever written into `fetchedSectionNamesRef` on this path.
+      })
+      .finally(() => {
+        inFlightSectionFetchRef.current.delete(effectiveProjectKey);
+        setSectionsFetchTick((tick) => tick + 1);
+      });
+  }, [effectiveProjectKey, listSectionsOption, callerSectionNamesByProject, sectionsFetchTick]);
+
+  // The caller's own eager Map, plus whatever this instance has fetched
+  // on demand above — the caller's own entry always wins for a given key
+  // (today, only ever the ambient Project), so a fresher on-demand fetch
+  // never shadows it.
+  function mergeSectionNames(
+    base: ReadonlyMap<string, readonly string[]> | undefined,
+    extra: ReadonlyMap<string, readonly string[]>,
+  ): ReadonlyMap<string, readonly string[]> | undefined {
+    if (base === undefined) {
+      return undefined;
+    }
+    if (extra.size === 0) {
+      return base;
+    }
+    const merged = new Map(base);
+    for (const [key, names] of extra) {
+      if (!merged.has(key)) {
+        merged.set(key, names);
+      }
+    }
+    return merged;
+  }
+  const mergedSectionNamesByProject = mergeSectionNames(
+    callerSectionNamesByProject,
+    fetchedSectionNamesRef.current,
+  );
+
   // Issue #388: `projectNames`/`labelNames` are built from the identical
   // `projectsRef`/`labelsRef` the autocomplete popup already reads above —
   // no new prop needed for those two. `options.projects`/`options.labels`
@@ -194,8 +317,71 @@ export function useQuickAddComposer(options: UseQuickAddComposerOptions): QuickA
     projectNames: projectsRef.current.map((project) => project.name),
     labelNames: labelsRef.current.map((label) => label.name),
     activeProjectName: options.ambientProjectName ?? null,
-    sectionNamesByProject: options.sectionNamesByProject,
+    sectionNamesByProject: mergedSectionNamesByProject,
   };
+
+  // `QuickAddAutocompleteOptions.getSections`'s own doc comment
+  // (`quick-add-autocomplete.ts`) has the full reasoning for why this
+  // takes the live document text rather than reading a ref: resolving
+  // "the active Project" from that text, via `parseQuickAdd`, is exactly
+  // `resolveSectionNames`'s own rule, reused rather than duplicated.
+  function getSections(fullText: string): readonly AutocompleteEntry[] {
+    if (mergedSectionNamesByProject === undefined) {
+      return [];
+    }
+    const activeProjectName =
+      parseQuickAdd(fullText, optionsRef.current).projectName ?? options.ambientProjectName ?? null;
+    if (activeProjectName === null) {
+      return [];
+    }
+    const sectionNames = mergedSectionNamesByProject.get(activeProjectName.toLowerCase());
+    if (sectionNames === undefined) {
+      return [];
+    }
+    // Section names, not Section objects, are all `sectionNamesByProject`
+    // (the parser's own source of truth, `todo-page.tsx`'s own doc
+    // comment) ever carries — `AutocompleteEntry`'s own header comment on
+    // why nothing here reads past `id`/`name` is why a synthesised
+    // name-as-id is safe: `selectAutocompleteOption` never reads
+    // `entry.id` for anything but a React list key.
+    return sectionNames.map((name) => ({ id: name, name }));
+  }
+
+  function onCreateSectionRow(fullText: string, name: string): void {
+    const create = options.onCreateSection;
+    if (create === undefined) {
+      return;
+    }
+    const activeProjectName =
+      parseQuickAdd(fullText, optionsRef.current).projectName ?? options.ambientProjectName ?? null;
+    if (activeProjectName === null) {
+      return;
+    }
+    const project = projectsRef.current.find(
+      (candidate) => candidate.name.toLowerCase() === activeProjectName.toLowerCase(),
+    );
+    if (project === undefined) {
+      return;
+    }
+    const trimmed = name.trim();
+    if (trimmed === "") {
+      return;
+    }
+    create(project.id, trimmed);
+    // Optimistic local reflect: the real mutation behind `create`
+    // (`addSection`) already invalidates the shared `["sections"]` query
+    // cache for every OTHER reader (`query-keys.ts`'s own doc comment) —
+    // this only keeps THIS composer instance's own popup/parser from
+    // waiting on a re-fetch to recognise the very name it just inserted.
+    const key = activeProjectName.toLowerCase();
+    if (!callerSectionNamesByProject?.has(key)) {
+      const existing = fetchedSectionNamesRef.current.get(key) ?? [];
+      if (!existing.some((existingName) => existingName.toLowerCase() === trimmed.toLowerCase())) {
+        fetchedSectionNamesRef.current.set(key, [...existing, trimmed]);
+        setSectionsFetchTick((tick) => tick + 1);
+      }
+    }
+  }
 
   const onAddRef = useRef(options.onAdd);
   onAddRef.current = options.onAdd;
@@ -288,6 +474,14 @@ export function useQuickAddComposer(options: UseQuickAddComposerOptions): QuickA
       getLabels: () => labelsRef.current,
       onCreateProject: options.onCreateProject,
       onCreateLabel: options.onCreateLabel,
+      // `sectionNamesByProject`'s own doc comment: `undefined` in means
+      // "no Section capability at all," which `getSections`
+      // omitted entirely (not a function that always returns `[]`)
+      // turns into "the `/` popup never mounts" — `quick-add-
+      // autocomplete.ts`'s own `buildState` doc comment on why that's
+      // the contract, not an empty listbox.
+      getSections: mergedSectionNamesByProject === undefined ? undefined : getSections,
+      onCreateSection: mergedSectionNamesByProject === undefined ? undefined : onCreateSectionRow,
     },
     options: optionsRef.current,
     pendingPasteLines,

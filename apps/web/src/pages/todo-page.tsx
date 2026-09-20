@@ -469,13 +469,19 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
   // `null` and file under "Inbox," which has no Sections of its own to
   // fetch), so `sectionsQuery` just above already IS that fetch — no
   // second query. Keyed by the ambient Project's own name, lower-cased,
-  // matching `QuickAddOptions.sectionNamesByProject`'s own doc comment. A
-  // typed `#OtherProject /section` scopes against whatever that other
-  // Project's Sections happen to already be cached as elsewhere in this
-  // session (react-query's own cache, keyed by `sectionsQueryKey`) — not
-  // eagerly fetched here, a real, acknowledged limitation flagged by this
-  // ticket's own design pass rather than solved by fetching every
-  // Project's Sections up front.
+  // matching `QuickAddOptions.sectionNamesByProject`'s own doc comment.
+  //
+  // A typed `#OtherProject /section` is NOT covered by this Map — this
+  // page still only ever eagerly fetches the AMBIENT Project's own
+  // Sections. That used to be a real, acknowledged gap (this comment's
+  // own pre-#388-follow-up version said so); it's closed one level down
+  // instead, not here: `listSections`/`addSection`, forwarded to
+  // `AddTaskForm`/`QuickAddDialog` below, let `use-quick-add-composer.ts`
+  // fetch a typed OTHER Project's own Sections itself, on demand, keyed
+  // off whatever the composer's own live text currently names (that
+  // hook's own `listSections` doc comment has the full reasoning for why
+  // that fetch belongs there and not here: only the composer instance
+  // ever sees its own live text, and this page renders two of them).
   const sectionNamesByProject = new Map<string, readonly string[]>([
     [ambientProjectName.toLowerCase(), sections.map((section) => section.name)],
   ]);
@@ -1210,6 +1216,8 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
             datesWithTasks={datesWithTasks}
             ambientProjectName={ambientProjectName}
             sectionNamesByProject={sectionNamesByProject}
+            listSections={listSections}
+            onCreateSection={addSection}
           />
         )}
 
@@ -1224,6 +1232,8 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
         datesWithTasks={datesWithTasks}
         ambientProjectName={ambientProjectName}
         sectionNamesByProject={sectionNamesByProject}
+        listSections={listSections}
+        onCreateSection={addSection}
       />
 
       {schedulingTask !== null && (
