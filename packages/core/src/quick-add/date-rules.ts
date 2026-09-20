@@ -230,23 +230,73 @@ function resolveTwoPartMonthDay(
   return dayMonthOrder === "day-month" ? [first, second] : [second, first];
 }
 
-/** `today`, `tomorrow`, `tod`, `tom`. */
+/**
+ * `today`, `tomorrow`, `tod`, `tom` — and, issue #384's own corpus rows:
+ *
+ * - **Punctuation swallowed into the match.** `Call mom today.` highlights
+ *   `today.` in Todoist, trailing period included; `today,` and the
+ *   quoted `"today"` (both surrounding quotes) do the same. The `\b`
+ *   boundary this rule's regex already needs stops exactly at the bare
+ *   word, so the match itself is extended afterward, once, rather than
+ *   folding punctuation into the word alternation itself.
+ * - **An apostrophe is not a word boundary.** `\b` treats `'` as a
+ *   non-word character exactly like a space, which is *why* `Today's
+ *   standup` used to wrongly match `Today` — JS regex `\b` cannot
+ *   distinguish "the word ended" from "the word grew a suffix." The
+ *   `(?!')` lookahead below closes that gap directly: `todays` (no
+ *   apostrophe) already correctly fails for an unrelated reason (`day`
+ *   and `s` share no boundary at all, so `\btoday\b` never matches
+ *   inside it); `Today's` needs this explicit exclusion because `\b`
+ *   alone cannot tell the two shapes apart.
+ */
 export function matchRelativeDate(input: string, ctx: DateRuleContext): QuickAddToken[] {
   const alt = alternation(Object.keys(ctx.language.relativeDays));
-  const regex = new RegExp(`\\b(${alt})\\b`, "gi");
+  const regex = new RegExp(`\\b(${alt})\\b(?!')`, "gi");
   const tokens: QuickAddToken[] = [];
   for (const match of input.matchAll(regex)) {
     // biome-ignore lint/style/noNonNullAssertion: the alternation is built from this exact table's own keys
     const offset = ctx.language.relativeDays[match[1]!.toLowerCase()]!;
+    const { start, end } = extendForSurroundingPunctuation(
+      input,
+      match.index,
+      match.index + match[0].length,
+    );
     tokens.push({
       kind: "date",
-      start: match.index,
-      end: match.index + match[0].length,
-      raw: match[0],
+      start,
+      end,
+      raw: input.slice(start, end),
       date: addDays(ctx.now, offset),
     });
   }
   return tokens;
+}
+
+/**
+ * Extends `[start, end)` to include one trailing `.`/`,`, or a matching
+ * pair of straight double-quotes immediately surrounding the whole span
+ * — Todoist's own eager match absorbs trailing sentence punctuation and
+ * enclosing quotes rather than stopping at the bare word (issue #384).
+ * Quotes take priority over trailing punctuation when both could apply
+ * (`"today."` is not a measured shape; nothing here needs to guess at
+ * it). Narrowly applied only where measured (`matchRelativeDate`) rather
+ * than every eager rule in this file — the corpus's own PENDING rows for
+ * this issue are all bare relative-day words (`today.`/`today,`/
+ * `"today"`); widening this to every rule in the file would be scope
+ * this ticket's own corpus doesn't ask for or falsify.
+ */
+function extendForSurroundingPunctuation(
+  input: string,
+  start: number,
+  end: number,
+): { start: number; end: number } {
+  if (input[start - 1] === '"' && input[end] === '"') {
+    return { start: start - 1, end: end + 1 };
+  }
+  if (input[end] === "." || input[end] === ",") {
+    return { start, end: end + 1 };
+  }
+  return { start, end };
 }
 
 /**
@@ -928,6 +978,179 @@ export function matchAfterDays(input: string): QuickAddToken[] {
 /** Every time-shaped rule — the pool ./rules.ts's `!reminder` handling resolves a whole phrase against, and free-text scanning's own time candidates. */
 export function matchTimeForms(input: string, ctx: DateRuleContext): QuickAddToken[] {
   return [...matchExplicitTime(input, ctx), ...matchFuzzyTime(input, ctx)];
+}
+
+/**
+ * Adjacent means "only whitespace between the two spans," for every merge
+ * `matchDateTimeCombo` below attempts — never a connector word, except the
+ * one named exception (`matchDateTimeCombo`'s own "starting" clause) that
+ * checks its own, different text between the spans instead of calling
+ * this.
+ */
+function isAdjacent(input: string, a: QuickAddToken, b: QuickAddToken): boolean {
+  return a.end <= b.start && input.slice(a.end, b.start).trim() === "";
+}
+
+/**
+ * Merges an adjacent date+time, weekday+time, or recurrence+time pair
+ * into one match — issue #384's own corpus rows: `today at 5pm`,
+ * `tomorrow morning`, `mon 9am` (a plain date word immediately followed
+ * by a time word becomes one `"date"` token carrying the merged
+ * instant), and `every day starting next monday` (a recurrence phrase
+ * followed by `starting` and a date-shaped phrase its own grammar
+ * doesn't parse — `parseRecurrence` wants an absolute `D Mon` date after
+ * `starting`, not "next monday" — still becomes one `"recurrence"`
+ * token spanning the whole thing, since a `"recurrence"` token's own
+ * `raw` is all this parser — and ../detection-corpus.test.ts's own
+ * `resolvedValueOf` — ever checks against a recurrence row; no merged
+ * *value* to compute for that shape, only a merged *span*).
+ *
+ * **Why this subsumes the individual calls rather than running
+ * alongside them.** `Buy milk tomorrow at 5pm every week p2`'s own
+ * corpus row is the reason: Todoist merges `at 5pm` with the
+ * *recurrence* (`every week`) here, not with the earlier `tomorrow` —
+ * and once that merge wins, `tomorrow` is not left behind as its own,
+ * separate match either. A date/time/recurrence candidate that
+ * *attempted* a merge is consumed whether or not that specific merge
+ * ultimately wins the greedy overlap race in ../parse-quick-add.ts's
+ * `resolveOverlaps` — if the individual `matchRelativeDate`/
+ * `matchWeekday`/`matchTimeForms`/`matchRecurrencePhrase` calls also ran
+ * independently in ../parse-quick-add.ts's own candidate list, their own
+ * unmerged `tomorrow` candidate would still be there, overlap nothing,
+ * and get accepted anyway — exactly the stray match the corpus says
+ * shouldn't exist. Returning both the merged tokens *and* whichever
+ * originals never attempted a merge, as one list, is what lets
+ * ../parse-quick-add.ts call this once, in place of those four
+ * functions, rather than four separate calls it would then have to
+ * reconcile.
+ *
+ * Merge priority (recurrence+time tried before date+time) is what
+ * settles that exact ambiguity: `at 5pm` is adjacent to both `tomorrow`
+ * (before it) and `every week` (after it) in that row, and the
+ * recurrence+time merge is attempted first, claiming `at 5pm every
+ * week` — the date+time merge for `tomorrow at 5pm` is attempted too,
+ * consuming `tomorrow` in the process, but the `time` half was already
+ * claimed by the higher-priority recurrence merge, so no second,
+ * conflicting merge token is produced for the same `at 5pm` span —
+ * `tomorrow`'s own consumed status means nothing falls back to it
+ * either.
+ */
+export function matchDateTimeCombo(input: string, ctx: DateRuleContext): QuickAddToken[] {
+  const dateCandidates = [...matchRelativeDate(input, ctx), ...matchWeekday(input, ctx)];
+  const timeCandidates = matchTimeForms(input, ctx);
+  const recurrenceCandidates = matchRecurrencePhrase(input);
+
+  const consumed = new Set<QuickAddToken>();
+  const merged: QuickAddToken[] = [];
+
+  // Recurrence + time, either order — tried before date + time below, so
+  // it wins the one measured ambiguity (`at 5pm` adjacent to both a date
+  // and a recurrence) this function's own doc comment names.
+  for (const rec of recurrenceCandidates) {
+    for (const time of timeCandidates) {
+      if (isAdjacent(input, time, rec)) {
+        merged.push({
+          kind: "recurrence",
+          start: time.start,
+          end: rec.end,
+          raw: input.slice(time.start, rec.end),
+        });
+        consumed.add(rec);
+        consumed.add(time);
+      } else if (isAdjacent(input, rec, time)) {
+        // Never actually reached today: an "at HH:MM" clause immediately
+        // after "every ..." is already inside ../recurrence/parser.ts's
+        // own grammar, so matchRecurrencePhrase's own span already
+        // swallows it before this function ever sees two separate
+        // candidates for it (`take pills every day at 5pm`, this
+        // module's own comment on `matchRecurrencePhrase`'s trailing
+        // clause). Kept for the reverse direction's own symmetry and as
+        // a guard against that no longer being true.
+        merged.push({
+          kind: "recurrence",
+          start: rec.start,
+          end: time.end,
+          raw: input.slice(rec.start, time.end),
+        });
+        consumed.add(rec);
+        consumed.add(time);
+      }
+    }
+  }
+
+  // Recurrence + "starting" + a date-shaped phrase the recurrence
+  // grammar itself doesn't parse (`every day starting next monday`) —
+  // the one named exception to "adjacent means only whitespace": exactly
+  // one "starting" between the two, nothing else.
+  for (const rec of recurrenceCandidates) {
+    if (consumed.has(rec)) {
+      continue;
+    }
+    for (const date of dateCandidates) {
+      if (rec.end >= date.start) {
+        continue;
+      }
+      const between = input.slice(rec.end, date.start);
+      if (/^\s*starting\s+$/i.test(between)) {
+        merged.push({
+          kind: "recurrence",
+          start: rec.start,
+          end: date.end,
+          raw: input.slice(rec.start, date.end),
+        });
+        consumed.add(rec);
+        consumed.add(date);
+      }
+    }
+  }
+
+  // Date + time (`today at 5pm`, `tomorrow morning`, `mon 9am`) — the
+  // merged token's own `date` is the two source tokens' values joined
+  // directly (`YYYY-MM-DD` + `T` + `HH:MM`): a plain date word already
+  // pins the day explicitly, so no roll-forward question even arises,
+  // exactly as ../parse-quick-add.ts's own `mergeDateAndTime` reasons
+  // for an explicit date token. A date candidate is consumed the moment
+  // it's adjacent to a time candidate at all — even when that time was
+  // already claimed by a *different*, higher-priority merge above (`Buy
+  // milk tomorrow at 5pm every week p2`'s own corpus row: `tomorrow` is
+  // adjacent to `at 5pm`, which the recurrence+time merge above already
+  // claimed for `at 5pm every week`) — so `tomorrow` is consumed, and
+  // therefore absent from `survivors` below, without a second,
+  // conflicting merge token ever being produced for the same `at 5pm`
+  // span.
+  for (const date of dateCandidates) {
+    if (consumed.has(date) || date.kind !== "date") {
+      continue;
+    }
+    for (const time of timeCandidates) {
+      if (time.kind !== "time" || !isAdjacent(input, date, time)) {
+        continue;
+      }
+      consumed.add(date);
+      if (consumed.has(time)) {
+        continue; // Already claimed by a different merge above — attempted, not completed.
+      }
+      merged.push({
+        kind: "date",
+        start: date.start,
+        end: time.end,
+        raw: input.slice(date.start, time.end),
+        date: `${date.date.slice(0, 10)}T${time.time}`,
+      });
+      consumed.add(time);
+    }
+  }
+
+  // Recurrence candidates first, then date, then time — the identical
+  // "compound wins over the bare word it's built from" priority this
+  // parser already had (`every monday` over plain `monday`, pushed in
+  // that order by the pre-#384 candidate list this function replaces),
+  // preserved here as this function's own internal ordering rather than
+  // inverted by folding everything into one list.
+  const survivors = [...recurrenceCandidates, ...dateCandidates, ...timeCandidates].filter(
+    (token) => !consumed.has(token),
+  );
+  return [...merged, ...survivors];
 }
 
 /**

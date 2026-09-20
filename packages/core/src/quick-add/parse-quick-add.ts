@@ -4,19 +4,15 @@ import {
   matchAbsoluteDate,
   matchAfterDays,
   matchArithmeticDate,
+  matchDateTimeCombo,
   matchDaysFromNow,
   matchEndOfMonth,
-  matchExplicitTime,
   matchFuzzyRange,
-  matchFuzzyTime,
   matchHolidayWord,
   matchNextMonth,
   matchNextWeek,
   matchNextYear,
-  matchRecurrencePhrase,
   matchRecurrenceWord,
-  matchRelativeDate,
-  matchWeekday,
   matchWeekdayArithmeticCombo,
 } from "./date-rules";
 import { englishQuickAddLanguage } from "./en";
@@ -150,25 +146,31 @@ function collectCandidates(
   ];
   if (smartDates) {
     candidates.push(
-      // A recurrence phrase is pushed first, ahead of every other eager
-      // rule: "every monday" or "every day at 5pm" is strictly more
-      // specific than the plain weekday/time candidates the same words
-      // would otherwise also match ("monday", "5pm"), and this list's
-      // own push order is what lets the compound match win those words
-      // rather than being shadowed by shorter ones that fire first — the
-      // identical reasoning matchWeekdayArithmeticCombo's own doc
-      // comment gives for going before plain matchWeekday/
-      // matchArithmeticDate.
-      ...matchRecurrencePhrase(input),
       // "after N days" (issue #369) is the same kind of compound-before-
-      // simple case matchRecurrencePhrase's own comment above describes —
-      // pushed right alongside it so the whole phrase wins over whatever
-      // shorter, unrelated candidate a bare number might otherwise match.
+      // simple case `matchWeekdayArithmeticCombo`'s own doc comment
+      // describes — pushed right alongside it so the whole phrase wins
+      // over whatever shorter, unrelated candidate a bare number might
+      // otherwise match.
       ...matchAfterDays(input),
       ...matchWeekdayArithmeticCombo(input, dateCtx),
+      // Issue #384: a recurrence phrase, a plain relative-date/weekday
+      // word, and a time word each used to be pushed as four separate
+      // calls (`matchRecurrencePhrase`, `matchRelativeDate`,
+      // `matchWeekday`, `matchExplicitTime`/`matchFuzzyTime` via
+      // `matchTimeForms`) — `matchDateTimeCombo` now subsumes all four,
+      // merging an adjacent pair into one match ("every monday"/"every
+      // day at 5pm"/"today at 5pm"/"mon 9am") where Todoist's own corpus
+      // shows one, and passing through whichever originals never
+      // attempted a merge unchanged — see that function's own doc
+      // comment for why replacing those calls, not adding alongside
+      // them, is what a stray unmerged leftover (issue #384's own `Buy
+      // milk tomorrow at 5pm every week p2` row) needs. Pushed after
+      // `matchAfterDays`/`matchWeekdayArithmeticCombo` so "monday in 2
+      // weeks" still wins over this function's own bare "monday"
+      // survivor for that input — the identical compound-before-simple
+      // ordering those two calls already needed relative to each other.
+      ...matchDateTimeCombo(input, dateCtx),
       ...matchAbsoluteDate(input, dateCtx),
-      ...matchRelativeDate(input, dateCtx),
-      ...matchWeekday(input, dateCtx),
       ...matchArithmeticDate(input, dateCtx),
       // "N unit(s) from now" (issue #382) — the reversed word order of
       // "in N units" just above; pushed right after it for the same
@@ -181,8 +183,6 @@ function collectCandidates(
       ...matchFuzzyRange(input, dateCtx),
       ...matchHolidayWord(input, dateCtx),
       ...matchEndOfMonth(input, dateCtx),
-      ...matchExplicitTime(input, dateCtx),
-      ...matchFuzzyTime(input, dateCtx),
       ...matchRecurrenceWord(input, dateCtx),
     );
   }

@@ -234,29 +234,12 @@ function checkRow(row: CorpusRow): RowCheck {
  * an unlisted row into a ticket's scope is how a later PR "flips" this
  * fixture without its acceptance criteria ever having promised it.
  */
-const PENDING: ReadonlyArray<{ reason: string; inputs: readonly string[] }> = [
-  {
-    reason:
-      "#384 — 'Today's' should fail the same exact-token test 'todays' does (both fail in Todoist); meologue's \\b boundary treats the apostrophe as a separator and matches anyway",
-    inputs: ["Today's standup"],
-  },
-  {
-    reason:
-      "#384 — Todoist's matched span swallows adjacent punctuation/quotes; meologue's word-boundary match stops at the bare word",
-    inputs: ["Call mom today.", "Call mom today,", 'Call mom "today"'],
-  },
-  {
-    reason:
-      "#384 — Todoist merges an adjacent date+time (or recurrence+time) phrase into one match; meologue always keeps them as separate tokens",
-    inputs: [
-      "today at 5pm",
-      "tomorrow morning",
-      "mon 9am",
-      "every day starting next monday",
-      "Buy milk tomorrow at 5pm every week p2",
-    ],
-  },
-];
+// Issue #384 resolved every row this list used to carry (the apostrophe
+// boundary, swallowed punctuation, and merged date+time/recurrence+time
+// groups) — kept as an empty array, not deleted, so a future PENDING
+// group has somewhere to land and the "no PENDING row has started
+// passing" guard test below still has a (vacuously true) list to check.
+const PENDING: ReadonlyArray<{ reason: string; inputs: readonly string[] }> = [];
 
 const PENDING_INPUTS = new Set(PENDING.flatMap((group) => group.inputs));
 
