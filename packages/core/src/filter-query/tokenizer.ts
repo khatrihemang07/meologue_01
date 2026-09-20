@@ -17,7 +17,7 @@
  * everything up to the next reserved character, spaces included: `#Home
  * Chores & today` tokenizes as the atom `"#Home Chores"`, then `&`, then
  * the atom `"today"`. An atom that opens any other way (a flag, a
- * priority, a `date`/`deadline` comparison) stops at the *first*
+ * priority, a `date` comparison) stops at the *first*
  * whitespace instead, exactly like every other single-word token in this
  * grammar — this is what lets `today p1` tokenize as **two** atoms with
  * nothing between them (a `FilterParseError` ./parser.ts raises, "these

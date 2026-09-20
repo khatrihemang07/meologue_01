@@ -72,8 +72,8 @@ The full, ordered collection of a user's Entries, as seen from a given Device. T
 show slightly different Histories at any given moment if one hasn't finished Syncing, but they
 converge once Syncing completes.
 
-Each day in History opens with that day's Day block, listing whatever Tasks are dated or
-deadlined then. The block is rendered alongside the day's Entries, not held as part of History
+Each day in History opens with that day's Day block, listing whatever Tasks are dated
+then. The block is rendered alongside the day's Entries, not held as part of History
 itself — it reflects Tasks that live elsewhere, and moving one from day to day moves it between
 blocks without touching any Entry that mentions it.
 
@@ -394,12 +394,6 @@ When the user plans to do a Task. Optional — a Task need not carry one. A Date
 well as a day, and that time is floating: 9am means 9am wherever the Device reading it happens to
 be, not 9am in some fixed timezone.
 
-### Deadline
-
-The hard cutoff by which a Task must be done. Date-only — no time, no recurrence — and independent
-of Date: a Task may carry a Date, a Deadline, both, or neither, and a Deadline does not imply the
-user plans to work on the Task before it, only that it must be finished by then.
-
 ### Recurrence
 
 A Task that comes back. What the user typed to describe the pattern is what is stored, unchanged;
@@ -424,11 +418,10 @@ Project appears.
 
 ### Upcoming
 
-The view over Tasks forward from today, grouped by the day each falls on. Upcoming reads the same
-two independent date fields Today does, and adds nothing of its own: a Task appears in it because of
-when it is planned or due, never because of where it lives or what it says. A Task with no Date and
-no Deadline appears nowhere in it, for the same reason it appears nowhere in Today — there is no day
-to put it under.
+The view over Tasks forward from today, grouped by the day each falls on. Upcoming groups by Date
+alone, and adds nothing of its own: a Task appears in it because of when it is planned, never
+because of where it lives or what it says. A Task with no Date appears nowhere in it — there is no
+day to put it under.
 
 ### Occurrence
 
@@ -438,7 +431,7 @@ recurring Task itself, which carries on to its next Date.
 
 ### Day block
 
-The list of Tasks dated or deadlined on a given day, shown at the start of that day in History. A
+The list of Tasks dated on a given day, shown at the start of that day in History. A
 Day block is a rendering, not a record: nothing about it is stored, so re-dating a Task moves it
 from one Day block to another while whatever Reference to it sits in an Entry stays exactly where
 it was written. A Day block is invisible to Export, to Digest grounding, and to embeddings — none

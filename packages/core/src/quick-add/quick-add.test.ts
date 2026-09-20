@@ -404,19 +404,15 @@ describe("tokens", () => {
     });
   });
 
-  describe("{deadline}", () => {
-    it("resolves an absolute worded date inside braces, with the same roll-forward rule as free text", () => {
-      expect(parse("finish report {27 Jan}").deadline).toBe("2027-01-27");
-    });
-
-    it("resolves a relative word inside braces", () => {
-      expect(parse("finish report {tomorrow}").deadline).toBe("2026-09-03");
-    });
-
-    it("produces no token at all when the brace content doesn't resolve to a whole date", () => {
-      const result = parse("finish report {banana}");
-      expect(result.deadline).toBeNull();
-      expect(result.content).toBe("finish report {banana}");
+  describe("{deadline} — no longer a token (issue #377 removed Deadline)", () => {
+    it.each<string>([
+      "finish report {27 Jan}",
+      "finish report {tomorrow}",
+      "finish report {banana}",
+    ])("%s produces no token, and stays exactly as typed", (input) => {
+      const result = parse(input);
+      expect(result.tokens).toEqual([]);
+      expect(result.content).toBe(input);
     });
   });
 
@@ -759,9 +755,10 @@ describe("smart date recognition can be turned off entirely", () => {
     expect(result.date).toBeNull();
   });
 
-  it("still resolves {deadline} — the brace is an explicit marker, not a guess", () => {
+  it("{27 Jan} produces no token either way — issue #377 removed the brace grammar entirely, not just its smartDates gating", () => {
     const result = parse("finish report {27 Jan}", { smartDates: false });
-    expect(result.deadline).toBe("2027-01-27");
+    expect(result.tokens).toEqual([]);
+    expect(result.content).toBe("finish report {27 Jan}");
   });
 
   it("still resolves !reminder", () => {

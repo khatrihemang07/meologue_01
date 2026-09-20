@@ -73,7 +73,6 @@ const COMPARABLE_KINDS = new Set<QuickAddToken["kind"]>([
   "recurrence",
   "priority",
   "project",
-  "deadline",
 ]);
 
 const MONTH_ABBR = [
@@ -116,8 +115,6 @@ function resolvedValueOf(token: QuickAddToken): string {
       return todoistDate(token.date);
     case "time":
       return todoistDateTime(NOW, token.time);
-    case "deadline":
-      return todoistDate(token.deadline);
     case "priority":
       // Todoist's matchId is the *UI* priority level (`p1` -> `"1"`), not
       // ../task-types.ts's stored/inverted value `token.priority` already
@@ -211,11 +208,6 @@ function checkRow(row: CorpusRow): RowCheck {
  * fixture without its acceptance criteria ever having promised it.
  */
 const PENDING: ReadonlyArray<{ reason: string; inputs: readonly string[] }> = [
-  {
-    reason:
-      "#377 — {deadline} braces are Pro-gated in Todoist (no match at all); meologue still resolves one",
-    inputs: ["{24 sept}"],
-  },
   {
     reason:
       "#383 — QuickAddLanguage.arithmeticUnits has no hour/minute unit at all, and even adding one would need a time-of-day-bearing `now` (QuickAddOptions.now is date-only, LocalDayKey) to resolve 'in an hour'/'in 30 min' to a clock time",

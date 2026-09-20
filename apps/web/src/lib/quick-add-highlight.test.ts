@@ -117,18 +117,6 @@ describe("tokenHighlightState", () => {
     expect(tokenHighlightState(token, 3)).toBe("unresolved");
   });
 
-  // Issue #376: `{24 sept}` still tokenises (issue #377 removes the rule;
-  // untouched here), but no surface can ever apply it, so it reads
-  // "unresolved" unconditionally — the same treatment `project`/`section`
-  // get, never a "pending" decoration that would promise a resolution
-  // that isn't coming.
-  it("is 'unresolved' for a deadline token, regardless of the caret", () => {
-    const token = { kind: "deadline" as const, start: 0, end: 9 };
-
-    expect(tokenHighlightState(token, null)).toBe("unresolved");
-    expect(tokenHighlightState(token, 4)).toBe("unresolved"); // caret inside
-  });
-
   it("is 'pending' for a supported kind while the caret sits inside it", () => {
     const token = { kind: "date" as const, start: 4, end: 12 };
 
@@ -263,6 +251,21 @@ describe("highlightSegments", () => {
 
     expect(tokenSegment).toEqual({ text: "#Work", kind: "project", state: "unresolved" });
   });
+
+  // Issue #377's own acceptance criterion: "{24 sept} leaves the braces
+  // as literal title text and sets nothing." Unlike `#Work` above, this
+  // isn't an unresolved-but-highlighted token — the parser (issue #377's
+  // own `maskBracedSpans`) never produces a token for it at all, so it
+  // reads as one plain, entirely unstyled run, the same as any other
+  // ordinary text this module has never assigned a kind to.
+  it("renders {24 sept} as one plain run — no token, no highlight, braces included", () => {
+    const result = parseWithDemotions("finish report {24 sept}", { now: NOW }, new Set());
+    expect(result.tokens).toEqual([]);
+
+    const segments = highlightSegments("finish report {24 sept}", result.tokens, null);
+
+    expect(segments).toEqual([{ text: "finish report {24 sept}", kind: null, state: null }]);
+  });
 });
 
 describe("tokenAtOffset", () => {
@@ -302,7 +305,6 @@ describe("isEagerTokenKind", () => {
       "label",
       "priority",
       "reminder",
-      "deadline",
       "uncompletable",
       "description",
     ] as const) {

@@ -2,7 +2,6 @@ import { storedPriorityOf } from "../task-types";
 import {
   type DateRuleContext,
   isEveryBangAt,
-  matchDateForms,
   matchTimeForms,
   resolveWholePhrase,
 } from "./date-rules";
@@ -12,9 +11,12 @@ import type { QuickAddToken } from "./types";
  * The sigil-marked rules (issue #170's Part A) — every one of these is
  * always active, regardless of `QuickAddOptions.smartDates`, because the
  * user typed an explicit marker on purpose: `#`, `/`, `@`/`%`, `p1`-`p4`,
- * `!`, `{}`, a leading `* `, `//`. See ./types.ts's
+ * `!`, a leading `* `, `//`. See ./types.ts's
  * `QuickAddTokenKind` doc comment for why that's the line
  * `smartDates` draws, and ./date-rules.ts for the family it turns off.
+ * (`{}` was a ninth marker here, for Deadline — issue #377 removed it;
+ * a brace pair is now just literal text, like any other punctuation this
+ * parser doesn't assign meaning to.)
  */
 
 /** A leading `* ` — issue #170's uncompletable marker. Only recognised at the very start of the input; `* ` appearing mid-sentence is plain text (a literal asterisk), not this token. */
@@ -193,36 +195,6 @@ export function matchPriority(input: string): QuickAddToken[] {
 }
 
 /**
- * `{deadline}` — the text inside the braces has to resolve, as a whole,
- * to one of ./date-rules.ts's date forms (`resolveWholePhrase`); braces
- * around anything else produce no token at all, rather than a deadline
- * this parser silently made up from a partial match. Always active
- * regardless of `smartDates`: the brace is the marker, and once it's
- * there the eager/non-eager distinction has nothing left to guard
- * against — see ./types.ts's `QuickAddTokenKind` doc comment.
- */
-export function matchDeadline(input: string, ctx: DateRuleContext): QuickAddToken[] {
-  const regex = /\{([^}]+)\}/g;
-  const tokens: QuickAddToken[] = [];
-  for (const match of input.matchAll(regex)) {
-    // biome-ignore lint/style/noNonNullAssertion: `[^}]+` guarantees the capture group participates
-    const phrase = match[1]!;
-    const resolved = resolveWholePhrase(phrase, ctx, [matchDateForms]);
-    if (resolved === null || resolved.kind !== "date") {
-      continue;
-    }
-    tokens.push({
-      kind: "deadline",
-      start: match.index,
-      end: match.index + match[0].length,
-      raw: match[0],
-      deadline: resolved.date,
-    });
-  }
-  return tokens;
-}
-
-/**
  * `!reminder` — `!` immediately followed by a time-of-day phrase that
  * resolves as a whole against ./date-rules.ts's time forms (explicit or
  * fuzzy). `!` with no recognisable time following it still produces a
@@ -230,8 +202,10 @@ export function matchDeadline(input: string, ctx: DateRuleContext): QuickAddToke
  * marker the user typed on purpose, and a caller (the Composer, issue
  * #170's Part D) still needs to know a reminder was asked for even when
  * this parser can't pin down when. Always active regardless of
- * `smartDates`, for the identical reason `{deadline}` is. One `!` is
- * excluded on sight — `isEveryBangAt`'s own doc comment explains why
+ * `smartDates`, the same "the sigil is the marker" reasoning every
+ * sigil-marked rule here follows (./types.ts's `QuickAddTokenKind` doc
+ * comment). One `!` is excluded on sight — `isEveryBangAt`'s own doc
+ * comment explains why
  * "every!" belongs to ./date-rules.ts's recurrence-phrase grammar
  * instead.
  */

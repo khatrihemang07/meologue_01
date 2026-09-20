@@ -12,12 +12,13 @@
  * priority (`p1`-`p4`), a Project (`#Name`, or `##Name` for the Project
  * *and everything nested under it* — criterion 3's "a Project with
  * everything under it"), a Section (`/Name`), a Label (`@Name`), or a
- * dated/deadlined comparison (`date:2026-09-10`, `date<2026-09-10`,
- * `date>2026-09-10`, and the identical three spellings for `deadline`).
- * ./parser.ts's own header comment has the full worked grammar and
- * ./evaluate.ts's has the full reasoning for `date`/`deadline` staying
- * two separate predicate kinds while `today`/`tomorrow`/`overdue` fold
- * them into one "what's due" question (criterion 4).
+ * dated comparison (`date:2026-09-10`, `date<2026-09-10`,
+ * `date>2026-09-10`). ./parser.ts's own header comment has the full
+ * worked grammar. (`deadline:`/`deadline<`/`deadline>` were a second,
+ * identically-shaped set of these until issue #377 — Deadline is no
+ * longer a concept this domain has at all, so the field name they
+ * predicated on stopped existing; ./evaluate.ts's own header comment on
+ * `matchesFlag` records the one thing that changed as a result.)
  *
  * **Criterion 5, in the type system.** `FilterNode`'s `and`/`or` variants
  * exist, but nothing in ./parser.ts ever *builds* one by silently
@@ -54,7 +55,7 @@ export class FilterParseError extends Error {
   }
 }
 
-/** Every flag this grammar recognises with no argument — CONTEXT.md's "the usual flags for undated, overdue, repeating, and sub-task," plus `today`/`tomorrow`, the two calendar-relative flags "asking what is due" (criterion 4) resolves through the same Date-or-Deadline rule ./evaluate.ts's own header comment states. */
+/** Every flag this grammar recognises with no argument — CONTEXT.md's "the usual flags for undated, overdue, repeating, and sub-task," plus `today`/`tomorrow`, the two calendar-relative flags "asking what is due" resolves by Date alone (./evaluate.ts's own header comment — Deadline no longer participates, issue #377). */
 export type FilterFlag = "today" | "tomorrow" | "overdue" | "undated" | "recurring" | "subtask";
 
 /** A UI priority level, 1-4 (p1 most urgent) — the same p1-p4 naming ../quick-add/types.ts's own `priority` token and ../task-types.ts's `uiPriorityOf` use, never the inverted 1-4 stored representation. */
@@ -80,8 +81,8 @@ export type FilterNode =
   | { kind: "section"; name: string }
   /** `@Name` — matched the identical way `project`/`section` above are, against every live Label sharing that name. */
   | { kind: "label"; name: string }
-  /** `date:`/`date<`/`date>`/`deadline:`/`deadline<`/`deadline>` — names ONE field explicitly (criterion 3), unlike the `flag` variants above that fold both fields together (criterion 4) — see ./evaluate.ts's own header comment for why these two are deliberately different rules, not two spellings of the same one. `value` is a bare `YYYY-MM-DD`, this grammar's only date literal (no relative phrases — see ./parser.ts's own header comment for why). */
-  | { kind: "due"; field: "date" | "deadline"; op: FilterDateComparison; value: string };
+  /** `date:`/`date<`/`date>` — criterion 3's "name a field explicitly." `value` is a bare `YYYY-MM-DD`, this grammar's only date literal (no relative phrases — see ./parser.ts's own header comment for why). Until issue #377 this variant also carried a `field: "date" | "deadline"` discriminant, since `deadline:`/`deadline<`/`deadline>` named the identical comparison against a different field — with Deadline gone, `date` was the only value that field could ever hold, so the discriminant itself was dropped rather than kept as a permanently-one-valued no-op. */
+  | { kind: "due"; op: FilterDateComparison; value: string };
 
 /** One comma-separated segment of a query, alongside the exact source text that produced it — criterion 2's "several result lists," each one a full expression tree of its own. `label` is the segment's own trimmed source text (`"today"`, `"#Work & p1"`) — the same "no invented name" choice a real Todoist makes for its own comma-separated columns, rather than this grammar inventing per-list titles nothing asked for. */
 export interface FilterResultList {

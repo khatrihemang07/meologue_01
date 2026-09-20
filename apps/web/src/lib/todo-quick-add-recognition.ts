@@ -73,8 +73,6 @@ export function matchIdForToken(token: QuickAddToken, resolvedDateTime: string |
       // time at all — but `token.time` is kept as a defensive fallback
       // rather than asserting that guarantee with a non-null assertion.
       return resolvedDateTime ?? token.time;
-    case "deadline":
-      return token.deadline;
     case "priority":
       // `token.priority` is the STORED 1-4 (../../packages/core/src/quick-add/
       // types.ts's own doc comment on `priority`); the identifier is meant
