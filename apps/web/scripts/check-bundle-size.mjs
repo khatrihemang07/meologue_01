@@ -286,16 +286,24 @@ const CHUNK_BUDGETS = {
   "src/pages/reflection-page.tsx": { ceilingBytes: 38_000, baselineBytes: 29_316 },
   // Measured 20,088 bytes gzip (own chunk + 6 shared).
   "src/pages/sessions-page.tsx": { ceilingBytes: 26_000, baselineBytes: 20_088 },
-  // Measured 13,586 bytes gzip (own chunk + 3 shared).
-  "src/pages/settings-page.tsx": { ceilingBytes: 17_600, baselineBytes: 13_586 },
+  // Re-measured at 17,253 gzip after Time's source configuration landed here
+  // (issues #419/#420/#423: the recorder picker, the path field and the
+  // archive/re-enable control), which took the route from 13,586 to within
+  // 350 bytes of its old 17,600 ceiling. Re-baselined rather than squeezed:
+  // the growth is a whole topic section this page did not have before, not
+  // drift. Headroom restored to the ~1.3x every other route entry uses.
+  "src/pages/settings-page.tsx": { ceilingBytes: 22_400, baselineBytes: 17_253 },
   // TimePage (issue #418, comparative lanes in #420). Carries `date-fns`'s
-  // `format` for the request key and `lib/time-lanes.ts`'s layout maths; the
-  // lanes themselves are plain absolutely-positioned elements rather than a
+  // date arithmetic and `lib/time-lanes.ts`'s layout maths; the lanes
+  // themselves are plain absolutely-positioned elements rather than a
   // charting library, which is most of why this sits nearer Digest's size
-  // than Todo's. Measured 12,708 bytes gzip (own chunk + 7 shared)
-  // immediately after landing, with the ~1.3x headroom every other route
-  // entry here uses.
-  "src/pages/time-page.tsx": { ceilingBytes: 16_500, baselineBytes: 12_708 },
+  // than Todo's.
+  //
+  // Re-measured at 16,288 gzip once #421's refresh and status panel, #422's
+  // nightly-run reporting and #424's day navigation, search and record
+  // inspector had all landed on it — 12,708 was the first slice alone.
+  // Headroom is the ~1.3x every other route entry here uses.
+  "src/pages/time-page.tsx": { ceilingBytes: 21_200, baselineBytes: 16_288 },
   "src/pages/todo-page.tsx": { ceilingBytes: 92_832, baselineBytes: 92_795 },
 };
 
