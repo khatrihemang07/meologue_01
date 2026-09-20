@@ -20,7 +20,6 @@ import {
 } from "./date-rules";
 import { englishQuickAddLanguage } from "./en";
 import {
-  matchDeadline,
   matchDescription,
   matchLabel,
   matchPriority,
@@ -61,10 +60,53 @@ export function parseQuickAdd(input: string, options: QuickAddOptions): QuickAdd
   const { now } = options;
   const dateCtx: DateRuleContext = { language, now };
 
-  const candidates = collectCandidates(input, dateCtx, smartDates);
+  // Issue #377: every candidate rule scans `maskBracedSpans(input)`, not
+  // `input` itself — see that function's own doc comment for why a brace
+  // pair has to stay opaque to every rule, sigil-marked or eager alike,
+  // rather than merely losing the one rule (`matchDeadline`) that used to
+  // read it on purpose.
+  const scanInput = maskBracedSpans(input);
+  const candidates = collectCandidates(scanInput, dateCtx, smartDates);
   const tokens = resolveOverlaps(candidates, demoted);
 
+  // `buildResult` still reads the real `input` — masking only ever
+  // affects what the matchers above are allowed to see, never what ends
+  // up in `content` or any token's own `raw` (which a masked region can
+  // never contribute in the first place, since nothing matches inside
+  // one).
   return buildResult(input, tokens, now);
+}
+
+/**
+ * Blanks every `{...}` span to same-length spaces before any rule runs
+ * over the input — issue #377's replacement for `matchDeadline`
+ * (./rules.ts, removed). Before this issue, that rule claimed a brace
+ * pair's *entire* span as its own "deadline" token, which — win or lose
+ * — kept every other candidate from separately recognising whatever text
+ * sat inside it (`resolveOverlaps`'s own greedy-by-push-order rule).
+ * Losing that rule without replacing its blocking effect would have
+ * *widened* what braces do: text that used to be shielded because a
+ * Deadline picker might use it (`{24 sept}`) would start being read as
+ * an ordinary date instead, the opposite of "the braces become literal
+ * text" — measured directly against the corpus (`detection-corpus.json`):
+ * bare `24 sept` is a real Todoist match, but `{24 sept}` is not, on a
+ * free/Deadline-less account. Masking reproduces that blocking effect
+ * with no token, no kind and no field at all — the cleanest match to
+ * "the token kind, the parser rule and the field on the parse result all
+ * go" while still leaving nothing for any rule to find in the braces
+ * (blanks match none of them), so the region falls out of every
+ * candidate untouched and survives into `content` exactly as typed, the
+ * same way any other unrecognised text already does.
+ *
+ * Same-length replacement, not deletion, is what keeps every other
+ * token's `start`/`end` valid against the *real* `input` a caller passed
+ * in — deleting the braced text instead would shift every offset after
+ * it, which this module's own header comment (`QuickAddResult.tokens`
+ * doc comment) already promises callers a token never has to correct
+ * for.
+ */
+function maskBracedSpans(input: string): string {
+  return input.replace(/\{[^}]+\}/g, (match) => " ".repeat(match.length));
 }
 
 /**
@@ -88,9 +130,9 @@ export function demoteQuickAddToken(
 }
 
 // `smartDates` gates only the eager/natural-language family below —
-// `matchDeadline`/`matchReminder` above are sigil-marked (./rules.ts's
-// own header comment) and always run, both here and inside this
-// function's own call from parseQuickAdd.
+// `matchReminder` above is sigil-marked (./rules.ts's own header
+// comment) and always runs, both here and inside this function's own
+// call from parseQuickAdd.
 function collectCandidates(
   input: string,
   dateCtx: DateRuleContext,
@@ -103,7 +145,6 @@ function collectCandidates(
     ...matchSection(input),
     ...matchLabel(input),
     ...matchPriority(input),
-    ...matchDeadline(input, dateCtx),
     ...matchReminder(input, dateCtx),
   ];
   if (smartDates) {
@@ -184,7 +225,6 @@ function resolveOverlaps(
 function buildResult(input: string, tokens: QuickAddToken[], now: string): QuickAddResult {
   let date: string | null = null;
   let time: string | null = null;
-  let deadline: string | null = null;
   let priority = 1;
   let projectName: string | null = null;
   let sectionName: string | null = null;
@@ -204,9 +244,6 @@ function buildResult(input: string, tokens: QuickAddToken[], now: string): Quick
         break;
       case "time":
         time = token.time;
-        break;
-      case "deadline":
-        deadline = token.deadline;
         break;
       case "priority":
         priority = token.priority;
@@ -241,7 +278,6 @@ function buildResult(input: string, tokens: QuickAddToken[], now: string): Quick
     tokens,
     content: buildContent(input, tokens),
     date: mergeDateAndTime(date, time, now),
-    deadline,
     priority,
     projectName,
     sectionName,

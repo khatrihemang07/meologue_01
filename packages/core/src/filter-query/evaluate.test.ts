@@ -55,8 +55,20 @@ describe("flags", () => {
     expect(matchIds("tomorrow", { tasks: allTasks })).toEqual(["due-tomorrow"]);
   });
 
-  it("undated matches a Task with neither a Date nor a Deadline", () => {
+  it("undated matches a Task with no Date", () => {
     expect(matchIds("undated", { tasks: allTasks })).toEqual(["undated"]);
+  });
+
+  // Issue #377: `undated` used to also require `task.deadline === null` —
+  // Deadline is no longer a concept this grammar reads at all, so a
+  // restored Task carrying one (D12's own risk: a Restore can reinject a
+  // value into a schema that no longer reads it) still matches `undated`
+  // purely on having no Date, and evaluating the flag never throws.
+  it("undated still matches a Task with no Date even when it carries a restored deadline value", () => {
+    const restoredWithDeadline = task({ id: "restored", deadline: "2026-09-01" });
+
+    expect(() => matchIds("undated", { tasks: [restoredWithDeadline] })).not.toThrow();
+    expect(matchIds("undated", { tasks: [restoredWithDeadline] })).toEqual(["restored"]);
   });
 
   it("recurring matches a Task carrying a Recurrence rule", () => {
@@ -113,17 +125,12 @@ describe("criterion 4: a query asking what is due prefers the Date when a Task h
   });
 });
 
-describe("criterion 3: naming a Date or a Deadline explicitly reads only that one field", () => {
+describe("criterion 3: naming a Date explicitly", () => {
   const both = task({ id: "both", date: "2026-09-15", deadline: "2026-09-01" });
 
-  it("date: matches only the Date field, ignoring the Deadline entirely", () => {
+  it("date: matches the Date field, ignoring a restored deadline value entirely", () => {
     expect(matchIds("date:2026-09-15", { tasks: [both] })).toEqual(["both"]);
     expect(matchIds("date:2026-09-01", { tasks: [both] })).toEqual([]);
-  });
-
-  it("deadline: matches only the Deadline field, ignoring the Date entirely", () => {
-    expect(matchIds("deadline:2026-09-01", { tasks: [both] })).toEqual(["both"]);
-    expect(matchIds("deadline:2026-09-15", { tasks: [both] })).toEqual([]);
   });
 
   it("date< / date> compare against the Date field", () => {
@@ -132,13 +139,7 @@ describe("criterion 3: naming a Date or a Deadline explicitly reads only that on
     expect(matchIds("date>2026-09-14", { tasks: [both] })).toEqual(["both"]);
   });
 
-  it("deadline< / deadline> compare against the Deadline field", () => {
-    expect(matchIds("deadline<2026-09-02", { tasks: [both] })).toEqual(["both"]);
-    expect(matchIds("deadline>2026-08-31", { tasks: [both] })).toEqual(["both"]);
-    expect(matchIds("deadline>2026-09-01", { tasks: [both] })).toEqual([]);
-  });
-
-  it("date: on a Task with no Date at all never matches, even if its Deadline matches the value", () => {
+  it("date: on a Task with no Date at all never matches, even if it carries a restored deadline value", () => {
     const deadlineOnly = task({ id: "deadline-only", deadline: "2026-09-15" });
     expect(matchIds("date:2026-09-15", { tasks: [deadlineOnly] })).toEqual([]);
   });
@@ -146,6 +147,16 @@ describe("criterion 3: naming a Date or a Deadline explicitly reads only that on
   it("a timed Date matches date: by its calendar day alone", () => {
     const timed = task({ id: "timed", date: "2026-09-15T09:30" });
     expect(matchIds("date:2026-09-15", { tasks: [timed] })).toEqual(["timed"]);
+  });
+
+  // Issue #377: `deadline:`/`deadline<`/`deadline>` named a field this
+  // grammar no longer has — parser.test.ts's own "date (criterion 3...)"
+  // describe block covers the parse refusal directly; this just confirms
+  // evaluation never reaches a Task with a query that never parsed.
+  it("deadline: no longer parses, so it's never reached here at all", () => {
+    expect(() => matchIds("deadline:2026-09-01", { tasks: [both] })).toThrow(
+      /isn't something this grammar recognises/,
+    );
   });
 });
 

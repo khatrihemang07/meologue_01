@@ -30,13 +30,16 @@ import { firstOccurrence } from "@meologue/core";
  * field that exists today — checked directly against task-types.ts
  * itself, not assumed from that comment's own wording.
  *
- * `deadline` sits here for the opposite reason: `Task.deadline` is a real,
- * already-stored field (kept, unread — D12), but issue #376 removed every
- * UI surface that could ever apply a parsed one, so `taskFieldsFromQuickAdd`
- * below no longer resolves it into anything a caller acts on. The parser
- * itself is untouched (issue #377's own job), so `{24 sept}` still
- * tokenises as `"deadline"` today — this is the one place that stops
- * treating that token as meaningful.
+ * `deadline` sat here too, briefly, for issue #376 — Deadline had lost
+ * every UI surface that could apply a parsed one, but the parser still
+ * tokenised `{24 sept}` as `"deadline"`. Issue #377 removed that
+ * recognition at its source instead (`{...}` is masked out of candidate
+ * scanning entirely — ../../packages/core/src/quick-add/
+ * parse-quick-add.ts's own `maskBracedSpans`), so there is no
+ * `"deadline"` `QuickAddTokenKind` left to route through here at all;
+ * `{24 sept}` never produces a token in the first place, and survives
+ * into `content` for the identical reason ordinary unrecognised text
+ * always has, not because this set names it.
  *
  * `project`/`section` used to sit in this set too, since issue #171
  * sequenced Project/Section storage apart from the parser itself ("each
@@ -48,7 +51,7 @@ import { firstOccurrence } from "@meologue/core";
  * stripped from `content` exactly like every other supported token,
  * the same way a recognised date or `@label` already was.
  *
- * The point of naming these four here rather than leaving them to fall
+ * The point of naming these three here rather than leaving them to fall
  * out of `content` silently: a recognised, non-demoted token's span
  * is always removed from `QuickAddResult.content` (../../packages/core/src/
  * quick-add/parse-quick-add.ts's `buildContent`) — correct for a field
@@ -85,15 +88,6 @@ const UNSUPPORTED_TOKEN_KINDS: ReadonlySet<QuickAddTokenKind> = new Set([
   "uncompletable",
   "description",
   "reminder",
-  // Issue #376: Deadline lost every UI surface that could apply it —
-  // `QuickAddTaskFields` no longer carries the field at all (below) — but
-  // the parser (`../../packages/core/src/quick-add/rules.ts`) still
-  // recognises `{24 sept}` as a "deadline" token today (issue #377's own
-  // removal of that rule hasn't landed yet). Routed through here for the
-  // identical reason `reminder` already is: a recognised-but-unapplied
-  // token's raw text has to survive in `content` rather than vanish with
-  // nothing to show for it.
-  "deadline",
 ]);
 
 /**

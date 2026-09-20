@@ -223,6 +223,24 @@ describe("FilterView — opening a saved Filter (criterion 1)", () => {
     fireEvent.click(screen.getByRole("button", { name: "Delete" }));
     expect(onRemove).toHaveBeenCalled();
   });
+
+  // Issue #377: an old Filter saved before Deadline was removed from this
+  // grammar can still carry a `deadline:` query. Opening it must not
+  // crash the page — this is "the preview, pre-filled with what was saved
+  // last time" (this file's own header comment), so it goes through the
+  // identical `parseFilterQuery`-throws-`FilterParseError` path a reader
+  // typing a bad query hits, and criterion 6's own error state is what
+  // shows, not an unhandled exception.
+  it("opens a Filter whose saved query used the removed deadline: predicate, showing the parse error rather than crashing", () => {
+    renderFilterView({
+      filter: filter({ name: "Old deadline filter", query: "deadline:2026-09-10" }),
+    });
+
+    expect(screen.getByRole("textbox", { name: "Filter query" })).toHaveValue(
+      "deadline:2026-09-10",
+    );
+    expect(screen.getByRole("alert")).toHaveTextContent(/isn't something this grammar recognises/i);
+  });
 });
 
 describe("FilterView — criterion 2, several result lists from one comma-separated query", () => {

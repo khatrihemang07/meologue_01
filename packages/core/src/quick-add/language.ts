@@ -26,7 +26,7 @@
  *   separator convention than `/`) needs an engine change, not just a
  *   different value here.
  * - The sigil tokens (`#project`, `/section`, `@label`, `p1`-`p4`,
- *   `!reminder`, `{deadline}`, a leading `* `, `//description`) are
+ *   `!reminder`, a leading `* `, `//description`) are
  *   deliberately *not* part of this interface at all: they're ASCII
  *   punctuation marks, not English words, so every language shares them
  *   unchanged. A language that wanted its own marker characters (unlikely,

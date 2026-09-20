@@ -85,22 +85,18 @@ describe("Label", () => {
   });
 });
 
-describe("date/deadline (criterion 3: naming a date or deadline explicitly)", () => {
-  it.each<[string, "date" | "deadline", "on" | "before" | "after"]>([
-    ["date:2026-09-10", "date", "on"],
-    ["date<2026-09-10", "date", "before"],
-    ["date>2026-09-10", "date", "after"],
-    ["deadline:2026-09-10", "deadline", "on"],
-    ["deadline<2026-09-10", "deadline", "before"],
-    ["deadline>2026-09-10", "deadline", "after"],
-  ])("recognises %s", (atom, field, op) => {
-    expect(expr(atom)).toEqual({ kind: "due", field, op, value: "2026-09-10" });
+describe("date (criterion 3: naming a date explicitly)", () => {
+  it.each<[string, "on" | "before" | "after"]>([
+    ["date:2026-09-10", "on"],
+    ["date<2026-09-10", "before"],
+    ["date>2026-09-10", "after"],
+  ])("recognises %s", (atom, op) => {
+    expect(expr(atom)).toEqual({ kind: "due", op, value: "2026-09-10" });
   });
 
   it("is case-insensitive on the field name", () => {
     expect(expr("DATE:2026-09-10")).toEqual({
       kind: "due",
-      field: "date",
       op: "on",
       value: "2026-09-10",
     });
@@ -109,7 +105,21 @@ describe("date/deadline (criterion 3: naming a date or deadline explicitly)", ()
   it("refuses a value that isn't YYYY-MM-DD", () => {
     expect(() => expr("date:tomorrow")).toThrow(/needs a date in YYYY-MM-DD form/);
     expect(() => expr("date:2026-9-1")).toThrow(FilterParseError);
-    expect(() => expr("deadline:not-a-date")).toThrow(FilterParseError);
+  });
+
+  // Issue #377: Deadline is no longer a field this grammar can name at
+  // all — `deadline:`/`deadline<`/`deadline>` fall all the way through
+  // to the generic "isn't something this grammar recognises" refusal,
+  // the identical `FilterParseError` any other unrecognised atom gets,
+  // never a crash. filter-view.tsx's own `evaluation` already catches
+  // `FilterParseError` and shows it as the query's own error state
+  // (criterion 6), so an existing saved Filter that used `deadline:`
+  // still opens — it just shows this message instead of a match list,
+  // rather than throwing uncaught and breaking the page.
+  it("refuses deadline: — the field it used to name is gone", () => {
+    expect(() => expr("deadline:2026-09-10")).toThrow(/isn't something this grammar recognises/);
+    expect(() => expr("deadline<2026-09-10")).toThrow(FilterParseError);
+    expect(() => expr("deadline>2026-09-10")).toThrow(FilterParseError);
   });
 });
 

@@ -176,17 +176,16 @@ export type QuickAddHighlightState = "resolved" | "pending" | "unresolved";
  * Add is pressed — it only ever reads `"pending"` while the caret is
  * still inside it, exactly like every other supported kind.
  *
- * `deadline` joined this set for issue #376: the parser still recognises
- * `{24 sept}` (issue #377 removes that rule; untouched here), but
- * quick-add-task.ts's own `UNSUPPORTED_TOKEN_KINDS` now keeps it out of
- * every Task field the identical way `project`/`section` used to be kept
- * out before #370 — the difference is this one is never coming back.
+ * `deadline` joined this set for issue #376, when the parser still
+ * recognised `{24 sept}` as a token nothing could act on. Issue #377
+ * removed that recognition at its source (`{...}` is masked out of
+ * candidate scanning entirely — ../../packages/core/src/quick-add/
+ * parse-quick-add.ts's own `maskBracedSpans`), so there is no `"deadline"`
+ * `QuickAddTokenKind` left to name here at all — this module never sees
+ * one, the same way it never saw a kind for "banana" in `{banana}`
+ * either, before or after #377.
  */
-const NEVER_RESOLVES_KINDS: ReadonlySet<QuickAddTokenKind> = new Set([
-  "project",
-  "section",
-  "deadline",
-]);
+const NEVER_RESOLVES_KINDS: ReadonlySet<QuickAddTokenKind> = new Set(["project", "section"]);
 
 /**
  * `token`'s live state, given where the caret currently sits (`null` when
@@ -267,9 +266,11 @@ export function tokenAtOffset(
  * supported kind (`label`, `reminder`, `uncompletable`, `description`)
  * reads as a resolved chip too, just a grayscale one — see
  * `quickAddHighlightClass`'s own `rounded-full` vs `rounded-[3px]` split,
- * the "chip shape" half of that same instruction. `project`/`section`/
- * `deadline` never reach `"resolved"` at all (`NEVER_RESOLVES_KINDS`
- * above), so they never consult this set.
+ * the "chip shape" half of that same instruction. `project`/`section`
+ * never reach `"resolved"` at all (`NEVER_RESOLVES_KINDS` above), so
+ * they never consult this set. (`deadline` used to be a third — see
+ * `NEVER_RESOLVES_KINDS`'s own doc comment for why issue #377 removed it
+ * from both sets at once, rather than moving it here.)
  */
 const COLOUR_WORTHY_KINDS: ReadonlySet<QuickAddTokenKind> = new Set([
   "date",

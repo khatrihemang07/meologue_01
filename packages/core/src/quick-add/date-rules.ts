@@ -16,10 +16,7 @@ import type { QuickAddToken } from "./types";
  * The eager/natural-language date-and-time rules (issue #170's Part A) —
  * every one of these is a candidate ../parse-quick-add.ts only runs when
  * `smartDates` is true, because every one of them infers meaning from
- * ordinary words with no marker the user typed on purpose. `{deadline}`
- * (./rules.ts) reuses `matchDateForms` below rather than a second copy of
- * this grammar, via `resolveWholePhrase` — see that function's own doc
- * comment.
+ * ordinary words with no marker the user typed on purpose.
  */
 
 export interface DateRuleContext {
@@ -873,24 +870,6 @@ export function matchAfterDays(input: string): QuickAddToken[] {
   return tokens;
 }
 
-/** Every date-shaped rule (not time, not recurrence) — the pool ./rules.ts's `{deadline}` handling resolves a whole phrase against, and free-text scanning's own date candidates. Combo listed first, matching ../parse-quick-add.ts's own priority-by-push-order convention. */
-export function matchDateForms(input: string, ctx: DateRuleContext): QuickAddToken[] {
-  return [
-    ...matchWeekdayArithmeticCombo(input, ctx),
-    ...matchAbsoluteDate(input, ctx),
-    ...matchRelativeDate(input, ctx),
-    ...matchWeekday(input, ctx),
-    ...matchArithmeticDate(input, ctx),
-    ...matchDaysFromNow(input, ctx),
-    ...matchNextWeek(input, ctx),
-    ...matchNextMonth(input, ctx),
-    ...matchNextYear(input, ctx),
-    ...matchFuzzyRange(input, ctx),
-    ...matchHolidayWord(input, ctx),
-    ...matchEndOfMonth(input, ctx),
-  ];
-}
-
 /** Every time-shaped rule — the pool ./rules.ts's `!reminder` handling resolves a whole phrase against, and free-text scanning's own time candidates. */
 export function matchTimeForms(input: string, ctx: DateRuleContext): QuickAddToken[] {
   return [...matchExplicitTime(input, ctx), ...matchFuzzyTime(input, ctx)];
@@ -898,16 +877,18 @@ export function matchTimeForms(input: string, ctx: DateRuleContext): QuickAddTok
 
 /**
  * Runs `matchers` against `phrase` and returns the first candidate that
- * consumes the *entire* trimmed phrase — the mechanism `{deadline}` and
- * `!reminder` (./rules.ts) both use to ask "is this bracketed/prefixed
- * text a recognisable whole date or time," reusing the identical
- * matcher functions free-text scanning uses rather than a second,
- * hand-written "parse one phrase" grammar that could drift from the
- * first. A partial match (the phrase has a date-shaped prefix and
- * trailing junk) is deliberately not good enough here — free-text
- * scanning already finds a date wherever one appears; the whole point of
- * requiring `{}` around a deadline is that the user drew the boundary
- * themselves, so this only honours a phrase that fits it exactly.
+ * consumes the *entire* trimmed phrase — the mechanism `!reminder`
+ * (./rules.ts) uses to ask "is this prefixed text a recognisable whole
+ * time," reusing the identical matcher functions free-text scanning uses
+ * rather than a second, hand-written "parse one phrase" grammar that
+ * could drift from the first. A partial match (the phrase has a
+ * time-shaped prefix and trailing junk) is deliberately not good enough
+ * here — free-text scanning already finds a time wherever one appears;
+ * the whole point of requiring a whole-phrase match is that the user
+ * drew the boundary themselves (the `!` they typed), so this only
+ * honours a phrase that fits it exactly. (Deadline's `{}` used to be
+ * this function's other caller, matched against `matchDateForms` — issue
+ * #377 removed both along with the token kind they built.)
  */
 export function resolveWholePhrase(
   phrase: string,

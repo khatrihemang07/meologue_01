@@ -28,8 +28,7 @@ import {
  * `atom` is whatever ./tokenizer.ts handed back as one opaque token;
  * `classifyAtom` below is what turns its text into a `FilterNode` leaf —
  * a flag, a priority, a `#Project`/`##Project`, a `/Section`, a `@Label`,
- * or a `date`/`deadline` comparison — or throws if it matches none of
- * them.
+ * or a `date` comparison — or throws if it matches none of them.
  *
  * **Criterion 5: mixing `&` and `|` is refused, not resolved.** `chain`
  * above reads as ordinary left-associative precedence climbing, but
@@ -44,8 +43,8 @@ import {
  * unparenthesised level, exactly where a reader would otherwise have to
  * guess which operator binds tighter.
  *
- * **No relative or natural-language dates.** `date`/`deadline`
- * comparisons take a bare `YYYY-MM-DD` literal only — no `next monday`,
+ * **No relative or natural-language dates.** A `date`
+ * comparison takes a bare `YYYY-MM-DD` literal only — no `next monday`,
  * no `in 3 days`. This is a deliberate, narrower scope than
  * ../quick-add/'s own date rules: quick-add's whole job is guessing what
  * a reader meant from natural language typed into a single free-text
@@ -63,13 +62,15 @@ import {
 const FLAG_ATOMS = new Set(["today", "tomorrow", "overdue", "undated", "recurring", "subtask"]);
 const PRIORITY_ATOMS: Record<string, 1 | 2 | 3 | 4> = { p1: 1, p2: 2, p3: 3, p4: 4 };
 const ISO_DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
-// No `\s*` around the field name or the operator: `date`/`deadline` open
-// with a letter, not one of ./tokenizer.ts's four name sigils, so the
-// tokenizer has already committed to stopping this atom at the first
-// whitespace by the time this pattern ever sees it — `date:2026-09-10`
-// only, never `date : 2026-09-10` (tokenizer.ts's own header comment has
-// the full reasoning for why a bare word can't span a space).
-const DATE_FIELD_PATTERN = /^(date|deadline)(:|<|>)(.+)$/i;
+// No `\s*` around the field name or the operator: `date` opens with a
+// letter, not one of ./tokenizer.ts's four name sigils, so the tokenizer
+// has already committed to stopping this atom at the first whitespace by
+// the time this pattern ever sees it — `date:2026-09-10` only, never
+// `date : 2026-09-10` (tokenizer.ts's own header comment has the full
+// reasoning for why a bare word can't span a space). `deadline` was a
+// second, identically-shaped alternative here until issue #377 removed
+// it along with the field it named.
+const DATE_FIELD_PATTERN = /^(date)(:|<|>)(.+)$/i;
 
 class Cursor {
   private readonly tokens: FilterToken[];
@@ -234,7 +235,7 @@ function unexpectedTokenError(token: FilterToken, expected: string): FilterParse
 // Turns one atom token's raw text into a leaf FilterNode, or throws. Every
 // branch below reflects one line of criterion 3's own list: a flag, a
 // Priority, a Project (with or without its descendants), a Section, a
-// Label, or a date/deadline comparison.
+// Label, or a date comparison.
 function classifyAtom(token: FilterToken): FilterNode {
   const raw = token.raw;
   const lower = raw.toLowerCase();
@@ -270,24 +271,25 @@ function classifyAtom(token: FilterToken): FilterNode {
 
   const dateMatch = DATE_FIELD_PATTERN.exec(raw);
   if (dateMatch !== null) {
-    // biome-ignore lint/style/noNonNullAssertion: DATE_FIELD_PATTERN's first two groups are mandatory, non-optional captures.
-    const field = dateMatch[1]!.toLowerCase() as "date" | "deadline";
-    // biome-ignore lint/style/noNonNullAssertion: see above.
+    // biome-ignore lint/style/noNonNullAssertion: DATE_FIELD_PATTERN's second group is a mandatory, non-optional capture.
     const opChar = dateMatch[2]!;
     // biome-ignore lint/style/noNonNullAssertion: the third group is `.*`, always present (possibly empty).
     const value = dateMatch[3]!.trim();
     if (!ISO_DATE_PATTERN.test(value)) {
       throw new FilterParseError(
-        `"${raw}" needs a date in YYYY-MM-DD form, like "${field}:2026-09-10".`,
-        { start: token.start, end: token.end },
+        `"${raw}" needs a date in YYYY-MM-DD form, like "date:2026-09-10".`,
+        {
+          start: token.start,
+          end: token.end,
+        },
       );
     }
     const op: FilterDateComparison = opChar === ":" ? "on" : opChar === "<" ? "before" : "after";
-    return { kind: "due", field, op, value };
+    return { kind: "due", op, value };
   }
 
   throw new FilterParseError(
-    `"${raw}" isn't something this grammar recognises. Try a flag (today, overdue, undated, recurring, subtask), a priority (p1-p4), #Project, ##Project (with its sub-Projects), /Section, @Label, or date:YYYY-MM-DD / deadline:YYYY-MM-DD.`,
+    `"${raw}" isn't something this grammar recognises. Try a flag (today, overdue, undated, recurring, subtask), a priority (p1-p4), #Project, ##Project (with its sub-Projects), /Section, @Label, or date:YYYY-MM-DD.`,
     { start: token.start, end: token.end },
   );
 }

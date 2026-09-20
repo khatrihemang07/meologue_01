@@ -17,27 +17,25 @@ import type { FilterNode, ParsedFilterQuery } from "./types";
  * implementations of this in sync the way `TaskStore.list()`'s own
  * ordering guarantee exists to avoid.
  *
- * **Criterion 4: two different rules for two different questions —
- * historically.** A `date`/`deadline` predicate (`date:2026-09-10`,
- * `deadline<2026-09-10`) names one field explicitly and reads only that
- * field — the criterion 3 case, "a query can name... dates and
- * deadlines" as two separate things a reader can ask about on purpose.
- * A `today`/`tomorrow`/`overdue` flag is a different question — "what is
- * due" — which this module answers with `effectiveDateKey`
- * (../task-views.ts), reused here rather than reimplemented.
+ * **Criterion 4, and what became of it.** A `date` predicate
+ * (`date:2026-09-10`) names that one field explicitly — the criterion 3
+ * case, "a query can name a date." A `today`/`tomorrow`/`overdue` flag is
+ * a different question — "what is due" — which this module answers with
+ * `effectiveDateKey` (../task-views.ts), reused here rather than
+ * reimplemented. Criterion 4 originally spelled out a rule for a Task
+ * carrying *both* a Date and a Deadline ("considers both... preferring
+ * the Date"); issue #375 stopped `effectiveDateKey` reading `deadline` at
+ * all (D12: Deadline is Pro-gated in Todoist and 0 Tasks carry one in
+ * either live database), and issue #377 removed Deadline as a concept
+ * this grammar can even name (`deadline:`/`deadline<`/`deadline>` are
+ * gone from ./parser.ts) — so criterion 4's own "preferring" question no
+ * longer has two fields to choose between. `matchesFlag`'s `undated` case
+ * below is the one place that removal is visible directly, rather than
+ * inherited through `effectiveDateKey`: it used to read `task.deadline`
+ * of its own accord (naming both fields explicitly, the way criterion 3
+ * predicates do), and now reads `task.date` alone, for the identical
+ * "Deadline no longer names anything" reason.
  *
- * Issue #375 stopped `effectiveDateKey` reading `deadline` at all (D12:
- * Deadline is Pro-gated in Todoist and 0 Tasks carry one in either live
- * database) — a change made in ../task-views.ts, not here, that this
- * evaluator's `today`/`tomorrow`/`overdue` flags inherited for free by
- * reusing the shared function rather than reimplementing criterion 4's
- * original "prefer the Date" rule locally. Before #375 that rule and
- * `today()`'s own inclusive union ("Date matches OR Deadline matches")
- * disagreed on one case — a Task with a *future* Date and a *passed*
- * Deadline — which evaluate.test.ts used to pin explicitly; #375 removed
- * Deadline from both sides, so there is nothing left to disagree on.
- *
-
  * Name matching (`#Project`, `/Section`, `@Label`) is
  * case-and-diacritic-insensitive via ../task-search.ts's `normalize` —
  * reused rather than reimplemented, the same convention every other
@@ -190,7 +188,7 @@ function matchesNode(node: FilterNode, task: Task, lookups: Lookups): boolean {
       return task.labelIds.some((id) => ids.has(id));
     }
     case "due":
-      return matchesDue(node.field, node.op, node.value, task);
+      return matchesDue(node.op, node.value, task);
   }
 }
 
@@ -206,8 +204,12 @@ function matchesFlag(
   now: string,
 ): boolean {
   switch (flag) {
+    // Issue #377: used to read `task.date === null && task.deadline ===
+    // null` — Deadline no longer names anything this grammar can ask
+    // about, so "undated" is just "no Date" now, the same simplification
+    // `effectiveDateKey` (../task-views.ts) already made for #375.
     case "undated":
-      return task.date === null && task.deadline === null;
+      return task.date === null;
     case "recurring":
       return task.dateString !== null;
     case "subtask":
@@ -239,26 +241,15 @@ function effectiveDueDay(task: Task): string | null {
   return key === null ? null : key.slice(0, 10);
 }
 
-// `date`/`deadline` predicates name ONE field explicitly (criterion 3) —
-// no Date-or-Deadline preference here, unlike matchesFlag above; a
-// Filter that asked for `deadline:2026-09-10` and got a Task matched
-// through its Date instead would be answering a different question than
-// the one typed.
-function matchesDue(
-  field: "date" | "deadline",
-  op: "on" | "before" | "after",
-  value: string,
-  task: Task,
-): boolean {
-  const raw = field === "date" ? task.date : task.deadline;
-  if (raw === null) {
+// A `date` predicate names that field explicitly (criterion 3) — until
+// issue #377 this also covered `deadline`, a second field name this
+// grammar could match against with the identical three operators; with
+// Deadline gone, `date` is the only field left to name.
+function matchesDue(op: "on" | "before" | "after", value: string, task: Task): boolean {
+  if (task.date === null) {
     return false;
   }
-  // `deadline` is already day-only (../task-types.ts's own doc comment:
-  // "no time, ever") — slicing it to ten characters is a no-op, so this
-  // one line safely covers both fields rather than branching on which
-  // one can carry a time.
-  const day = raw.slice(0, 10);
+  const day = task.date.slice(0, 10);
   if (op === "on") {
     return day === value;
   }

@@ -25,8 +25,8 @@ import type { QuickAddLanguage } from "./language";
  * parse-quick-add.ts's own header comment for the full reasoning):
  *
  * - **Sigil-marked** (`project`, `section`, `label`, `priority`,
- *   `reminder`, `deadline`, `uncompletable`, `description`):
- *   the user typed an explicit marker — `#`, `/`, `@`, `p1`, `!`, `{}`,
+ *   `reminder`, `uncompletable`, `description`):
+ *   the user typed an explicit marker — `#`, `/`, `@`, `p1`, `!`,
  *   a leading `* `, `//` — so there is no false-positive risk to
  *   guard against. These are always recognised.
  * - **Eager/natural-language** (`date`, `time`, `recurrence`): inferred
@@ -38,7 +38,12 @@ import type { QuickAddLanguage } from "./language";
  * `duration` (`for 45min`) was a third sigil-marked kind here until issue
  * #179 removed it — Duration exists nowhere in the product any more, so
  * `for 45min` is now just ordinary words, exactly as `for 45min` would
- * have read before issue #169 ever added the field.
+ * have read before issue #169 ever added the field. `deadline` (`{}`)
+ * was a fourth, removed by issue #377 for the identical reason: Deadline
+ * itself is gone from the product (D12 — Pro-gated in Todoist, 0 Tasks
+ * carried one in either live database), so `{27 jan}` is now just
+ * ordinary punctuation, exactly like any other brace pair this parser
+ * never assigned meaning to.
  */
 export type QuickAddTokenKind =
   | "date"
@@ -48,7 +53,6 @@ export type QuickAddTokenKind =
   | "label"
   | "priority"
   | "reminder"
-  | "deadline"
   | "uncompletable"
   | "description"
   | "recurrence";
@@ -71,7 +75,6 @@ export type QuickAddToken =
   | (TokenBase & { kind: "label"; name: string })
   | (TokenBase & { kind: "priority"; priority: number })
   | (TokenBase & { kind: "reminder"; time: string | null })
-  | (TokenBase & { kind: "deadline"; deadline: string })
   | (TokenBase & { kind: "uncompletable" })
   | (TokenBase & { kind: "description"; text: string })
   | (TokenBase & { kind: "recurrence" });
@@ -103,8 +106,6 @@ export interface QuickAddResult {
   content: string;
   /** Merged date-and-time (`YYYY-MM-DD` or floating `YYYY-MM-DDTHH:MM`, ../task-types.ts's `Task.date` encoding), or `null` if no date-family token was recognised. */
   date: string | null;
-  /** `YYYY-MM-DD`, or `null` — ../task-types.ts's `Task.deadline` encoding. */
-  deadline: string | null;
   /** Stored 1-4 (4 most urgent) via ../task-types.ts's `storedPriorityOf` — never open-coded. Defaults to 1 ("no priority"), matching `Task.priority`'s own default. */
   priority: number;
   projectName: string | null;
@@ -131,16 +132,20 @@ export interface QuickAddOptions {
    * A floating `YYYY-MM-DD` reference day — the same "caller supplies it,
    * this module never reads the system clock" convention
    * ../task-views.ts's `today()` uses, for the identical testability
-   * reason. Required — not `?`-optional, unlike every other field below —
-   * even with `smartDates: false`: see parseQuickAdd's own header comment
-   * for why that setting doesn't relax this. `{deadline}` and `!reminder`
-   * (./rules.ts) are sigil-marked and always active, and resolving a
-   * year-less absolute date inside either one still needs to know what
-   * "today" is. Requiring it in the type, rather than only checking at
-   * runtime, is deliberate: a caller that always has a `now` on hand
-   * (every real one does — this is the composer's own clock) gets a
-   * compile error for forgetting it, not a working build that throws the
-   * first time a user types `{27 Jan}`.
+   * reason. Required — not `?`-optional, unlike every other field below.
+   * Every eager/natural-language rule (date-rules.ts's own year-less
+   * "27 jan"/relative "tomorrow"/weekday resolution) reads it, and those
+   * only ever run when `smartDates` is true — but this field stayed
+   * required regardless of that setting even before issue #377, back when
+   * `{deadline}` (sigil-marked, always active) resolved the identical
+   * date grammar against it through `resolveWholePhrase`. That consumer
+   * is gone now, and no other sigil-marked rule reads `now` at all
+   * (`!reminder`'s own time forms don't), so `smartDates: false` alone
+   * no longer has a runtime reason to need it — kept required anyway,
+   * a caller that always has a `now` on hand (every real one does — this
+   * is the composer's own clock) gets a compile error for forgetting it
+   * rather than a working build that silently regresses the moment a
+   * future sigil-marked rule reads it again.
    *
    * `LocalDayKey`, not a bare `string` (issue #314): `../local-day-key.ts`
    * originally left this field unbranded because its own sole two
@@ -158,7 +163,7 @@ export interface QuickAddOptions {
    * clean call-site distinction issue #170's Part A brief asks for,
    * instead of a flag threaded through every individual rule function.
    * Defaults to `true`. Sigil-marked tokens (`#project`, `@label`, `p1`,
-   * `!reminder`, `{deadline}`, leading `* `, `//`) are
+   * `!reminder`, leading `* `, `//`) are
    * unaffected — see QuickAddTokenKind's own doc comment for why an
    * explicit marker carries no false-positive risk to turn off.
    */
