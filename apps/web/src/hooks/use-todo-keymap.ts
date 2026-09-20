@@ -19,10 +19,9 @@ export interface UseTodoKeymapOptions {
   /** Looks a Task up by id — `todo-page.tsx`'s own `tasks`/`completedTasks` two-list lookup (`openTask`'s own doc comment there gives the reason both lists matter), handed in rather than duplicated here. */
   resolveTask: (taskId: string) => Task | null;
   onOpenTaskDetail: (task: Task) => void;
-  /** Opens the shared `TaskScheduleSheet` — reached from `D`/`Y` (Deadline/Priority) only, since issue #253 moved `T` (Date) onto `OPEN_SCHEDULE_EVENT` instead (that constant's own doc comment, todo-keymap.ts). */
+  /** Opens the shared `TaskScheduleSheet` — reached from `Y` (Priority) only, since issue #253 moved `T` (Date) onto `OPEN_SCHEDULE_EVENT` instead (that constant's own doc comment, todo-keymap.ts) and issue #376 removed `D` (Deadline) along with the sheet's own Deadline picker. */
   onOpenSchedule: (taskId: string) => void;
   onSetTaskDate: (taskId: string, date: string | null) => void;
-  onSetTaskDeadline: (taskId: string, deadline: string | null) => void;
   onRequestDelete: (taskId: string) => void;
   onOpenQuickFind: () => void;
   onShowShortcuts: () => void;
@@ -158,15 +157,14 @@ export function useTodoKeymap(options: UseTodoKeymapOptions): void {
         // `TaskSchedulePopover` instance rather than the shared bottom
         // sheet — `OPEN_SCHEDULE_EVENT`'s own doc comment (todo-keymap.ts)
         // has the reasoning for why this fires an event instead of calling
-        // `onOpenSchedule` the way `set-deadline`/`set-priority` below
-        // still do (the sheet still holds Deadline and Priority, unchanged
-        // by this ticket).
+        // `onOpenSchedule` the way `set-priority` below still does (the
+        // sheet holds Priority alone since issue #376 removed Deadline's
+        // half).
         case "set-date":
           if (taskId !== null) {
             document.dispatchEvent(new CustomEvent(OPEN_SCHEDULE_EVENT, { detail: { taskId } }));
           }
           return;
-        case "set-deadline":
         case "set-priority":
           if (taskId !== null) {
             opts.onOpenSchedule(taskId);
@@ -175,11 +173,6 @@ export function useTodoKeymap(options: UseTodoKeymapOptions): void {
         case "remove-date":
           if (taskId !== null) {
             opts.onSetTaskDate(taskId, null);
-          }
-          return;
-        case "remove-deadline":
-          if (taskId !== null) {
-            opts.onSetTaskDeadline(taskId, null);
           }
           return;
         case "delete-task":

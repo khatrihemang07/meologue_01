@@ -360,7 +360,6 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
     message,
     messageAction,
     setTaskDate,
-    setTaskDeadline,
     setTaskPriority,
     setTaskDateString,
     setTaskLabels,
@@ -555,10 +554,6 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
     uncompleteTask(task.id);
   }
 
-  function handleOpenScheduleTask(task: Task) {
-    handleOpenSchedule(task.id);
-  }
-
   // Issue #178's Task detail view. `openTask` is looked up against
   // `tasks` **and** `completedTasks` — the identical two-list lookup
   // `entry-row.tsx`'s own Task Reference (`TaskReferenceItem`) already
@@ -729,7 +724,6 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
     onOpenTaskDetail: openTaskDetail,
     onOpenSchedule: handleOpenSchedule,
     onSetTaskDate: setTaskDate,
-    onSetTaskDeadline: setTaskDeadline,
     onRequestDelete: handleRequestDelete,
     onCompleteTask: handleCompleteTask,
     onCopyLink: copyTaskLink,
@@ -759,7 +753,6 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
       {
         renameTask,
         setTaskDate,
-        setTaskDeadline,
         setTaskPriority,
         setTaskDateString,
         setTaskLabels,
@@ -827,7 +820,6 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
         : null;
     addTask(fields.content, {
       date: fields.date ?? captureDate,
-      deadline: fields.deadline,
       priority: fields.priority,
       dateString: fields.dateString,
       labelIds,
@@ -946,7 +938,6 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
           onComplete={handleComplete}
           onCompleteForever={handleCompleteForever}
           onRequestDelete={handleRequestDelete}
-          onOpenSchedule={handleOpenSchedule}
           onSetDate={setTaskDate}
         />
       )}
@@ -958,7 +949,6 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
           onComplete={handleComplete}
           onCompleteForever={handleCompleteForever}
           onRequestDelete={handleRequestDelete}
-          onOpenSchedule={handleOpenSchedule}
           onSetDate={setTaskDate}
         />
       )}
@@ -975,7 +965,6 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
           onComplete={handleCompleteTask}
           onCompleteForever={handleCompleteForeverTask}
           onRequestDelete={handleRequestDeleteTask}
-          onOpenSchedule={handleOpenScheduleTask}
           reorderTask={reorderTask}
           setTaskParent={setTaskParent}
           listTaskChildren={listTaskChildren}
@@ -1030,7 +1019,6 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
             onComplete={handleCompleteTask}
             onCompleteForever={handleCompleteForeverTask}
             onRequestDelete={handleRequestDeleteTask}
-            onOpenSchedule={handleOpenScheduleTask}
             onMoveToSection={setTaskSection}
             reorderTask={reorderTask}
             setTaskParent={setTaskParent}
@@ -1179,7 +1167,6 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
                 setSchedulingId(null);
               }
             }}
-            onSetDeadline={setTaskDeadline}
             onSetPriority={setTaskPriority}
           />
         </Suspense>

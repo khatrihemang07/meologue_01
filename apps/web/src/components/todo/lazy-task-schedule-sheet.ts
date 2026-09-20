@@ -9,12 +9,13 @@ import { lazy } from "react";
  *
  * This chunk carries more than its own ~9 KB of source: it statically
  * imports `task-schedule-popover.tsx` (issue #227's Todoist-style
- * scheduler, `date-fns` plus `ui/popover.tsx`'s Radix `Popover`) and
- * `date-picker-sheet.tsx` (react-day-picker, for the Deadline field's
- * unchanged picker) — together the ~35 KB `check-bundle-size.mjs`'s own
- * `CHUNK_BUDGETS` comment on `todo-page.tsx` already attributes to "the
- * shared portion, not Todo's own code." None of that is needed to render
- * a Task row, only to open a scheduler.
+ * scheduler, `date-fns` plus `ui/popover.tsx`'s Radix `Popover`) — the
+ * ~35 KB `check-bundle-size.mjs`'s own `CHUNK_BUDGETS` comment on
+ * `todo-page.tsx` already attributes to "the shared portion, not Todo's
+ * own code." None of that is needed to render a Task row, only to open a
+ * scheduler. (Issue #376 dropped this file's own `date-picker-sheet.tsx`
+ * import along with Deadline's picker; `task-schedule-popover.tsx` still
+ * pulls it in for `date`, so it stays part of this chunk regardless.)
  *
  * `todo-page.tsx` is the only caller this wrapper serves. `composer-page.tsx`
  * keeps its own **static** import of `task-schedule-sheet.tsx` — Composer

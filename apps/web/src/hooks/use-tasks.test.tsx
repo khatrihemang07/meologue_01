@@ -657,7 +657,6 @@ describe("useTasks", () => {
     act(() =>
       result.current.addTask("pay rent", {
         date: "2026-09-05",
-        deadline: "2026-09-10",
         priority: 4,
         labelIds: ["label-1"],
         dateString: "every month",
@@ -669,11 +668,24 @@ describe("useTasks", () => {
     expect(added).toMatchObject({
       content: "pay rent",
       date: "2026-09-05",
-      deadline: "2026-09-10",
       priority: 4,
       labelIds: ["label-1"],
       dateString: "every month",
     });
+  });
+
+  // Issue #376: `AddTaskOverrides` carries no `deadline` field anymore —
+  // no surface can set one, so every Task this hook creates gets `null`
+  // unconditionally, the same "nothing to give" state a Task created
+  // directly in Todo always started with.
+  it("always creates a Task with deadline: null — there is no override to give it one", async () => {
+    const store = createFakeStore();
+    const { result } = await renderUseTasks(store);
+
+    act(() => result.current.addTask("pay rent", { date: "2026-09-05" }));
+
+    await waitFor(() => expect(result.current.tasks).toHaveLength(1));
+    expect(result.current.tasks[0]).toMatchObject({ deadline: null });
   });
 
   it("omitted overrides default to the same undated, un-repeating state a bare addTask always has", async () => {

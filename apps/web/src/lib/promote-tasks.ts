@@ -124,7 +124,6 @@ export interface PromotedTask {
   readonly content: string;
   /** The parsed `date`, or `null` when nothing dated this line — `use-history.ts`'s own `promotedTaskToTask` is where "the Entry's own capture date wins when nothing parses" actually happens; this field only ever carries what the parse itself decided. */
   readonly date: string | null;
-  readonly deadline: string | null;
   readonly priority: number;
   readonly dateString: string | null;
   readonly labelNames: string[];
@@ -332,7 +331,6 @@ function transformNode(
         checked,
         content,
         date: fields.date,
-        deadline: fields.deadline,
         priority: fields.priority,
         dateString: fields.dateString,
         labelNames: fields.labelNames,

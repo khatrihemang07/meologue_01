@@ -19,8 +19,7 @@ export interface TodayViewProps {
   /** Shift+Click on a recurring Task's checkbox, or its touch-reachable button (task-row.tsx's own doc comments) — "Complete and archive recurring task," ending the series. */
   onCompleteForever: (id: string, content: string) => void;
   onRequestDelete: (id: string) => void;
-  onOpenSchedule: (id: string) => void;
-  /** Rescheduling only ever calls this — see overdue-reschedule-action.tsx's own comment on why Reschedule touches `date` and never `deadline`. */
+  /** Rescheduling only ever calls this — see overdue-reschedule-action.tsx's own comment on why Reschedule touches `date` alone. */
   onSetDate: (id: string, date: string | null) => void;
 }
 
@@ -30,7 +29,6 @@ export function TodayView({
   onComplete,
   onCompleteForever,
   onRequestDelete,
-  onOpenSchedule,
   onSetDate,
 }: TodayViewProps) {
   const [grouping, setGrouping] = useState<TodayGrouping>("none");
@@ -79,8 +77,8 @@ export function TodayView({
         <CheckCircle2 aria-hidden="true" className="size-8 text-muted-foreground" />
         <p className="font-medium text-sm">All caught up</p>
         <p className="max-w-xs text-muted-foreground text-sm">
-          Nothing is due today, and nothing is overdue. A Task lands here the moment its Date or
-          Deadline arrives.
+          Nothing is due today, and nothing is overdue. A Task lands here the moment its Date
+          arrives.
         </p>
       </div>
     );
@@ -122,7 +120,6 @@ export function TodayView({
                 onComplete={() => onComplete(task.id, task.content, task.dateString)}
                 onCompleteForever={() => onCompleteForever(task.id, task.content)}
                 onRequestDelete={() => onRequestDelete(task.id)}
-                onOpenSchedule={() => onOpenSchedule(task.id)}
               />
             ))}
           </ul>
@@ -168,7 +165,6 @@ export function TodayView({
                     onComplete={() => onComplete(task.id, task.content, task.dateString)}
                     onCompleteForever={() => onCompleteForever(task.id, task.content)}
                     onRequestDelete={() => onRequestDelete(task.id)}
-                    onOpenSchedule={() => onOpenSchedule(task.id)}
                     suppressDateBadge
                   />
                 ))}

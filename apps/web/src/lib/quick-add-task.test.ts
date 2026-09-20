@@ -56,6 +56,18 @@ describe("taskFieldsFromQuickAdd", () => {
     expect(result.content).toBe("buy milk !5pm");
   });
 
+  // Issue #376: the parser still recognises `{24 sept}` as a "deadline"
+  // token (issue #377 removes that rule; untouched here) — this proves
+  // the web layer stops treating it as meaningful, keeping the braces as
+  // literal text rather than silently deleting them with nothing to show
+  // for it, the identical "never a Task that vanished as it was typed"
+  // restraint the other unsupported kinds above already get.
+  it("keeps a {deadline}'s text rather than dropping it — no surface can apply it anymore", () => {
+    const result = fields("buy milk {24 sept}");
+
+    expect(result.content).toBe("buy milk {24 sept}");
+  });
+
   describe("recurrence", () => {
     it("resolves a bare recurrence word to its canonical 'every ...' phrase", () => {
       const result = fields("Create monthly report");
@@ -282,7 +294,6 @@ describe("taskFieldsForRename", () => {
 
     expect(result.content).toBe("buy milk");
     expect(result.date).toBeNull();
-    expect(result.deadline).toBeNull();
     expect(result.priority).toBeNull();
     expect(result.dateString).toBeNull();
     expect(result.labelNames).toEqual([]);

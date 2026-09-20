@@ -146,7 +146,6 @@ function renderRow(overrides: Partial<Parameters<typeof TaskRow>[0]> = {}) {
     onComplete: vi.fn(),
     onCompleteForever: vi.fn(),
     onRequestDelete: vi.fn(),
-    onOpenSchedule: vi.fn(),
     isDropTarget: false,
     onHandlePointerDown: vi.fn(),
     onHandlePointerMove: vi.fn(),
@@ -711,24 +710,23 @@ describe("TaskRow", () => {
   });
 
   // Issue #253: the Date button now anchors its own `TaskSchedulePopover`
-  // instance directly — it no longer opens the shared bottom sheet
-  // (`onOpenSchedule`), which now only opens from the More-actions
-  // "Deadline…" item. `scheduler-view` is the popover's own `data-testid`
+  // instance directly — it no longer opens the shared bottom sheet. That
+  // sheet had no other door from this row at all once issue #376 removed
+  // the More-actions "Deadline…" item that used to be the other one.
+  // `scheduler-view` is the popover's own `data-testid`
   // (task-schedule-popover.tsx) — jsdom lays nothing out, so this proves
   // the popover opens, not that it anchors under the button; see this
   // ticket's own report for why anchoring itself needs a real browser.
   // "Schedule" was renamed "Date" (issue #178's own reference behaviour —
   // the row's four hover actions read Edit, Date, Comment, More).
   it("the Date button opens this row's own anchored scheduler popover, not the shared sheet", () => {
-    const onOpenSchedule = vi.fn();
-    renderRow({ task: task({ content: "call mum" }), onOpenSchedule });
+    renderRow({ task: task({ content: "call mum" }) });
 
     expect(screen.queryByTestId("scheduler-view")).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: 'Date "call mum"' }));
 
     expect(screen.getByTestId("scheduler-view")).toBeInTheDocument();
-    expect(onOpenSchedule).not.toHaveBeenCalled();
   });
 
   // Issue #253: the More-actions "Date…" item is a second entry point onto
@@ -892,17 +890,14 @@ describe("TaskRow", () => {
     });
   });
 
-  // Issue #253: "Deadline…" is unchanged by this ticket — it still opens
-  // the shared `TaskScheduleSheet`, not the Date popover.
-  it("the More-actions 'Deadline…' item still calls onOpenSchedule, not the scheduler popover", () => {
-    const onOpenSchedule = vi.fn();
-    renderRow({ task: task({ content: "call mum" }), onOpenSchedule });
+  // Issue #376: the More-actions "Deadline…" item is gone — no surface
+  // offers to set, edit, clear or display a deadline.
+  it("the More-actions menu has no 'Deadline…' item", () => {
+    renderRow({ task: task({ content: "call mum" }) });
 
     fireEvent.pointerDown(screen.getByRole("button", { name: 'More actions for "call mum"' }));
-    fireEvent.click(screen.getByRole("menuitem", { name: /^Deadline/ }));
 
-    expect(onOpenSchedule).toHaveBeenCalledTimes(1);
-    expect(screen.queryByTestId("scheduler-view")).not.toBeInTheDocument();
+    expect(screen.queryByRole("menuitem", { name: /^Deadline/ })).not.toBeInTheDocument();
   });
 
   it("on a hover-capable pointer, a row's actions render in the fixed order Edit, Date, Comment, More", () => {
@@ -946,9 +941,10 @@ describe("TaskRow", () => {
   // Issue #309: More used to be the one exception — it carried no `hidden`
   // at all, because it was the only door onto the full command set (Edit,
   // Date, Priority, Deadline, Labels, Move to…, Copy link, Delete) on a
-  // touch-only device. #302's detail sheet (inline Date/Priority/Deadline/
-  // Labels/Project fields, plus its own `⋮` overflow for Copy link/Complete
-  // forever/Delete) and #308's long-press lift (reordering) between them
+  // touch-only device. #302's detail sheet (inline Date/Priority/Labels/
+  // Project fields — Deadline too, until issue #376 removed its own field
+  // — plus its own `⋮` overflow for Copy link/Complete forever/Delete)
+  // and #308's long-press lift (reordering) between them
   // give a touch reader a door onto every one of those actions without
   // this menu, so More now rides the identical `hidden pointer-fine:flex`
   // gate as the other three — this asserts it does, on a device that
@@ -1130,7 +1126,11 @@ describe("TaskRow", () => {
     expect(screen.queryByText(/^P[1-4]$/)).not.toBeInTheDocument();
   });
 
-  it("summarises an all-day date and a deadline — a non-default priority renders no text badge", () => {
+  // Issue #376: a deadline value renders nothing here even when set — a
+  // Restore from an old backup can reinject one, but there is no "Due …"
+  // badge left to show it in. Date and priority summarise exactly as they
+  // would if the Task carried no deadline at all.
+  it("summarises an all-day date, ignoring a deadline — a non-default priority renders no text badge", () => {
     renderRow({
       task: task({
         content: "call mum",
@@ -1141,7 +1141,7 @@ describe("TaskRow", () => {
     });
 
     expect(screen.getByText("3 Sep")).toBeInTheDocument();
-    expect(screen.getByText("Due 10 Sep")).toBeInTheDocument();
+    expect(screen.queryByText(/Due/)).not.toBeInTheDocument();
     expect(screen.queryByText("P1")).not.toBeInTheDocument();
   });
 

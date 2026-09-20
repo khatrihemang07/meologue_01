@@ -65,7 +65,6 @@ export interface ProjectViewProps {
   onComplete: (task: Task) => void;
   onCompleteForever: (task: Task) => void;
   onRequestDelete: (task: Task) => void;
-  onOpenSchedule: (task: Task) => void;
   onMoveToSection: (taskId: string, sectionId: string | null) => void;
   reorderTask: (id: string, orderKey: string) => void;
   setTaskParent: (id: string, parentId: string | null) => Promise<void>;
@@ -113,7 +112,6 @@ export function ProjectView({
   onComplete,
   onCompleteForever,
   onRequestDelete,
-  onOpenSchedule,
   onMoveToSection,
   reorderTask,
   setTaskParent,
@@ -451,7 +449,6 @@ export function ProjectView({
           onComplete={onComplete}
           onCompleteForever={onCompleteForever}
           onRequestDelete={onRequestDelete}
-          onOpenSchedule={onOpenSchedule}
           onMoveToSection={onMoveToSection}
           reorderTask={reorderTask}
           setTaskParent={setTaskParent}

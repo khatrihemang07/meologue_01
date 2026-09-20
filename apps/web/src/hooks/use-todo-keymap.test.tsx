@@ -97,7 +97,6 @@ function renderKeymap(overrides: Partial<UseTodoKeymapOptions> = {}) {
     onOpenTaskDetail: vi.fn(),
     onOpenSchedule: vi.fn(),
     onSetTaskDate: vi.fn(),
-    onSetTaskDeadline: vi.fn(),
     onRequestDelete: vi.fn(),
     onOpenQuickFind: vi.fn(),
     onShowShortcuts: vi.fn(),
@@ -300,18 +299,20 @@ describe("useTodoKeymap", () => {
     document.removeEventListener(OPEN_SCHEDULE_EVENT, listener);
   });
 
-  it("opens the schedule sheet for the focused Task on D and Y, unchanged (Deadline and Priority still live there)", () => {
+  it("opens the schedule sheet for the focused Task on Y (Priority) — D (Deadline) is gone, issue #376", () => {
     focusTaskRow("task-1");
     const options = renderKeymap();
 
     fireEvent.keyDown(document, { key: "d" });
     fireEvent.keyDown(document, { key: "y" });
 
-    expect(options.onOpenSchedule).toHaveBeenCalledTimes(2);
+    // D no longer matches any binding at all, so it fires nothing —
+    // exactly one call, from Y alone.
+    expect(options.onOpenSchedule).toHaveBeenCalledTimes(1);
     expect(options.onOpenSchedule).toHaveBeenCalledWith("task-1");
   });
 
-  it("clears the focused Task's Date/Deadline on Shift+T / Shift+D", () => {
+  it("clears the focused Task's Date on Shift+T — Shift+D (Deadline) is gone, issue #376", () => {
     focusTaskRow("task-1");
     const options = renderKeymap();
 
@@ -319,7 +320,7 @@ describe("useTodoKeymap", () => {
     fireEvent.keyDown(document, { key: "D", shiftKey: true });
 
     expect(options.onSetTaskDate).toHaveBeenCalledWith("task-1", null);
-    expect(options.onSetTaskDeadline).toHaveBeenCalledWith("task-1", null);
+    expect(options.onSetTaskDate).toHaveBeenCalledTimes(1);
   });
 
   it("requests deletion of the focused Task on Cmd+Backspace or Shift+Delete", () => {

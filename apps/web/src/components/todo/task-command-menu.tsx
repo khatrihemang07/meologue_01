@@ -13,12 +13,13 @@
  * fixed, always-visible trigger is the trade this ticket takes instead,
  * named here rather than left silent.
  *
- * Every item here reuses an existing door onto TaskStore — `onOpenDetail`/
- * `onOpenSchedule` open views this app already built (the Task's own
- * route, `TaskScheduleSheet`). Issue #253 split "Date…" off from
- * `onOpenSchedule` onto its own `onOpenDate` — the row's own anchored
- * `TaskSchedulePopover` instance, not the sheet — while "Deadline…" keeps
- * the original callback unchanged. `onSetPriority`/`onSetProject`/
+ * Every item here reuses an existing door onto TaskStore — `onOpenDetail`
+ * opens a view this app already built (the Task's own route). `onOpenDate`
+ * opens the row's own anchored `TaskSchedulePopover` instance (issue #253);
+ * Priority has its own submenu (`onSetPriority` below) rather than opening
+ * `TaskScheduleSheet` the way "Deadline…" used to — issue #376 removed
+ * that item along with `onOpenSchedule`, this menu's last door onto the
+ * sheet. `onSetPriority`/`onSetProject`/
  * `onSetLabels` are use-tasks.ts's own setters. **Reminders, Duplicate and
  * Open in new window are deliberately absent** — none names a capability
  * this codebase has: there is no Reminder store, no Duplicate mutation on
@@ -43,7 +44,7 @@
  */
 import type { Label, Project, Task } from "@meologue/core";
 import { storedPriorityOf, uiPriorityOf } from "@meologue/core";
-import { CalendarClock, CalendarX2, Copy, FolderInput, Pencil, Tag, Trash2 } from "lucide-react";
+import { CalendarClock, Copy, FolderInput, Pencil, Tag, Trash2 } from "lucide-react";
 import { DropdownMenu } from "radix-ui";
 import type * as React from "react";
 import { useRef } from "react";
@@ -63,13 +64,12 @@ export interface TaskCommandMenuProps {
   onOpenDetail: () => void;
   /**
    * Opens the row's own anchored `TaskSchedulePopover` instance (issue
-   * #253) — this menu's own "Date…" item, sitting alongside "Deadline…"
-   * below (`onOpenSchedule`, still the shared bottom sheet) rather than
-   * sharing its callback: the two now open genuinely different surfaces,
-   * where before this ticket both opened the identical sheet.
+   * #253) — this menu's own "Date…" item. Used to sit alongside
+   * "Deadline…" sharing `onOpenSchedule` (the bottom sheet); issue #376
+   * removed that item along with Deadline's own half of the sheet, so this
+   * is the menu's only door onto a schedule picker now.
    */
   onOpenDate: () => void;
-  onOpenSchedule: () => void;
   onSetPriority: (priority: number) => void;
   onSetProject: (projectId: string | null) => void;
   onSetLabels: (labelIds: string[]) => void;
@@ -109,7 +109,6 @@ export function TaskCommandMenu({
   trigger,
   onOpenDetail,
   onOpenDate,
-  onOpenSchedule,
   onSetPriority,
   onSetProject,
   onSetLabels,
@@ -253,12 +252,6 @@ export function TaskCommandMenu({
               </DropdownMenu.SubContent>
             </DropdownMenu.Portal>
           </DropdownMenu.Sub>
-
-          <DropdownMenu.Item className={itemClassName} onSelect={onOpenSchedule}>
-            <CalendarX2 aria-hidden="true" className="size-3.5" />
-            Deadline…
-            <Hint id="set-deadline" />
-          </DropdownMenu.Item>
 
           {labels.length > 0 && (
             <DropdownMenu.Sub>

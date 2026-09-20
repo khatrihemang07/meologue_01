@@ -121,7 +121,7 @@ export interface TaskDetailViewProps {
    * (`task-row-content.tsx`'s `isRecurring`).
    */
   onCompleteForever: () => void;
-  /** Opens the shared `TaskScheduleSheet` — this file's own header comment on why Deadline/Priority funnel through the one door rather than each growing a picker of its own. Date no longer does (issue #253) — see `onSetDate`/`onSetDateString`/`datesWithTasks` below. */
+  /** Opens the shared `TaskScheduleSheet` — Priority's own picker, since issue #376 removed Deadline's half of it. Date has never gone through it (issue #253) — see `onSetDate`/`onSetDateString`/`datesWithTasks` below. */
   onOpenSchedule: () => void;
   /** Sets or clears the Task's `date` (issue #253) — reaches this view's own `TaskSchedulePopover` instance for the Date attribute, mirroring `task-row-content.tsx`'s identical wiring. */
   onSetDate: (id: string, date: string | null) => void;
@@ -175,8 +175,8 @@ export interface TaskDetailViewProps {
  * (`task-row-content.tsx`'s own doc comment has the fuller account of that
  * trap, found once already in this repo). `onClick` is optional now for
  * the identical reason: the Date attribute passes none — Radix's own
- * trigger click is what opens its popover — where Project/Deadline/
- * Priority/Labels below still pass one to toggle their own local picker.
+ * trigger click is what opens its popover — where Project/Priority/Labels
+ * below still pass one to toggle their own local picker.
  */
 const AttributePill = forwardRef<HTMLButtonElement, { label: string; onClick?: () => void }>(
   function AttributePill({ label, onClick }, ref) {
@@ -206,7 +206,7 @@ const AttributeRow = forwardRef<
     icon: React.ReactNode;
     label: string;
     value: React.ReactNode;
-    /** A leading dot in this colour — Priority's own ring colour, or a Project's/Label's own swatch. Omitted for Date/Deadline, which carry no colour of their own. */
+    /** A leading dot in this colour — Priority's own ring colour, or a Project's/Label's own swatch. Omitted for Date, which carries no colour of its own. */
     colour?: string;
     onClick?: () => void;
   }
@@ -610,8 +610,8 @@ const overflowItemClassName =
  * Delete and (recurring Tasks only) Complete forever, plus a non-
  * interactive "Added on …" stamp. This is a second, narrower
  * `DropdownMenu.Root` alongside `TaskCommandMenu`'s (task-command-menu.tsx),
- * not that component reused wholesale: that menu's own seven items —
- * Edit, Date…, Priority, Deadline…, Labels, Move to… — either have no
+ * not that component reused wholesale: that menu's own items —
+ * Edit, Date…, Priority, Labels, Move to… — either have no
  * meaning here (Edit is this whole view; there is no second "Move to…"
  * picker to keep in sync with the sidebar's own Project attribute a few
  * lines below) or would need a parallel, harder-to-follow prop surface on
@@ -1484,7 +1484,7 @@ function TaskDetailBody({
           <CommentComposer onSubmit={onAddComment} initialExpanded={openCommentComposer} />
         </div>
 
-        {/* The attribute sidebar — Project, Date, Deadline, Priority,
+        {/* The attribute sidebar — Project, Date, Priority,
             Labels, pill-or-row per this file's own `AttributePill`/
             `AttributeRow` doc comments. `sm:w-56` only takes effect
             alongside the `sm:flex-row` above, so a narrow sheet still
@@ -1493,7 +1493,7 @@ function TaskDetailBody({
         <div className="flex shrink-0 flex-col gap-1 sm:min-h-0 sm:w-56 sm:overflow-y-auto">
           {/*
             Project — the one attribute that's never truly "unset" the way
-            Date/Deadline/Priority/Labels can be (CONTEXT.md's Inbox
+            Date/Priority/Labels can be (CONTEXT.md's Inbox
             entry: Inbox is the absence of a Project, not a lesser value
             of one), so this always renders as a promoted row, never a
             pill — there is no "nothing chosen yet" state to promote out
@@ -1572,16 +1572,6 @@ function TaskDetailBody({
               )
             }
           />
-          {task.deadline === null ? (
-            <AttributePill label="Deadline" onClick={onOpenSchedule} />
-          ) : (
-            <AttributeRow
-              icon={null}
-              label="Deadline"
-              value={formatDay(task.deadline)}
-              onClick={onOpenSchedule}
-            />
-          )}
           {task.priority === 1 ? (
             <AttributePill label="Priority" onClick={onOpenSchedule} />
           ) : (

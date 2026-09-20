@@ -169,16 +169,16 @@ export interface EntryStoreOutletContext {
   reorderTaskToday: (id: string, dayOrder: string) => void;
   removeTask: (id: string) => void;
   /**
-   * The three scheduling setters issue #169 adds (use-tasks.ts's own doc
-   * comments carry the reasoning each individually needs). Grouped under
-   * `tasks`/`addTask`/etc. above rather than a nested object: every other
-   * Task mutation on this context is a flat, top-level field, and a
-   * `scheduling: {...}` bag here would be the one field on this interface
-   * that reads differently from its neighbours for no reason a caller
-   * benefits from.
+   * The scheduling setters issue #169 adds (use-tasks.ts's own doc
+   * comments carry the reasoning each individually needs — `setTaskDeadline`
+   * was a third, removed by issue #376 along with every surface that could
+   * call it). Grouped under `tasks`/`addTask`/etc. above rather than a
+   * nested object: every other Task mutation on this context is a flat,
+   * top-level field, and a `scheduling: {...}` bag here would be the one
+   * field on this interface that reads differently from its neighbours
+   * for no reason a caller benefits from.
    */
   setTaskDate: (id: string, date: string | null) => void;
-  setTaskDeadline: (id: string, deadline: string | null) => void;
   setTaskPriority: (id: string, priority: number) => void;
   /** Sets or clears a Task's Recurrence (issue #227) — use-tasks.ts's own `setTaskDateString` doc comment. `today` (not an instant — issue #296) is what that doc comment now names it. */
   setTaskDateString: (id: string, dateString: string | null, today: LocalDayKey) => void;
@@ -506,12 +506,11 @@ function noopReorderTaskToday(_id: string, _dayOrder: string) {}
 
 function noopRemoveTask(_id: string) {}
 
-// Issue #169's three setters — the not-ready stand-ins for a Today view or a
+// Issue #169's setters — the not-ready stand-ins for a Today view or a
 // picker mounted before the store opens, same reasoning as
-// noopAddTask/noopReorderTask above.
+// noopAddTask/noopReorderTask above. A third, noopSetTaskDeadline, was
+// removed by issue #376 along with `setTaskDeadline` itself.
 function noopSetTaskDate(_id: string, _date: string | null) {}
-
-function noopSetTaskDeadline(_id: string, _deadline: string | null) {}
 
 function noopSetTaskPriority(_id: string, _priority: number) {}
 
@@ -1440,7 +1439,6 @@ export function EntryStoreLayout() {
     reorderTaskToday,
     removeTask,
     setTaskDate,
-    setTaskDeadline,
     setTaskPriority,
     setTaskDateString,
     setTaskLabels,
@@ -1495,7 +1493,6 @@ export function EntryStoreLayout() {
               reorderTaskToday,
               removeTask,
               setTaskDate,
-              setTaskDeadline,
               setTaskPriority,
               setTaskDateString,
               setTaskLabels,
@@ -1575,7 +1572,6 @@ export function EntryStoreLayout() {
               reorderTaskToday: noopReorderTaskToday,
               removeTask: noopRemoveTask,
               setTaskDate: noopSetTaskDate,
-              setTaskDeadline: noopSetTaskDeadline,
               setTaskPriority: noopSetTaskPriority,
               setTaskDateString: noopSetTaskDateString,
               setTaskLabels: noopSetTaskLabels,

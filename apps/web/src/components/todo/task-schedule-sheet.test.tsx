@@ -37,18 +37,16 @@ function task(overrides: Partial<Task> = {}): Task {
 }
 
 function renderSheet(overrides: Partial<Task> = {}) {
-  const onSetDeadline = vi.fn();
   const onSetPriority = vi.fn();
   render(
     <TaskScheduleSheet
       task={task(overrides)}
       open={true}
       onOpenChange={vi.fn()}
-      onSetDeadline={onSetDeadline}
       onSetPriority={onSetPriority}
     />,
   );
-  return { onSetDeadline, onSetPriority };
+  return { onSetPriority };
 }
 
 describe("TaskScheduleSheet", () => {
@@ -72,23 +70,17 @@ describe("TaskScheduleSheet", () => {
     expect(screen.queryByRole("button", { name: "Pick a date" })).not.toBeInTheDocument();
   });
 
+  // Issue #376: no surface offers to set, edit, clear or display a
+  // deadline — this sheet used to hold Deadline alongside Priority
+  // (task-schedule-sheet.tsx's own former header comment); that half is
+  // gone, and a restored `deadline` value renders nothing.
   describe("Deadline", () => {
-    it("'Pick a deadline' opens the nested DatePickerSheet, and confirming sets the deadline", () => {
-      const { onSetDeadline } = renderSheet();
+    it("renders no Deadline section, on a Task with or without a deadline value", () => {
+      renderSheet({ deadline: "2026-09-10" });
 
-      fireEvent.click(screen.getByRole("button", { name: "Pick a deadline" }));
-      fireEvent.click(screen.getByRole("button", { name: /September 20th, 2026/ }));
-      fireEvent.click(screen.getByRole("button", { name: /^Confirm/ }));
-
-      expect(onSetDeadline).toHaveBeenCalledWith("1", "2026-09-20");
-    });
-
-    it("offers Clear only once a deadline is set", () => {
-      const { onSetDeadline } = renderSheet({ deadline: "2026-09-10" });
-
-      fireEvent.click(screen.getByRole("button", { name: "Clear deadline" }));
-
-      expect(onSetDeadline).toHaveBeenCalledWith("1", null);
+      expect(screen.queryByText("Deadline")).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Pick a deadline" })).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Clear deadline" })).not.toBeInTheDocument();
     });
   });
 

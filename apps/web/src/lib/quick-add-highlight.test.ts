@@ -117,6 +117,18 @@ describe("tokenHighlightState", () => {
     expect(tokenHighlightState(token, 3)).toBe("unresolved");
   });
 
+  // Issue #376: `{24 sept}` still tokenises (issue #377 removes the rule;
+  // untouched here), but no surface can ever apply it, so it reads
+  // "unresolved" unconditionally — the same treatment `project`/`section`
+  // get, never a "pending" decoration that would promise a resolution
+  // that isn't coming.
+  it("is 'unresolved' for a deadline token, regardless of the caret", () => {
+    const token = { kind: "deadline" as const, start: 0, end: 9 };
+
+    expect(tokenHighlightState(token, null)).toBe("unresolved");
+    expect(tokenHighlightState(token, 4)).toBe("unresolved"); // caret inside
+  });
+
   it("is 'pending' for a supported kind while the caret sits inside it", () => {
     const token = { kind: "date" as const, start: 4, end: 12 };
 
@@ -159,7 +171,7 @@ describe("quickAddHighlightClass", () => {
   });
 
   it("gives Priority and every Date-family kind a colour-worthy 'resolved' class", () => {
-    for (const kind of ["date", "time", "deadline", "recurrence", "priority"] as const) {
+    for (const kind of ["date", "time", "recurrence", "priority"] as const) {
       expect(quickAddHighlightClass(kind, "resolved")).toContain("quick-add-resolved-accent");
     }
   });

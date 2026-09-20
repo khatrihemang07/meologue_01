@@ -105,7 +105,6 @@ export function ComposerPage() {
     completeForeverTask,
     renameTask,
     setTaskDate,
-    setTaskDeadline,
     setTaskPriority,
     setTaskDateString,
     setTaskProject,
@@ -461,7 +460,6 @@ export function ComposerPage() {
       {
         renameTask,
         setTaskDate,
-        setTaskDeadline,
         setTaskPriority,
         setTaskDateString,
         setTaskLabels,
@@ -664,7 +662,6 @@ export function ComposerPage() {
           task={openTask}
           open={true}
           onOpenChange={setSchedulingOpen}
-          onSetDeadline={setTaskDeadline}
           onSetPriority={setTaskPriority}
         />
       )}
