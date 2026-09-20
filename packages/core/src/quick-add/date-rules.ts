@@ -122,6 +122,39 @@ export function matchAbsoluteDate(input: string, ctx: DateRuleContext): QuickAdd
     pushIfValidCalendarDate(tokens, match, parseDateOnly(date).year, month, day);
   }
 
+  // Bare month name (`March`, `May`, `August`) — issue #410, and D1's own
+  // "follows from D1, no further decision needed" list
+  // (`.scratch/todoist-add-todo/DECISIONS.md`: "Bare month names stay in
+  // the eager vocabulary"). Todoist treats a month name as ordinary
+  // literal-token vocabulary, exactly like a weekday name — so a month
+  // used as a common noun or verb still false-positives, resolving to
+  // day 1 of that month rolled forward to its next occurrence (identical
+  // `resolveYearRollForward` this function's day+month forms already
+  // use). Measured (`.scratch/todoist-add-todo/web/11-detection-
+  // recheck.md`, `data/11-false-positive-boundary.json`): a leading
+  // `in ` immediately before the month is swallowed into the match ("I
+  // saw him in August" -> "in August"), but a month with nothing before
+  // it is not ("March forward" -> "March" alone). Both lookaround guards
+  // below refuse a month word immediately adjacent to a number, on
+  // either side, regardless of whether that number is a valid day — the
+  // corpus's own `32 sept` (an out-of-range day) still expects *no*
+  // match at all, not a fallback bare-month reading of `sept`, so an
+  // adjacent number blocks this rule even when the compound it's part of
+  // fails `pushIfValidCalendarDate` below. Pushed after `dayFirst`/
+  // `monthFirst` above so a day-qualified date always wins the overlap
+  // against this looser, unqualified match for the identical month
+  // word — the same "more specific form pushed first" convention this
+  // function's numeric forms already follow.
+  const bareMonth = new RegExp(`(?<!\\d\\s*)\\b(in\\s+)?(${monthAlt})\\b(?!\\s*\\d)`, "gi");
+  for (const match of input.matchAll(bareMonth)) {
+    // biome-ignore lint/style/noNonNullAssertion: the alternation is built from this exact table's own keys
+    const month = ctx.language.months[match[2]!.toLowerCase()]!;
+    const date = resolveYearRollForward(ctx.now, month, 1, undefined);
+    const start = match.index;
+    const end = match.index + match[0].length;
+    tokens.push({ kind: "date", start, end, raw: input.slice(start, end), date });
+  }
+
   // Three-part numeric form always carries an explicit year (issue
   // #170's own example, `27/1/2026`, does) — see
   // QuickAddLanguage.dayMonthOrder's own doc comment for why only this

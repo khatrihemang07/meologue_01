@@ -80,18 +80,30 @@ export function useDraftDateState(
   now: LocalDayKey,
   onTextChange: (nextText: string) => void,
 ): DraftDateState {
-  // The identical explicit-per-kind `find` shape `task-schedule-popover.tsx`'s
-  // own `resolveSchedulePreview` already uses (a generic `findToken<K>`
-  // helper doesn't typecheck here: a type predicate keyed off a generic
-  // `K` isn't provably assignable back to the callback's own parameter
-  // type, a real TypeScript limitation, not a style choice).
-  const dateToken = tokens.find(
+  // `findLast`, not `find` — issue #410: when two date-family tokens of
+  // the same kind compete (`meet monday or tuesday`, `today tomorrow`),
+  // Todoist's own measured behaviour is that the *rightmost* one settles
+  // the chip (`.scratch/todoist-add-todo/web/02-detection-corpus.md`).
+  // `tokens` is already sorted by ascending `start`
+  // (../../../packages/core/src/quick-add/parse-quick-add.ts's own
+  // `resolveOverlaps`), so the last element of a same-kind run is the
+  // rightmost one — the identical "last one wins" rule that module's own
+  // `buildResult` already applies to `QuickAddResult.date`/`time`. A
+  // plain `find` here returned the *first* (leftmost) match instead,
+  // silently disagreeing with that rule for any draft with two
+  // same-kind matches. (Still the same explicit-per-kind shape
+  // `task-schedule-popover.tsx`'s own `resolveSchedulePreview` uses — a
+  // generic `findToken<K>` helper doesn't typecheck here: a type
+  // predicate keyed off a generic `K` isn't provably assignable back to
+  // the callback's own parameter type, a real TypeScript limitation, not
+  // a style choice.)
+  const dateToken = tokens.findLast(
     (token): token is Extract<QuickAddToken, { kind: "date" }> => token.kind === "date",
   );
-  const timeToken = tokens.find(
+  const timeToken = tokens.findLast(
     (token): token is Extract<QuickAddToken, { kind: "time" }> => token.kind === "time",
   );
-  const recurrenceToken = tokens.find(
+  const recurrenceToken = tokens.findLast(
     (token): token is Extract<QuickAddToken, { kind: "recurrence" }> => token.kind === "recurrence",
   );
 

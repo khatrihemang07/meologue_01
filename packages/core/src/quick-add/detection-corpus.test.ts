@@ -284,6 +284,52 @@ describe("detection corpus — passing rows", () => {
   }
 });
 
+/**
+ * Issue #410: `checkRow` above claims every expected match against its
+ * *own* comparable token and checks that token's *own* resolved value —
+ * it never checks which one `QuickAddResult.date` (the single field a
+ * caller actually reads to decide what to schedule) settles on when two
+ * "date"-kind tokens exist in the same row. That gap is exactly how a
+ * leftmost-wins regression could pass 117/117: every individual span
+ * would still resolve correctly on its own, even while the merged
+ * `result.date` silently picked the wrong one.
+ *
+ * Todoist's own measured behaviour — `.scratch/todoist-add-todo/web/
+ * 02-detection-corpus.md`: "`meet monday or tuesday` → both `monday` and
+ * `tuesday` are highlighted as separate matches, but the **rightmost one
+ * wins** for the actual date chip (`Tuesday`)"; "`today tomorrow` → same
+ * rightmost-wins pattern... chip settles on `Tomorrow`" — is that the
+ * *rightmost* span wins, not the first one typed. This guard derives the
+ * rows to check directly from the corpus itself (any row whose actual
+ * parse produces two or more "date"-kind tokens), rather than naming
+ * `meet monday or tuesday`/`today tomorrow` by hand, so a future corpus
+ * addition with the same shape is covered automatically.
+ */
+describe("detection corpus — rightmost date wins when two compete", () => {
+  const rowsWithCompetingDates = CORPUS.filter((row) => {
+    const result = parseQuickAdd(row.input, { now: NOW });
+    return result.tokens.filter((t) => t.kind === "date").length >= 2;
+  });
+
+  // Guards this describe block against silently checking nothing if the
+  // corpus is ever edited such that no row has this shape any more.
+  it("at least one corpus row exercises two competing date matches", () => {
+    expect(rowsWithCompetingDates.length).toBeGreaterThan(0);
+  });
+
+  for (const row of rowsWithCompetingDates) {
+    it(`${JSON.stringify(row.input)} settles result.date on the rightmost match, not the leftmost`, () => {
+      const result = parseQuickAdd(row.input, { now: NOW });
+      const dateTokens = result.tokens.filter(
+        (t): t is Extract<QuickAddToken, { kind: "date" }> => t.kind === "date",
+      );
+      // biome-ignore lint/style/noNonNullAssertion: rowsWithCompetingDates already filtered to length >= 2
+      const rightmost = dateTokens[dateTokens.length - 1]!;
+      expect(result.date).toBe(rightmost.date);
+    });
+  }
+});
+
 // The other half of "this list may only shrink": a pending row that
 // starts passing has to fail *this* test, not slide by unnoticed under
 // `it.todo`'s own always-skipped status.
