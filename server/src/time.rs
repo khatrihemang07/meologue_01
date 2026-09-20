@@ -613,6 +613,136 @@ impl ImportRuns {
 }
 
 // ---------------------------------------------------------------------------
+// Bootstrapping a managed Server (issue #425)
+// ---------------------------------------------------------------------------
+
+/// One Time source as `MEOLOGUE_TIME_SOURCES_JSON` describes it.
+#[derive(Debug, Deserialize)]
+pub struct BootstrapSource {
+    pub name: String,
+    pub kind: String,
+    pub path: String,
+    /// Defaults to enabled: an operator listing a source almost always wants
+    /// it importing, and a seed file full of `"enabled": true` would be noise.
+    #[serde(default = "enabled_by_default")]
+    pub enabled: bool,
+}
+
+fn enabled_by_default() -> bool {
+    true
+}
+
+/// Seeds Time sources from the environment, once, on an empty table.
+///
+/// Returns how many were inserted.
+///
+/// **Once** is the whole design. Postgres and Server Settings are
+/// authoritative the moment any source row exists, so a later environment
+/// change adds nothing, replaces nothing, and neither re-enables nor archives
+/// anything. Without that, an operator who archived a seeded source in
+/// Settings would find it back and importing after the next restart — the
+/// environment would have become a permanent overlay rewriting user choices
+/// on every boot.
+///
+/// An **archived** row counts as existing configuration. It is the clearest
+/// case of a deliberate decision someone made after seeding, and it is
+/// exactly the one a naive "no *enabled* sources, so seed again" check would
+/// undo.
+///
+/// Nothing here can stop the Server starting. Invalid JSON, an unknown
+/// adapter kind or an unreadable path are logged and skipped, leaving the
+/// Settings repair path — adding the source by hand — open.
+pub async fn bootstrap_sources(pool: &PgPool, raw: Option<&str>) -> usize {
+    let Some(raw) = raw.map(str::trim).filter(|value| !value.is_empty()) else {
+        return 0;
+    };
+
+    let existing: i64 = sqlx::query_scalar("select count(*) from time_sources")
+        .fetch_one(pool)
+        .await
+        .unwrap_or(1);
+    if existing > 0 {
+        tracing::debug!(
+            "MEOLOGUE_TIME_SOURCES_JSON ignored: this Server already has Time sources, which are \
+             owned by its database and Settings from the first one onwards"
+        );
+        return 0;
+    }
+
+    let parsed: Vec<BootstrapSource> = match serde_json::from_str(raw) {
+        Ok(parsed) => parsed,
+        Err(error) => {
+            tracing::warn!(
+                "MEOLOGUE_TIME_SOURCES_JSON is not a JSON array of Time sources and was ignored \
+                 ({error}); add the sources in Server Settings instead"
+            );
+            return 0;
+        }
+    };
+
+    let mut seeded = Vec::new();
+    for source in parsed {
+        let name = source.name.trim();
+        if name.is_empty() {
+            tracing::warn!("MEOLOGUE_TIME_SOURCES_JSON: a source has no name and was skipped");
+            continue;
+        }
+        let Some(kind) = SourceKind::from_wire(&source.kind) else {
+            tracing::warn!(
+                "MEOLOGUE_TIME_SOURCES_JSON: source {name:?} names an unsupported adapter kind \
+                 {:?} and was skipped",
+                source.kind
+            );
+            continue;
+        };
+        let path = match canonical_source_path(&source.path) {
+            Ok(path) => path,
+            Err(error) => {
+                tracing::warn!("MEOLOGUE_TIME_SOURCES_JSON: source {name:?} was skipped — {error}");
+                continue;
+            }
+        };
+        if let Err(error) = validate_source(kind, &path) {
+            tracing::warn!("MEOLOGUE_TIME_SOURCES_JSON: source {name:?} was skipped — {error}");
+            continue;
+        }
+
+        let id = Uuid::new_v4();
+        let stored_path = path.to_string_lossy().into_owned();
+        let inserted = sqlx::query(
+            "insert into time_sources (id,name,kind,path,enabled) values ($1,$2,$3,$4,$5)",
+        )
+        .bind(id)
+        .bind(name)
+        .bind(kind.as_wire())
+        .bind(&stored_path)
+        .bind(source.enabled)
+        .execute(pool)
+        .await;
+        match inserted {
+            Ok(_) => {
+                tracing::info!("seeded Time source {name:?} from MEOLOGUE_TIME_SOURCES_JSON");
+                seeded.push((id, kind, stored_path, source.enabled));
+            }
+            Err(error) => tracing::warn!(
+                "MEOLOGUE_TIME_SOURCES_JSON: source {name:?} could not be stored ({error})"
+            ),
+        }
+    }
+
+    // A seeded enabled source imports immediately, exactly as one added in
+    // Settings does — an operator should not have to press Refresh now to make
+    // a Server they just configured useful.
+    let count = seeded.len();
+    for (id, kind, path, enabled) in seeded {
+        if enabled {
+            spawn_import(pool.clone(), id, kind, path);
+        }
+    }
+    count
+}
+
+// ---------------------------------------------------------------------------
 // The nightly run (issue #422)
 // ---------------------------------------------------------------------------
 
@@ -693,11 +823,12 @@ pub struct RefreshAccepted {
 pub async fn refresh_handler(
     State(pool): State<PgPool>,
     State(runs): State<ImportRuns>,
-    State(ConfigLocked(locked)): State<ConfigLocked>,
 ) -> Result<(StatusCode, Json<RefreshAccepted>), (StatusCode, String)> {
-    if locked {
-        return Err((StatusCode::LOCKED, "Server configuration is locked".into()));
-    }
+    // Deliberately NOT gated on `ConfigLocked`. That lock makes a Server's
+    // *configuration* read-only; importing changes evidence, not settings, and
+    // a managed Server whose sources were seeded from the environment still
+    // has to be able to import them (issue #425). The nightly worker runs on a
+    // locked Server for the same reason.
 
     // Archived sources are excluded here rather than inside the run, so the
     // queued count a Device is told matches what will actually be imported.

@@ -268,6 +268,17 @@ async fn main() -> anyhow::Result<()> {
     // combined) — see `router_with_everything`'s own doc comment for why
     // neither the backup fields nor the settings/flags fields get folded
     // into a narrower call here.
+    // Seed Time sources from the environment, once, on a Server whose table
+    // is still empty (issue #425). After the first source exists this does
+    // nothing at all — Postgres and Server Settings own the configuration
+    // from then on, and an environment that kept reasserting itself would
+    // undo whatever an operator changed in Settings on every restart.
+    meologue_server::time::bootstrap_sources(
+        &pool,
+        env::var("MEOLOGUE_TIME_SOURCES_JSON").ok().as_deref(),
+    )
+    .await;
+
     // The nightly import worker and the Router share one run guard, so a
     // scheduled run and a reader pressing "Refresh now" cannot both be
     // importing the same sources at once (issues #421/#422).

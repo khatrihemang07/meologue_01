@@ -89,6 +89,55 @@ Two more variables arrive with this:
 | `MEOLOGUE_MODE` | `production` or `sandbox`, defaulting to `production`. Names this instance — in its startup banner today, in a UI banner or log prefix later — and decides nothing else: it does **not** affect precedence. See `docs/adr/0061-*`. |
 | `MEOLOGUE_CONFIG_LOCK` | Any non-empty value makes this Server ignore its stored settings entirely and read only the environment, as if `server_settings` held nothing. Not something to copy into your own `.env` — the e2e scripts set it so the persistent e2e databases can't poison a suite run with a stored value left over from a previous one. |
 
+## Time sources
+
+Time sources are normally added in Server Settings. A managed or scripted Server can be given its
+first ones through the environment instead:
+
+| Var | Behaviour |
+|---|---|
+| `MEOLOGUE_TIME_SOURCES_JSON` | A JSON array of Time sources to seed, **once**, into a Server whose `time_sources` table is still empty. Each entry is `{"name": ..., "kind": ..., "path": ..., "enabled": true}`; `enabled` defaults to `true`. `kind` is `toggl_activity` or `clockify_auto_tracker`. `path` may start with `~` and is stored canonicalised. |
+
+```sh
+MEOLOGUE_TIME_SOURCES_JSON='[
+  {"name": "Work activity", "kind": "toggl_activity",
+   "path": "~/Library/Group Containers/B227VTMZ94.group.com.toggl.daneel.extensions/production/DatabaseModel.sqlite"},
+  {"name": "Desktop tracker", "kind": "clockify_auto_tracker",
+   "path": "~/Library/Application Support/Clockify Desktop/Clockify_….sqlite", "enabled": false}
+]'
+```
+
+**It is read once and then never again.** From the moment this Server has any Time source row —
+including an archived one — Postgres and Server Settings own that configuration. A later change to
+this variable adds nothing, replaces nothing, and neither re-enables nor archives anything. That
+is deliberate: an environment that kept reasserting itself would undo whatever an operator changed
+in Settings on every restart, and archiving a seeded source is exactly the decision a naive
+"re-seed if nothing is enabled" rule would silently reverse.
+
+Invalid JSON, an unknown adapter kind, a missing file or a database that is not the recorder it
+claims to be are **logged and skipped**. None of them stops the Server starting, and whatever was
+skipped can still be added by hand in Server Settings.
+
+A seeded, enabled source begins its all-history import immediately, exactly as one added in
+Settings does.
+
+`MEOLOGUE_CONFIG_LOCK` makes Time source *configuration* read-only — adding, archiving, renaming
+and repointing all answer `423`. Listing sources, reading their import status, querying Time and
+**importing** all keep working, including the nightly run: a lock on configuration is not a reason
+to stop collecting the evidence a Server was configured to collect.
+
+### What a Time source exposes
+
+> **Read this before putting a Server on a network you do not control.**
+>
+> Activity intervals carry the **full window titles** the recorder saw — document names, branch
+> names, email subjects, the URL of every page visited. `GET /v1/time/intervals/{id}` serves the
+> **complete raw provider row** on top of that, including columns Meologue does not interpret.
+>
+> This Server has no authentication (ADR 0003: trust is network-level, not transport-level). Any
+> device that can reach it can read all of it. Run it on a trusted network or a tailnet, never on
+> an interface exposed to the internet. `BIND` exists to narrow the interface it listens on.
+
 `GET /v1/config` reports each field's resolved value **and where it came from** (`stored`, `env`,
 or `unset`) — without the source, a UI can't tell a value it may Clear from one it can only
 override. It also reports the instance's `mode`, whether it is `locked`, and

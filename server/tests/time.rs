@@ -1915,6 +1915,10 @@ async fn refresh_imports_every_enabled_source_and_reports_each_one_separately(po
     // runs — the ordinary way a source breaks.
     std::fs::remove_file(&gone).unwrap();
 
+    // Recorded before the run so the wait below can tell this run's success
+    // from the initial import's.
+    let healthy_before = source_status(&pool, healthy).await["last_success_at"].clone();
+
     let (status, body) = post_refresh(app(&pool, false)).await;
     assert_eq!(
         status,
@@ -1928,11 +1932,12 @@ async fn refresh_imports_every_enabled_source_and_reports_each_one_separately(po
         "an archived source must not be queued for import"
     );
 
-    // Wait for the run to settle: the broken source ends with an error, the
-    // healthy one with a fresh success.
+    // Wait on the LAST source the run touches, not the first. The broken one
+    // is imported first, so its error appears while the healthy one has not
+    // run yet — keying the wait on it read the healthy source's *initial*
+    // import and failed under load.
     for _ in 0..400 {
-        let broken_status = source_status(&pool, broken).await;
-        if broken_status["last_error"].is_string() {
+        if source_status(&pool, healthy).await["last_success_at"] != healthy_before {
             break;
         }
         tokio::time::sleep(Duration::from_millis(25)).await;
@@ -2182,9 +2187,43 @@ async fn deleting_a_record_from_the_source_never_removes_imported_evidence(pool:
 }
 
 #[sqlx::test]
-async fn refresh_is_refused_while_configuration_is_locked(pool: PgPool) {
+async fn a_locked_server_still_imports(pool: PgPool) {
+    // `MEOLOGUE_CONFIG_LOCK` makes a Server's *configuration* read-only. An
+    // import changes evidence, not settings, and a managed Server whose
+    // sources were seeded from the environment still has to be able to import
+    // them (issue #425) — so refresh is deliberately not gated on the lock,
+    // while adding, archiving and repointing a source all are.
+    let dir = scratch_dir("locked-refresh");
+    let path = dir.join("db.sqlite");
+    write_toggl_db(&path, &[one_activity(&[0xe9], "Xcode")]);
+    let source = create_toggl_source(&pool, "Toggl", &path).await;
+    wait_for_intervals(&pool, source, 1).await;
+
     let (status, _) = post_refresh(app(&pool, true)).await;
-    assert_eq!(status, StatusCode::LOCKED);
+    assert_eq!(status, StatusCode::ACCEPTED);
+
+    // The mutations stay locked.
+    let (archive, _) = patch_source(&pool, source, json!({ "enabled": false }), true).await;
+    assert_eq!(archive, StatusCode::LOCKED);
+    let (create, _) = send(
+        app(&pool, true),
+        Request::builder()
+            .method("POST")
+            .uri("/v1/time/sources")
+            .header("Content-Type", "application/json")
+            .body(Body::from(
+                json!({ "name": "New", "kind": "toggl_activity", "path": path.to_string_lossy() })
+                    .to_string(),
+            ))
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(create, StatusCode::LOCKED);
+
+    // And reading is untouched.
+    let (listed, _) = list_intervals(&pool, DAY, Some(source)).await;
+    assert_eq!(listed, StatusCode::OK);
+    assert_eq!(sources_of(&pool).await.len(), 1);
 }
 
 #[sqlx::test]
@@ -2386,4 +2425,239 @@ async fn a_nightly_tick_is_skipped_while_another_run_is_in_flight(pool: PgPool) 
         !run_scheduled_import(&pool, &runs, local_date(0)).await,
         "a nightly tick started alongside a run already in flight"
     );
+}
+
+// ---------------------------------------------------------------------------
+// Bootstrapping a managed Server (issue #425)
+// ---------------------------------------------------------------------------
+
+use meologue_server::time::bootstrap_sources;
+
+/// The env value as an operator would write it, for one Toggl database.
+fn bootstrap_json(entries: &[(&str, &str, &Path, Option<bool>)]) -> String {
+    let items: Vec<Value> = entries
+        .iter()
+        .map(|(name, kind, path, enabled)| {
+            let mut item = json!({ "name": name, "kind": kind, "path": path.to_string_lossy() });
+            if let Some(enabled) = enabled {
+                item["enabled"] = json!(enabled);
+            }
+            item
+        })
+        .collect();
+    Value::Array(items).to_string()
+}
+
+#[sqlx::test]
+async fn an_empty_server_is_seeded_from_the_environment_and_imports_at_once(pool: PgPool) {
+    let dir = scratch_dir("bootstrap");
+    let toggl = dir.join("toggl.sqlite");
+    let clockify = dir.join("clockify.sqlite");
+    write_toggl_db(&toggl, &[one_activity(&[0xe2], "Xcode")]);
+    write_clockify_db(
+        &clockify,
+        &[AutoTrackerItem {
+            id: "68cf0a1b2c3d4e5f607182b0",
+            started: TimestampValue::Real(MORNING_START),
+            ended: Some(TimestampValue::Real(MORNING_END)),
+            name: "Figma",
+            description: None,
+            idle_seconds: 0.0,
+            icon: &[],
+        }],
+    );
+
+    let seeded = bootstrap_sources(
+        &pool,
+        Some(&bootstrap_json(&[
+            ("Work", "toggl_activity", &toggl, None),
+            ("Desktop", "clockify_auto_tracker", &clockify, Some(false)),
+        ])),
+    )
+    .await;
+    assert_eq!(seeded, 2);
+
+    let sources = sources_of(&pool).await;
+    assert_eq!(sources.len(), 2);
+    assert_eq!(sources[0]["name"], "Work");
+    assert_eq!(sources[0]["enabled"], true, "enabled is the default");
+    assert_eq!(sources[1]["name"], "Desktop");
+    assert_eq!(sources[1]["enabled"], false);
+    // The path is canonicalised exactly as one typed into Settings would be.
+    assert_eq!(
+        sources[0]["path"],
+        std::fs::canonicalize(&toggl)
+            .unwrap()
+            .to_string_lossy()
+            .as_ref()
+    );
+
+    // A seeded ENABLED source imports immediately, as one added in Settings
+    // does — an operator should not have to press Refresh now to make a
+    // Server they just configured useful.
+    let work = Uuid::parse_str(sources[0]["id"].as_str().unwrap()).unwrap();
+    wait_for_intervals(&pool, work, 1).await;
+    let (_, intervals) = list_intervals(&pool, DAY, Some(work)).await;
+    assert_eq!(labels(&intervals), vec!["Xcode"]);
+
+    // The archived one is not imported, the same way archival works anywhere
+    // else.
+    let desktop = Uuid::parse_str(sources[1]["id"].as_str().unwrap()).unwrap();
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let stored: i64 =
+        sqlx::query_scalar("select count(*) from activity_intervals where source_id = $1")
+            .bind(desktop)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(stored, 0);
+}
+
+#[sqlx::test]
+async fn once_any_source_exists_the_environment_stops_being_consulted(pool: PgPool) {
+    // The one-time ownership transfer. Without it the environment would be a
+    // permanent overlay, rewriting whatever an operator changed in Settings
+    // on every single restart.
+    let dir = scratch_dir("ownership");
+    let first = dir.join("first.sqlite");
+    let second = dir.join("second.sqlite");
+    write_toggl_db(&first, &[one_activity(&[0xe3], "First")]);
+    write_toggl_db(&second, &[one_activity(&[0xe4], "Second")]);
+
+    assert_eq!(
+        bootstrap_sources(
+            &pool,
+            Some(&bootstrap_json(&[("Work", "toggl_activity", &first, None)]))
+        )
+        .await,
+        1
+    );
+
+    // A restart with a *different* environment adds nothing and replaces
+    // nothing.
+    assert_eq!(
+        bootstrap_sources(
+            &pool,
+            Some(&bootstrap_json(&[
+                ("Work", "toggl_activity", &first, None),
+                ("Extra", "toggl_activity", &second, None),
+            ]))
+        )
+        .await,
+        0
+    );
+    let sources = sources_of(&pool).await;
+    assert_eq!(sources.len(), 1);
+    assert_eq!(sources[0]["name"], "Work");
+
+    // And an empty environment does not remove what is already configured.
+    assert_eq!(bootstrap_sources(&pool, None).await, 0);
+    assert_eq!(sources_of(&pool).await.len(), 1);
+}
+
+#[sqlx::test]
+async fn an_archived_source_counts_as_configuration_and_is_not_re_seeded(pool: PgPool) {
+    // The case a naive "no *enabled* sources, so seed again" check would get
+    // wrong: archiving is the clearest decision an operator can make after
+    // seeding, and a restart must not undo it.
+    let dir = scratch_dir("archived-bootstrap");
+    let path = dir.join("db.sqlite");
+    let other = dir.join("other.sqlite");
+    write_toggl_db(&path, &[one_activity(&[0xe5], "Xcode")]);
+    write_toggl_db(&other, &[one_activity(&[0xea], "Elsewhere")]);
+
+    assert_eq!(
+        bootstrap_sources(
+            &pool,
+            Some(&bootstrap_json(&[("Work", "toggl_activity", &path, None)]))
+        )
+        .await,
+        1
+    );
+    let id = Uuid::parse_str(sources_of(&pool).await[0]["id"].as_str().unwrap()).unwrap();
+    patch_source(&pool, id, json!({ "enabled": false }), false).await;
+
+    // The restart names a source at a DIFFERENT path. Naming the same one
+    // would be caught by the unique path constraint whatever the rule here
+    // said, and the test would pass while proving nothing — measured: that
+    // is exactly what happened before this line changed.
+    assert_eq!(
+        bootstrap_sources(
+            &pool,
+            Some(&bootstrap_json(&[(
+                "Elsewhere",
+                "toggl_activity",
+                &other,
+                None
+            )]))
+        )
+        .await,
+        0
+    );
+
+    let sources = sources_of(&pool).await;
+    assert_eq!(sources.len(), 1, "an archived source was seeded over");
+    assert_eq!(
+        sources[0]["enabled"], false,
+        "a restart re-enabled a source an operator had archived"
+    );
+}
+
+#[sqlx::test]
+async fn invalid_definitions_are_skipped_without_stopping_the_valid_ones(pool: PgPool) {
+    // Nothing here may prevent the Server starting, and nothing may hide the
+    // repair path: whatever was skipped can still be added in Settings.
+    let dir = scratch_dir("invalid-bootstrap");
+    let good = dir.join("good.sqlite");
+    write_toggl_db(&good, &[one_activity(&[0xe6], "Xcode")]);
+
+    // A file that exists and canonicalises but is not a provider database at
+    // all. Without this the only invalid entries would be ones rejected
+    // before validation is even reached, and removing the schema check would
+    // leave this test green — measured.
+    let not_a_recorder = dir.join("not-a-recorder.sqlite");
+    let connection = Connection::open(&not_a_recorder).unwrap();
+    connection
+        .execute_batch("create table something_else (a integer)")
+        .unwrap();
+    connection.close().unwrap();
+
+    let env = json!([
+        { "name": "", "kind": "toggl_activity", "path": good.to_string_lossy() },
+        { "name": "Unknown kind", "kind": "rescuetime", "path": good.to_string_lossy() },
+        { "name": "Missing file", "kind": "toggl_activity", "path": "/nowhere/at/all.sqlite" },
+        { "name": "Wrong shape", "kind": "toggl_activity", "path": not_a_recorder.to_string_lossy() },
+        { "name": "Good", "kind": "toggl_activity", "path": good.to_string_lossy() },
+    ])
+    .to_string();
+
+    assert_eq!(bootstrap_sources(&pool, Some(&env)).await, 1);
+    let sources = sources_of(&pool).await;
+    assert_eq!(sources.len(), 1);
+    assert_eq!(sources[0]["name"], "Good");
+}
+
+#[sqlx::test]
+async fn invalid_json_is_ignored_rather_than_fatal(pool: PgPool) {
+    for raw in [
+        "not json at all",
+        "{}",
+        "[{\"name\": \"No path\"}]",
+        "",
+        "   ",
+    ] {
+        assert_eq!(
+            bootstrap_sources(&pool, Some(raw)).await,
+            0,
+            "{raw:?} should have been ignored"
+        );
+    }
+    assert!(sources_of(&pool).await.is_empty());
+
+    // And a Server left in that state can still be repaired through Settings.
+    let dir = scratch_dir("repairable");
+    let path = dir.join("db.sqlite");
+    write_toggl_db(&path, &[one_activity(&[0xe7], "Xcode")]);
+    let source = create_toggl_source(&pool, "Added by hand", &path).await;
+    wait_for_intervals(&pool, source, 1).await;
 }
