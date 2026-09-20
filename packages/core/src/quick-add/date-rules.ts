@@ -332,7 +332,10 @@ function addByUnit(
 // matchDaysFromNow decide "which spelling of the amount is this," so
 // matchWeekdayArithmeticCombo (unmeasured for a spelled-out amount,
 // issue #382) doesn't have to make the identical decision a second time.
-function resolveAmount(text: string, numberWords: QuickAddLanguage["numberWords"]): number | undefined {
+function resolveAmount(
+  text: string,
+  numberWords: QuickAddLanguage["numberWords"],
+): number | undefined {
   if (/^\d+$/.test(text)) {
     return Number(text);
   }
