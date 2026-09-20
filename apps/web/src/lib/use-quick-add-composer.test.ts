@@ -106,6 +106,44 @@ describe("useQuickAddComposer", () => {
     expect(result.current.autocomplete.getProjects()).toEqual([{ id: "p2", name: "Home" }]);
   });
 
+  // Issue #388: `composer.options.projectNames`/`labelNames` are rebuilt
+  // fresh every render from `projectsRef`/`labelsRef` (this hook's own
+  // header comment on why those are refs, not plain state) — this proves
+  // a freshly-passed `projects`/`labels` prop is reflected on the very
+  // next render's `options`, not captured once at mount the way an easy
+  // mistake (building `optionsRef.current` only inside a `useEffect`, say)
+  // could silently produce instead.
+  it("options.projectNames/labelNames/activeProjectName reflect freshly-passed props, not a value captured at mount", () => {
+    const { result, rerender } = renderHook(
+      (props: {
+        projects: { id: string; name: string }[];
+        labels: { id: string; name: string }[];
+        ambientProjectName: string | null;
+      }) => useQuickAddComposer({ onAdd: vi.fn(), ...props }),
+      {
+        initialProps: {
+          projects: [{ id: "p1", name: "Errands" }],
+          labels: [{ id: "l1", name: "urgent" }],
+          ambientProjectName: "Errands",
+        },
+      },
+    );
+
+    expect(result.current.options.projectNames).toEqual(["Errands"]);
+    expect(result.current.options.labelNames).toEqual(["urgent"]);
+    expect(result.current.options.activeProjectName).toBe("Errands");
+
+    rerender({
+      projects: [{ id: "p2", name: "Home" }],
+      labels: [{ id: "l2", name: "chores" }],
+      ambientProjectName: "Home",
+    });
+
+    expect(result.current.options.projectNames).toEqual(["Home"]);
+    expect(result.current.options.labelNames).toEqual(["chores"]);
+    expect(result.current.options.activeProjectName).toBe("Home");
+  });
+
   // Issue #373: multi-line paste, deferred to the dialog rather than
   // silently split or merged.
   describe("multi-line paste", () => {

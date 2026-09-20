@@ -196,9 +196,7 @@ describe("AddTaskForm", () => {
     // Issue #388: `@errands` only matches an existing Label — see
     // `use-quick-add-composer.test.ts`'s identical fixture change for the
     // full reasoning.
-    render(
-      <AddTaskForm onAdd={onAdd} disabled={false} labels={[{ id: "l1", name: "errands" }]} />,
-    );
+    render(<AddTaskForm onAdd={onAdd} disabled={false} labels={[{ id: "l1", name: "errands" }]} />);
     await reveal();
 
     const input = await getInput();

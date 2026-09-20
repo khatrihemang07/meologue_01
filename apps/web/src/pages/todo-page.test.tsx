@@ -1630,7 +1630,9 @@ describe("TodoPage — Projects", () => {
       const addTask = vi.fn();
       const resolveProjectId = vi.fn(async () => "project-work");
       const resolveSectionId = vi.fn(async () => "section-cutover");
-      const listSections = vi.fn(async () => [section({ id: "s1", projectId: "p2", name: "Cutover" })]);
+      const listSections = vi.fn(async () => [
+        section({ id: "s1", projectId: "p2", name: "Cutover" }),
+      ]);
       renderTodoPage(
         readyContext({
           projects: [work],
