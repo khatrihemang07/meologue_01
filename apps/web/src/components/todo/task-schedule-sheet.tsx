@@ -5,7 +5,7 @@ import { DatePickerSheet } from "@/components/date-picker-sheet";
 import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { formatDay } from "@/lib/format-task-date";
-import { priorityPickerColour } from "@/lib/task-priority-colors";
+import { PrioritySheetContent } from "./priority-sheet-content";
 
 export interface TaskScheduleSheetProps {
   /** The Task being scheduled, looked up fresh by id on every render of the caller — never a snapshot taken when the sheet opened, so a picker's own effect is visible the moment the next render lands. */
@@ -73,36 +73,14 @@ export function TaskScheduleSheet({
             </div>
           </section>
 
-          <section className="flex flex-col gap-2 px-1 pb-1">
-            <h3 className="text-muted-foreground text-xs">Priority</h3>
-            <div className="flex gap-2">
-              {[1, 2, 3, 4].map((ui) => (
-                <Button
-                  key={ui}
-                  type="button"
-                  size="sm"
-                  variant={ui === uiPriority ? "default" : "outline"}
-                  aria-pressed={ui === uiPriority}
-                  onClick={() => onSetPriority(task.id, storedPriorityOf(ui))}
-                >
-                  {/* The same colour swatch `task-command-menu.tsx`'s own
-                      priority submenu already renders, from the identical
-                      `priorityPickerColour` — Todoist colours its priority
-                      options everywhere it offers them (red/orange/blue, P4
-                      unfilled), and this picker was the one place in meologue
-                      that rendered four identical text buttons. The tokens
-                      existed (`--td-priority-picker-1..4`, ADR 0069); this
-                      control simply never read them. */}
-                  <span
-                    aria-hidden="true"
-                    className="size-3 shrink-0 rounded-full"
-                    style={{ backgroundColor: priorityPickerColour(ui) }}
-                  />
-                  {`P${ui}`}
-                </Button>
-              ))}
-            </div>
-          </section>
+          {/* Extracted to `priority-sheet-content.tsx` (issue #372's Step
+              4) so a draft-coupled sibling can render the identical
+              picker with no `Task` import at all — this wrapper is the
+              only place that still knows `task.id`/`storedPriorityOf`. */}
+          <PrioritySheetContent
+            uiPriority={uiPriority}
+            onSelect={(ui) => onSetPriority(task.id, storedPriorityOf(ui))}
+          />
         </SheetContent>
       </Sheet>
 
