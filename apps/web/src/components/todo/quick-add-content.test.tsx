@@ -264,7 +264,7 @@ describe("QuickAddContent", () => {
       fireEvent.click(screen.getByRole("button", { name: "Set date" }));
       fireEvent.click(await screen.findByRole("button", { name: "Today Thu" }));
 
-      expect(screen.getByRole("button", { name: "10 Sep 2026" })).toHaveClass("rounded-r-none");
+      expect(screen.getByRole("button", { name: "Today" })).toHaveClass("rounded-r-none");
     });
 
     it("Remove date strips the words back out, and its own button disappears", async () => {

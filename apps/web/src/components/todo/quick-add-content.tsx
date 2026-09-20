@@ -1,11 +1,11 @@
 import type { QuickAddToken } from "@meologue/core";
-import { parseQuickAdd, uiPriorityOf } from "@meologue/core";
+import { localDayKeyOf, parseQuickAdd, uiPriorityOf } from "@meologue/core";
 import { ArrowUp, Plus, X } from "lucide-react";
 import { DropdownMenu } from "radix-ui";
 import type * as React from "react";
 import { forwardRef, Suspense, useState } from "react";
-import { LazyTaskTitleEditor } from "@/components/todo/lazy-task-title-editor";
 import { LazyTaskDescriptionEditor } from "@/components/todo/lazy-task-description-editor";
+import { LazyTaskTitleEditor } from "@/components/todo/lazy-task-title-editor";
 import { MultiLinePasteDialog } from "@/components/todo/multiline-paste-dialog";
 import { Button } from "@/components/ui/button";
 import { useDraftDateState } from "@/hooks/use-draft-date-state";
@@ -132,7 +132,14 @@ export function QuickAddContent({
   const dateState = useDraftDateState(
     composer.value,
     parsed.tokens,
-    composer.options.now,
+    // `useDraftDateState`'s own `now` is still `LocalDayKey` (issue
+    // #383 didn't touch that hook); `composer.options.now` moved onto
+    // `LocalDateTimeKey` under it, so every other caller needing a day
+    // out of an instant (`task-schedule-popover.tsx`, `quick-add-
+    // task.ts`, `task-title-commit.ts`) derives it the same way, via
+    // `localDayKeyOf`, rather than resolving two independently-computed
+    // values that could disagree.
+    localDayKeyOf(composer.options.now),
     composer.remount,
   );
 

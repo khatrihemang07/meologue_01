@@ -466,13 +466,7 @@ describe("AddTaskForm", () => {
     it("touch stays open after Add and resets its Project chip to Inbox", async () => {
       stubTouch(true);
       const onAdd = vi.fn();
-      render(
-        <AddTaskForm
-          onAdd={onAdd}
-          disabled={false}
-          ambientProjectName="Groceries"
-        />,
-      );
+      render(<AddTaskForm onAdd={onAdd} disabled={false} ambientProjectName="Groceries" />);
       await reveal();
 
       expect(screen.getByRole("button", { name: "Select project" })).toHaveTextContent("Inbox");
