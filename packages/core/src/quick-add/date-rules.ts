@@ -3,6 +3,7 @@ import {
   addDays,
   addMonths,
   addYears,
+  daysInMonth,
   formatDate,
   formatTime,
   isoWeekday,
@@ -51,17 +52,21 @@ function pushIfValidCalendarDate(
   month: number,
   day: number,
 ): void {
+  if (month < 1 || month > 12) {
+    return; // Not a real month at all — never a genuine calendar date under any rollover, and the guard "13/25" (neither reading has a valid month) still needs (../quick-add.test.ts).
+  }
   if (day < 1 || day > 31) {
     return; // Not a calendar day at all — see this file's header comment on why an invalid match is silently skipped rather than "corrected".
   }
+  // Issue #382: `formatDate` normalises a day that doesn't exist in
+  // `month` forward into the next one (Date.UTC's own rollover — `29 Feb`
+  // in a non-leap year becomes `1 Mar`), and this is now *let through*
+  // rather than refused, per the corpus's own measured `"29 feb"` row —
+  // Todoist itself gracefully rolls it forward instead of refusing the
+  // match. Only reachable once `month` is already confirmed 1-12 above:
+  // an invalid month is refused outright, never "rolled" into a
+  // different, unasked-for one.
   const date = formatDate({ year, month, day });
-  // formatDate normalises an out-of-range day forward into the next
-  // month (Date.UTC's own rollover, e.g. 30 Feb -> 2 Mar) — checked here
-  // by re-parsing the result, so "30 Feb" is refused as unrecognised
-  // rather than silently becoming a different month the user never typed.
-  if (parseDateOnly(date).month !== month) {
-    return;
-  }
   tokens.push({
     kind: "date",
     start: match.index,
@@ -90,7 +95,7 @@ function resolveYearRollForward(
   return thisYear < now.slice(0, 10) ? formatDate({ year: nowYear + 1, month, day }) : thisYear;
 }
 
-/** `27 Jan`, `Jan 27`, `27/1/2026` — every absolute-date form issue #170's Part A brief names. */
+/** `27 Jan`, `Jan 27`, `27/1/2026` — every absolute-date form issue #170's Part A brief names — plus, from issue #382, the remaining numeric forms Todoist also accepts: `24.9.2026` (dot-separated, explicit year), `2026-09-24` (ISO 8601, year-first) and `24-09` (hyphen-separated, no year). */
 export function matchAbsoluteDate(input: string, ctx: DateRuleContext): QuickAddToken[] {
   const monthAlt = alternation(Object.keys(ctx.language.months));
   const tokens: QuickAddToken[] = [];
@@ -147,6 +152,51 @@ export function matchAbsoluteDate(input: string, ctx: DateRuleContext): QuickAdd
   // already-passing corpus row, not just fail to fix the pending one.
   const monthDayNoYear = /\b(\d{1,2})\/(\d{1,2})\b(?!\/\d)/g;
   for (const match of input.matchAll(monthDayNoYear)) {
+    const [first, second] = [Number(match[1]), Number(match[2])];
+    const [month, day] = resolveTwoPartMonthDay(ctx.language.dayMonthOrder, first, second);
+    const date = resolveYearRollForward(ctx.now, month, day, undefined);
+    pushIfValidCalendarDate(tokens, match, parseDateOnly(date).year, month, day);
+  }
+
+  // Dot-separated three-part form, always carrying an explicit year
+  // (`24.9.2026`, issue #382) — the identical day/month-order reading the
+  // slash three-part form above already applies, just a different
+  // separator; no dayMonthOrder-free fallback is needed here for the same
+  // reason the slash form doesn't need one: a year always disambiguates
+  // which reading was intended, so there is no "neither reading has a
+  // valid month" case a fallback would ever rescue.
+  const dotted = /\b(\d{1,2})\.(\d{1,2})\.(\d{4})\b/g;
+  for (const match of input.matchAll(dotted)) {
+    const [first, second] = [Number(match[1]), Number(match[2])];
+    const year = Number(match[3]);
+    const [month, day] =
+      ctx.language.dayMonthOrder === "day-month" ? [second, first] : [first, second];
+    pushIfValidCalendarDate(tokens, match, year, month, day);
+  }
+
+  // ISO 8601 year-first form (`2026-09-24`, issue #382) — year-month-day
+  // is unambiguous by construction (that's the entire point of the ISO
+  // convention), so this needs no `dayMonthOrder` reading at all, unlike
+  // every other numeric form above. Pushed *before* the hyphenated
+  // two-part form below so this always wins the overlap on a string like
+  // `2026-09-24`, where that form's own regex would otherwise also match
+  // the trailing `09-24` as its own, shorter candidate — the identical
+  // "more specific form pushed first, wins the greedy overlap resolution"
+  // convention this parser already uses throughout (../parse-quick-add.ts's
+  // own header comment).
+  const isoYearFirst = /\b(\d{4})-(\d{1,2})-(\d{1,2})\b/g;
+  for (const match of input.matchAll(isoYearFirst)) {
+    const year = Number(match[1]);
+    const month = Number(match[2]);
+    const day = Number(match[3]);
+    pushIfValidCalendarDate(tokens, match, year, month, day);
+  }
+
+  // Hyphenated two-part form, no year (`24-09`, issue #382) — the
+  // identical `dayMonthOrder`-with-fallback reading `monthDayNoYear`
+  // above already applies to the slash form, just a different separator.
+  const dayMonthHyphenNoYear = /\b(\d{1,2})-(\d{1,2})\b(?!-\d)/g;
+  for (const match of input.matchAll(dayMonthHyphenNoYear)) {
     const [first, second] = [Number(match[1]), Number(match[2])];
     const [month, day] = resolveTwoPartMonthDay(ctx.language.dayMonthOrder, first, second);
     const date = resolveYearRollForward(ctx.now, month, day, undefined);
@@ -277,13 +327,65 @@ function addByUnit(
   }
 }
 
-/** `in 3 days`, `in 2 weeks`. */
+// Reads `text` as either a bare `\d+` or a `QuickAddLanguage.numberWords`
+// entry, or `undefined` if it's neither — the one place matchArithmeticDate/
+// matchDaysFromNow decide "which spelling of the amount is this," so
+// matchWeekdayArithmeticCombo (unmeasured for a spelled-out amount,
+// issue #382) doesn't have to make the identical decision a second time.
+function resolveAmount(
+  text: string,
+  numberWords: QuickAddLanguage["numberWords"],
+): number | undefined {
+  if (/^\d+$/.test(text)) {
+    return Number(text);
+  }
+  return numberWords[text.toLowerCase()];
+}
+
+/**
+ * `in 3 days`, `in 2 weeks`, and — issue #382's own corpus row — `in
+ * three days`, the identical grammar with a spelled-out amount
+ * (`QuickAddLanguage.numberWords`) in place of a bare `\d+`.
+ */
 export function matchArithmeticDate(input: string, ctx: DateRuleContext): QuickAddToken[] {
   const unitAlt = alternation(Object.keys(ctx.language.arithmeticUnits));
+  const amountAlt = alternation(Object.keys(ctx.language.numberWords));
   const regex = new RegExp(
-    `\\b${escapeRegExp(ctx.language.inWord)}\\s+(\\d+)\\s+(${unitAlt})\\b`,
+    `\\b${escapeRegExp(ctx.language.inWord)}\\s+(\\d+|${amountAlt})\\s+(${unitAlt})\\b`,
     "gi",
   );
+  const tokens: QuickAddToken[] = [];
+  for (const match of input.matchAll(regex)) {
+    // biome-ignore lint/style/noNonNullAssertion: the alternation is built from this exact table's own keys, or the regex's own `\d+` branch
+    const amount = resolveAmount(match[1]!, ctx.language.numberWords);
+    // biome-ignore lint/style/noNonNullAssertion: the alternation is built from this exact table's own keys
+    const unit = ctx.language.arithmeticUnits[match[2]!.toLowerCase()]!;
+    if (amount === undefined) {
+      continue;
+    }
+    tokens.push({
+      kind: "date",
+      start: match.index,
+      end: match.index + match[0].length,
+      raw: match[0],
+      date: addByUnit(ctx.now, amount, unit),
+    });
+  }
+  return tokens;
+}
+
+/**
+ * `3 days from now` (issue #382) — the reversed word order of `in 3
+ * days` above, digit amounts only (no spelled-out form is corpus-
+ * measured for this order, unlike the forward one). Reuses the same
+ * `arithmeticUnits` table `matchArithmeticDate` does, generalising to
+ * `weeks`/`months`/`years` for the identical symmetry reason that table
+ * already covers all four units for the forward phrasing, not just
+ * `days`.
+ */
+export function matchDaysFromNow(input: string, ctx: DateRuleContext): QuickAddToken[] {
+  const unitAlt = alternation(Object.keys(ctx.language.arithmeticUnits));
+  const regex = new RegExp(`\\b(\\d+)\\s+(${unitAlt})\\s+from\\s+now\\b`, "gi");
   const tokens: QuickAddToken[] = [];
   for (const match of input.matchAll(regex)) {
     const amount = Number(match[1]);
@@ -295,6 +397,29 @@ export function matchArithmeticDate(input: string, ctx: DateRuleContext): QuickA
       end: match.index + match[0].length,
       raw: match[0],
       date: addByUnit(ctx.now, amount, unit),
+    });
+  }
+  return tokens;
+}
+
+/**
+ * `end of month` (issue #382) — the last calendar day of `ctx.now`'s own
+ * month. Deliberately the literal three-word phrase only: the corpus's
+ * own PENDING reason for this row is explicit that `eom`/`eow`/`end of
+ * week` are correctly unmatched on both sides (Todoist doesn't recognise
+ * those either), so this regex must not be loosened to catch them.
+ */
+export function matchEndOfMonth(input: string, ctx: DateRuleContext): QuickAddToken[] {
+  const regex = /\bend of month\b/gi;
+  const tokens: QuickAddToken[] = [];
+  for (const match of input.matchAll(regex)) {
+    const { year, month } = parseDateOnly(ctx.now);
+    tokens.push({
+      kind: "date",
+      start: match.index,
+      end: match.index + match[0].length,
+      raw: match[0],
+      date: formatDate({ year, month, day: daysInMonth(year, month) }),
     });
   }
   return tokens;
@@ -756,11 +881,13 @@ export function matchDateForms(input: string, ctx: DateRuleContext): QuickAddTok
     ...matchRelativeDate(input, ctx),
     ...matchWeekday(input, ctx),
     ...matchArithmeticDate(input, ctx),
+    ...matchDaysFromNow(input, ctx),
     ...matchNextWeek(input, ctx),
     ...matchNextMonth(input, ctx),
     ...matchNextYear(input, ctx),
     ...matchFuzzyRange(input, ctx),
     ...matchHolidayWord(input, ctx),
+    ...matchEndOfMonth(input, ctx),
   ];
 }
 

@@ -73,6 +73,18 @@ export interface QuickAddLanguage {
   /** Arithmetic unit word (lower-cased, singular or plural) to the unit it names. */
   arithmeticUnits: Readonly<Record<string, "days" | "weeks" | "months" | "years">>;
   /**
+   * Spelled-out cardinal numbers (lower-cased) to their numeric value —
+   * issue #382: `in three days` needs a spelled-out amount wherever
+   * `matchArithmeticDate` otherwise reads a bare `\d+`. `one`-`twenty`
+   * for English, a deliberately small closed set (nobody spells out "in
+   * thirty-seven days") rather than a general number-word parser — only
+   * `three` is corpus-measured, but a table with one entry would read as
+   * a hack the next time a different amount was typed; this is the same
+   * "a complete small vocabulary, not just the tested value" judgment
+   * `weekdays`/`months` already make.
+   */
+  numberWords: Readonly<Record<string, number>>;
+  /**
    * Bare single-word recurrence keywords this parser merely *flags* as
    * recurrence-shaped, without attempting to resolve them — see
    * ./rules.ts's recurrence rule for the full reasoning on why this

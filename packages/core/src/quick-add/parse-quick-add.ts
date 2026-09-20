@@ -3,6 +3,8 @@ import {
   matchAbsoluteDate,
   matchAfterDays,
   matchArithmeticDate,
+  matchDaysFromNow,
+  matchEndOfMonth,
   matchExplicitTime,
   matchFuzzyRange,
   matchFuzzyTime,
@@ -126,11 +128,17 @@ function collectCandidates(
       ...matchRelativeDate(input, dateCtx),
       ...matchWeekday(input, dateCtx),
       ...matchArithmeticDate(input, dateCtx),
+      // "N unit(s) from now" (issue #382) — the reversed word order of
+      // "in N units" just above; pushed right after it for the same
+      // "related forms stay adjacent" reasoning the rest of this list
+      // already follows.
+      ...matchDaysFromNow(input, dateCtx),
       ...matchNextWeek(input, dateCtx),
       ...matchNextMonth(input, dateCtx),
       ...matchNextYear(input, dateCtx),
       ...matchFuzzyRange(input, dateCtx),
       ...matchHolidayWord(input, dateCtx),
+      ...matchEndOfMonth(input, dateCtx),
       ...matchExplicitTime(input, dateCtx),
       ...matchFuzzyTime(input, dateCtx),
       ...matchRecurrenceWord(input, dateCtx),

@@ -71,10 +71,50 @@ describe("dates", () => {
     ["buy milk 24/9", "2026-09-24"], // still ahead this year — issue #366's corpus row: data-match-id "24 Sep"
     ["buy milk 9/24", "2026-09-24"], // same corpus date, digits swapped — data-match-id "24 Sep" again; only a day-first reading of "24" is possible either way
     ["buy milk 1/6", "2027-06-01"], // 1 Jun already passed (today is 2 Sep) — rolls forward
+    // Issue #382's remaining numeric absolute-date forms — hyphen,
+    // ISO 8601 (year-first, unambiguous), and dot-separated, alongside
+    // the existing slash forms above.
+    ["buy milk 24-09", "2026-09-24"],
+    ["buy milk 2026-09-24", "2026-09-24"],
+    ["buy milk 24.9.2026", "2026-09-24"],
+    // Issue #382: bare "yesterday" wasn't in relativeDays at all.
+    ["buy milk yesterday", "2026-09-01"],
+    // Issue #382: spelled-out and reversed-word-order arithmetic,
+    // alongside the existing digit/forward forms above.
+    ["buy milk in three days", "2026-09-05"],
+    ["buy milk 3 days from now", "2026-09-05"],
+    // Issue #382: "end of month" — the current month's own last day.
+    ["buy milk end of month", "2026-09-30"],
   ])("%s", (input, expectedDate) => {
     it(`resolves to ${expectedDate}`, () => {
       expect(parse(input).date).toBe(expectedDate);
     });
+  });
+
+  it("does not recognise 'end of month's abbreviations — Todoist doesn't either (issue #382)", () => {
+    // The corpus's own PENDING reason (before this fixed it) is explicit
+    // that these stay unmatched on both sides — a regression guard
+    // against loosening matchEndOfMonth's regex to catch them.
+    for (const abbreviation of ["eom", "eow", "end of week"]) {
+      expect(parse(`buy milk ${abbreviation}`).date).toBeNull();
+    }
+  });
+
+  it('"29 feb" (no year, non-leap target years on both sides) gracefully rolls into March, matching Todoist\'s own measured behaviour, rather than refusing the match (issue #382)', () => {
+    // NOW is 2026-09-02: this year's own "29 Feb" (2026, non-leap) has
+    // already passed, so this rolls to 2027's — also non-leap — which
+    // itself rolls one month further into March, the identical
+    // double-rollover the corpus's own row measures against a 19 Sep
+    // 2026 capture date (landing on "1 Mar 2027").
+    expect(parse("buy milk 29 feb").date).toBe("2027-03-01");
+  });
+
+  it('a "13/25"-shaped invalid month is still refused outright, not "rolled" into a different one (issue #382 regression guard)', () => {
+    // pushIfValidCalendarDate now explicitly validates the month (1-12)
+    // before ever allowing a day-rollover — this proves that guard is
+    // still there, not silently defeated by the day-rollover leniency
+    // "29 feb" above now needs.
+    expect(parse("do it 13/25").date).toBeNull();
   });
 
   it("'next week' resolves to the next Monday", () => {
@@ -223,9 +263,15 @@ describe("fuzzy times", () => {
     ["buy milk morning", "2026-09-02T09:00"],
     ["buy milk noon", "2026-09-02T12:00"],
     ["buy milk afternoon", "2026-09-02T15:00"],
-    ["buy milk evening", "2026-09-02T18:00"],
+    // Issue #382: flipped from 18:00 to 19:00 — the corpus's own measured
+    // row (`data-match-id` "19 Sep 19:00" against the capture date) shows
+    // the earlier 18:00 was an unverified guess, not something Todoist
+    // itself does.
+    ["buy milk evening", "2026-09-02T19:00"],
     ["buy milk night", "2026-09-02T21:00"],
     ["buy milk midnight", "2026-09-02T00:00"],
+    // Issue #382's own corpus row — "tonight" wasn't in fuzzyTimes at all.
+    ["buy milk tonight", "2026-09-02T22:00"],
   ])("%s", (input, expectedDate) => {
     it(`resolves to ${expectedDate}`, () => {
       expect(parse(input).date).toBe(expectedDate);
@@ -310,6 +356,35 @@ describe("tokens", () => {
 
     it("does not fire inside an ordinary word", () => {
       expect(parse("prepare the report").priority).toBe(1);
+    });
+
+    // Issue #382's own corpus row — "!!N" as an alternate spelling of
+    // "pN", resolving to the identical stored priority.
+    describe("!!1-!!4 — the alternate spelling issue #382 added", () => {
+      it.each<[string, number]>([
+        ["buy milk !!1", storedPriorityOf(1)],
+        ["buy milk !!2", storedPriorityOf(2)],
+        ["buy milk !!3", storedPriorityOf(3)],
+        ["buy milk !!4", storedPriorityOf(4)],
+      ])("%s -> stored priority %i", (input, expected) => {
+        expect(parse(input).priority).toBe(expected);
+      });
+
+      it("wins the whole span over matchReminder's own greedy per-`!` scan", () => {
+        // Before this rule recognised "!!N" as one compound token, each
+        // "!" was read independently by matchReminder as a bare reminder
+        // marker, and "1" was left as stray content — this is the
+        // regression that push-order priority (matchPriority is pushed
+        // ahead of matchReminder) now prevents.
+        const result = parse("buy milk !!1");
+        expect(result.priority).toBe(storedPriorityOf(1));
+        expect(result.reminderTime).toBeNull();
+        expect(result.content).toBe("buy milk");
+      });
+
+      it("removes the token from content, exactly like p1-p4", () => {
+        expect(parse("buy milk !!1").content).toBe("buy milk");
+      });
     });
   });
 

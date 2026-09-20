@@ -218,33 +218,13 @@ const PENDING: ReadonlyArray<{ reason: string; inputs: readonly string[] }> = [
   },
   {
     reason:
-      "no ticket filed yet — 'end of month' reads like #366's territory but isn't in its acceptance criteria (its abbreviations 'eom'/'eow'/'end of week' are correctly unmatched on both sides — Todoist doesn't recognise them either — so only the full phrase is pending)",
-    inputs: ["end of month"],
-  },
-  {
-    reason:
-      "no ticket filed yet — hyphen/ISO/dot numeric date forms; #366 only names the two-part slash form's day-month-order bug, not these forms' absence",
-    inputs: ["24-09", "2026-09-24", "24.9.2026"],
-  },
-  {
-    reason:
-      "no ticket filed yet — bare 'yesterday' isn't in englishQuickAddLanguage.relativeDays at all",
-    inputs: ["yesterday"],
-  },
-  {
-    reason:
-      "no ticket filed yet — matchArithmeticDate requires a numeral (\\d+); the spelled-out form isn't recognised",
-    inputs: ["in three days"],
-  },
-  {
-    reason:
-      "no ticket filed yet — 'N days from now' (word order reversed from 'in N days') isn't a recognised phrasing",
-    inputs: ["3 days from now"],
-  },
-  {
-    reason:
-      "no ticket filed yet — QuickAddLanguage.arithmeticUnits has no hour/minute unit at all, and even adding one would need a time-of-day-bearing `now` (see the roll-forward group below) to resolve 'in an hour' to a clock time",
+      "#383 — QuickAddLanguage.arithmeticUnits has no hour/minute unit at all, and even adding one would need a time-of-day-bearing `now` (QuickAddOptions.now is date-only, LocalDayKey) to resolve 'in an hour'/'in 30 min' to a clock time",
     inputs: ["in an hour", "in 30 min"],
+  },
+  {
+    reason:
+      "#383 — 'at 5' (a bare hour, no am/pm) was investigated for #382: the corpus's own measured value ('20 Sep 05:00', i.e. tomorrow) only makes sense if 5am *today* has already passed by the time of typing, which needs live clock time — the identical time-of-day-`now` gap the 'in an hour'/'in 30 min' row above has, not a separate one. Recognising 'at 5' at all (as a span) is straightforward; resolving it to the *correct* value is not, without #383.",
+    inputs: ["at 5"],
   },
   {
     reason:
@@ -271,25 +251,6 @@ const PENDING: ReadonlyArray<{ reason: string; inputs: readonly string[] }> = [
     reason:
       "no ticket filed yet — QuickAddOptions.now is date-only (LocalDayKey), so a fuzzy/explicit time can never roll to tomorrow the way Todoist does once that time-of-day has already passed today",
     inputs: ["noon", "midnight", "morning"],
-  },
-  {
-    reason:
-      "no ticket filed yet — fuzzyTimes table gaps independent of the roll-forward issue above: 'evening' is defined as 18:00 (Todoist: 19:00), and 'tonight' isn't in the table at all",
-    inputs: ["evening", "tonight"],
-  },
-  {
-    reason:
-      "no ticket filed yet — a bare hour with no am/pm marker ('at 5') isn't recognised at all",
-    inputs: ["at 5"],
-  },
-  {
-    reason: "no ticket filed yet — '!!N' as an alternate priority syntax isn't implemented",
-    inputs: ["!!1"],
-  },
-  {
-    reason:
-      "no ticket filed yet — contradicts D1's clone standard on the record: pushIfValidCalendarDate (./date-rules.ts) deliberately refuses a date that rolls into a different month after a year-bump (29 Feb in a non-leap year), where Todoist gracefully rolls it to 1 Mar",
-    inputs: ["29 feb"],
   },
 ];
 
