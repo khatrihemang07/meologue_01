@@ -81,7 +81,10 @@ export default defineConfig({
     // merely for `hasTouch` — which a plain `{ hasTouch: true }` override on
     // the desktop project would not have triggered.
     //
-    // `testMatch` scopes this to composer-touch.spec.ts alone, deliberately:
+    // `testMatch` scopes this to the specs that carry touch-only behavior,
+    // deliberately: Composer's touch toolbar and Quick Add's FAB/sheet/
+    // stay-open submit branch. The latter also carries desktop cases, but
+    // skips those cases in this project and runs only its touch describe.
     // `workers: 1, fullyParallel: false` above exist because this suite
     // shares one Postgres across every test (this config's own comment on
     // `workers`), and an unscoped second project would run the ENTIRE
