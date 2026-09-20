@@ -231,7 +231,8 @@ export function useQuickAddComposer(options: UseQuickAddComposerOptions): QuickA
     projectNames: projectsRef.current.map((project) => project.name),
   }).projectName;
   const effectiveProjectName = typedProjectName ?? options.ambientProjectName ?? null;
-  const effectiveProjectKey = effectiveProjectName === null ? null : effectiveProjectName.toLowerCase();
+  const effectiveProjectKey =
+    effectiveProjectName === null ? null : effectiveProjectName.toLowerCase();
 
   const listSectionsOption = options.listSections;
   const callerSectionNamesByProject = options.sectionNamesByProject;
