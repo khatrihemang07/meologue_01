@@ -13,6 +13,7 @@ import { useCompletionUndoShortcut } from "@/hooks/use-completion-undo-shortcut"
 import { useHistorySearch } from "@/hooks/use-history-search";
 import { commentsForTask } from "@/lib/comment-counts";
 import { localDateTimeKey } from "@/lib/local-day-key";
+import { projectNameFor } from "@/lib/project-name";
 import type { ComposerPromotionContext } from "@/lib/promote-tasks";
 import { useSettingsStore, useSyncEnabled } from "@/lib/settings";
 import { taskDetailPath } from "@/lib/task-detail-route";
@@ -454,10 +455,22 @@ export function ComposerPage() {
     if (task === undefined) {
       return;
     }
+    // Issue #388: `sectionNamesByProject` stays unsupplied here — this
+    // page has no `listSections` query of its own for the identical
+    // reason `TaskDetailView`'s own `section={null}` just below already
+    // states ("a `listSections` query this page has no other use for"),
+    // so `/section` on a rename from Composer stays on its permissive
+    // fallback rather than growing this page's store surface for it.
     void commitTaskTitle(
       task,
       content,
-      { now: localDateTimeKey(new Date()), smartDates },
+      {
+        now: localDateTimeKey(new Date()),
+        smartDates,
+        projectNames: projects.map((project) => project.name),
+        labelNames: labels.map((label) => label.name),
+        activeProjectName: projectNameFor(projects, task.projectId),
+      },
       {
         renameTask,
         setTaskDate,

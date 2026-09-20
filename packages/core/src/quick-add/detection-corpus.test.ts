@@ -185,8 +185,26 @@ interface RowCheck {
  * vocabulary, not Todoist's, and start/end offsets are never something
  * the corpus recorded.
  */
+// Issue #388: the capture account's own real Project/Label list, per this
+// file's own header comment ("zero pre-existing labels/projects beyond
+// Inbox") — supplying it (rather than leaving `matchProject`/`matchLabel`
+// on their permissive default) is what makes the two `#Inbox` rows below
+// actually exercise the new exact-match path, instead of silently passing
+// against the old "any word after `#` counts" behaviour forever. Checked
+// against `detection-corpus.json` directly: "Inbox" is the only Project
+// name that ever appears (`grep '"#'`), and no Label sigil row is
+// compared at all (`COMPARABLE_KINDS` excludes `"label"` — this file's own
+// comment on why), so `labelNames: []` has no row's outcome riding on it;
+// it's supplied anyway for the same "the account had none" honesty.
+const CORPUS_PROJECT_NAMES: readonly string[] = ["Inbox"];
+const CORPUS_LABEL_NAMES: readonly string[] = [];
+
 function checkRow(row: CorpusRow): RowCheck {
-  const result = parseQuickAdd(row.input, { now: NOW });
+  const result = parseQuickAdd(row.input, {
+    now: NOW,
+    projectNames: CORPUS_PROJECT_NAMES,
+    labelNames: CORPUS_LABEL_NAMES,
+  });
   const actual = result.tokens.filter((t) => COMPARABLE_KINDS.has(t.kind));
   const claimed = new Set<number>();
   const reasons: string[] = [];

@@ -462,6 +462,24 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
   });
   const sections = sectionsQuery.data ?? [];
 
+  // Issue #388: `/section` on the add field needs the ambient Project's
+  // own Section names to scope against — `captureProjectId` above is
+  // exactly `currentProjectId` whenever there's an ambient Project at all
+  // (`backgroundView.view === "project"`; Today/Inbox both leave it
+  // `null` and file under "Inbox," which has no Sections of its own to
+  // fetch), so `sectionsQuery` just above already IS that fetch — no
+  // second query. Keyed by the ambient Project's own name, lower-cased,
+  // matching `QuickAddOptions.sectionNamesByProject`'s own doc comment. A
+  // typed `#OtherProject /section` scopes against whatever that other
+  // Project's Sections happen to already be cached as elsewhere in this
+  // session (react-query's own cache, keyed by `sectionsQueryKey`) — not
+  // eagerly fetched here, a real, acknowledged limitation flagged by this
+  // ticket's own design pass rather than solved by fetching every
+  // Project's Sections up front.
+  const sectionNamesByProject = new Map<string, readonly string[]>([
+    [ambientProjectName.toLowerCase(), sections.map((section) => section.name)],
+  ]);
+
   const [confirmingId, setConfirmingId] = useState<string | null>(null);
   const confirmingTask = tasks.find((task) => task.id === confirmingId) ?? null;
 
@@ -755,10 +773,31 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
     if (task === undefined) {
       return;
     }
+    // Issue #388: a rename has no ambient view Project to fall back to —
+    // only the Task's own existing one, task-title-commit.ts's own doc
+    // comment on `sectionProjectId` already states this for
+    // `resolveSectionId`, applied here identically for the exact-match
+    // seam. `sectionNamesByProject` reuses the SAME Map already built for
+    // the add field above: when this rename's own Task happens to be
+    // filed under the view's own ambient Project (the common case — a row
+    // renamed from inside the Project it lives in), that Map already
+    // carries the right entry; when it doesn't (renaming a Task from
+    // Today, or a different Project's own view), `/section` simply won't
+    // match anything for that rename rather than fetching a second
+    // Project's Sections just for this — a deliberate, narrow limitation,
+    // not an oversight (this ticket's own design pass flagged eager
+    // Section fetching for every Project as unsized, separate work).
     void commitTaskTitle(
       task,
       content,
-      { now: localDateTimeKey(new Date()), smartDates },
+      {
+        now: localDateTimeKey(new Date()),
+        smartDates,
+        projectNames: projects.map((project) => project.name),
+        labelNames: labels.map((label) => label.name),
+        activeProjectName: projectNameFor(projects, task.projectId),
+        sectionNamesByProject,
+      },
       {
         renameTask,
         setTaskDate,
@@ -1170,6 +1209,7 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
             onCreateLabel={addLabel}
             datesWithTasks={datesWithTasks}
             ambientProjectName={ambientProjectName}
+            sectionNamesByProject={sectionNamesByProject}
           />
         )}
 
@@ -1183,6 +1223,7 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
         onCreateLabel={addLabel}
         datesWithTasks={datesWithTasks}
         ambientProjectName={ambientProjectName}
+        sectionNamesByProject={sectionNamesByProject}
       />
 
       {schedulingTask !== null && (

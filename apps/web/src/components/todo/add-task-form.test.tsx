@@ -193,7 +193,10 @@ describe("AddTaskForm", () => {
 
   it("calls onAdd with the parsed fields on Enter, the editor's own commit keymap", async () => {
     const onAdd = vi.fn();
-    render(<AddTaskForm onAdd={onAdd} disabled={false} />);
+    // Issue #388: `@errands` only matches an existing Label — see
+    // `use-quick-add-composer.test.ts`'s identical fixture change for the
+    // full reasoning.
+    render(<AddTaskForm onAdd={onAdd} disabled={false} labels={[{ id: "l1", name: "errands" }]} />);
     await reveal();
 
     const input = await getInput();

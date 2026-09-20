@@ -63,7 +63,7 @@ export function parseQuickAdd(input: string, options: QuickAddOptions): QuickAdd
   // rather than merely losing the one rule (`matchDeadline`) that used to
   // read it on purpose.
   const scanInput = maskBracedSpans(input);
-  const candidates = collectCandidates(scanInput, dateCtx, smartDates);
+  const candidates = collectCandidates(scanInput, dateCtx, smartDates, options);
   const tokens = resolveOverlaps(candidates, demoted);
 
   // `buildResult` still reads the real `input` — masking only ever
@@ -126,21 +126,85 @@ export function demoteQuickAddToken(
   return parseQuickAdd(input, { ...options, demoted: [...(options.demoted ?? []), span] });
 }
 
+/**
+ * Which Project's Sections `matchSection` should scan against (issue
+ * #388) — only meaningful on the exact-match path (`options.
+ * sectionNamesByProject` supplied at all; `undefined` here means "stay
+ * permissive," identical to every other name-list field's own contract,
+ * ./types.ts's `QuickAddOptions.sectionNamesByProject` doc comment).
+ *
+ * `winningProjectToken`, not a fresh call to `matchProject`: this reuses
+ * whichever project candidates `collectCandidates` already computed, so
+ * the exact same "last occurrence in the input wins" rule this function
+ * applies is the one and only place that decision gets made — not a
+ * second, potentially-disagreeing computation. That tie-break is
+ * `buildResult`'s own existing "last one wins for every single-valued
+ * field" convention (below), reused here for consistency — **not**
+ * independently measured against Todoist: its own capture never typed
+ * two `#project` tokens in one input, so which one an ambiguous `#ProjectA
+ * #ProjectB /Section` should scope against has no measured answer either
+ * way.
+ *
+ * **Not reproducing Todoist's own "This project doesn't have any
+ * sections" dropdown defect** (`.scratch/todoist-add-todo/web/
+ * 09-projects-sections.md`): Todoist's own `/` suggestions dropdown
+ * carries a second, stale notion of "the active Project" — populated
+ * only by clicking a `#` suggestion, never by a completed auto-match —
+ * so typing a Project name out in full makes its dropdown wrongly claim
+ * "no sections" even though the save-time resolver still works. This
+ * function computes "the active Project" exactly once, from the same
+ * winning token the highlight and the eventual resolve both read, so
+ * there is no second, stale copy for that defect to live in here. Issue
+ * #388 flagged whether to deliberately clone it anyway as unsettled;
+ * ADR 0088 (`docs/adr/0088-...md`, line 65) sets the bar at "reproduced
+ * independently on two of Todoist's own clients," and this defect has
+ * web-only evidence — no Android capture confirms or contradicts it — so
+ * the bar isn't met and it is not reproduced.
+ */
+function resolveSectionNames(
+  projectTokens: readonly QuickAddToken[],
+  options: QuickAddOptions,
+): readonly string[] | undefined {
+  if (options.sectionNamesByProject === undefined) {
+    return undefined;
+  }
+  const winningProjectToken = projectTokens.at(-1);
+  const typedProjectName =
+    winningProjectToken !== undefined && winningProjectToken.kind === "project"
+      ? winningProjectToken.name
+      : undefined;
+  const effectiveProjectName = typedProjectName ?? options.activeProjectName ?? null;
+  if (effectiveProjectName === null) {
+    return [];
+  }
+  return options.sectionNamesByProject.get(effectiveProjectName.toLowerCase()) ?? [];
+}
+
 // `smartDates` gates only the eager/natural-language family below —
 // `matchReminder` above is sigil-marked (./rules.ts's own header
 // comment) and always runs, both here and inside this function's own
 // call from parseQuickAdd.
+//
+// `matchProject` runs on its own, ahead of the rest of the list, because
+// `matchSection` needs to know which Project won *before* it can decide
+// which Section list to scan (`resolveSectionNames`'s own doc comment) —
+// a real sequencing change from the pre-#388 shape, where every rule
+// below pushed into this list independently, in any order, with no rule
+// needing another rule's own result first.
 function collectCandidates(
   input: string,
   dateCtx: DateRuleContext,
   smartDates: boolean,
+  options: QuickAddOptions,
 ): QuickAddToken[] {
+  const projectTokens = matchProject(input, options.projectNames);
+  const sectionNames = resolveSectionNames(projectTokens, options);
   const candidates: QuickAddToken[] = [
     ...matchUncompletable(input),
     ...matchDescription(input),
-    ...matchProject(input),
-    ...matchSection(input),
-    ...matchLabel(input),
+    ...projectTokens,
+    ...matchSection(input, sectionNames),
+    ...matchLabel(input, options.labelNames),
     ...matchPriority(input),
     ...matchReminder(input, dateCtx),
   ];

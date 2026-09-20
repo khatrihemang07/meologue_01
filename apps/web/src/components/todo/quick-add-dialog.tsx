@@ -19,6 +19,8 @@ export interface QuickAddDialogProps {
   onCreateLabel?: (name: string) => void;
   datesWithTasks?: ReadonlyMap<string, number>;
   ambientProjectName?: string;
+  /** Issue #388 — see `add-task-form.tsx`'s identically-named prop for the full reasoning; both surfaces share the same seam. */
+  sectionNamesByProject?: ReadonlyMap<string, readonly string[]>;
 }
 
 /**
@@ -42,6 +44,7 @@ export function QuickAddDialog({
   onCreateLabel,
   datesWithTasks,
   ambientProjectName,
+  sectionNamesByProject,
 }: QuickAddDialogProps) {
   const touch = touchOnlyDevice();
 
@@ -74,6 +77,11 @@ export function QuickAddDialog({
     onCreateProject,
     onCreateLabel,
     open,
+    // Issue #388 — the identical `touch ? "Inbox" : ambientProjectName`
+    // resolution `content` below already applies for the chip's own
+    // display text.
+    ambientProjectName: touch ? "Inbox" : ambientProjectName,
+    sectionNamesByProject,
     onCommitted: () => {
       if (!touch) {
         onOpenChange(false);

@@ -1,6 +1,7 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { useState } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { AutocompleteEntry } from "@/lib/quick-add-autocomplete";
 import type { QuickAddTaskFields } from "@/lib/quick-add-task";
 import { useSettingsStore } from "@/lib/settings";
 import { useQuickAddComposer } from "@/lib/use-quick-add-composer";
@@ -78,6 +79,7 @@ interface HarnessProps {
   touch?: boolean;
   onAdd?: (fields: QuickAddTaskFields) => void;
   ambientProjectName?: string;
+  projects?: readonly AutocompleteEntry[];
 }
 
 /**
@@ -86,8 +88,8 @@ interface HarnessProps {
  * `add-task-form.tsx`), rather than a hand-built fake composer that could
  * silently drift from what either real wrapper hands it.
  */
-function Harness({ touch = false, onAdd = vi.fn(), ambientProjectName }: HarnessProps) {
-  const composer = useQuickAddComposer({ onAdd, open: true });
+function Harness({ touch = false, onAdd = vi.fn(), ambientProjectName, projects }: HarnessProps) {
+  const composer = useQuickAddComposer({ onAdd, open: true, ambientProjectName, projects });
   return (
     <QuickAddContent
       composer={composer}
@@ -141,6 +143,33 @@ describe("QuickAddContent", () => {
     typeText("buy milk");
 
     expect(await screen.findByText("Inbox")).toBeInTheDocument();
+  });
+
+  // Issue #388: typing a known multi-word Project name in full updates the
+  // chip immediately — no dropdown click needed, matching the ticket's own
+  // headline acceptance criterion (`#Aurora migration` exact-matches as one
+  // two-word span).
+  it("a fully-typed, known multi-word Project name updates the chip with no selection", async () => {
+    render(
+      <Harness ambientProjectName="Inbox" projects={[{ id: "p1", name: "Aurora migration" }]} />,
+    );
+    typeText("Test #Aurora migration");
+
+    expect(await screen.findByText("Aurora migration")).toBeInTheDocument();
+  });
+
+  // The other half of the same criterion: a partial/unknown name does NOT
+  // update the chip — no dropdown interaction happened in this test (it
+  // only asserts the parser's own recognition, not the popup), so the chip
+  // must stay on the ambient Project until something real is picked.
+  it("a partial or unknown Project name leaves the chip on the ambient Project", async () => {
+    render(
+      <Harness ambientProjectName="Inbox" projects={[{ id: "p1", name: "Aurora migration" }]} />,
+    );
+    typeText("Test #Aurora");
+
+    expect(await screen.findByText("Inbox")).toBeInTheDocument();
+    expect(screen.queryByText("Aurora migration")).not.toBeInTheDocument();
   });
 
   // Issue #374's own measured fact: the submit control is absent from the

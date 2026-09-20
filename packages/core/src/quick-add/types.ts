@@ -178,4 +178,48 @@ export interface QuickAddOptions {
    * rather than tracking spans by hand.
    */
   demoted?: readonly QuickAddSpan[];
+  /**
+   * Real Project names, case-insensitive, for `#project`
+   * existence-checking (issue #388: `#Name` should highlight only when it
+   * exactly matches something real, multi-word names included). Longest
+   * exact match wins at each `#`.
+   *
+   * **`undefined` (the default, left out entirely) is not "no
+   * restriction" — it means "no lookup available," and `matchProject`
+   * falls back to its pre-#388 permissive behaviour (any run of
+   * word characters after `#` counts as a project name, exactly as
+   * before this issue).** This is deliberate, not an oversight: two real
+   * callers of `parseQuickAdd` — the journal Composer's checklist
+   * highlighting and Task-promotion, both routed through
+   * `quick-add-highlight.ts` (`apps/web`) — are outside issue #388's own
+   * scope (its D14) and must keep working exactly as they do today. Only
+   * the Todo composer (`apps/web`'s `use-quick-add-composer.ts`) supplies
+   * this field; every other caller simply never passes it, and stays on
+   * the permissive path with no code of its own having to opt out. A
+   * caller that DOES want the exact-match/"unknown name creates nothing"
+   * behaviour must actively supply this list — even an empty one, which
+   * correctly means "no known Projects yet, so nothing matches."
+   */
+  projectNames?: readonly string[];
+  /** Same shape and the identical `undefined`-means-permissive contract as `projectNames`'s own doc comment — for `@`/`%` label sigils. */
+  labelNames?: readonly string[];
+  /**
+   * A Project's own Section names, keyed by the Project's name,
+   * lower-cased. Same `undefined`-means-permissive contract as
+   * `projectNames` — supplied (even as an empty `Map`) is what switches
+   * `/section` from "any word after `/`" to exact-match against whichever
+   * Project the parser decides is "active" for this line (the winning
+   * `#project` token in the same input, or `activeProjectName` when none
+   * was typed — see ./parse-quick-add.ts's `collectCandidates` for the
+   * exact sequencing). Ignored entirely on the permissive path.
+   */
+  sectionNamesByProject?: ReadonlyMap<string, readonly string[]>;
+  /**
+   * The view's ambient Project name — what `/section` falls back to
+   * scoping against when no `#project` token wins in this same line.
+   * `null`/absent means there is no ambient Project (e.g. Today, Inbox).
+   * Only consulted when `sectionNamesByProject` is also supplied; has no
+   * effect on the permissive fallback path.
+   */
+  activeProjectName?: string | null;
 }

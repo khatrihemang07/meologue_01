@@ -8,6 +8,22 @@ export interface AutocompleteEntry {
   readonly name: string;
 }
 
+/**
+ * `/` (Section) is deliberately left out here. Issue #388's own web
+ * capture (`.scratch/todoist-add-todo/web/09-projects-sections.md`)
+ * shows Todoist offering an identical interactive suggestions dropdown
+ * for `/`, scoped to whichever Project is "active" — but wiring that up
+ * correctly needs this plugin to know which Project is active at the
+ * caret, live, mid-keystroke (the typed `#project` in the same line, or
+ * the view's own ambient one), which is new plumbing this module has no
+ * seam for today and #388's own design pass never scoped in its
+ * file-by-file plan. `/section`'s own EXACT-MATCH HIGHLIGHT (issue
+ * #388's headline acceptance criterion) is implemented regardless —
+ * `packages/core`'s `matchSection` and this app's own `todo-quick-add-
+ * recognition.ts` need nothing from this file to do that. Only the
+ * interactive dropdown for `/` is out of this ticket's scope, a
+ * deliberate cut flagged in its own PR, not an oversight.
+ */
 export type AutocompleteSigil = "#" | "@";
 
 /** One rendered row: a real entry, or the "not found" fallback that carries the literal query so `Create <text>` (and the token inserted on selecting it) can show what the reader actually typed. */
@@ -63,6 +79,27 @@ const WORD_NAME_CHAR = /[\p{L}\p{N}_-]/u;
  * field), but the same boundary `matchProject`'s own regex allows for a
  * `#` following whitespace, and a sensible reading of "you're starting a
  * new token," not continuing a word that merely contains a `#`.
+ *
+ * **Crosses at most one interior space** while scanning back from the
+ * caret (issue #388) — `#Aurora migration` must not lose the popup the
+ * instant the space after "Aurora" is typed, or the dropdown could never
+ * incrementally filter/offer a real two-word name past its first word.
+ * Capped at one space (a two-word query), not unbounded: every multi-word
+ * Project/Section name this parser's own corpus has ever measured is
+ * exactly two words (`Aurora migration`, `Cutover night`, and so on), and
+ * an unbounded scan would instead swallow the *rest of the line* as the
+ * query for as long as the reader keeps typing single-space-separated
+ * words with no unrelated punctuation — clearly wrong, and not what
+ * crossing "a single interior space" (singular) was ever meant to do. Two
+ * consecutive spaces, or a space right at the start of the text, is never
+ * crossed — that ends a word normally, not the middle of a name still
+ * being typed. **Not measured against Todoist directly**: its own
+ * capture only ever showed the dropdown for a single-word prefix
+ * (`#Aurora`) or a completed multi-word exact match with no dropdown at
+ * all, never an in-between multi-word partial with the popup open — this
+ * is inferred from the ticket's own acceptance criteria, not quoted from
+ * a capture, and is the one part of this file most likely to need
+ * revisiting against the live dropdown.
  */
 export function findTrigger(
   text: string,
@@ -72,8 +109,34 @@ export function findTrigger(
     return null;
   }
   let i = caret;
-  while (i > 0 && WORD_NAME_CHAR.test(text[i - 1] as string)) {
-    i--;
+  let crossedSpace = false;
+  // Only ever true once the scan has actually consumed a word character —
+  // `consumedWordChar` is what tells "the caret sits at the end of a
+  // second word, reached by crossing one space" (cross it) apart from
+  // "the caret sits directly after a trailing space with nothing typed
+  // since" (`#work `'s own existing test below — don't cross that one, or
+  // the popup would never close once a completed single-word entry is
+  // followed by a space).
+  let consumedWordChar = false;
+  while (i > 0) {
+    const ch = text[i - 1] as string;
+    if (WORD_NAME_CHAR.test(ch)) {
+      i--;
+      consumedWordChar = true;
+      continue;
+    }
+    if (
+      !crossedSpace &&
+      consumedWordChar &&
+      ch === " " &&
+      i - 2 >= 0 &&
+      WORD_NAME_CHAR.test(text[i - 2] as string)
+    ) {
+      crossedSpace = true;
+      i--;
+      continue;
+    }
+    break;
   }
   const sigilPos = i - 1;
   if (sigilPos < 0) {

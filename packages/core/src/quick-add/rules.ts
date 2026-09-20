@@ -99,9 +99,25 @@ export function matchDescription(input: string): QuickAddToken[] {
 
 const WORD_NAME_PATTERN = "[\\p{L}\\p{N}_-]+";
 
-/** `#project` — the name is any run of letters/digits/`_`/`-`, so a project called `q1-goals` or `2026-review` both work. */
-export function matchProject(input: string): QuickAddToken[] {
-  return matchNamedSigil(input, "#", "project");
+/** `matchProject`/`matchLabel`/`matchSection`'s own name-boundary character class, once a real name list is supplied (issue #388) — a name match is only accepted when the character right after it, if any, fails this test, so `#Home` inside `#Homework` never counts as a match for a Project named `Home`. Identical character class to `WORD_NAME_PATTERN`'s own, kept as a real RegExp here (rather than reused as a string) since `matchAgainstKnownNames` only ever needs to `.test()` a single character. */
+const WORD_NAME_CHAR = /[\p{L}\p{N}_-]/u;
+
+/**
+ * `#project` — the name is any run of letters/digits/`_`/`-`, so a
+ * project called `q1-goals` or `2026-review` both work.
+ *
+ * `names`'s own doc comment on `QuickAddOptions.projectNames` has the
+ * full contract: `undefined` (the default) keeps this permissive, any
+ * run of word characters after `#`; supplied, this switches to an exact
+ * (case-insensitive, longest-match-wins) scan against `names` instead —
+ * issue #388's own headline acceptance criterion, "`#Name` highlights
+ * only on an exact match against an existing project."
+ */
+export function matchProject(input: string, names?: readonly string[]): QuickAddToken[] {
+  if (names === undefined) {
+    return matchNamedSigil(input, "#", "project");
+  }
+  return matchAgainstKnownNames(input, "#", names, "project");
 }
 
 /**
@@ -110,11 +126,22 @@ export function matchProject(input: string): QuickAddToken[] {
  * numeric date like `27/1/2026` (a section name starting with a digit
  * isn't a form issue #170's own examples ask for, and refusing it here
  * is what avoids the ambiguity rather than resolving it by luck of rule
- * ordering).
+ * ordering). Kept as a guard on both the permissive AND the exact-match
+ * path below — issue #388 doesn't relax it, it only changes what counts
+ * as a match once the `/` itself is a candidate.
+ *
+ * `names`'s own contract mirrors `matchProject`'s: `undefined` stays
+ * permissive; supplied (even `[]`), this only matches a name from that
+ * list — see ./parse-quick-add.ts's `collectCandidates` for how the
+ * caller decides *which* Project's section list to pass here, since that
+ * decision needs to know which `#project` token (if any) won first.
  */
-export function matchSection(input: string): QuickAddToken[] {
-  const regex = new RegExp(`\\/(?=[\\p{L}_])(${WORD_NAME_PATTERN})`, "gu");
-  return collectNamedMatches(input, regex, "section");
+export function matchSection(input: string, names?: readonly string[]): QuickAddToken[] {
+  if (names === undefined) {
+    const regex = new RegExp(`\\/(?=[\\p{L}_])(${WORD_NAME_PATTERN})`, "gu");
+    return collectNamedMatches(input, regex, "section");
+  }
+  return matchAgainstKnownNames(input, "/", names, "section");
 }
 
 /**
@@ -126,9 +153,19 @@ export function matchSection(input: string): QuickAddToken[] {
  * are recognised here, not just the one Todoist's docs lead with. `%` was
  * deliberately retired by issue #226 in favour of `@` alone; this
  * re-add is Todoist itself reversing that call, not a return to a bug.
+ *
+ * `names`'s own contract mirrors `matchProject`'s doc comment exactly —
+ * `undefined` stays permissive, supplied switches to exact-match, applied
+ * identically to both sigils.
  */
-export function matchLabel(input: string): QuickAddToken[] {
-  return [...matchNamedSigil(input, "@", "label"), ...matchNamedSigil(input, "%", "label")];
+export function matchLabel(input: string, names?: readonly string[]): QuickAddToken[] {
+  if (names === undefined) {
+    return [...matchNamedSigil(input, "@", "label"), ...matchNamedSigil(input, "%", "label")];
+  }
+  return [
+    ...matchAgainstKnownNames(input, "@", names, "label"),
+    ...matchAgainstKnownNames(input, "%", names, "label"),
+  ];
 }
 
 function matchNamedSigil(input: string, sigil: string, kind: "project" | "label"): QuickAddToken[] {
@@ -158,6 +195,95 @@ function collectNamedMatches(
       raw: match[0],
       name,
     });
+  }
+  return tokens;
+}
+
+/**
+ * The exact-match side of `matchProject`/`matchSection`/`matchLabel`
+ * (issue #388), once a real name list is supplied. At every occurrence
+ * of `sigil` in `input` (still gated by `urlSpans`, exactly like the
+ * permissive path — a URL's own `/`, `#` or `@` is never this rule's
+ * sigil either way), scans `names` for the longest one whose
+ * case-insensitive text starts right there, with a trailing
+ * word-boundary check (the character right after the match, if any,
+ * must fail `WORD_NAME_CHAR` — `#Home` must not claim part of
+ * `#Homework`). No name matches at a given `/`/`#`/`@`/`%` occurrence
+ * means no token there; the sigil and whatever follows it fall back into
+ * `content` as plain text, exactly like any other unrecognised text
+ * already does — issue #388's own "an unknown name … stays in the title
+ * as plain text and creates nothing."
+ *
+ * A literal substring compare, not a `name`-built RegExp — the design
+ * this module was built from flagged a hand-rolled `\b(name)\b` as the
+ * likely mistake here: it still needs `name` regex-escaped (a Project or
+ * Section called `q1.goals` or `C++` would otherwise corrupt the
+ * pattern), and a literal compare needs no escaping at all because
+ * nothing is ever compiled from `name`.
+ *
+ * Names are tried longest-first so a shorter name that happens to be a
+ * prefix of a longer one never wins by accident — `#Aurora migration`
+ * must resolve to the two-word Project, not stop at a shorter `Aurora`
+ * some other list also happens to carry.
+ *
+ * `/section`'s own digit-lookahead guard (`matchSection`'s own doc
+ * comment — keeps this from firing on the `/` inside `27/1/2026`) is
+ * still enforced here, not just on the permissive path, since a Section
+ * beginning with a digit is exactly as unintended a match either way.
+ */
+function matchAgainstKnownNames(
+  input: string,
+  sigil: string,
+  names: readonly string[],
+  kind: "project" | "section" | "label",
+): QuickAddToken[] {
+  const spans = urlSpans(input);
+  const tokens: QuickAddToken[] = [];
+  // Longest first: the first list entry whose text matches at a given
+  // position is therefore also the longest one that does.
+  const sortedNames = [...names].sort((a, b) => b.length - a.length);
+  let searchFrom = 0;
+  let sigilIndex = input.indexOf(sigil, searchFrom);
+  while (sigilIndex !== -1) {
+    searchFrom = sigilIndex + sigil.length;
+    if (isInsideUrl(sigilIndex, spans)) {
+      sigilIndex = input.indexOf(sigil, searchFrom);
+      continue;
+    }
+    const afterSigil = sigilIndex + sigil.length;
+    const rest = input.slice(afterSigil);
+    if (kind === "section" && /^[0-9]/.test(rest)) {
+      // The identical guard `matchSection`'s permissive regex applies via
+      // its own `(?=[\p{L}_])` lookahead — a Section can't start with a
+      // digit, which is what keeps `27/1/2026` from ever being read as
+      // one.
+      sigilIndex = input.indexOf(sigil, searchFrom);
+      continue;
+    }
+    const restLower = rest.toLowerCase();
+    let matchedName: string | null = null;
+    for (const name of sortedNames) {
+      if (name.length === 0 || !restLower.startsWith(name.toLowerCase())) {
+        continue;
+      }
+      const boundaryChar = rest[name.length];
+      if (boundaryChar !== undefined && WORD_NAME_CHAR.test(boundaryChar)) {
+        continue;
+      }
+      matchedName = name;
+      break;
+    }
+    if (matchedName !== null) {
+      const end = afterSigil + matchedName.length;
+      tokens.push({
+        kind,
+        start: sigilIndex,
+        end,
+        raw: input.slice(sigilIndex, end),
+        name: matchedName,
+      });
+    }
+    sigilIndex = input.indexOf(sigil, searchFrom);
   }
   return tokens;
 }

@@ -21,7 +21,14 @@ describe("useQuickAddComposer", () => {
   it("calls onAdd with the parsed fields, clears value/seed and bumps resetKey on a real commit", () => {
     const onAdd = vi.fn();
     const onCommitted = vi.fn();
-    const { result } = renderHook(() => useQuickAddComposer({ onAdd, onCommitted }));
+    // Issue #388: `@errands` only matches once "errands" is a real Label
+    // this hook knows about — the composer always supplies `labelNames`
+    // (even `[]`, once a caller wires `labels` at all), so an unmatched
+    // `@errands` would otherwise stay literal in `content` instead of
+    // resolving.
+    const { result } = renderHook(() =>
+      useQuickAddComposer({ onAdd, onCommitted, labels: [{ id: "l1", name: "errands" }] }),
+    );
 
     act(() => {
       result.current.setValue("buy milk @errands");
@@ -97,6 +104,44 @@ describe("useQuickAddComposer", () => {
     rerender({ projects: [{ id: "p2", name: "Home" }] });
 
     expect(result.current.autocomplete.getProjects()).toEqual([{ id: "p2", name: "Home" }]);
+  });
+
+  // Issue #388: `composer.options.projectNames`/`labelNames` are rebuilt
+  // fresh every render from `projectsRef`/`labelsRef` (this hook's own
+  // header comment on why those are refs, not plain state) — this proves
+  // a freshly-passed `projects`/`labels` prop is reflected on the very
+  // next render's `options`, not captured once at mount the way an easy
+  // mistake (building `optionsRef.current` only inside a `useEffect`, say)
+  // could silently produce instead.
+  it("options.projectNames/labelNames/activeProjectName reflect freshly-passed props, not a value captured at mount", () => {
+    const { result, rerender } = renderHook(
+      (props: {
+        projects: { id: string; name: string }[];
+        labels: { id: string; name: string }[];
+        ambientProjectName: string | null;
+      }) => useQuickAddComposer({ onAdd: vi.fn(), ...props }),
+      {
+        initialProps: {
+          projects: [{ id: "p1", name: "Errands" }],
+          labels: [{ id: "l1", name: "urgent" }],
+          ambientProjectName: "Errands",
+        },
+      },
+    );
+
+    expect(result.current.options.projectNames).toEqual(["Errands"]);
+    expect(result.current.options.labelNames).toEqual(["urgent"]);
+    expect(result.current.options.activeProjectName).toBe("Errands");
+
+    rerender({
+      projects: [{ id: "p2", name: "Home" }],
+      labels: [{ id: "l2", name: "chores" }],
+      ambientProjectName: "Home",
+    });
+
+    expect(result.current.options.projectNames).toEqual(["Home"]);
+    expect(result.current.options.labelNames).toEqual(["chores"]);
+    expect(result.current.options.activeProjectName).toBe("Home");
   });
 
   // Issue #373: multi-line paste, deferred to the dialog rather than

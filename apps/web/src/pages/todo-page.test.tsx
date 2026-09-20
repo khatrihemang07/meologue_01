@@ -1,4 +1,4 @@
-import type { Comment, Event, Task } from "@meologue/core";
+import type { Comment, Event, Project, Section, Task } from "@meologue/core";
 import { QueryClient, QueryClientProvider, queryOptions } from "@tanstack/react-query";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { useState } from "react";
@@ -166,6 +166,48 @@ function task(overrides: Partial<Task> = {}): Task {
     sectionId: null,
     parentId: null,
     description: null,
+    ...overrides,
+  };
+}
+
+// Issue #388: the `#project`/`@label`/`/section` name-list tests below
+// need real Project/Section fixtures — a typed `#Word` no longer matches
+// unless "Word" is a name this page's own `projects` prop actually
+// carries (this ticket's own headline change).
+function project(overrides: Partial<Project> = {}): Project {
+  return {
+    id: "p1",
+    deviceId: "device-a",
+    name: "Work",
+    colour: "#DC4C3E",
+    favourite: false,
+    archived: false,
+    parentId: null,
+    description: null,
+    orderKey: "A",
+    createdAt: "2026-01-01T00:00:00.000Z",
+    updatedAt: "2026-01-01T00:00:00.000Z",
+    seq: 1,
+    syncedAt: "2026-01-01T00:00:00.000Z",
+    deletedAt: null,
+    ...overrides,
+  };
+}
+
+function section(overrides: Partial<Section> = {}): Section {
+  return {
+    id: "s1",
+    deviceId: "device-a",
+    projectId: "p1",
+    name: "Cutover",
+    description: null,
+    orderKey: "A",
+    archived: false,
+    createdAt: "2026-01-01T00:00:00.000Z",
+    updatedAt: "2026-01-01T00:00:00.000Z",
+    seq: 1,
+    syncedAt: "2026-01-01T00:00:00.000Z",
+    deletedAt: null,
     ...overrides,
   };
 }
@@ -1190,6 +1232,9 @@ describe("TodoPage — rename resolves recognised phrases (issue #247)", () => {
     const resolveProjectId = vi.fn(async () => "project-work");
     renderTodoPage(
       inboxContext([task({ id: "a", content: "buy milk", projectId: null })], {
+        // Issue #388: "Work" has to be a real Project the page knows
+        // about for `#Work` to match at all.
+        projects: [project({ id: "p1", name: "Work" })],
         setTaskProject,
         resolveProjectId,
       }),
@@ -1515,7 +1560,17 @@ describe("TodoPage — Projects", () => {
     it("assigns the Task to a typed #project, and strips the sigil from the saved title", async () => {
       const addTask = vi.fn();
       const resolveProjectId = vi.fn(async (name: string) => `project-${name}`);
-      renderTodoPage(inboxContext([], { addTask, resolveProjectId }));
+      // Issue #388: "Groceries" has to be a real Project the page knows
+      // about for `#Groceries` to match at all — #370's own find-or-create
+      // resolver only runs once the parser has recognised a `#project`
+      // token in the first place.
+      renderTodoPage(
+        inboxContext([], {
+          projects: [project({ id: "p1", name: "Groceries" })],
+          addTask,
+          resolveProjectId,
+        }),
+      );
 
       await revealAddTaskField();
       fireEvent.change(await screen.findByLabelText("Task name"), {
@@ -1533,28 +1588,16 @@ describe("TodoPage — Projects", () => {
     // The ticket's own worked example: a typed `#project` beats the
     // ambient view's own Project — issue #370 gives `captureProjectId` the
     // typed override this file's own `handleAdd` comment used to say it
-    // had none of.
+    // had none of. Issue #388: both "Groceries" (the ambient Project) and
+    // "Work" (the typed one) have to be real Projects for either sigil to
+    // match at all.
     it("a typed #project overrides the view's own inherited Project", async () => {
-      const project = {
-        id: "p1",
-        deviceId: "device-a",
-        name: "Groceries",
-        colour: "#DC4C3E",
-        favourite: false,
-        archived: false,
-        parentId: null,
-        description: null,
-        orderKey: "A",
-        createdAt: "2026-01-01T00:00:00.000Z",
-        updatedAt: "2026-01-01T00:00:00.000Z",
-        seq: 1,
-        syncedAt: "2026-01-01T00:00:00.000Z",
-        deletedAt: null,
-      };
+      const groceries = project({ id: "p1", name: "Groceries" });
+      const work = project({ id: "p2", name: "Work" });
       const addTask = vi.fn();
       const resolveProjectId = vi.fn(async () => "project-work");
       renderTodoPage(
-        readyContext({ projects: [project], addTask, resolveProjectId }),
+        readyContext({ projects: [groceries, work], addTask, resolveProjectId }),
         "/todo/projects/p1",
       );
 
@@ -1571,13 +1614,38 @@ describe("TodoPage — Projects", () => {
       );
     });
 
+    // Issue #388: `/section` only scopes against the AMBIENT Project's own
+    // Section list (todo-page.tsx's own `sectionNamesByProject` doc
+    // comment — a typed `#project` different from the one currently being
+    // viewed has no Section list fetched for it, a known, deliberate
+    // limitation, not solved by this ticket). So unlike #370's own
+    // original version of this test, the typed `#project` here is the SAME
+    // one the view is already open on — still exercises the real,
+    // end-to-end resolve path (`resolveProjectId`/`resolveSectionId` both
+    // actually called), just no longer proves an override at the same
+    // time; that's `a typed #project overrides the view's own inherited
+    // Project` just above's own job now.
     it("#project /section lands the Task in that Section, resolved inside the typed Project", async () => {
+      const work = project({ id: "p2", name: "Work" });
       const addTask = vi.fn();
       const resolveProjectId = vi.fn(async () => "project-work");
       const resolveSectionId = vi.fn(async () => "section-cutover");
-      renderTodoPage(inboxContext([], { addTask, resolveProjectId, resolveSectionId }));
+      const listSections = vi.fn(async () => [
+        section({ id: "s1", projectId: "p2", name: "Cutover" }),
+      ]);
+      renderTodoPage(
+        readyContext({
+          projects: [work],
+          addTask,
+          resolveProjectId,
+          resolveSectionId,
+          listSections,
+        }),
+        "/todo/projects/p2",
+      );
 
       await revealAddTaskField();
+      await waitFor(() => expect(listSections).toHaveBeenCalledWith("p2"));
       fireEvent.change(await screen.findByLabelText("Task name"), {
         target: { value: "buy milk #Work /Cutover" },
       });
@@ -1595,11 +1663,17 @@ describe("TodoPage — Projects", () => {
     // one line to a single `projectName` before this page ever sees it —
     // this proves the wiring doesn't call `resolveProjectId` a second time
     // on top of that, which would be the only way this page could still
-    // mint a duplicate.
+    // mint a duplicate. Issue #388: both names have to be real Projects.
     it("two #project references in one line resolve only once, not twice", async () => {
       const addTask = vi.fn();
       const resolveProjectId = vi.fn(async () => "project-personal");
-      renderTodoPage(inboxContext([], { addTask, resolveProjectId }));
+      renderTodoPage(
+        inboxContext([], {
+          projects: [project({ id: "p1", name: "Work" }), project({ id: "p2", name: "Personal" })],
+          addTask,
+          resolveProjectId,
+        }),
+      );
 
       await revealAddTaskField();
       fireEvent.change(await screen.findByLabelText("Task name"), {
@@ -1612,6 +1686,15 @@ describe("TodoPage — Projects", () => {
       expect(resolveProjectId).toHaveBeenCalledWith("Personal");
     });
 
+    // Issue #388 changed what "ignored" means here. Inbox (the ambient
+    // Project in this test) has no Sections of its own — under the
+    // pre-#388 permissive parser, `/Cutover` was always RECOGNISED as a
+    // section token and stripped from the title, just never resolved
+    // (`projectId === null` skipped the resolve call); now that
+    // `/section` only matches a real name, an unrecognised `/Cutover`
+    // stays literal in the title instead of silently vanishing from it —
+    // issue #388's own acceptance criterion ("an unknown name … stays in
+    // the title as plain text and creates nothing").
     it("a lone /section with no typed or ambient Project is ignored", async () => {
       const addTask = vi.fn();
       const resolveSectionId = vi.fn(async () => "section-cutover");
@@ -1626,7 +1709,7 @@ describe("TodoPage — Projects", () => {
       await waitFor(() => expect(addTask).toHaveBeenCalled());
       expect(resolveSectionId).not.toHaveBeenCalled();
       expect(addTask).toHaveBeenCalledWith(
-        "buy milk",
+        "buy milk /Cutover",
         expect.objectContaining({ projectId: null, sectionId: null }),
       );
     });
