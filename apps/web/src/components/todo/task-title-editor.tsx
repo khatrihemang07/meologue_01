@@ -15,6 +15,7 @@ import {
   quickAddAutocompletePlugin,
   quickAddAutocompletePluginKey,
 } from "@/lib/quick-add-autocomplete";
+import { titleLinkSegments } from "@/lib/task-title-links";
 import { cn } from "@/lib/utils";
 
 /**
@@ -58,16 +59,6 @@ export const taskTitleSchema = new Schema({
 });
 
 /**
- * `[text](url)` runs inside an already-typed title, recognised on LOAD the
- * same way `linkInputRule` below recognises one as it's typed — the two
- * halves of #373's round-trip: `titleDocFromText` reads this syntax back
- * into a live mark, `titleTextFromDoc` writes it back out. Two groups
- * (text, then url), the identical shape `linkInputRule` matches against,
- * kept as one pattern so the reader and the writer can't drift apart.
- */
-const TITLE_MARKDOWN_LINK = /\[([^\]\n]+)\]\(([^)\n]+)\)/g;
-
-/**
  * A title `Node` seeded with `text` — empty text becomes an empty `doc`,
  * never a zero-length text node (ProseMirror disallows those outright).
  *
@@ -80,36 +71,23 @@ const TITLE_MARKDOWN_LINK = /\[([^\]\n]+)\]\(([^)\n]+)\)/g;
  * back into a live mark here, so the mark surviving a save-then-reopen
  * cycle costs nothing but re-running this same parse — `titleTextFromDoc`
  * below is the inverse that makes the round trip whole.
+ *
+ * `titleLinkSegments` (`@/lib/task-title-links`) is where the actual
+ * `[text](url)` matching lives — issue #398's read-only title renderer
+ * (`task-title-text.tsx`) needs the identical split, so it moved out of
+ * this file rather than being duplicated; that module's own header
+ * comment explains why it isn't here.
  */
 export function titleDocFromText(text: string): PMNode {
   if (text.length === 0) {
     return taskTitleSchema.node("doc", null, []);
   }
   const linkType = taskTitleSchema.marks.link;
-  const nodes: PMNode[] = [];
-  let cursor = 0;
-  TITLE_MARKDOWN_LINK.lastIndex = 0;
-  let match = TITLE_MARKDOWN_LINK.exec(text);
-  while (match !== null) {
-    const linkText = match[1];
-    const href = match[2];
-    if (
-      linkText !== undefined &&
-      href !== undefined &&
-      linkText.trim() !== "" &&
-      href.trim() !== ""
-    ) {
-      if (match.index > cursor) {
-        nodes.push(taskTitleSchema.text(text.slice(cursor, match.index)));
-      }
-      nodes.push(taskTitleSchema.text(linkText, [linkType.create({ href })]));
-      cursor = match.index + match[0].length;
-    }
-    match = TITLE_MARKDOWN_LINK.exec(text);
-  }
-  if (cursor < text.length) {
-    nodes.push(taskTitleSchema.text(text.slice(cursor)));
-  }
+  const nodes = titleLinkSegments(text).map((segment) =>
+    segment.href === undefined
+      ? taskTitleSchema.text(segment.text)
+      : taskTitleSchema.text(segment.text, [linkType.create({ href: segment.href })]),
+  );
   return taskTitleSchema.node("doc", null, nodes);
 }
 

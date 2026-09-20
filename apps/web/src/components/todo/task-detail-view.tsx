@@ -23,6 +23,7 @@ import { LazyActivityFeed } from "@/components/todo/lazy-activity-feed";
 import { LazyTaskDescriptionEditor } from "@/components/todo/lazy-task-description-editor";
 import { LazyTaskTitleEditor } from "@/components/todo/lazy-task-title-editor";
 import { TaskSchedulePopover } from "@/components/todo/task-schedule-popover";
+import { taskTitleText } from "@/components/todo/task-title-text";
 import { ConfirmDialog } from "@/components/ui/alert-dialog";
 import {
   Dialog,
@@ -1250,7 +1251,7 @@ function TaskDetailBody({
                       task.completedAt !== null && "completed-task-text",
                     )}
                   >
-                    {inlineProse(task.content)}
+                    {taskTitleText(task.content)}
                   </div>
                 )}
               </DialogTitle>
