@@ -88,9 +88,13 @@ function TimeContent() {
 }
 
 function DailyTimeline({ source }: { source: TimeSource }) {
-  // The Server assigns the exact start/end instants to its configured
-  // timezone. Until date navigation arrives, today's floating date is only
-  // a request key; the response remains the Server's authoritative day.
+  // This Device's own local date, sent as a floating YYYY-MM-DD. The Server
+  // currently resolves it against UTC, not against its configured
+  // `MEOLOGUE_TZ` — measured on a seeded Server in Asia/Kolkata, where the
+  // same calendar date selects 104 Activity intervals as a UTC day and 70 as
+  // a Server-timezone day. Issue #424 owns moving the boundary to the
+  // Server's timezone along with date navigation; until then "Today" means
+  // the UTC day, which is why nothing here claims otherwise on screen.
   const day = format(new Date(), "yyyy-MM-dd");
   const intervalsQuery = useQuery({
     queryKey: activityIntervalsQueryKey(day, source.id),
