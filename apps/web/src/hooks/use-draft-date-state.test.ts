@@ -34,6 +34,32 @@ describe("useDraftDateState", () => {
     expect(result.current.dateDay).toBe("2026-12-25");
   });
 
+  // Issue #410: two competing date words in one draft — Todoist's own
+  // measured behaviour (`.scratch/todoist-add-todo/web/02-detection-
+  // corpus.md`, "meet monday or tuesday" / "today tomorrow": "both
+  // highlighted, but the rightmost one wins for the actual date chip")
+  // is that the *rightmost* match settles the chip, not the leftmost.
+  // `parseQuickAdd`'s own `result.date` already implements this (its
+  // `buildResult` walks tokens in ascending start order and lets a later
+  // one overwrite an earlier one — "last one wins"), but this hook read
+  // it off `tokens.find(kind === "date")` instead, which returns the
+  // *first* match in that same ascending-order array — the leftmost one.
+  it("settles the day on the rightmost of two competing date tokens, not the leftmost", () => {
+    const result = draft("meet monday or tuesday", vi.fn());
+
+    // 2026-01-01 is a Thursday: bare "monday" is 2026-01-05, bare
+    // "tuesday" is 2026-01-06 — the rightmost (tuesday) must win.
+    expect(result.current.dateDay).toBe("2026-01-06");
+  });
+
+  it("settles the day on the rightmost of two competing date tokens for a second measured input", () => {
+    const result = draft("today tomorrow", vi.fn());
+
+    // 2026-01-01 is "today"; "tomorrow" is 2026-01-02 — the rightmost
+    // (tomorrow) must win.
+    expect(result.current.dateDay).toBe("2026-01-02");
+  });
+
   it("reads the time off a recognised 24-hour time, independent of any date", () => {
     const result = draft("buy milk 14:30", vi.fn());
 
