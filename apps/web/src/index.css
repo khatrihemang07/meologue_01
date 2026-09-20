@@ -356,7 +356,11 @@
 
   /* A recognised natural-language match (README's own "one fact that
      shapes the rebuild") — an inline-block span, not a text colour, hence
-     radius and padding tokens alongside the background. */
+     radius and padding tokens alongside the background. Left exactly as
+     it was (still the DARK-theme value, in `:root` too) — this token also
+     feeds `--td-nav-active-pill` below, an unrelated surface issue #374
+     has no reason to repaint. The Quick Add/rename highlight pill's own
+     LIGHT-theme value is `--td-quick-add-highlight-*`, just below. */
   --td-recognition-background: rgb(111, 38, 37);
   /* A token rather than the literal white the rule below carried, per ADR
      0069's own second rule: everything Todoist has and this palette has no
@@ -379,9 +383,6 @@
      second time. */
   --td-calendar-cell-hover: rgb(77, 77, 77);
 
-  --td-composer-background: rgb(255, 255, 255);
-  --td-composer-border: var(--border);
-  --td-composer-radius: 12px;
   --td-popover-background: var(--muted);
   --td-popover-border: var(--border);
   --td-popover-radius: var(--radius);
@@ -393,11 +394,40 @@
   --td-row-font-size: 14px;
   --td-row-line-height: 21px;
   --td-chrome-font-size: 13px;
-  --td-composer-title-font-size: 16px;
-  --td-composer-title-line-height: 23px;
 
-  --td-add-task-font-size: 14px;
-  --td-add-task-placeholder: var(--muted-foreground);
+  /*
+   * Issue #374: Quick Add's own scoped tokens, renamed off `--td-composer-*`/
+   * `--td-add-task-*` — "Composer" is CONTEXT.md's reserved name for the
+   * journal Destination, not this surface (D17/#378's own glossary
+   * amendment: "Quick Add" is meologue's name for this clone). New,
+   * measured values, not carried over from the old tokens: `web/07-
+   * native-colours.md`, Dark Reader disabled, read off the literal CSS
+   * bytes — `01-anatomy.md`/`04-interaction.md`'s own colours are that
+   * extension's repaint and are NOT used here. "Todoist" (light) theme
+   * below; the Dark preset's own values are in `.dark`.
+   */
+  --td-quick-add-background: rgb(252, 250, 248);
+  --td-quick-add-border: rgb(230, 230, 230);
+  --td-quick-add-radius: 12px;
+  --td-quick-add-shadow: rgba(0, 0, 0, 0.06) 0px 3px 10px 0px;
+  --td-quick-add-title-color: rgb(32, 32, 32);
+  --td-quick-add-title-font-size: 16px;
+  --td-quick-add-title-line-height: 23px;
+  --td-quick-add-placeholder-font-size: 14px;
+  --td-quick-add-placeholder: var(--muted-foreground);
+  /* Chip text/border (Project, Date, Priority) — Todoist paints every
+     chip transparent with the same neutral text colour, never its own
+     accent. */
+  --td-quick-add-chip-color: rgb(32, 32, 32);
+  --td-quick-add-chip-radius: 8px;
+  --td-quick-add-submit-background: rgb(211, 51, 34);
+  --td-quick-add-submit-foreground: rgb(255, 255, 255);
+  --td-quick-add-cancel-color: rgb(102, 102, 102);
+  /* The touch sheet's own scrim (`android/02-anatomy.md`: darker than the
+     app's ordinary dark-theme background, confirming a scrim is present)
+     — not reused from `DialogOverlay`'s generic `bg-black/50`, which is
+     a different, unmeasured value. */
+  --td-quick-add-sheet-scrim: rgba(16, 16, 16, 0.7);
 
   --td-nav-active-pill: var(--td-recognition-background);
   --td-nav-active-icon: var(--td-calendar-selected);
@@ -439,9 +469,23 @@
   --border: rgb(61, 61, 61);
   --muted: rgb(38, 38, 38);
   --muted-foreground: rgb(204, 204, 204);
-  --td-composer-background: rgb(40, 40, 40);
   --td-focus-tint: rgba(255, 255, 255, 0.14);
-  --td-add-task-placeholder: rgb(128, 128, 128);
+  /* Issue #374: the Dark preset's own measured values (`web/07-native-
+     colours.md`'s "Dark theme" table) — not `theme_todoist`'s own dark
+     mode, which does not exist (that file's own headline finding: the
+     account's default theme is light; every "dark" pixel the first
+     un-neutralised audit pass recorded was Dark Reader's repaint, not
+     Todoist's). This app has no dark PRESET of its own to be pixel-
+     faithful to yet (Stage B's nine themes), so the closest legitimate
+     comparison — Todoist's own explicit "Dark" preset — is what this
+     app's `.dark` class carries. */
+  --td-quick-add-background: rgb(38, 38, 38);
+  --td-quick-add-border: rgb(61, 61, 61);
+  --td-quick-add-title-color: rgb(255, 255, 255);
+  --td-quick-add-placeholder: rgb(128, 128, 128);
+  --td-quick-add-chip-color: rgb(255, 255, 255);
+  --td-quick-add-submit-background: rgb(208, 67, 72);
+  --td-quick-add-cancel-color: rgb(209, 209, 209);
 }
 
 @layer base {

@@ -1,12 +1,12 @@
-import { Suspense, useEffect, useState } from "react";
-import { LazyTaskTitleEditor } from "@/components/todo/lazy-task-title-editor";
-import { MultiLinePasteDialog } from "@/components/todo/multiline-paste-dialog";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
+import { useEffect, useState } from "react";
+import { touchOnlyDevice } from "@/lib/pointer";
 import type { AutocompleteEntry } from "@/lib/quick-add-autocomplete";
 import type { QuickAddTaskFields } from "@/lib/quick-add-task";
 import { FOCUS_ADD_TASK_EVENT } from "@/lib/todo-keymap";
 import { useQuickAddComposer } from "@/lib/use-quick-add-composer";
+import { QuickAddContent } from "./quick-add-content";
+import { QuickAddInlineCard } from "./quick-add-inline-card";
+import { QuickAddSheet } from "./quick-add-sheet";
 
 export interface AddTaskFormProps {
   /**
@@ -24,14 +24,22 @@ export interface AddTaskFormProps {
   labels?: readonly AutocompleteEntry[];
   onCreateProject?: (name: string) => void;
   onCreateLabel?: (name: string) => void;
+  datesWithTasks?: ReadonlyMap<string, number>;
+  ambientProjectName?: string;
 }
 
 const TRIGGER_CLASSES =
-  "flex items-center gap-2 rounded-md px-2.5 py-1.5 text-[length:var(--td-add-task-font-size)] text-[color:var(--td-add-task-placeholder)] hover:text-foreground disabled:pointer-events-none disabled:opacity-60";
+  "flex items-center gap-2 rounded-md px-2.5 py-1.5 text-[length:var(--td-quick-add-placeholder-font-size)] text-[color:var(--td-quick-add-placeholder)] hover:text-foreground disabled:pointer-events-none disabled:opacity-60";
 
-const EDITOR_BOX_CLASSES =
-  "h-8 w-full min-w-0 rounded-lg border border-transparent bg-transparent px-1 py-1 text-[length:var(--td-composer-title-font-size)] leading-[length:var(--td-composer-title-line-height)] outline-none";
-
+/**
+ * Todoist web's own inline "+ Add task" row (Surface B, `web/01-
+ * anatomy.md`) — always mounted, byte-for-byte the same subtree as the
+ * global Quick Add once expanded (now `QuickAddContent`, shared via
+ * `quick-add-dialog.tsx`). Only this component's own collapsed<->expanded
+ * trigger shape is specific to it; the expanded surface itself is
+ * `QuickAddInlineCard`/`QuickAddSheet`, chosen the identical way
+ * `quick-add-dialog.tsx` does.
+ */
 export function AddTaskForm({
   onAdd,
   disabled,
@@ -39,8 +47,11 @@ export function AddTaskForm({
   labels = [],
   onCreateProject,
   onCreateLabel,
+  datesWithTasks,
+  ambientProjectName,
 }: AddTaskFormProps) {
   const [open, setOpen] = useState(false);
+  const touch = touchOnlyDevice();
 
   // Issue #260 Defect 2: `todo-keymap.ts`'s `focusAddTaskField()` has no
   // reference to this component's own `open` state — private `useState`,
@@ -51,9 +62,7 @@ export function AddTaskForm({
   // selector-based fast path finds no live textbox/input already
   // mounted, i.e. only while this composer is still the collapsed
   // resting row. This listener is the other half: reveal on that event,
-  // the same way the trigger button's own `onClick` below does. The
-  // existing `autoFocus={true}` on `LazyTaskTitleEditor` below lands the
-  // caret once it mounts — no separate focus call needed here.
+  // the same way the trigger button's own `onClick` below does.
   useEffect(() => {
     function onFocusAddTask() {
       setOpen(true);
@@ -68,14 +77,15 @@ export function AddTaskForm({
     labels,
     onCreateProject,
     onCreateLabel,
+    open,
     // No `onCommitted` here, deliberately: it used to collapse the
-    // composer back to the quiet row after a real Add (this file's own
-    // header comment explains why that was wrong, and issue #260 Defect
-    // 1 reverses it). `composer.commit()` itself already clears
+    // composer back to the quiet row after a real Add (issue #260
+    // Defect 1 reversed that). `composer.commit()` itself already clears
     // `value`/`seed` and bumps `resetKey`, which remounts a fresh, empty,
-    // autofocused editor — exactly flow-12 S1's observed "stayed
-    // mounted, EMPTY, and focused" behaviour, with nothing further
-    // needed from this component.
+    // autofocused editor with its chips reset — exactly flow-12 S1's
+    // observed "stayed mounted, EMPTY, and focused" behaviour, and
+    // exactly D4's touch-side "stays open… title cleared, chips reset"
+    // rule too, with nothing further needed from this component.
   });
 
   function collapse() {
@@ -112,51 +122,41 @@ export function AddTaskForm({
     );
   }
 
-  return (
-    <div
-      className="flex flex-col gap-2 rounded-lg border border-border px-3 py-2"
-      data-add-task-field
-    >
-      <Suspense
-        fallback={
-          <Input aria-hidden="true" disabled tabIndex={-1} className="border-transparent" />
-        }
-      >
-        <LazyTaskTitleEditor
-          key={composer.resetKey}
-          value={composer.seed}
-          ariaLabel="Task name"
-          placeholder="Add task"
-          autoFocus={true}
-          commitOnBlur={false}
-          onChange={composer.setValue}
-          onCommit={composer.commit}
-          onCancel={collapse}
-          className={EDITOR_BOX_CLASSES}
-          extraPlugins={composer.extraPlugins}
-          autocomplete={composer.autocomplete}
-          onMultiLinePaste={composer.onMultiLinePaste}
-        />
-      </Suspense>
-      <div className="flex justify-end gap-2">
-        <Button type="button" variant="outline" size="sm" onClick={collapse}>
-          Cancel
-        </Button>
-        <Button
-          type="button"
-          size="sm"
-          onClick={() => composer.commit(composer.value)}
-          disabled={composer.value.trim() === ""}
-        >
-          Add task
-        </Button>
-      </div>
-      <MultiLinePasteDialog
-        lines={composer.pendingPasteLines}
-        onConfirmSplit={composer.confirmSplitPaste}
-        onConfirmMerge={composer.confirmMergePaste}
-        onCancel={composer.cancelPendingPaste}
-      />
-    </div>
+  const content = (
+    <QuickAddContent
+      composer={composer}
+      touch={touch}
+      placeholder={composer.placeholder}
+      datesWithTasks={datesWithTasks}
+      ambientProjectName={ambientProjectName}
+      onCancel={collapse}
+    />
   );
+
+  // Touch: the identical full-screen sheet `quick-add-dialog.tsx`'s FAB
+  // opens — Android has no inline add row of its own to diverge from
+  // (issue #283/#304's own scope), so if this trigger is ever reached on
+  // a touch device it still gets D16's real touch shell, not a second,
+  // narrower one. Non-touch: `QuickAddInlineCard` rendered in place, no
+  // Dialog/Portal at all — this row has to stay a real sibling in the
+  // list, not relocate to `document.body` (that component's own header
+  // comment has the full reasoning).
+  if (touch) {
+    return (
+      <QuickAddSheet
+        open={open}
+        onOpenChange={(next) => {
+          if (!next) {
+            collapse();
+          }
+        }}
+        ariaLabel="Add task"
+        markAddTaskField
+      >
+        {content}
+      </QuickAddSheet>
+    );
+  }
+
+  return <QuickAddInlineCard data-add-task-field>{content}</QuickAddInlineCard>;
 }

@@ -306,7 +306,8 @@ export function ComposerPage() {
   // the route, which is correctly "not Todo" on `/composer`, and an
   // unresolved `var(--td-…)` is an invalid value rather than a near-miss —
   // measured on the device, `--td-recognition-background`,
-  // `--td-priority-picker-1` and `--td-composer-background` all read
+  // `--td-priority-picker-1` and `--td-quick-add-background` (renamed
+  // from `--td-composer-background` by issue #374) all read
   // `(UNSET)` before that claim existed). ADR 0085 (superseding ADR 0069)
   // deletes the scope: every `--td-*` token is a plain `:root`/`.dark`
   // value now, so it resolves here — or anywhere else — with no claim to

@@ -1,11 +1,27 @@
 import type { QuickAddOptions } from "@meologue/core";
 import { parseQuickAdd } from "@meologue/core";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { localDateTimeKey } from "@/lib/local-day-key";
 import type { AutocompleteEntry } from "@/lib/quick-add-autocomplete";
 import { type QuickAddTaskFields, taskFieldsFromQuickAdd } from "@/lib/quick-add-task";
 import { useSettingsStore } from "@/lib/settings";
 import { quickAddRecognitionPlugin } from "@/lib/todo-quick-add-recognition";
+
+/**
+ * `web/01-anatomy.md`'s own captured pool — the title field's placeholder
+ * rotates through natural-language quick-add examples on each fresh open,
+ * never per keystroke. Kept to web's own four strings rather than also
+ * building Android's separate "e.g. "-prefixed pool (`android/02-
+ * anatomy.md`): both shells share this one hook, and specialising the
+ * pool per platform is a real (if small) piece of unmeasured-against
+ * work this ticket's own report flags as deferred, not silently done.
+ */
+const PLACEHOLDER_POOL: readonly string[] = [
+  "Submit essay on AI by Thursday p1",
+  "Join student sports club Tuesday p3",
+  "Meet with tutor Friday at 3pm",
+  "Confirm catering by Fri at noon",
+];
 
 export interface UseQuickAddComposerOptions {
   onAdd: (fields: QuickAddTaskFields) => void;
@@ -21,6 +37,17 @@ export interface UseQuickAddComposerOptions {
    * would otherwise do so on an Enter that added nothing.
    */
   onCommitted?: () => void;
+  /**
+   * Whether this composer's own surface is currently open/expanded —
+   * read only to advance `placeholder` below on a closed→open transition
+   * (`web/01-anatomy.md`: "rotates through example strings on each fresh
+   * open"), the same shape `quick-add-dialog.tsx`'s own pre-#374
+   * reset-on-open effect already used for `composer.remount("")`.
+   * Omitted entirely by a caller with no open/closed concept of its own
+   * (a bare inline field, or a test) — `placeholder` then just stays on
+   * the pool's first entry.
+   */
+  open?: boolean;
 }
 
 export interface QuickAddComposer {
@@ -61,6 +88,8 @@ export interface QuickAddComposer {
   confirmMergePaste: () => void;
   /** Cancel, Escape, or an outside click on the dialog — creates nothing, discards the pending lines. */
   cancelPendingPaste: () => void;
+  /** This open's own rotated placeholder string — `UseQuickAddComposerOptions.open`'s own doc comment has the full reasoning. */
+  placeholder: string;
 }
 
 /**
@@ -76,7 +105,22 @@ export function useQuickAddComposer(options: UseQuickAddComposerOptions): QuickA
   const [seed, setSeed] = useState("");
   const [resetKey, setResetKey] = useState(0);
   const [pendingPasteLines, setPendingPasteLines] = useState<readonly string[] | null>(null);
+  const [placeholderIndex, setPlaceholderIndex] = useState(0);
   const smartDates = useSettingsStore((state) => state.smartDatesEnabled);
+
+  // Advances only on the closed→open transition, never per keystroke —
+  // `options.open`'s own doc comment. `wasOpenRef`, not `[options.open]`
+  // alone as the effect's whole condition, because a caller that never
+  // passes `open` at all (it stays `undefined` every render) must not
+  // re-fire this on every unrelated render either.
+  const wasOpenRef = useRef(options.open ?? false);
+  useEffect(() => {
+    const isOpen = options.open ?? false;
+    if (isOpen && !wasOpenRef.current) {
+      setPlaceholderIndex((index) => (index + 1) % PLACEHOLDER_POOL.length);
+    }
+    wasOpenRef.current = isOpen;
+  }, [options.open]);
 
   const optionsRef = useRef<QuickAddOptions>({ now: localDateTimeKey(new Date()), smartDates });
   optionsRef.current = { now: localDateTimeKey(new Date()), smartDates };
@@ -170,5 +214,7 @@ export function useQuickAddComposer(options: UseQuickAddComposerOptions): QuickA
     confirmSplitPaste,
     confirmMergePaste,
     cancelPendingPaste,
+    // biome-ignore lint/style/noNonNullAssertion: `placeholderIndex % PLACEHOLDER_POOL.length` is always a valid index into a fixed, non-empty pool.
+    placeholder: PLACEHOLDER_POOL[placeholderIndex % PLACEHOLDER_POOL.length]!,
   };
 }

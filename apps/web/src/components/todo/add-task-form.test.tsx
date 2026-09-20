@@ -1,6 +1,6 @@
 import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import { useEffect, useRef, useState } from "react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useSettingsStore } from "@/lib/settings";
 import { focusAddTaskField } from "@/lib/todo-keymap";
 import { AddTaskForm } from "./add-task-form";
@@ -98,6 +98,30 @@ vi.mock("@/components/todo/task-title-editor", () => ({
   TaskTitleEditor: StubTaskTitleEditor,
 }));
 
+/**
+ * `task-schedule-popover.test.tsx`'s own `stubLayout` helper, mirrored:
+ * `test/setup.ts`'s global stub already answers non-touch to every query,
+ * so only the touch branch needs stubbing at all — a test with no call to
+ * this exercises non-touch by construction, the same "assert the
+ * property, not the difference" discipline that file's own header
+ * comment names.
+ */
+function stubTouch(touch: boolean) {
+  vi.stubGlobal(
+    "matchMedia",
+    vi.fn((query: string) => ({
+      matches: touch && (query === "(pointer: coarse)" || query === "(hover: none)"),
+      media: query,
+      onchange: null,
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+    })),
+  );
+}
+
 async function reveal(): Promise<void> {
   fireEvent.click(await screen.findByRole("button", { name: "Add task" }));
 }
@@ -117,6 +141,14 @@ describe("AddTaskForm", () => {
     useSettingsStore.setState({ smartDatesEnabled: true });
   });
 
+  // `test/setup.ts`'s own header comment on `stubTouch`-shaped helpers:
+  // clears a per-test `matchMedia` stub before the next `beforeEach`
+  // re-installs the (non-touch) default, so a touch stub never leaks
+  // into a test that never asked for it.
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
   it("renders collapsed, as a quiet 'Add task' button", async () => {
     render(<AddTaskForm onAdd={vi.fn()} disabled={false} />);
 
@@ -124,13 +156,25 @@ describe("AddTaskForm", () => {
     expect(screen.queryByLabelText("Task name")).not.toBeInTheDocument();
   });
 
-  it("reveals the editor and its Cancel/Add task buttons on click", async () => {
+  // Issue #374: the submit control is absent from the DOM while the
+  // title is empty, not disabled (`web/01-anatomy.md`/`android/02-
+  // anatomy.md`'s own measured fact) — Cancel and "More actions" are the
+  // two controls the empty-title tab order names as always present
+  // (`web/01-anatomy.md`), so they render at rest; "Add task" does not.
+  it("reveals the editor and Cancel at rest; Add task appears only once there's text", async () => {
     render(<AddTaskForm onAdd={vi.fn()} disabled={false} />);
     await reveal();
 
     expect(await getInput()).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Cancel" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Add task" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "More actions" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Add task", exact: true })).not.toBeInTheDocument();
+
+    fireEvent.change(await getInput(), { target: { value: "buy milk" } });
+
+    expect(
+      await screen.findByRole("button", { name: "Add task", exact: true }),
+    ).toBeInTheDocument();
   });
 
   it("calls onAdd with the parsed fields on Add, and stays open, empty and focused", async () => {
@@ -171,8 +215,13 @@ describe("AddTaskForm", () => {
     render(<AddTaskForm onAdd={onAdd} disabled={false} />);
     await reveal();
 
-    fireEvent.change(await getInput(), { target: { value: "   " } });
-    fireEvent.click(screen.getByRole("button", { name: "Add task" }));
+    const input = await getInput();
+    fireEvent.change(input, { target: { value: "   " } });
+    // Whitespace-only still reads as empty (`composer.value.trim()`) —
+    // the submit control stays absent from the DOM, so this submits
+    // through the editor's own commit keymap (Enter) instead of a click.
+    expect(screen.queryByRole("button", { name: "Add task", exact: true })).not.toBeInTheDocument();
+    fireEvent.keyDown(input, { key: "Enter" });
 
     expect(onAdd).not.toHaveBeenCalled();
     expect(await getInput()).toBeInTheDocument();
@@ -226,15 +275,17 @@ describe("AddTaskForm", () => {
     expect(screen.getByRole("button", { name: "Add task" })).toBeDisabled();
   });
 
-  it("disables the Add task button until there is non-blank text", async () => {
+  it("Add task is absent from the DOM until there is non-blank text, never merely disabled", async () => {
     render(<AddTaskForm onAdd={vi.fn()} disabled={false} />);
     await reveal();
 
-    expect(screen.getByRole("button", { name: "Add task" })).toBeDisabled();
+    expect(screen.queryByRole("button", { name: "Add task", exact: true })).not.toBeInTheDocument();
 
     fireEvent.change(await getInput(), { target: { value: "buy milk" } });
 
-    expect(screen.getByRole("button", { name: "Add task" })).not.toBeDisabled();
+    const submit = await screen.findByRole("button", { name: "Add task", exact: true });
+    expect(submit).toBeInTheDocument();
+    expect(submit).not.toBeDisabled();
   });
 
   it("submits a recognised recurrence phrase as dateString, stripped from content", async () => {
@@ -376,6 +427,43 @@ describe("AddTaskForm", () => {
 
       expect(onAdd).not.toHaveBeenCalled();
       expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    });
+  });
+
+  /**
+   * Hard compatibility constraint (issue #374's own brief):
+   * `apps/e2e/tests/todo.spec.ts`'s `addTask` helper locates
+   * `[data-add-task-field]` once and expects both the collapsed trigger
+   * and (after its own first click) the expanded editor to be found
+   * inside it — unmodified by this ticket.
+   */
+  it("data-add-task-field marks both the collapsed row and the expanded card", async () => {
+    const { container } = render(<AddTaskForm onAdd={vi.fn()} disabled={false} />);
+
+    expect(container.querySelector("[data-add-task-field]")).toBeInTheDocument();
+    await reveal();
+
+    const marked = container.querySelector("[data-add-task-field]");
+    expect(marked).toBeInTheDocument();
+    expect(within(marked as HTMLElement).getByLabelText("Task name")).toBeInTheDocument();
+  });
+
+  describe("shell chosen by touch capability (issue #374/D4)", () => {
+    it("touch renders the full-screen sheet, still reachable through data-add-task-field", async () => {
+      stubTouch(true);
+      render(<AddTaskForm onAdd={vi.fn()} disabled={false} />);
+      await reveal();
+
+      // Portalled to `document.body` (the touch sheet is a real Radix
+      // `Dialog`), so it's found off `document`, not the render's own
+      // `container` — the same reason `quick-add-dialog.test.tsx` already
+      // queries `document.querySelector('[data-testid="quick-add"]')`.
+      const marked = document.querySelector("[data-add-task-field]");
+      expect(marked).toBeInTheDocument();
+      expect(within(marked as HTMLElement).getByLabelText("Task name")).toBeInTheDocument();
+      // Touch drops the row-level Cancel button (`quick-add-content.tsx`'s
+      // own header comment on D11's "no Cancel row" reading).
+      expect(screen.queryByRole("button", { name: "Cancel" })).not.toBeInTheDocument();
     });
   });
 });
