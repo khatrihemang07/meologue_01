@@ -168,7 +168,11 @@ describe("QuickAddContent", () => {
     expect(await screen.findByText("Errands")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Select project" }));
     expect(await getInput()).toHaveValue("buy milk #");
-    expect(screen.getByRole("button", { name: "Set date" })).toBeInTheDocument();
+    // Issue #416: the date chip is `LazyTaskSchedulePopover`'s own trigger
+    // now, behind a `<Suspense fallback={null}>` — `findByRole` rather than
+    // a synchronous `getByRole` because the button doesn't exist at all
+    // until that `import()` resolves.
+    expect(await screen.findByRole("button", { name: "Set date" })).toBeInTheDocument();
   });
 
   it("defaults the Project chip to Inbox with no ambientProjectName supplied", async () => {

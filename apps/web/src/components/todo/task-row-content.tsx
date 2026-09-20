@@ -40,10 +40,10 @@ import type { MouseEvent, PointerEvent } from "react";
 import { Suspense, useRef, useState } from "react";
 import { Link, useOutletContext } from "react-router";
 import { inlineProse } from "@/components/inline-prose";
+import { LazyTaskSchedulePopover } from "@/components/todo/lazy-task-schedule-popover";
 import { LazyTaskTitleEditor } from "@/components/todo/lazy-task-title-editor";
 import { TaskCommandMenu } from "@/components/todo/task-command-menu";
 import type { TaskDetailActions } from "@/components/todo/task-row";
-import { TaskSchedulePopover } from "@/components/todo/task-schedule-popover";
 import { taskTitleText } from "@/components/todo/task-title-text";
 import { SWIPE_TARGET_ATTRIBUTE } from "@/hooks/use-swipe-actions";
 import { useTaskDateState } from "@/hooks/use-task-date-state";
@@ -587,27 +587,12 @@ export function TaskRowContent({
         This button was already a plain native element before this ticket,
         so it needs no change to be a valid trigger.
       */}
-      <TaskSchedulePopover
-        open={scheduleOpen}
-        onOpenChange={onScheduleOpenChange}
-        dateDay={dateDay}
-        dateTime={dateTime}
-        onSetTime={setScheduleTime}
-        dateString={task.dateString}
-        datesWithTasks={detailActions.datesWithTasks}
-        onPickDay={(day) => {
-          setScheduleDay(day);
-          if (day === null && task.dateString !== null) {
-            detailActions.onSetDateString(task.id, null, localDayKey(new Date()));
-          }
-        }}
-        onPickRecurrence={(dateString) =>
-          detailActions.onSetDateString(task.id, dateString, localDayKey(new Date()))
-        }
-        trigger={
+      <Suspense
+        fallback={
           <button
             type="button"
             aria-label={`Date "${task.content}"`}
+            disabled
             className={cn(
               "hidden pointer-fine:flex -my-1 size-11 shrink-0 items-center justify-center rounded-md text-muted-foreground transition hover:bg-muted hover:text-foreground",
               HOVER_REVEAL_CLASSES,
@@ -616,7 +601,38 @@ export function TaskRowContent({
             <CalendarClock aria-hidden="true" className="size-4" />
           </button>
         }
-      />
+      >
+        <LazyTaskSchedulePopover
+          open={scheduleOpen}
+          onOpenChange={onScheduleOpenChange}
+          dateDay={dateDay}
+          dateTime={dateTime}
+          onSetTime={setScheduleTime}
+          dateString={task.dateString}
+          datesWithTasks={detailActions.datesWithTasks}
+          onPickDay={(day) => {
+            setScheduleDay(day);
+            if (day === null && task.dateString !== null) {
+              detailActions.onSetDateString(task.id, null, localDayKey(new Date()));
+            }
+          }}
+          onPickRecurrence={(dateString) =>
+            detailActions.onSetDateString(task.id, dateString, localDayKey(new Date()))
+          }
+          trigger={
+            <button
+              type="button"
+              aria-label={`Date "${task.content}"`}
+              className={cn(
+                "hidden pointer-fine:flex -my-1 size-11 shrink-0 items-center justify-center rounded-md text-muted-foreground transition hover:bg-muted hover:text-foreground",
+                HOVER_REVEAL_CLASSES,
+              )}
+            >
+              <CalendarClock aria-hidden="true" className="size-4" />
+            </button>
+          }
+        />
+      </Suspense>
       <button
         type="button"
         aria-label={`Comment on "${task.content}"`}

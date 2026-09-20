@@ -1,6 +1,6 @@
 import type { Task } from "@meologue/core";
-import { fireEvent, render, screen, within } from "@testing-library/react";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { swipeDown, swipeLeft } from "@/test/swipe";
 import { TodayView } from "./today-view";
 
@@ -73,6 +73,29 @@ function renderTodayView(overrides: Partial<Parameters<typeof TodayView>[0]> = {
   render(<TodayView {...props} />);
   return props;
 }
+
+// Issue #416: `TaskSchedulePopover` sits behind `LazyTaskSchedulePopover`
+// now (a `React.lazy()` singleton, one module-level promise shared by every
+// render in this file). Its first-ever resolution needs a real Promise
+// microtask *and* a React scheduler callback to re-render the Suspense
+// boundary — and once this suite's own `beforeEach` below swaps in
+// `vi.useFakeTimers()`, that scheduler callback is captured against the
+// faked timer APIs and never fires again, even from a test that later
+// calls `vi.useRealTimers()` mid-test (confirmed empirically:
+// `upcoming-view.test.tsx`'s identical wiring hit the same failure —
+// switching back after the fact does not unstick an already-broken retry,
+// only resolving it beforehand does). This primes that first resolution
+// here, under real timers, before any test's `beforeEach` ever runs —
+// every fake-timer test after this one renders the already-resolved
+// component synchronously, with no Suspense retry needed at all.
+beforeAll(async () => {
+  renderTodayView({
+    tasks: [task({ id: "warm-lazy-schedule-popover", content: "warm task", date: "2026-09-02" })],
+  });
+  swipeLeft(rowBox("warm task"));
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  cleanup();
+});
 
 describe("TodayView", () => {
   // "Now" is pinned so overdue/due-today classification (task-views.ts's

@@ -242,9 +242,17 @@ const CHUNK_BUDGETS = {
     ceilingBytes: 64_200,
     baselineBytes: 49_399,
   },
+  // Issue #416 — raised from 3,400/2,734. #411's Mod-Enter/Cmd-Enter
+  // keymap binding and #388's `/` sigil support both landed genuine new
+  // code in this shared editor since the previous baseline, measuring
+  // 3,610 gzip bytes (own chunk + 1 shared) on a clean `build:android`.
+  // ~30% headroom above that, the same margin the other entries in this
+  // table carry (e.g. `task-description-editor.tsx`,
+  // `task-schedule-sheet.tsx` above), not the ~24% the original entry
+  // had.
   "src/components/todo/task-title-editor.tsx": {
-    ceilingBytes: 3_400,
-    baselineBytes: 2_734,
+    ceilingBytes: 4_700,
+    baselineBytes: 3_610,
   },
   "src/components/todo/task-description-editor.tsx": {
     ceilingBytes: 2_300,

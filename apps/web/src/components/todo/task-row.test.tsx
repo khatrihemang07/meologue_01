@@ -719,14 +719,31 @@ describe("TaskRow", () => {
   // ticket's own report for why anchoring itself needs a real browser.
   // "Schedule" was renamed "Date" (issue #178's own reference behaviour —
   // the row's four hover actions read Edit, Date, Comment, More).
-  it("the Date button opens this row's own anchored scheduler popover, not the shared sheet", () => {
+  //
+  // Issue #416: `TaskSchedulePopover` now sits behind `LazyTaskSchedulePopover`
+  // (a `<Suspense>` boundary), the same move `quick-add-content.tsx` already
+  // made for `LazyTaskTitleEditor` — one shared lazy chunk pulled out of
+  // `todo-page.tsx`'s own eager bundle. The trigger button renders either
+  // way (this file's own `fallback` mirrors the real trigger), but the
+  // popover content itself only exists once that `import()` resolves, so
+  // this asserts with `waitFor` rather than synchronously — the same
+  // asynchronous shape the More-actions "Date…" test below already uses,
+  // for a different reason.
+  it("the Date button opens this row's own anchored scheduler popover, not the shared sheet", async () => {
     renderRow({ task: task({ content: "call mum" }) });
 
     expect(screen.queryByTestId("scheduler-view")).not.toBeInTheDocument();
 
+    // The trigger renders in both the `fallback` and the loaded
+    // `LazyTaskSchedulePopover` — only the loaded one is clickable
+    // (`fallback`'s own copy is `disabled`), so this waits for the real
+    // button before firing the click `waitFor` below still needs.
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: 'Date "call mum"' })).toBeEnabled(),
+    );
     fireEvent.click(screen.getByRole("button", { name: 'Date "call mum"' }));
 
-    expect(screen.getByTestId("scheduler-view")).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByTestId("scheduler-view")).toBeInTheDocument());
   });
 
   // Issue #253: the More-actions "Date…" item is a second entry point onto
@@ -753,7 +770,7 @@ describe("TaskRow", () => {
   // dispatches `OPEN_SCHEDULE_EVENT` (todo-keymap.ts) rather than calling
   // this row directly, the identical document-level mechanism
   // `OPEN_COMMAND_MENU_EVENT` already uses for `.` below.
-  it("opens the scheduler popover when todo-keymap.ts's own OPEN_SCHEDULE_EVENT names this Task", () => {
+  it("opens the scheduler popover when todo-keymap.ts's own OPEN_SCHEDULE_EVENT names this Task", async () => {
     renderRow({ task: task({ id: "1", content: "call mum" }) });
 
     expect(screen.queryByTestId("scheduler-view")).not.toBeInTheDocument();
@@ -762,7 +779,9 @@ describe("TaskRow", () => {
       document.dispatchEvent(new CustomEvent(OPEN_SCHEDULE_EVENT, { detail: { taskId: "1" } }));
     });
 
-    expect(screen.getByTestId("scheduler-view")).toBeInTheDocument();
+    // Issue #416: `LazyTaskSchedulePopover`'s own `import()` — see this
+    // file's earlier "the Date button opens..." test for the full account.
+    await waitFor(() => expect(screen.getByTestId("scheduler-view")).toBeInTheDocument());
   });
 
   it("ignores OPEN_SCHEDULE_EVENT when it names a different Task", () => {

@@ -5,6 +5,7 @@ import { DropdownMenu } from "radix-ui";
 import type * as React from "react";
 import { forwardRef, Suspense, useState } from "react";
 import { LazyTaskDescriptionEditor } from "@/components/todo/lazy-task-description-editor";
+import { LazyTaskSchedulePopover } from "@/components/todo/lazy-task-schedule-popover";
 import { LazyTaskTitleEditor } from "@/components/todo/lazy-task-title-editor";
 import { MultiLinePasteDialog } from "@/components/todo/multiline-paste-dialog";
 import { Button } from "@/components/ui/button";
@@ -16,7 +17,6 @@ import { priorityPickerColour } from "@/lib/task-priority-colors";
 import type { QuickAddComposer } from "@/lib/use-quick-add-composer";
 import { cn } from "@/lib/utils";
 import { DraftPrioritySheet } from "./draft-priority-sheet";
-import { TaskSchedulePopover } from "./task-schedule-popover";
 
 export interface QuickAddContentProps {
   composer: QuickAddComposer;
@@ -348,30 +348,32 @@ export function QuickAddContent({
                 {projectDisplayName}
               </Chip>
 
-              <TaskSchedulePopover
-                trigger={
-                  <Chip
-                    aria-label={dateState.dateDay === null ? "Set date" : dateLabel}
-                    // `web/07-native-colours.md:47`: the date chip's own
-                    // radius is `8px 0 0 8px`, not the uniform 8px every
-                    // other chip gets — its right corners are square
-                    // because the "Remove date" button sits fused to its
-                    // right edge. Only apply that once the remove button
-                    // is actually there (`hasDate`); with no date set
-                    // there's nothing to fuse against.
-                    className={hasDate ? "rounded-r-none" : undefined}
-                  >
-                    {dateLabel}
-                  </Chip>
-                }
-                dateDay={dateState.dateDay}
-                dateTime={dateState.dateTime}
-                onSetTime={dateState.setScheduleTime}
-                dateString={dateState.dateString}
-                datesWithTasks={datesWithTasks ?? EMPTY_DATES_WITH_TASKS}
-                onPickDay={dateState.setScheduleDay}
-                onPickRecurrence={dateState.setScheduleRecurrence}
-              />
+              <Suspense fallback={null}>
+                <LazyTaskSchedulePopover
+                  trigger={
+                    <Chip
+                      aria-label={dateState.dateDay === null ? "Set date" : dateLabel}
+                      // `web/07-native-colours.md:47`: the date chip's own
+                      // radius is `8px 0 0 8px`, not the uniform 8px every
+                      // other chip gets — its right corners are square
+                      // because the "Remove date" button sits fused to its
+                      // right edge. Only apply that once the remove button
+                      // is actually there (`hasDate`); with no date set
+                      // there's nothing to fuse against.
+                      className={hasDate ? "rounded-r-none" : undefined}
+                    >
+                      {dateLabel}
+                    </Chip>
+                  }
+                  dateDay={dateState.dateDay}
+                  dateTime={dateState.dateTime}
+                  onSetTime={dateState.setScheduleTime}
+                  dateString={dateState.dateString}
+                  datesWithTasks={datesWithTasks ?? EMPTY_DATES_WITH_TASKS}
+                  onPickDay={dateState.setScheduleDay}
+                  onPickRecurrence={dateState.setScheduleRecurrence}
+                />
+              </Suspense>
               {hasDate && (
                 <Button
                   type="button"
