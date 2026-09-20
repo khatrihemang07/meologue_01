@@ -1,12 +1,17 @@
 import { useQuery } from "@tanstack/react-query";
-import { format } from "date-fns";
+import { addDays, format, isToday, parseISO } from "date-fns";
 import { useState } from "react";
 import { Link } from "react-router";
 import { BackToChats } from "@/components/back-to-chats";
 import { ServerUnreachableBanner } from "@/components/server-unreachable-banner";
 import { Shell } from "@/components/shell";
 import { Button } from "@/components/ui/button";
-import { activityIntervalsQueryKey, TIME_SOURCES_QUERY_KEY } from "@/lib/query-keys";
+import { Input } from "@/components/ui/input";
+import {
+  activityIntervalQueryKey,
+  activityIntervalsQueryKey,
+  TIME_SOURCES_QUERY_KEY,
+} from "@/lib/query-keys";
 import { refreshCapabilities, useCapabilities, useSyncEnabled } from "@/lib/settings";
 import {
   formatDuration,
@@ -14,12 +19,16 @@ import {
   type Lane,
   lanesFor,
   MINIMUM_INTERVAL_FRACTION,
+  type PlacedInterval,
   placeLane,
 } from "@/lib/time-lanes";
 import {
   type ActivityInterval,
+  type ActivityIntervalDetail,
+  fetchActivityInterval,
   listActivityIntervals,
   listTimeSources,
+  type TimeSource,
 } from "@/lib/time-transport";
 
 /**
@@ -28,8 +37,9 @@ import {
  * Since issue #420 this is a *comparison*, not a feed: every selected
  * recorder gets its own lane against one shared 24-hour clock, because the
  * question Time exists to answer is what one recorder saw while another saw
- * something else. Collapsing the lanes back into a single chronological list
- * would answer a different, easier question.
+ * something else. Issue #424 makes a dense day explorable — move between
+ * days, choose lanes, search the text recorders wrote down, and open one
+ * record to see the provider's own row behind it.
  */
 export function TimePage() {
   const syncEnabled = useSyncEnabled();
@@ -39,7 +49,7 @@ export function TimePage() {
   return (
     <Shell title="Time" back={<BackToChats />}>
       {!syncEnabled ? (
-        <p className="text-center text-sm text-muted-foreground">
+        <p className="text-center text-muted-foreground text-sm">
           Sync is off —{" "}
           <Link to="/settings" className="underline underline-offset-2 hover:text-foreground">
             add a Server URL
@@ -47,7 +57,7 @@ export function TimePage() {
           to see your Time.
         </p>
       ) : !timeSupported ? (
-        <p className="text-center text-sm text-muted-foreground">
+        <p className="text-center text-muted-foreground text-sm">
           This Server doesn't support Time yet.
         </p>
       ) : (
@@ -77,15 +87,13 @@ function TimeContent() {
   }
 
   if (sourcesQuery.isPending) {
-    return <p className="text-center text-sm text-muted-foreground">Loading Time sources…</p>;
+    return <p className="text-center text-muted-foreground text-sm">Loading Time sources…</p>;
   }
 
-  const enabled = sourcesQuery.data?.ok
-    ? sourcesQuery.data.sources.filter((source) => source.enabled)
-    : [];
-  if (enabled.length === 0) {
+  const sources = sourcesQuery.data?.ok ? sourcesQuery.data.sources : [];
+  if (sources.filter((source) => source.enabled).length === 0) {
     return (
-      <p className="text-center text-sm text-muted-foreground">
+      <p className="text-center text-muted-foreground text-sm">
         No Time sources are enabled yet. Configure one in{" "}
         <Link to="/settings" className="underline underline-offset-2 hover:text-foreground">
           Server Settings
@@ -95,140 +103,246 @@ function TimeContent() {
     );
   }
 
-  return <DailyComparison />;
+  return <DailyComparison sources={sources} />;
 }
 
-function DailyComparison() {
-  // This Device's own local date, sent as a floating YYYY-MM-DD. The Server
-  // currently resolves it against UTC, not against its configured
-  // `MEOLOGUE_TZ` — measured on a seeded Server in Asia/Kolkata, where the
-  // same calendar date selects 104 Activity intervals as a UTC day and 70 as
-  // a Server-timezone day. Issue #424 owns moving the boundary to the
-  // Server's timezone along with date navigation; until then "Today" means
-  // the UTC day, which is why nothing here claims otherwise on screen.
-  const today = new Date();
-  const day = format(today, "yyyy-MM-dd");
-  const intervalsQuery = useQuery({
-    queryKey: activityIntervalsQueryKey(day),
-    queryFn: () => listActivityIntervals(day),
-  });
+function DailyComparison({ sources }: { sources: TimeSource[] }) {
+  // A floating YYYY-MM-DD. Which instants it covers is the Server's answer,
+  // resolved against its configured timezone, so two Devices in different
+  // zones asking for the same date see the same day (issue #424).
+  const [day, setDay] = useState(() => format(new Date(), "yyyy-MM-dd"));
+  const [search, setSearch] = useState("");
+  const [openIntervalId, setOpenIntervalId] = useState<string | null>(null);
 
   // Which lanes the reader has switched off, by source id. Hidden rather than
   // visible so a source that starts recording later shows up on its own
   // instead of having to be discovered and switched on.
   const [hidden, setHidden] = useState<ReadonlySet<string>>(() => new Set());
+  const selectedIds =
+    hidden.size === 0
+      ? undefined
+      : sources.filter((source) => !hidden.has(source.id)).map((source) => source.id);
 
-  if (intervalsQuery.data?.ok === false) {
-    return (
-      <ServerUnreachableBanner
-        message="Today's activity couldn't be loaded right now."
-        onRetry={() => {
-          void refreshCapabilities();
-          void intervalsQuery.refetch();
-        }}
-      />
-    );
-  }
-
-  if (intervalsQuery.isPending) {
-    return (
-      <p className="text-center text-sm text-muted-foreground">Loading today&apos;s activity…</p>
-    );
-  }
+  const intervalsQuery = useQuery({
+    queryKey: activityIntervalsQueryKey(day, selectedIds, search),
+    queryFn: () => listActivityIntervals(day, { sourceIds: selectedIds, search }),
+    // A day already looked at comes back instantly when the reader steps back
+    // onto it, rather than blanking while it refetches.
+    placeholderData: (previous) => previous,
+  });
 
   const intervals = intervalsQuery.data?.ok ? intervalsQuery.data.intervals : [];
   const lanes = lanesFor(intervals);
-  const visible = lanes.filter((lane) => !hidden.has(lane.sourceId));
 
-  // The scale runs from this Device's local midnight to the next, which is
-  // what "today" means to the person reading it. Records the Server included
-  // that fall outside that window are clamped to the edges by `dayFraction`
-  // rather than drawn off the scale.
-  const dayStart = new Date(today);
-  dayStart.setHours(0, 0, 0, 0);
-  const dayEnd = new Date(dayStart);
-  dayEnd.setDate(dayEnd.getDate() + 1);
+  // The scale runs from this Device's local midnight to the next. The Server
+  // decides which records belong to the day; this only decides where on the
+  // page an instant is drawn, and `dayFraction` clamps anything the Server
+  // included that falls outside the window rather than drawing it off-scale.
+  const dayStart = parseISO(`${day}T00:00:00`);
+  const dayEnd = addDays(dayStart, 1);
 
   return (
-    <section aria-labelledby="time-today-heading" className="flex min-h-0 flex-col gap-3">
-      <div>
-        <h2 id="time-today-heading" className="font-semibold text-sm">
-          Today
-        </h2>
-        <p className="text-muted-foreground text-xs">
-          {lanes.length === 0
-            ? "No activity was recorded today."
-            : `${intervals.length} record${intervals.length === 1 ? "" : "s"} across ${
-                lanes.length
-              } source${lanes.length === 1 ? "" : "s"}`}
-        </p>
-      </div>
+    <section aria-labelledby="time-day-heading" className="flex min-h-0 flex-col gap-3">
+      <DayNavigator
+        day={day}
+        onChange={(next) => {
+          setDay(next);
+          setOpenIntervalId(null);
+        }}
+      />
 
-      {lanes.length > 1 && <LanePicker lanes={lanes} hidden={hidden} onChange={setHidden} />}
+      <SearchField value={search} onChange={setSearch} />
 
-      {lanes.length === 0 ? null : visible.length === 0 ? (
-        <p className="text-sm text-muted-foreground">
-          Every source lane is hidden. Switch one back on to compare them.
-        </p>
-      ) : (
+      {sources.length > 1 && <LanePicker sources={sources} hidden={hidden} onChange={setHidden} />}
+
+      <p className="text-muted-foreground text-xs" aria-live="polite">
+        <DayCount
+          pending={intervalsQuery.isPending}
+          failed={intervalsQuery.data?.ok === false}
+          count={intervals.length}
+          lanes={lanes.length}
+          search={search}
+        />
+      </p>
+
+      {intervalsQuery.data?.ok === false ? (
+        <ServerUnreachableBanner
+          message="This day's activity couldn't be loaded right now."
+          onRetry={() => {
+            void refreshCapabilities();
+            void intervalsQuery.refetch();
+          }}
+        />
+      ) : lanes.length === 0 ? null : (
         <ComparativeTimeline
-          lanes={visible}
+          lanes={lanes}
           dayStart={dayStart.getTime()}
           dayEnd={dayEnd.getTime()}
+          openIntervalId={openIntervalId}
+          onOpen={setOpenIntervalId}
         />
       )}
+
+      {openIntervalId && (
+        <IntervalDetail id={openIntervalId} onClose={() => setOpenIntervalId(null)} />
+      )}
     </section>
+  );
+}
+
+function DayCount({
+  pending,
+  failed,
+  count,
+  lanes,
+  search,
+}: {
+  pending: boolean;
+  failed: boolean;
+  count: number;
+  lanes: number;
+  search: string;
+}) {
+  if (pending) {
+    return <>Loading…</>;
+  }
+  if (failed) {
+    return <>Couldn't load this day.</>;
+  }
+  const term = search.trim();
+  if (count === 0) {
+    return term ? (
+      <>Nothing on this day matches “{term}”.</>
+    ) : (
+      <>No activity was recorded on this day.</>
+    );
+  }
+  return (
+    <>
+      {count} record{count === 1 ? "" : "s"} across {lanes} source{lanes === 1 ? "" : "s"}
+      {term ? <> matching “{term}”</> : null}
+    </>
+  );
+}
+
+/**
+ * Previous / Today / next, over calendar dates rather than instants.
+ *
+ * Stepping a date, not adding 24 hours: on a daylight-saving day those are
+ * different, and the Server's own boundaries are calendar ones.
+ */
+function DayNavigator({ day, onChange }: { day: string; onChange: (day: string) => void }) {
+  const parsed = parseISO(`${day}T00:00:00`);
+  const today = format(new Date(), "yyyy-MM-dd");
+  return (
+    <div className="flex items-center gap-2">
+      <Button
+        type="button"
+        size="touch"
+        variant="outline"
+        aria-label="Previous day"
+        onClick={() => onChange(format(addDays(parsed, -1), "yyyy-MM-dd"))}
+      >
+        ‹
+      </Button>
+      <h2 id="time-day-heading" className="min-w-0 flex-1 truncate font-semibold text-sm">
+        {isToday(parsed) ? "Today" : format(parsed, "EEEE d MMMM yyyy")}
+      </h2>
+      <Button
+        type="button"
+        size="touch"
+        variant="outline"
+        disabled={day === today}
+        onClick={() => onChange(today)}
+      >
+        Today
+      </Button>
+      <Button
+        type="button"
+        size="touch"
+        variant="outline"
+        aria-label="Next day"
+        onClick={() => onChange(format(addDays(parsed, 1), "yyyy-MM-dd"))}
+      >
+        ›
+      </Button>
+    </div>
+  );
+}
+
+/**
+ * Searches this day's Activity intervals and nothing else.
+ *
+ * Deliberately not the Shell's own History search: Time searches what
+ * recorders observed, which is not History, Tasks or any other Destination's
+ * material — and one box that sometimes meant one and sometimes the other
+ * would be worse than two that each say what they search.
+ */
+function SearchField({ value, onChange }: { value: string; onChange: (value: string) => void }) {
+  return (
+    <div className="flex flex-col gap-1">
+      <label htmlFor="time-search" className="sr-only">
+        Search this day's activity
+      </label>
+      <Input
+        id="time-search"
+        type="search"
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        placeholder="Search this day's activity"
+        className="h-11"
+      />
+    </div>
   );
 }
 
 /**
  * One independent on/off fact per lane, rendered as a real `role="switch"`
  * with `aria-checked` for the same reason `switch-row.tsx` gives: a lane is
- * simply shown or not, with no sibling option it is being chosen over. These
- * are compact chips rather than that component's full-width rows because a
- * comparison wants its lanes named side by side, above the thing they label.
+ * simply shown or not, with no sibling option it is being chosen over.
+ *
+ * Driven by the configured sources rather than by the day's response, so a
+ * lane that has been switched off — and therefore has no records in the
+ * response — still has a switch to turn back on.
  */
 function LanePicker({
-  lanes,
+  sources,
   hidden,
   onChange,
 }: {
-  lanes: Lane[];
+  sources: TimeSource[];
   hidden: ReadonlySet<string>;
   onChange: (next: ReadonlySet<string>) => void;
 }) {
   return (
-    // A real `<fieldset>`/`<legend>` rather than a div carrying `role="group"`:
-    // the switches inside it are independent on/off facts that only make sense
-    // under a shared label, which is exactly what a fieldset is for.
     <fieldset className="flex flex-wrap items-center gap-2 border-0 p-0">
       <legend className="sr-only">Source lanes</legend>
       <span aria-hidden="true" className="text-muted-foreground text-xs">
         Lanes
       </span>
-      {lanes.map((lane) => {
-        const shown = !hidden.has(lane.sourceId);
+      {sources.map((source) => {
+        const shown = !hidden.has(source.id);
         return (
           <Button
-            key={lane.sourceId}
+            key={source.id}
             type="button"
             size="touch"
             variant={shown ? "default" : "outline"}
             role="switch"
             aria-checked={shown}
-            aria-label={`${lane.sourceName} lane`}
+            aria-label={`${source.name} lane`}
             onClick={() => {
               const next = new Set(hidden);
               if (shown) {
-                next.add(lane.sourceId);
+                next.add(source.id);
               } else {
-                next.delete(lane.sourceId);
+                next.delete(source.id);
               }
               onChange(next);
             }}
           >
-            {lane.sourceName}
-            {!lane.enabled && " (archived)"}
+            {source.name}
+            {!source.enabled && " (archived)"}
           </Button>
         );
       })}
@@ -244,10 +358,14 @@ function ComparativeTimeline({
   lanes,
   dayStart,
   dayEnd,
+  openIntervalId,
+  onOpen,
 }: {
   lanes: Lane[];
   dayStart: number;
   dayEnd: number;
+  openIntervalId: string | null;
+  onOpen: (id: string) => void;
 }) {
   const marks = hourMarks(dayStart, dayEnd);
 
@@ -268,7 +386,14 @@ function ComparativeTimeline({
       <div className="min-w-0 flex-1 overflow-x-auto" data-testid="time-lane-scroller">
         <div className="flex min-w-max gap-2">
           {lanes.map((lane) => (
-            <LaneColumn key={lane.sourceId} lane={lane} dayStart={dayStart} dayEnd={dayEnd} />
+            <LaneColumn
+              key={lane.sourceId}
+              lane={lane}
+              dayStart={dayStart}
+              dayEnd={dayEnd}
+              openIntervalId={openIntervalId}
+              onOpen={onOpen}
+            />
           ))}
         </div>
       </div>
@@ -325,7 +450,19 @@ function LaneHeading({ children, hidden }: { children: React.ReactNode; hidden?:
   );
 }
 
-function LaneColumn({ lane, dayStart, dayEnd }: { lane: Lane; dayStart: number; dayEnd: number }) {
+function LaneColumn({
+  lane,
+  dayStart,
+  dayEnd,
+  openIntervalId,
+  onOpen,
+}: {
+  lane: Lane;
+  dayStart: number;
+  dayEnd: number;
+  openIntervalId: string | null;
+  onOpen: (id: string) => void;
+}) {
   const placed = placeLane(lane.intervals, dayStart, dayEnd);
 
   return (
@@ -347,7 +484,12 @@ function LaneColumn({ lane, dayStart, dayEnd }: { lane: Lane; dayStart: number; 
         style={{ height: SCALE_HEIGHT }}
       >
         {placed.map((entry) => (
-          <IntervalBlock key={entry.interval.id} placed={entry} />
+          <IntervalBlock
+            key={entry.interval.id}
+            placed={entry}
+            open={entry.interval.id === openIntervalId}
+            onOpen={onOpen}
+          />
         ))}
       </ol>
     </section>
@@ -356,20 +498,16 @@ function LaneColumn({ lane, dayStart, dayEnd }: { lane: Lane; dayStart: number; 
 
 function IntervalBlock({
   placed,
+  open,
+  onOpen,
 }: {
-  placed: {
-    interval: ActivityInterval;
-    top: number;
-    height: number;
-    column: number;
-    columns: number;
-  };
+  placed: PlacedInterval;
+  open: boolean;
+  onOpen: (id: string) => void;
 }) {
   const { interval, top, height, column, columns } = placed;
-  const started = new Date(interval.started_at);
-  const ended = new Date(interval.ended_at);
-  const clock = `${formatClockTime(started)}–${formatClockTime(ended)}`;
-  const duration = formatDuration(ended.getTime() - started.getTime());
+  const clock = intervalClock(interval);
+  const duration = formatDuration(Date.parse(interval.ended_at) - Date.parse(interval.started_at));
 
   // Overlapping records share the lane's width side by side rather than
   // stacking, so neither disappears behind the other.
@@ -377,34 +515,133 @@ function IntervalBlock({
 
   return (
     <li
-      className={`absolute overflow-hidden rounded border px-1 py-0.5 text-[10px] leading-tight ${
-        interval.idle
-          ? "border-dashed border-border bg-background text-muted-foreground"
-          : "border-border bg-background"
-      }`}
+      className="absolute"
       style={{
         top: `${top * 100}%`,
         height: `${height * 100}%`,
         left: `${column * width}%`,
         width: `${width}%`,
       }}
-      // The exact instants, duration and detail, available without a detail
-      // view: issue #424 owns opening one record, but a block a reader cannot
-      // identify at all would make the lanes decorative in the meantime.
-      title={`${interval.label}\n${clock} · ${duration}${interval.idle ? " · idle" : ""}${
-        interval.detail ? `\n${interval.detail}` : ""
-      }`}
     >
-      <span className="block truncate font-medium">{interval.label}</span>
-      {/* Only tall enough blocks get a second line; a short record would
-          otherwise clip its own label away to show a time nobody can read. */}
-      {height > MINIMUM_INTERVAL_FRACTION * 4 && (
-        <span className="block truncate text-muted-foreground tabular-nums">{clock}</span>
-      )}
+      <button
+        type="button"
+        onClick={() => onOpen(interval.id)}
+        aria-expanded={open}
+        // The accessible name carries what the block is too small to show.
+        aria-label={`${interval.label}, ${clock}, ${duration}${interval.idle ? ", idle" : ""}`}
+        className={`size-full overflow-hidden rounded border px-1 py-0.5 text-left text-[10px] leading-tight ${
+          open ? "border-foreground bg-muted" : "border-border bg-background"
+        } ${interval.idle ? "border-dashed text-muted-foreground" : ""}`}
+      >
+        <span className="block truncate font-medium">{interval.label}</span>
+        {/* Only tall enough blocks get a second line; a short record would
+            otherwise clip its own label away to show a time nobody can read. */}
+        {height > MINIMUM_INTERVAL_FRACTION * 4 && (
+          <span className="block truncate text-muted-foreground tabular-nums">{clock}</span>
+        )}
+      </button>
     </li>
   );
 }
 
-function formatClockTime(value: Date): string {
-  return new Intl.DateTimeFormat(undefined, { hour: "numeric", minute: "2-digit" }).format(value);
+/**
+ * One record in full, including the provider's own row.
+ *
+ * Fetched only when a record is opened — that is the whole reason the daily
+ * response omits `raw_row`. A dense day would otherwise carry every
+ * provider's icons and BLOBs whether or not anyone looked at one, and
+ * filtering a day would drag them along too.
+ */
+function IntervalDetail({ id, onClose }: { id: string; onClose: () => void }) {
+  const query = useQuery({
+    queryKey: activityIntervalQueryKey(id),
+    queryFn: () => fetchActivityInterval(id),
+  });
+
+  return (
+    <section
+      aria-label="Activity interval"
+      className="rounded-lg border border-border bg-background p-3"
+    >
+      <div className="flex items-start justify-between gap-3">
+        <h3 className="min-w-0 truncate font-semibold text-sm">
+          {query.data?.ok ? query.data.interval.label : "Activity interval"}
+        </h3>
+        <Button type="button" size="sm" variant="outline" onClick={onClose}>
+          Close
+        </Button>
+      </div>
+
+      {query.isPending ? (
+        <p className="mt-2 text-muted-foreground text-sm">Loading this record…</p>
+      ) : query.data?.ok ? (
+        <IntervalFacts interval={query.data.interval} />
+      ) : (
+        <p className="mt-2 text-muted-foreground text-sm">
+          {query.data?.reason === "not-found"
+            ? "That record is no longer on this Server."
+            : "Couldn't load that record right now."}
+        </p>
+      )}
+    </section>
+  );
+}
+
+function IntervalFacts({ interval }: { interval: ActivityIntervalDetail }) {
+  const started = new Date(interval.started_at);
+  const ended = new Date(interval.ended_at);
+
+  return (
+    <div className="mt-2 flex flex-col gap-2 text-sm">
+      <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1">
+        <Fact label="Source">
+          {interval.source_name}
+          {!interval.source_enabled && " (archived)"}
+        </Fact>
+        <Fact label="Started">{started.toLocaleString()}</Fact>
+        <Fact label="Ended">{ended.toLocaleString()}</Fact>
+        <Fact label="Duration">{formatDuration(ended.getTime() - started.getTime())}</Fact>
+        {interval.detail && <Fact label="Detail">{interval.detail}</Fact>}
+        <Fact label="Idle">{interval.idle ? "Reported by the recorder" : "Not reported"}</Fact>
+      </dl>
+
+      <details>
+        <summary className="cursor-pointer text-muted-foreground text-xs">
+          Everything the recorder stored
+        </summary>
+        <dl className="mt-1 grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 text-xs">
+          {Object.entries(interval.raw_row)
+            .sort(([a], [b]) => a.localeCompare(b))
+            .map(([column, value]) => (
+              <Fact key={column} label={column}>
+                {/* A BLOB is described rather than printed: its bytes are kept
+                    losslessly, but pasting a base64 icon into a list of facts
+                    would be noise, not evidence. */}
+                {value.type === "blob"
+                  ? `binary (${value.base64?.length ?? 0} base64 characters)`
+                  : value.type === "null"
+                    ? "—"
+                    : String(value.value)}
+              </Fact>
+            ))}
+        </dl>
+      </details>
+    </div>
+  );
+}
+
+function Fact({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <>
+      <dt className="text-muted-foreground">{label}</dt>
+      <dd className="min-w-0 break-words">{children}</dd>
+    </>
+  );
+}
+
+function intervalClock(interval: ActivityInterval): string {
+  const formatter = new Intl.DateTimeFormat(undefined, { hour: "numeric", minute: "2-digit" });
+  return `${formatter.format(new Date(interval.started_at))}–${formatter.format(
+    new Date(interval.ended_at),
+  )}`;
 }

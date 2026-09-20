@@ -34,6 +34,7 @@ use std::time::Duration;
 use axum::Router;
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
+use chrono::TimeZone as _;
 use http_body_util::BodyExt;
 use meologue_server::settings::InstanceMode;
 use rusqlite::Connection;
@@ -98,7 +99,7 @@ async fn create_toggl_source(pool: &PgPool, name: &str, path: &Path) -> Uuid {
 
 async fn list_intervals(pool: &PgPool, day: &str, source: Option<Uuid>) -> (StatusCode, Value) {
     let uri = match source {
-        Some(id) => format!("/v1/time/intervals?day={day}&source_id={id}"),
+        Some(id) => format!("/v1/time/intervals?day={day}&source_ids={id}"),
         None => format!("/v1/time/intervals?day={day}"),
     };
     let (status, bytes) = send(
@@ -106,6 +107,26 @@ async fn list_intervals(pool: &PgPool, day: &str, source: Option<Uuid>) -> (Stat
         Request::builder()
             .method("GET")
             .uri(uri)
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await;
+    let json = if bytes.is_empty() {
+        Value::Null
+    } else {
+        serde_json::from_slice(&bytes).unwrap()
+    };
+    (status, json)
+}
+
+/// The daily query with every filter it accepts, for the cases that exercise
+/// more than one source or a search term.
+async fn query_intervals(pool: &PgPool, query: &str) -> (StatusCode, Value) {
+    let (status, bytes) = send(
+        app(pool, false),
+        Request::builder()
+            .method("GET")
+            .uri(format!("/v1/time/intervals?{query}"))
             .body(Body::empty())
             .unwrap(),
     )
@@ -812,6 +833,28 @@ async fn two_sources_reading_the_same_records_keep_their_own_copies(pool: PgPool
 // The daily query
 // ---------------------------------------------------------------------------
 
+/// Core Data seconds for a wall-clock time **in the Server's own timezone**.
+///
+/// Boundary fixtures have to be built this way rather than from fixed UTC
+/// instants. `#[sqlx::test]` loads `server/.env`, so these tests run under
+/// whatever `MEOLOGUE_TZ` a given machine has configured — Asia/Kolkata on
+/// the one this was written on — and a fixture pinned to UTC would pass or
+/// fail depending on whose checkout it ran in. Expressing the fixture in the
+/// same terms as the question ("does a record spanning local midnight show up
+/// on both local days") makes the test mean the same thing everywhere.
+fn core_data_local(year: i32, month: u32, day: u32, hour: u32, minute: u32) -> f64 {
+    let tz = meologue_server::period::server_timezone();
+    let naive = chrono::NaiveDate::from_ymd_opt(year, month, day)
+        .unwrap()
+        .and_hms_opt(hour, minute, 0)
+        .unwrap();
+    let instant = tz
+        .from_local_datetime(&naive)
+        .earliest()
+        .expect("the fixture times chosen here exist in every zone");
+    instant.timestamp() as f64 - APPLE_EPOCH
+}
+
 #[sqlx::test]
 async fn a_record_spanning_midnight_belongs_to_both_days_it_covers(pool: PgPool) {
     let dir = scratch_dir("midnight");
@@ -821,8 +864,8 @@ async fn a_record_spanning_midnight_belongs_to_both_days_it_covers(pool: PgPool)
         &[
             Activity {
                 id: &[0x60],
-                start: MIDNIGHT_START,
-                end: Some(MIDNIGHT_END),
+                start: core_data_local(2026, 3, 15, 23, 40),
+                end: Some(core_data_local(2026, 3, 16, 0, 20)),
                 filename: "Across midnight",
                 title: None,
                 idle: 0,
@@ -830,8 +873,8 @@ async fn a_record_spanning_midnight_belongs_to_both_days_it_covers(pool: PgPool)
             },
             Activity {
                 id: &[0x61],
-                start: OTHER_DAY_START,
-                end: Some(OTHER_DAY_END),
+                start: core_data_local(2026, 3, 17, 8, 0),
+                end: Some(core_data_local(2026, 3, 17, 8, 15)),
                 filename: "Two days later",
                 title: None,
                 idle: 0,
@@ -1614,4 +1657,160 @@ async fn wait_for_first_import(pool: &PgPool, source: Uuid) {
         tokio::time::sleep(Duration::from_millis(25)).await;
     }
     panic!("the import for {source} never recorded a first successful run");
+}
+
+// ---------------------------------------------------------------------------
+// Filtering and search (issue #424)
+// ---------------------------------------------------------------------------
+
+/// A day holding one record per label, across two sources.
+async fn seed_searchable_day(pool: &PgPool) -> (Uuid, Uuid) {
+    let dir = scratch_dir("search");
+    let toggl = dir.join("toggl.sqlite");
+    let clockify = dir.join("clockify.sqlite");
+    write_toggl_db(
+        &toggl,
+        &[
+            Activity {
+                id: &[0xe0],
+                start: MORNING_START,
+                end: Some(MORNING_END),
+                filename: "Xcode",
+                title: Some("time.rs \u{2014} meologue"),
+                idle: 0,
+                client: &[],
+            },
+            Activity {
+                id: &[0xe1],
+                start: AFTERNOON_START,
+                end: Some(AFTERNOON_END),
+                filename: "Music",
+                title: Some("100% volume"),
+                idle: 0,
+                client: &[],
+            },
+        ],
+    );
+    write_clockify_db(
+        &clockify,
+        &[AutoTrackerItem {
+            id: "68cf0a1b2c3d4e5f6071829a",
+            started: TimestampValue::Real(MORNING_START),
+            ended: Some(TimestampValue::Real(MORNING_END)),
+            name: "Figma",
+            description: Some("meologue \u{2014} Time lanes"),
+            idle_seconds: 0.0,
+            icon: &[],
+        }],
+    );
+    let a = create_toggl_source(pool, "Toggl Track", &toggl).await;
+    let b = create_clockify_source(pool, "Clockify Desktop", &clockify).await;
+    wait_for_intervals(pool, a, 2).await;
+    wait_for_intervals(pool, b, 1).await;
+    (a, b)
+}
+
+#[sqlx::test]
+async fn a_day_can_be_narrowed_to_the_selected_source_lanes(pool: PgPool) {
+    let (toggl, clockify) = seed_searchable_day(&pool).await;
+
+    let (status, all) = query_intervals(&pool, &format!("day={DAY}")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(all.as_array().unwrap().len(), 3);
+
+    // Several ids at once — the shape a reader with three lanes and one
+    // switched off actually produces.
+    let (_, both) =
+        query_intervals(&pool, &format!("day={DAY}&source_ids={toggl},{clockify}")).await;
+    assert_eq!(both.as_array().unwrap().len(), 3);
+
+    let (_, only_clockify) =
+        query_intervals(&pool, &format!("day={DAY}&source_ids={clockify}")).await;
+    assert_eq!(labels(&only_clockify), vec!["Figma"]);
+
+    // Every lane switched off asks for nothing, and must not be read as
+    // asking for everything.
+    let (status, none) = query_intervals(&pool, &format!("day={DAY}&source_ids=")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(none.as_array().unwrap().is_empty());
+
+    let (bad, _) = query_intervals(&pool, &format!("day={DAY}&source_ids=not-a-uuid")).await;
+    assert_eq!(bad, StatusCode::BAD_REQUEST);
+}
+
+#[sqlx::test]
+async fn search_matches_label_and_detail_without_leaving_the_day(pool: PgPool) {
+    let (_toggl, _clockify) = seed_searchable_day(&pool).await;
+
+    // Label, case-insensitively.
+    let (status, by_label) = query_intervals(&pool, &format!("day={DAY}&q=xcode")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(labels(&by_label), vec!["Xcode"]);
+
+    // Detail, across both recorders — the text lives in different provider
+    // columns, and the search is against the normalized field, not either of
+    // the provider ones.
+    let (_, by_detail) = query_intervals(&pool, &format!("day={DAY}&q=meologue")).await;
+    let mut found = labels(&by_detail);
+    found.sort();
+    assert_eq!(found, vec!["Figma", "Xcode"]);
+
+    // A cleared search box shows the whole day rather than nothing.
+    let (_, blank) = query_intervals(&pool, &format!("day={DAY}&q=%20%20")).await;
+    assert_eq!(blank.as_array().unwrap().len(), 3);
+
+    let (_, nothing) = query_intervals(&pool, &format!("day={DAY}&q=nothingmatchesthis")).await;
+    assert!(nothing.as_array().unwrap().is_empty());
+}
+
+#[sqlx::test]
+async fn a_wildcard_typed_into_search_looks_for_itself(pool: PgPool) {
+    // `%` is a SQL wildcard and also an ordinary character in a window title
+    // ("100% volume"). Unescaped it would match every record of the day, which
+    // is the opposite of narrowing one.
+    seed_searchable_day(&pool).await;
+
+    let (_, literal) = query_intervals(&pool, &format!("day={DAY}&q=100%25")).await;
+    assert_eq!(labels(&literal), vec!["Music"]);
+
+    let (_, bare) = query_intervals(&pool, &format!("day={DAY}&q=%25")).await;
+    assert_eq!(
+        labels(&bare),
+        vec!["Music"],
+        "a bare % must match the record that literally contains one, not the day"
+    );
+}
+
+#[sqlx::test]
+async fn search_and_source_selection_narrow_together(pool: PgPool) {
+    let (toggl, clockify) = seed_searchable_day(&pool).await;
+
+    let (_, toggl_only) =
+        query_intervals(&pool, &format!("day={DAY}&source_ids={toggl}&q=meologue")).await;
+    assert_eq!(labels(&toggl_only), vec!["Xcode"]);
+
+    let (_, clockify_only) = query_intervals(
+        &pool,
+        &format!("day={DAY}&source_ids={clockify}&q=meologue"),
+    )
+    .await;
+    assert_eq!(labels(&clockify_only), vec!["Figma"]);
+}
+
+#[sqlx::test]
+async fn a_filtered_day_still_serves_only_normalized_fields(pool: PgPool) {
+    // Filtering must not become a way to pull raw provider rows out in bulk:
+    // a search that matched every record of a dense day would otherwise drag
+    // every icon and BLOB down with it.
+    seed_searchable_day(&pool).await;
+
+    let (_, matched) = query_intervals(&pool, &format!("day={DAY}&q=e")).await;
+    let rows = matched.as_array().unwrap();
+    assert!(!rows.is_empty(), "the search should have matched something");
+    for row in rows {
+        assert!(
+            !row.as_object().unwrap().contains_key("raw_row"),
+            "a filtered day leaked a raw provider row"
+        );
+    }
 }

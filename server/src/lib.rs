@@ -103,6 +103,16 @@ pub struct AppState {
     /// since every handler that already extracts `Option<ReflectState>`
     /// gets the same atomics for free without a second extractor.
     pub flags: settings::RuntimeFlags,
+    /// Issue #424: the Server's configured `MEOLOGUE_TZ`, resolved once at
+    /// startup (`period::server_timezone`) for the same reason every other
+    /// startup-time fact on this struct is — and for one more that is
+    /// specific to it. A Time day is a calendar date, and which instants it
+    /// covers is the Server's answer, not each Device's: two Devices in
+    /// different zones asking for the same date have to get the same day.
+    /// Reading the environment inside the handler instead would also make
+    /// that boundary untestable, since `cargo test`'s threads share one
+    /// process environment (see `settings.rs`'s own test-module note).
+    pub timezone: chrono_tz::Tz,
 }
 
 impl FromRef<AppState> for PgPool {
@@ -176,6 +186,19 @@ impl FromRef<AppState> for ConfiguredEmbedModel {
 /// see that type's own doc comment.
 #[derive(Debug, Clone, Copy)]
 pub struct ConfigLocked(pub bool);
+
+/// The Server's configured timezone, as its own type for the same reason
+/// `ConfigLocked` is one: a bare `impl FromRef<AppState> for Tz` would be a
+/// blanket claim on a common type that any future state field could collide
+/// with.
+#[derive(Clone, Copy)]
+pub struct ServerTimezone(pub chrono_tz::Tz);
+
+impl FromRef<AppState> for ServerTimezone {
+    fn from_ref(state: &AppState) -> Self {
+        ServerTimezone(state.timezone)
+    }
+}
 
 impl FromRef<AppState> for ConfigLocked {
     fn from_ref(state: &AppState) -> Self {
@@ -653,6 +676,7 @@ pub fn router_with_everything(
             settings_locked: locked,
             mode,
             flags,
+            timezone: period::server_timezone(),
         })
         .fallback_service(app_shell)
         .layer(axum::middleware::from_fn(metrics::track_metrics))

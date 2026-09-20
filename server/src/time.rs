@@ -32,7 +32,8 @@ use axum::{
     extract::{Path as AxumPath, Query, State},
     http::StatusCode,
 };
-use chrono::{DateTime, Duration, NaiveDate, TimeZone, Utc};
+use chrono::{DateTime, Duration, LocalResult, NaiveDate, NaiveDateTime, TimeZone, Utc};
+use chrono_tz::Tz;
 use rusqlite::{Connection, OpenFlags, types::ValueRef};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
@@ -40,7 +41,7 @@ use sqlx::PgPool;
 use utoipa::{IntoParams, ToSchema};
 use uuid::Uuid;
 
-use crate::ConfigLocked;
+use crate::{ConfigLocked, ServerTimezone};
 
 const APPLE_EPOCH: i64 = 978_307_200;
 
@@ -194,8 +195,17 @@ pub struct ActivityIntervalDetail {
 
 #[derive(Debug, Deserialize, IntoParams)]
 pub struct IntervalQuery {
+    /// A calendar date, `YYYY-MM-DD`. Which instants it covers is the
+    /// Server's answer rather than each Device's — see `day_bounds`.
     pub day: String,
-    pub source_id: Option<Uuid>,
+    /// Comma-separated source ids. Absent means every source; present and
+    /// empty means none, which is what a reader who has switched every lane
+    /// off has actually asked for.
+    pub source_ids: Option<String>,
+    /// Free text matched against an interval's label and detail, case
+    /// insensitively. Nothing here reaches outside `activity_intervals`:
+    /// Time searches what recorders observed, not Entries or Tasks.
+    pub q: Option<String>,
 }
 
 /// Every interval column the daily timeline serves, joined to its source.
@@ -223,7 +233,10 @@ const LIST_INTERVALS_SQL: &str = concat!(
     interval_columns!(),
     " from activity_intervals i join time_sources s on s.id = i.source_id \
       where i.started_at < $2 and i.ended_at > $1 \
-        and ($3::uuid is null or i.source_id = $3) \
+        and ($3::uuid[] is null or i.source_id = any($3)) \
+        and ($4::text is null \
+             or i.label ilike $4 escape '\\' \
+             or coalesce(i.detail, '') ilike $4 escape '\\') \
       order by i.started_at"
 );
 
@@ -506,24 +519,110 @@ pub async fn update_source_handler(
     Ok(Json(next))
 }
 
+/// The first instant of `day` in `tz`.
+///
+/// Daylight saving makes this more than `date.and_hms(0,0,0)`. In a zone that
+/// springs forward *at* midnight — America/Santiago does — local midnight does
+/// not exist on that date at all, and the day begins at the instant the clock
+/// jumped to. In a zone that falls back across midnight there are two local
+/// midnights, and the day begins at the first. Neither case may be an error:
+/// a Device asking for an ordinary calendar date must get an answer.
+fn zoned_day_start(day: NaiveDate, tz: Tz) -> DateTime<Utc> {
+    let midnight = day
+        .and_hms_opt(0, 0, 0)
+        .expect("midnight is a valid time on every date");
+    match tz.from_local_datetime(&midnight) {
+        LocalResult::Single(at) => at.with_timezone(&Utc),
+        // Ambiguous: the clock reads this twice. The day starts the first time.
+        LocalResult::Ambiguous(first, _) => first.with_timezone(&Utc),
+        // Skipped: walk forward to the first local time that does exist.
+        LocalResult::None => first_existing_instant(midnight, tz),
+    }
+}
+
+/// Walks forward in fifteen-minute steps to the first local time that exists.
+/// Every real transition is a whole number of quarter hours and at most two
+/// hours wide, so six hours of steps is a wide margin rather than a guess.
+fn first_existing_instant(from: NaiveDateTime, tz: Tz) -> DateTime<Utc> {
+    for step in 1..=24 {
+        let candidate = from + Duration::minutes(15 * step);
+        match tz.from_local_datetime(&candidate) {
+            LocalResult::Single(at) => return at.with_timezone(&Utc),
+            LocalResult::Ambiguous(first, _) => return first.with_timezone(&Utc),
+            LocalResult::None => continue,
+        }
+    }
+    // Unreachable for any real zone; falling back to UTC keeps a Device that
+    // asked for a date from getting an error instead of a day.
+    Utc.from_utc_datetime(&from)
+}
+
+/// The half-open instant range one calendar date covers in `tz`.
+///
+/// The end is the *next date's* start rather than "start plus 24 hours", so a
+/// daylight-saving day is correctly 23 or 25 hours long instead of silently
+/// losing or double-counting an hour of recorded activity.
+pub fn day_bounds(day: NaiveDate, tz: Tz) -> (DateTime<Utc>, DateTime<Utc>) {
+    let start = zoned_day_start(day, tz);
+    let end = zoned_day_start(day + Duration::days(1), tz);
+    (start, end)
+}
+
 #[utoipa::path(get, path = "/v1/time/intervals", params(IntervalQuery), responses((status = 200, body = [ActivityInterval])))]
 pub async fn list_intervals_handler(
     State(pool): State<PgPool>,
+    State(ServerTimezone(tz)): State<ServerTimezone>,
     Query(query): Query<IntervalQuery>,
 ) -> Result<Json<Vec<ActivityInterval>>, StatusCode> {
     let day =
         NaiveDate::parse_from_str(&query.day, "%Y-%m-%d").map_err(|_| StatusCode::BAD_REQUEST)?;
-    let start = Utc.from_utc_datetime(&day.and_hms_opt(0, 0, 0).unwrap());
-    let end = start + Duration::days(1);
+    let (start, end) = day_bounds(day, tz);
+    let sources = parse_source_ids(query.source_ids.as_deref())?;
+    let search = normalised_search(query.q.as_deref());
 
     sqlx::query_as(LIST_INTERVALS_SQL)
         .bind(start)
         .bind(end)
-        .bind(query.source_id)
+        .bind(sources)
+        .bind(search)
         .fetch_all(&pool)
         .await
         .map(Json)
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
+}
+
+/// `None` (every source) or an explicit list, which may be empty.
+///
+/// The empty list is not folded into `None`: a reader who has switched every
+/// lane off has asked for nothing, and answering with everything would be the
+/// opposite of what they did.
+fn parse_source_ids(value: Option<&str>) -> Result<Option<Vec<Uuid>>, StatusCode> {
+    let Some(raw) = value else {
+        return Ok(None);
+    };
+    raw.split(',')
+        .map(str::trim)
+        .filter(|part| !part.is_empty())
+        .map(|part| Uuid::parse_str(part).map_err(|_| StatusCode::BAD_REQUEST))
+        .collect::<Result<Vec<_>, _>>()
+        .map(Some)
+}
+
+/// A search term as a SQL `ilike` pattern, or `None` when there is nothing to
+/// search for. Whitespace-only input is nothing, not a match-everything
+/// pattern — a search box that has been cleared should show the whole day.
+fn normalised_search(value: Option<&str>) -> Option<String> {
+    let term = value?.trim();
+    if term.is_empty() {
+        return None;
+    }
+    // Escape the wildcards so a literal % or _ in a window title searches for
+    // itself rather than matching everything.
+    let escaped = term
+        .replace('\\', "\\\\")
+        .replace('%', "\\%")
+        .replace('_', "\\_");
+    Some(format!("%{escaped}%"))
 }
 
 /// The single-interval route's own row. `ActivityIntervalDetail` cannot be
@@ -722,6 +821,162 @@ mod tests {
             Some("68cf0a1b2c3d4e5f60718293".to_string())
         );
         assert_eq!(provider_identity(ValueRef::Null), None);
+    }
+
+    /// Every expected instant below was computed independently with Python's
+    /// `zoneinfo` against the same IANA data, not read back out of this
+    /// module. A test that asked `day_bounds` what `day_bounds` should say
+    /// would agree with it however wrong it was.
+    fn bounds_of(zone: &str, date: (i32, u32, u32)) -> (String, String, f64) {
+        let tz: Tz = zone.parse().unwrap();
+        let day = NaiveDate::from_ymd_opt(date.0, date.1, date.2).unwrap();
+        let (start, end) = day_bounds(day, tz);
+        (
+            start.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+            end.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+            (end - start).num_minutes() as f64 / 60.0,
+        )
+    }
+
+    #[test]
+    fn an_ordinary_day_runs_local_midnight_to_local_midnight() {
+        assert_eq!(
+            bounds_of("UTC", (2026, 3, 15)),
+            (
+                "2026-03-15T00:00:00Z".into(),
+                "2026-03-16T00:00:00Z".into(),
+                24.0
+            )
+        );
+        // A fixed-offset zone: the same calendar date names a different pair
+        // of instants, which is the whole reason the boundary is the
+        // Server's answer rather than each Device's.
+        assert_eq!(
+            bounds_of("Asia/Kolkata", (2026, 3, 15)),
+            (
+                "2026-03-14T18:30:00Z".into(),
+                "2026-03-15T18:30:00Z".into(),
+                24.0
+            )
+        );
+    }
+
+    #[test]
+    fn a_daylight_saving_day_is_twenty_three_or_twenty_five_hours_long() {
+        // The claim "end is the next date's start", not "start plus 24 hours".
+        // Adding a fixed day would lose an hour of recorded activity in spring
+        // and count an hour twice in autumn.
+        assert_eq!(
+            bounds_of("Europe/London", (2026, 3, 29)),
+            (
+                "2026-03-29T00:00:00Z".into(),
+                "2026-03-29T23:00:00Z".into(),
+                23.0
+            )
+        );
+        assert_eq!(
+            bounds_of("America/New_York", (2026, 11, 1)),
+            (
+                "2026-11-01T04:00:00Z".into(),
+                "2026-11-02T05:00:00Z".into(),
+                25.0
+            )
+        );
+    }
+
+    #[test]
+    fn a_day_whose_local_midnight_never_happened_starts_when_the_clock_jumped() {
+        // Cuba and Chile move their clocks forward *at* midnight, so on these
+        // dates 00:00 local does not exist at all. The day has to begin at the
+        // instant the clock jumped to — 01:00 local — rather than the request
+        // failing, because a Device asked for an ordinary calendar date.
+        assert_eq!(
+            bounds_of("America/Havana", (2026, 3, 8)),
+            (
+                "2026-03-08T05:00:00Z".into(),
+                "2026-03-09T04:00:00Z".into(),
+                23.0
+            )
+        );
+        assert_eq!(
+            bounds_of("America/Santiago", (2026, 9, 6)),
+            (
+                "2026-09-06T04:00:00Z".into(),
+                "2026-09-07T03:00:00Z".into(),
+                23.0
+            )
+        );
+    }
+
+    #[test]
+    fn a_day_with_two_local_midnights_starts_at_the_first() {
+        // Havana falls back at 01:00, so 2026-11-01 has one midnight; Lord
+        // Howe and others differ. What matters is that an ambiguous local time
+        // resolves to the earlier instant, so the day contains both readings
+        // of the repeated hour rather than starting after the first of them.
+        let tz: Tz = "America/Havana".parse().unwrap();
+        let (start, end) = day_bounds(NaiveDate::from_ymd_opt(2026, 11, 1).unwrap(), tz);
+        assert!(end - start >= Duration::hours(24));
+        assert_eq!(
+            start.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+            "2026-11-01T04:00:00Z"
+        );
+    }
+
+    #[test]
+    fn consecutive_days_meet_exactly_with_no_gap_or_overlap() {
+        // Whatever the zone does, one day's end has to be the next one's
+        // start: a gap would drop recorded activity that belongs to neither
+        // day, and an overlap would show the same record on two days that do
+        // not actually share an instant.
+        for zone in [
+            "UTC",
+            "Asia/Kolkata",
+            "Europe/London",
+            "America/Santiago",
+            "America/Havana",
+        ] {
+            let tz: Tz = zone.parse().unwrap();
+            let mut day = NaiveDate::from_ymd_opt(2026, 3, 1).unwrap();
+            for _ in 0..400 {
+                let (_, end) = day_bounds(day, tz);
+                let (next_start, _) = day_bounds(day + Duration::days(1), tz);
+                assert_eq!(end, next_start, "{zone} leaves a seam after {day}");
+                day += Duration::days(1);
+            }
+        }
+    }
+
+    #[test]
+    fn a_search_term_is_a_pattern_only_when_there_is_something_to_search_for() {
+        assert_eq!(normalised_search(None), None);
+        assert_eq!(normalised_search(Some("   ")), None);
+        assert_eq!(
+            normalised_search(Some(" xcode ")),
+            Some("%xcode%".to_string())
+        );
+        // A literal wildcard in a window title searches for itself. Without
+        // this, typing "%" would match every record of the day.
+        assert_eq!(
+            normalised_search(Some("100%")),
+            Some("%100\\%%".to_string())
+        );
+        assert_eq!(normalised_search(Some("a_b")), Some("%a\\_b%".to_string()));
+    }
+
+    #[test]
+    fn an_empty_source_selection_is_not_the_same_as_no_selection() {
+        // Absent means "every source". Present-but-empty means the reader has
+        // switched every lane off, and answering that with everything would be
+        // the opposite of what they asked for.
+        assert_eq!(parse_source_ids(None).unwrap(), None);
+        assert_eq!(parse_source_ids(Some("")).unwrap(), Some(vec![]));
+        let one = Uuid::new_v4();
+        assert_eq!(
+            parse_source_ids(Some(&format!(" {one} , "))).unwrap(),
+            Some(vec![one])
+        );
+        assert!(parse_source_ids(Some("not-a-uuid")).is_err());
     }
 
     #[test]

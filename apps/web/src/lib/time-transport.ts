@@ -34,20 +34,39 @@ export async function listTimeSources(): Promise<TimeSourcesResult> {
   return { ok: true, sources: (await response.json()) as TimeSource[] };
 }
 
+/** Which slice of a day to ask for. */
+export type IntervalFilters = {
+  /** The source lanes to include. `undefined` means every source. */
+  sourceIds?: readonly string[];
+  /** Free text matched against label and detail. */
+  search?: string;
+};
+
 /**
- * GET /v1/time/intervals for one day, across every source.
+ * GET /v1/time/intervals for one day.
  *
- * `day` is a floating YYYY-MM-DD: which calendar boundary it names is the
- * Server's to decide, and issue #424 is what moves that from UTC to the
- * Server's configured timezone.
+ * `day` is a floating YYYY-MM-DD and the Server resolves it against its own
+ * configured timezone, so two Devices in different zones asking for the same
+ * date get the same day (issue #424).
  *
- * Deliberately unfiltered by source. Every interval carries its own source
- * name, kind and enabled flag, so one request is enough to build every lane —
- * and the response never carries raw provider rows, which is what makes
- * fetching a whole dense day cheap enough to do this way (issue #419).
+ * The response carries only normalized fields — never raw provider rows —
+ * which is what makes fetching a whole dense day, filtered or not, cheap
+ * enough to do on every navigation (issue #419).
  */
-export async function listActivityIntervals(day: string): Promise<ActivityIntervalsResult> {
+export async function listActivityIntervals(
+  day: string,
+  filters: IntervalFilters = {},
+): Promise<ActivityIntervalsResult> {
   const parameters = new URLSearchParams({ day });
+  if (filters.sourceIds) {
+    // Deliberately set even when empty: a reader who has switched every lane
+    // off has asked for nothing, and omitting the parameter would ask for
+    // everything instead.
+    parameters.set("source_ids", filters.sourceIds.join(","));
+  }
+  if (filters.search?.trim()) {
+    parameters.set("q", filters.search.trim());
+  }
   const response = await serverRequest(`/v1/time/intervals?${parameters}`);
   if (response === null) {
     return { ok: false, reason: "unreachable" };
@@ -59,6 +78,36 @@ export async function listActivityIntervals(day: string): Promise<ActivityInterv
     return { ok: false, reason: "unreachable" };
   }
   return { ok: true, intervals: (await response.json()) as ActivityInterval[] };
+}
+
+export type ActivityIntervalDetail = ActivityInterval & {
+  /** The provider's complete row, by column, with its SQLite storage class. */
+  raw_row: Record<string, { type: string; value?: unknown; base64?: string }>;
+};
+
+export type ActivityIntervalDetailResult =
+  | { ok: true; interval: ActivityIntervalDetail }
+  | { ok: false; reason: "not-found" | "unreachable" };
+
+/**
+ * GET /v1/time/intervals/{id} — one record, with the provider evidence.
+ *
+ * Fetched only when a record is actually opened. That is the whole reason the
+ * daily response omits `raw_row`: a dense day would otherwise carry every
+ * provider's icons and BLOBs whether or not anyone looked at one (issue #424).
+ */
+export async function fetchActivityInterval(id: string): Promise<ActivityIntervalDetailResult> {
+  const response = await serverRequest(`/v1/time/intervals/${id}`);
+  if (response === null) {
+    return { ok: false, reason: "unreachable" };
+  }
+  if (response.status === 404) {
+    return { ok: false, reason: "not-found" };
+  }
+  if (!response.ok) {
+    return { ok: false, reason: "unreachable" };
+  }
+  return { ok: true, interval: (await response.json()) as ActivityIntervalDetail };
 }
 
 export type CreateTimeSourceResult =

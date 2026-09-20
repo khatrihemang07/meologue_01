@@ -125,6 +125,9 @@ or change an Entry, and visiting it does not stop a Device's ordinary Sync; it r
 intervals the Server owns. A Server that supports Time may have no enabled Time source yet, which
 is an empty state rather than a missing Destination.
 
+A Time **day** is a calendar date as the Server's own timezone reckons it, not as each Device's
+does (ADR 0092). Two Devices in different zones asking for the same date see the same day.
+
 ### Activity interval
 
 One immutable stretch of activity observed by a Time source, with a start and end, a source, a

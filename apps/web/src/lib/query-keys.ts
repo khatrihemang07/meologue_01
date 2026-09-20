@@ -29,8 +29,28 @@ export const TIME_SOURCES_QUERY_KEY = ["time", "sources"] as const;
 // a key per source would mean one request per lane and a separate cache entry
 // for each, which is a worse deal for a response that already carries its
 // source attribution and never carries raw provider rows.
-export function activityIntervalsQueryKey(day: string) {
-  return ["time", "intervals", day] as const;
+export function activityIntervalsQueryKey(
+  day: string,
+  sourceIds: readonly string[] | undefined,
+  search: string,
+) {
+  // The filters are part of the key, not arguments applied to a cached day:
+  // moving between days and toggling lanes both have to be instant on the way
+  // back, and a single key per day would refetch each time either changed.
+  // `sourceIds` is sorted so the same selection always produces the same key
+  // however the reader arrived at it.
+  return [
+    "time",
+    "intervals",
+    day,
+    sourceIds ? [...sourceIds].sort().join(",") : "all",
+    search.trim(),
+  ] as const;
+}
+
+/** One record and its provider evidence, fetched only when it is opened. */
+export function activityIntervalQueryKey(id: string) {
+  return ["time", "interval", id] as const;
 }
 
 /**
