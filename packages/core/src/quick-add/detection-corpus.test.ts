@@ -248,11 +248,6 @@ const PENDING: ReadonlyArray<{ reason: string; inputs: readonly string[] }> = [
   },
   {
     reason:
-      "no ticket filed yet — recurrence-grammar gaps in #368's domain but not named in its acceptance criteria",
-    inputs: ["ev day", "every weekday", "every 1st", "every month on the 1st", "every jan 1"],
-  },
-  {
-    reason:
       "no ticket filed yet — 'Today's' should fail the same exact-token test 'todays' does (both fail in Todoist); meologue's \\b boundary treats the apostrophe as a separator and matches anyway",
     inputs: ["Today's standup"],
   },

@@ -583,17 +583,18 @@ export function matchRecurrenceWord(input: string, ctx: DateRuleContext): QuickA
   return tokens;
 }
 
-// "every"/"every!" followed by whitespace, or glued straight onto "day"
-// with none at all ("everyday", issue #369) — the one fixed anchor
-// ../recurrence/parser.ts's own EVERY_PREFIX requires, mirrored here
-// (not read off that module, which exports no such pattern) only far
-// enough to find where a *candidate* phrase might start; nothing here
-// decides whether what follows is actually a legal recurrence, which is
-// exactly why `\b` alone (not the full grammar) is enough for this
-// regex's own job. Kept in lockstep with EVERY_PREFIX's own `(?=day\b)`
-// branch — see that regex's own comment for why it's `day\b` specifically
-// and not any looser "glued word" rule.
-const EVERY_ANCHOR = /\bevery!?(?=\s|day\b)/gi;
+// "every"/"every!" (or issue #385's abbreviated "ev"/"ev!") followed by
+// whitespace, or glued straight onto "day" with none at all ("everyday",
+// issue #369) — the one fixed anchor ../recurrence/parser.ts's own
+// EVERY_PREFIX requires, mirrored here (not read off that module, which
+// exports no such pattern) only far enough to find where a *candidate*
+// phrase might start; nothing here decides whether what follows is
+// actually a legal recurrence, which is exactly why `\b` alone (not the
+// full grammar) is enough for this regex's own job. Kept in lockstep with
+// EVERY_PREFIX's own `(?:every|ev)` and `(?=day\b)` — see that regex's
+// own comment for why "ev" and "day\b" are exactly this and nothing
+// looser.
+const EVERY_ANCHOR = /\b(?:every|ev)!?(?=\s|day\b)/gi;
 
 /**
  * True when `input[bangIndex]` is the `!` glued onto the end of the word
