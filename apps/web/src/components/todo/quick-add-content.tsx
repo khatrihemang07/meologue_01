@@ -30,11 +30,11 @@ export interface QuickAddContentProps {
    * The Project chip's own display text when nothing typed overrides it —
    * whatever the ambient view would file this Task into (`todo-page.tsx`'s
    * own `captureProjectId`, resolved to a name), or "Inbox" for a caller
-   * with no ambient Project at all. Display-only (D11): issue #370 already
+   * with no ambient Project at all. Issue #370 already
    * makes a *typed* `#project` file the Task correctly, but no picker
-   * exists yet for clicking this chip to change it without typing — a
-   * real gap, not this ticket's to close (flagged in its own report), so
-   * the chip shows the resolved name without pretending to be a button.
+   * exists yet for clicking this chip to choose directly, so clicking it
+   * inserts the same bare `#` that More actions does and hands selection
+   * to the existing project autocomplete.
    */
   ambientProjectName?: string;
   /** The editor's own `onCancel` — Escape, and the footer's Cancel button (non-touch only; touch has none, matching D11's "no Cancel row" reading of `android/02-anatomy.md`'s own control inventory). What "cancel" means (a plain collapse, or `quick-add-dialog.tsx`'s discard-confirmation) is entirely the caller's own call — this component only ever fires it. */
@@ -250,15 +250,11 @@ export function QuickAddContent({
             </DropdownMenu.Trigger>
             <DropdownMenu.Portal>
               {/*
-                Priority / Labels / Project / Section only (issue #374's
-                own report): Description and Reminders are BOTH omitted,
-                not stubbed (D11) — `quick-add-task.ts`'s own
-                `UNSUPPORTED_TOKEN_KINDS` still discards both at commit
-                time, so a menu item that "added" either would look
-                acted-upon and do nothing, the exact defect this whole
-                revamp exists to remove. Attachment, Location, task
-                extraction, extensions and the dictation mic never had a
-                row here to begin with.
+                Description is a real Task field and is committed through
+                the shared composer. Reminders remain omitted because the
+                Task model still has nowhere to store one. Attachment,
+                Location, task extraction, extensions and the dictation
+                mic never had a row here to begin with.
               */}
               <DropdownMenu.Content
                 align="start"

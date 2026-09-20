@@ -47,8 +47,31 @@ function StubTaskTitleEditor({
   );
 }
 
+function StubTaskDescriptionEditor({
+  value,
+  onChange,
+  placeholder,
+}: {
+  value: string;
+  onChange: (value: string) => void;
+  placeholder?: string;
+}) {
+  return (
+    <textarea
+      aria-label="Description"
+      placeholder={placeholder}
+      value={value}
+      onChange={(event) => onChange(event.target.value)}
+    />
+  );
+}
+
 vi.mock("@/components/todo/task-title-editor", () => ({
   TaskTitleEditor: StubTaskTitleEditor,
+}));
+
+vi.mock("@/components/todo/task-description-editor", () => ({
+  TaskDescriptionEditor: StubTaskDescriptionEditor,
 }));
 
 interface HarnessProps {
@@ -103,15 +126,13 @@ describe("QuickAddContent", () => {
     expect(screen.queryByRole("button", { name: "Set date" })).not.toBeInTheDocument();
   });
 
-  it("typing text reveals the Project chip (display-only) and the Date chip", async () => {
+  it("typing text reveals actionable Project and Date chips", async () => {
     render(<Harness ambientProjectName="Errands" />);
     typeText("buy milk");
 
     expect(await screen.findByText("Errands")).toBeInTheDocument();
-    // Display-only — see `QuickAddContentProps.ambientProjectName`'s own
-    // doc comment: a `<span>`-shaped chip, not a clickable control.
-    expect(screen.getByText("Errands").tagName).toBe("BUTTON");
-    expect(screen.getByText("Errands")).toHaveClass("cursor-default");
+    fireEvent.click(screen.getByRole("button", { name: "Select project" }));
+    expect(await getInput()).toHaveValue("buy milk #");
     expect(screen.getByRole("button", { name: "Set date" })).toBeInTheDocument();
   });
 
@@ -146,12 +167,12 @@ describe("QuickAddContent", () => {
     expect(submit.className).toContain("rounded-full");
   });
 
-  describe("More actions menu (issue #374 — omits Description and Reminders)", () => {
+  describe("More actions menu (issue #374 — supports Description and omits Reminders)", () => {
     function openMenu() {
       fireEvent.pointerDown(screen.getByRole("button", { name: "More actions" }));
     }
 
-    it("offers only Priority, Labels, Project and Section", async () => {
+    it("offers Description, Priority, Labels, Project and Section", async () => {
       render(<Harness />);
       await getInput();
       openMenu();
@@ -160,7 +181,24 @@ describe("QuickAddContent", () => {
       const items = Array.from(menu.querySelectorAll('[role="menuitem"]')).map(
         (item) => item.textContent,
       );
-      expect(items).toEqual(["Priority", "Labels", "Project", "Section"]);
+      expect(items).toEqual(["Description", "Priority", "Labels", "Project", "Section"]);
+    });
+
+    it("Description opens an editor whose text is committed with the Task", async () => {
+      const onAdd = vi.fn();
+      render(<Harness onAdd={onAdd} />);
+      typeText("buy milk");
+      openMenu();
+
+      fireEvent.click(await screen.findByRole("menuitem", { name: "Description" }));
+      fireEvent.change(await screen.findByLabelText("Description"), {
+        target: { value: "Get the oat kind" },
+      });
+      fireEvent.click(screen.getByRole("button", { name: "Add task" }));
+
+      expect(onAdd).toHaveBeenCalledWith(
+        expect.objectContaining({ content: "buy milk", description: "Get the oat kind" }),
+      );
     });
 
     it("Labels inserts a bare '@' and refocuses, ready for the existing autocomplete", async () => {
