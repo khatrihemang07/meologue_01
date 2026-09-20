@@ -80,6 +80,11 @@ export function addYears(date: string, years: number): string {
   return addMonths(date, years * 12);
 }
 
+/** The last day of `year`/`month` (1-12) — issue #382's `end of month`, reusing the identical `Date.UTC(year, month, 0)` trick `addMonths` already leans on for its own clamping rather than a third hand-rolled 28/29/30/31 table. */
+export function daysInMonth(year: number, month: number): number {
+  return new Date(Date.UTC(year, month, 0)).getUTCDate();
+}
+
 /** ISO weekday of a `YYYY-MM-DD`-prefixed string: 1 (Monday) through 7 (Sunday), matching QuickAddLanguage.weekdays' own convention. */
 export function isoWeekday(date: string): number {
   const parsed = parseDateOnly(date);

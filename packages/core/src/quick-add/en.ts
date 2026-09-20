@@ -64,6 +64,12 @@ export const englishQuickAddLanguage: QuickAddLanguage = {
     tomorrow: 1,
     tom: 1,
     tmr: 1,
+    // Issue #382's own corpus row — "yesterday" wasn't in this table at
+    // all, so it fell through to plain text. No abbreviation is added
+    // alongside it: none was measured, and "tod"/"tom" are themselves
+    // typed shortenings this table already had before #382, not a
+    // pattern to extend without evidence.
+    yesterday: -1,
   },
 
   // Defaults chosen for a plausible clock time under each word, not a
@@ -76,9 +82,14 @@ export const englishQuickAddLanguage: QuickAddLanguage = {
     morning: { hour: 9, minute: 0 },
     noon: { hour: 12, minute: 0 },
     afternoon: { hour: 15, minute: 0 },
-    evening: { hour: 18, minute: 0 },
+    // Issue #382's own corpus row: measured against the live app as
+    // 19:00, not the 18:00 this table previously guessed — D1's clone
+    // standard takes the measurement over the earlier, unverified guess.
+    evening: { hour: 19, minute: 0 },
     night: { hour: 21, minute: 0 },
     midnight: { hour: 0, minute: 0 },
+    // Issue #382: "tonight" wasn't in this table at all.
+    tonight: { hour: 22, minute: 0 },
   },
 
   meridiem: {
@@ -102,6 +113,32 @@ export const englishQuickAddLanguage: QuickAddLanguage = {
     months: "months",
     year: "years",
     years: "years",
+  },
+
+  // Issue #382's own corpus row ("in three days") — see
+  // QuickAddLanguage.numberWords' own doc comment for why this is a
+  // small closed set, not a general number-word parser.
+  numberWords: {
+    one: 1,
+    two: 2,
+    three: 3,
+    four: 4,
+    five: 5,
+    six: 6,
+    seven: 7,
+    eight: 8,
+    nine: 9,
+    ten: 10,
+    eleven: 11,
+    twelve: 12,
+    thirteen: 13,
+    fourteen: 14,
+    fifteen: 15,
+    sixteen: 16,
+    seventeen: 17,
+    eighteen: 18,
+    nineteen: 19,
+    twenty: 20,
   },
 
   // Deliberately small — see ./language.ts's own doc comment on this

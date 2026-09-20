@@ -160,13 +160,27 @@ function collectNamedMatches(
   return tokens;
 }
 
-/** `p1`-`p4` — stored through ../task-types.ts's storedPriorityOf, never open-coded (issue #170's own instruction). `p1` is the most urgent, stored as 4. */
+/**
+ * `p1`-`p4`, and — issue #382's own corpus row — `!!1`-`!!4` as an
+ * alternate spelling of the identical priority, stored through
+ * ../task-types.ts's storedPriorityOf, never open-coded (issue #170's
+ * own instruction). `p1`/`!!1` is the most urgent, stored as 4.
+ *
+ * Pushed ahead of `matchReminder` in ../parse-quick-add.ts's own
+ * candidate list (unchanged by this addition — both were already in that
+ * relative order), which is what lets `!!1` win the whole three-character
+ * span over `matchReminder`'s own greedy per-`!` scan: without that
+ * push-order priority, `!!1` would otherwise read as two independent bare
+ * `!` reminder markers with `1` left as stray text, exactly as it did
+ * before this rule recognised the compound form at all.
+ */
 export function matchPriority(input: string): QuickAddToken[] {
-  const regex = /\bp([1-4])\b/gi;
+  const regex = /\bp([1-4])\b|!!([1-4])\b/gi;
   const tokens: QuickAddToken[] = [];
   for (const match of input.matchAll(regex)) {
-    // biome-ignore lint/style/noNonNullAssertion: the character class in the pattern guarantees a single digit 1-4
-    const uiPriority = Number(match[1]!);
+    const digit = match[1] ?? match[2];
+    // biome-ignore lint/style/noNonNullAssertion: one alternative's character class always captures a single digit 1-4 when the overall match succeeds
+    const uiPriority = Number(digit!);
     tokens.push({
       kind: "priority",
       start: match.index,
