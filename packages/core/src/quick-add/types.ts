@@ -1,4 +1,4 @@
-import type { LocalDayKey } from "../local-day-key";
+import type { LocalDateTimeKey } from "../local-day-key";
 import type { QuickAddLanguage } from "./language";
 
 /**
@@ -129,8 +129,8 @@ export interface QuickAddOptions {
   /** Defaults to ./en.ts's `englishQuickAddLanguage`. */
   language?: QuickAddLanguage;
   /**
-   * A floating `YYYY-MM-DD` reference day — the same "caller supplies it,
-   * this module never reads the system clock" convention
+   * A floating `YYYY-MM-DDTHH:MM` reference instant — the same "caller
+   * supplies it, this module never reads the system clock" convention
    * ../task-views.ts's `today()` uses, for the identical testability
    * reason. Required — not `?`-optional, unlike every other field below.
    * Every eager/natural-language rule (date-rules.ts's own year-less
@@ -147,17 +147,17 @@ export interface QuickAddOptions {
    * rather than a working build that silently regresses the moment a
    * future sigil-marked rule reads it again.
    *
-   * `LocalDayKey`, not a bare `string` (issue #314): `../local-day-key.ts`
-   * originally left this field unbranded because its own sole two
-   * construction sites (`apps/web/.../task-schedule-popover.tsx`) were
-   * off-limits while that file was under concurrent rework; #314 closes
-   * that gap once the file was clear. Every real caller already hands
-   * this a day-only value produced by `localDayKey()`/`entryDayKey()`
-   * (never `YYYY-MM-DDTHH:MM` in practice, despite this field's older doc
-   * comment implying that shape was live here too), so branding it costs
-   * nothing beyond that one file's own parameter type.
+   * `LocalDateTimeKey`, not `LocalDayKey` (issue #383): a fuzzy or
+   * explicit time already past on the reference day has to roll to
+   * tomorrow, the way Todoist's own does — "noon" typed at 14:00 means
+   * tomorrow's noon — and answering that needs to know *when* today is,
+   * not only *which day*. Every real caller now hands this
+   * `localDateTimeKey(new Date())` (`apps/web`'s own producer, alongside
+   * `localDayKey()`) rather than `localDayKey(new Date())`; nothing
+   * silently defaults to midnight, because the type itself refuses a
+   * bare day.
    */
-  now: LocalDayKey;
+  now: LocalDateTimeKey;
   /**
    * Turns off the eager/natural-language family of rules entirely — the
    * clean call-site distinction issue #170's Part A brief asks for,

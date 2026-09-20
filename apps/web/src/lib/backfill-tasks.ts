@@ -53,11 +53,12 @@ import {
   englishQuickAddLanguage,
   mintId as mintTaskId,
   orderKeyBetween,
-  parseLocalDayKey,
+  parseLocalDateTimeKey,
+  toLocalParts,
 } from "@meologue/core";
 import { promotedTaskToTask } from "@/hooks/use-history";
 import { deviceUtcOffsetMinutes, entryDayKey } from "@/lib/entry-day";
-import { localDayKey } from "@/lib/local-day-key";
+import { localDateTimeKey } from "@/lib/local-day-key";
 import { type ChecklistConfidenceGate, promoteBareCheckboxes } from "@/lib/promote-tasks";
 import { queryClient } from "@/lib/query-client";
 import { ENTRIES_QUERY_KEY } from "@/lib/query-keys";
@@ -259,18 +260,36 @@ export async function backfillTasksFromHistory(
     // meaning against a value that was never a valid timestamp to begin
     // with.
     const capturedDay = entryDayKey(entry.createdAt, offsetMinutes) ?? entry.createdAt.slice(0, 10);
+    // Issue #383: `QuickAddOptions.now` needs a real time-of-day too, not
+    // just a day, and one is genuinely available here — `entry.createdAt`
+    // is the Entry's own capture instant, the identical value
+    // `entryDayKey` above already reads. `toLocalParts` (the same helper
+    // `entryDayKey` itself delegates to) reads it once for both the day
+    // and the clock time, so the two can never disagree the way deriving
+    // them from two separate calls could. Guarded by the identical
+    // `Date.parse` check `entryDayKey`'s own doc comment names — a
+    // `createdAt` too corrupt to parse at all has no real time to read
+    // either, so `"00:00"` is this one pathological branch's own
+    // "produce *something*, don't abort the whole run" default, not a
+    // silent midnight the issue's own criterion is about (every real
+    // Entry this app ever wrote has a genuine, parseable `createdAt`).
+    const capturedTime = Number.isNaN(Date.parse(entry.createdAt))
+      ? "00:00"
+      : toLocalParts(entry.createdAt, offsetMinutes).time.slice(0, 5);
     // `capturedDay` is a genuine `LocalDayKey` whenever `entryDayKey`
     // itself produced it (the overwhelming common case — see the comment
     // above). The `.slice(0, 10)` fallback only ever runs against
     // already-corrupt `createdAt` data (a restored backup or external
     // import), and that comment's own "produce *some* day-shaped string
     // rather than throw" intent means this can't become a `mustParse
-    // LocalDayKey` that would abort the whole backfill run over one bad
-    // Entry (issue #314): `parseLocalDayKey` checks the shape, and only
-    // the pathological non-`YYYY-MM-DD` slice — never realistic — falls
-    // back to today, a real day rather than an ill-shaped string leaking
+    // LocalDateTimeKey` that would abort the whole backfill run over one
+    // bad Entry (issue #314's own reasoning, carried over to #383):
+    // `parseLocalDateTimeKey` checks the shape, and only the
+    // pathological non-`YYYY-MM-DD` slice — never realistic — falls back
+    // to today, a real instant rather than an ill-shaped string leaking
     // into `QuickAddOptions.now`.
-    const now = parseLocalDayKey(capturedDay) ?? localDayKey(new Date());
+    const now =
+      parseLocalDateTimeKey(`${capturedDay}T${capturedTime}`) ?? localDateTimeKey(new Date());
     const quickAddOptions: QuickAddOptions = { now, smartDates: true, language };
     const { body, tasks: promoted } = promoteBareCheckboxes(
       entry.body,

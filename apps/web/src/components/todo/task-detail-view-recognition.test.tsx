@@ -1,5 +1,5 @@
 import type { Comment, Label, Project, Task } from "@meologue/core";
-import { mustParseLocalDayKey } from "@meologue/core";
+import { mustParseLocalDateTimeKey } from "@meologue/core";
 import { fireEvent, render, screen, within } from "@testing-library/react";
 import { useEffect, useRef, useState } from "react";
 import { MemoryRouter, Outlet, Route, Routes } from "react-router";
@@ -295,7 +295,7 @@ describe("recognition in the detail title", () => {
         autoFocus={false}
         extraPlugins={[
           quickAddRecognitionPlugin(() => ({
-            now: mustParseLocalDayKey("2026-09-10"),
+            now: mustParseLocalDateTimeKey("2026-09-10T00:00"),
             smartDates: true,
           })),
         ]}

@@ -12,7 +12,7 @@ import { useCompletionToast } from "@/hooks/use-completion-toast";
 import { useCompletionUndoShortcut } from "@/hooks/use-completion-undo-shortcut";
 import { useHistorySearch } from "@/hooks/use-history-search";
 import { commentsForTask } from "@/lib/comment-counts";
-import { localDayKey } from "@/lib/local-day-key";
+import { localDateTimeKey } from "@/lib/local-day-key";
 import type { ComposerPromotionContext } from "@/lib/promote-tasks";
 import { useSettingsStore, useSyncEnabled } from "@/lib/settings";
 import { taskDetailPath } from "@/lib/task-detail-route";
@@ -456,7 +456,7 @@ export function ComposerPage() {
     void commitTaskTitle(
       task,
       content,
-      { now: localDayKey(new Date()), smartDates },
+      { now: localDateTimeKey(new Date()), smartDates },
       {
         renameTask,
         setTaskDate,

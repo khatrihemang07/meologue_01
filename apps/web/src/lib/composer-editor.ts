@@ -32,7 +32,7 @@
  * transaction and defer to it, per ADR 0046.
  */
 
-import { type LocalDayKey, mustParseLocalDayKey } from "@meologue/core";
+import { type LocalDateTimeKey, mustParseLocalDateTimeKey, toLocalParts } from "@meologue/core";
 import { baseKeymap, chainCommands, splitBlock } from "prosemirror-commands";
 import { history } from "prosemirror-history";
 import { InputRule, inputRules, undoInputRule } from "prosemirror-inputrules";
@@ -66,7 +66,7 @@ import {
 } from "@/lib/composer-commands";
 import { derivePicker, type ReferencePickerState } from "@/lib/composer-picker";
 import { deriveSlashMenu, type SlashMenuState } from "@/lib/composer-slash";
-import { deviceUtcOffsetMinutes, entryDayKey } from "@/lib/entry-day";
+import { deviceUtcOffsetMinutes } from "@/lib/entry-day";
 import { entrySchema, type ReferenceAttrs } from "@/lib/entry-schema";
 import { parseReferenceDate, parseReferenceEntryId } from "@/lib/inline-markdown";
 import {
@@ -1070,16 +1070,17 @@ export function slashPlugin(): Plugin<SlashMenuState | null> {
  * (`buildComposerPlugins`, composer.tsx's own `useState` initializer), so
  * caching this at construction time would leave it stale the moment the
  * Device crosses midnight or the reader flips Smart dates in Settings
- * while the Composer stays mounted. `entryDayKey`/`deviceUtcOffsetMinutes`
- * rather than `lib/local-day-key.ts`'s own `localDayKey` — the two
- * compute the identical device-local `YYYY-MM-DD`, but from different
- * inputs (an ISO instant plus a device offset here, versus a `Date`
- * already built from local fields there). Kept separate so this
- * function's `now` stays on the same `entryDayKey` conversion `use-
- * history.ts`'s send/edit path already relies on for the identical value,
- * per this function's own doc comment below — not because of an
- * import-direction rule `localDayKey`'s later move out of `components/`
- * would have made moot anyway.
+ * while the Composer stays mounted. `toLocalParts`/`deviceUtcOffsetMinutes`
+ * rather than `lib/local-day-key.ts`'s own `localDateTimeKey` — the two
+ * compute the identical device-local instant, but from different inputs
+ * (an ISO instant plus a device offset here, versus a `Date` already
+ * built from local fields there). Kept separate so this function's `now`
+ * stays on the same `toLocalParts` conversion `entryDayKey` (lib/entry-
+ * day.ts) itself delegates to — the identical conversion `use-history.ts`'s
+ * send/edit path already relies on for the identical value, per this
+ * function's own doc comment below — not because of an import-direction
+ * rule `localDayKey`'s later move out of `components/` would have made
+ * moot anyway.
  *
  * Exported so `use-history.ts`'s `sendEntry`/`commitEntryEdit` can fall
  * back to this SAME computation when no live Composer handed over its own
@@ -1087,17 +1088,15 @@ export function slashPlugin(): Plugin<SlashMenuState | null> {
  * parse in step with the highlight") — one function computing "now" for
  * quick-add purposes, not two that could drift apart.
  */
-export function quickAddOptionsNow(): { now: LocalDayKey; smartDates: boolean } {
+export function quickAddOptionsNow(): { now: LocalDateTimeKey; smartDates: boolean } {
   const instant = new Date().toISOString();
   const offsetMinutes = deviceUtcOffsetMinutes();
-  const day = entryDayKey(instant, offsetMinutes);
-  if (day === null) {
+  if (Number.isNaN(Date.parse(instant))) {
     // Not reachable for any real `Date`: `new Date().toISOString()` is
-    // always parseable, so `entryDayKey` only returns `null` here if the
-    // runtime's own `Date` is broken. Thrown rather than papered over with
-    // a slice-derived fallback day, which would reintroduce the exact
-    // "UTC instant sliced into a local day key" shape issues #290/#296
-    // exist to close.
+    // always parseable, so this only fires if the runtime's own `Date` is
+    // broken. Thrown rather than papered over with a slice-derived
+    // fallback day, which would reintroduce the exact "UTC instant sliced
+    // into a local day key" shape issues #290/#296 exist to close.
     //
     // The message names both inputs on purpose. This throw sits in the
     // composer's typing path, so whoever meets it meets it as an exception
@@ -1106,14 +1105,19 @@ export function quickAddOptionsNow(): { now: LocalDayKey; smartDates: boolean } 
     // one that reaches it. The value that got here is the first thing that
     // reader needs and the hardest thing for them to recover afterwards.
     throw new Error(
-      `quickAddOptionsNow: entryDayKey rejected ${JSON.stringify(instant)} at offset ${offsetMinutes}`,
+      `quickAddOptionsNow: ${JSON.stringify(instant)} did not parse at offset ${offsetMinutes}`,
     );
   }
-  // `mustParseLocalDayKey` — a real parse, not an `as LocalDayKey` cast —
-  // is what turns `entryDayKey`'s already-validated `YYYY-MM-DD` result
-  // into the branded value (issue #314).
+  const { date, time } = toLocalParts(instant, offsetMinutes);
+  // `mustParseLocalDateTimeKey` — a real parse, not an `as
+  // LocalDateTimeKey` cast — is what turns `toLocalParts`'s own
+  // already-validated `YYYY-MM-DD`/`HH:MM:SS` result into the branded
+  // value (issue #314's own reasoning, carried over to #383's new brand).
+  // `time` carries seconds `toLocalParts` itself always computes;
+  // `LocalDateTimeKey` stops at minutes, matching `Task.date`'s own
+  // floating-time granularity.
   return {
-    now: mustParseLocalDayKey(day),
+    now: mustParseLocalDateTimeKey(`${date}T${time.slice(0, 5)}`),
     smartDates: useSettingsStore.getState().smartDatesEnabled,
   };
 }

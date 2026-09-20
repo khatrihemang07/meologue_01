@@ -81,9 +81,26 @@ export interface QuickAddLanguage {
    * `three` is corpus-measured, but a table with one entry would read as
    * a hack the next time a different amount was typed; this is the same
    * "a complete small vocabulary, not just the tested value" judgment
-   * `weekdays`/`months` already make.
+   * `weekdays`/`months` already make. Issue #383 adds `a`/`an` = 1
+   * alongside the cardinals — `in an hour`'s own indefinite article,
+   * naturally the identical "one" the cardinal `one` entry already means.
    */
   numberWords: Readonly<Record<string, number>>;
+  /**
+   * Hour/minute unit word (lower-cased, singular or plural) to the unit it
+   * names — `arithmeticUnits`' own sibling, kept separate rather than
+   * folded into that table (issue #383: `in an hour`, `in 30 min`). A
+   * day/week/month/year amount produces a day-precision `date` token
+   * (`../local-day-key.ts`'s day granularity is all `arithmeticUnits`
+   * ever needed); an hour/minute amount needs the full `now` instant —
+   * `date-math.ts`'s `addMinutes`, not the day-only `addDays`/`addMonths`/
+   * `addYears` family — so `matchArithmeticDate` reads this as a genuinely
+   * separate table rather than widening the existing union everywhere it
+   * already appears (`matchNextWeek`/`matchDaysFromNow`/
+   * `matchWeekdayArithmeticCombo`, none of which have a measured
+   * "N hours from now"/"monday in 2 hours" form to support).
+   */
+  timeArithmeticUnits: Readonly<Record<string, "hours" | "minutes">>;
   /**
    * Bare single-word recurrence keywords this parser merely *flags* as
    * recurrence-shaped, without attempting to resolve them — see

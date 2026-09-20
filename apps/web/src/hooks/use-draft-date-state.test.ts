@@ -1,16 +1,22 @@
-import { mustParseLocalDayKey, parseQuickAdd } from "@meologue/core";
+import { mustParseLocalDateTimeKey, mustParseLocalDayKey, parseQuickAdd } from "@meologue/core";
 import { renderHook } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { useDraftDateState } from "./use-draft-date-state";
 
-const now = mustParseLocalDayKey("2026-01-01");
+// `parseQuickAdd`'s own `now` (issue #383, `LocalDateTimeKey`) and
+// `useDraftDateState`'s own `now` (`LocalDayKey`, unaffected — that hook
+// never touches the quick-add parser's time-of-day concern) are two
+// different brands sharing one calendar day here, not one value used
+// for both.
+const now = mustParseLocalDateTimeKey("2026-01-01T00:00");
+const nowDay = mustParseLocalDayKey("2026-01-01");
 
 function tokensFor(text: string) {
   return parseQuickAdd(text, { now }).tokens;
 }
 
 function draft(text: string, onTextChange: (next: string) => void) {
-  return renderHook(() => useDraftDateState(text, tokensFor(text), now, onTextChange)).result;
+  return renderHook(() => useDraftDateState(text, tokensFor(text), nowDay, onTextChange)).result;
 }
 
 describe("useDraftDateState", () => {

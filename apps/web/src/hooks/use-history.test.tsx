@@ -9,7 +9,7 @@ import type {
   Task,
   TaskStore,
 } from "@meologue/core";
-import { mustParseLocalDayKey } from "@meologue/core";
+import { mustParseLocalDateTimeKey } from "@meologue/core";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { act, renderHook, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
@@ -442,7 +442,7 @@ describe("useHistory", () => {
     // (a wrong argument order, a dropped `quickAddOptions`, and so on).
     describe("the checkbox line files itself (issue #173 follow-up)", () => {
       const PROMOTION: ComposerPromotionContext = {
-        quickAddOptions: { now: mustParseLocalDayKey("2026-09-02"), smartDates: true },
+        quickAddOptions: { now: mustParseLocalDateTimeKey("2026-09-02T00:00"), smartDates: true },
         active: null,
       };
 

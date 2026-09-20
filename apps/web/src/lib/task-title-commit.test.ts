@@ -1,9 +1,15 @@
 import type { Task } from "@meologue/core";
-import { mustParseLocalDayKey } from "@meologue/core";
+import { mustParseLocalDateTimeKey } from "@meologue/core";
 import { describe, expect, it, vi } from "vitest";
 import { commitTaskTitle, type TaskTitleCommitSetters } from "./task-title-commit";
 
-const NOW = mustParseLocalDayKey("2026-09-02"); // Wednesday.
+const NOW = mustParseLocalDateTimeKey("2026-09-02T00:00"); // Wednesday, midnight.
+// `setTaskDateString`'s own `today` parameter stays `LocalDayKey`
+// (issue #383 doesn't touch `TaskStore` at all) — `commitTaskTitle`
+// derives it from `options.now` via `localDayKeyOf`, so an assertion on
+// what that setter was actually called with needs the day alone, not
+// `NOW`'s own `LocalDateTimeKey` shape.
+const NOW_DAY = "2026-09-02";
 
 function task(overrides: Partial<Task> = {}): Task {
   return {
@@ -171,7 +177,7 @@ describe("commitTaskTitle", () => {
     const s = setters();
     await commitTaskTitle(task({ content: "pay rent" }), "pay rent monthly", { now: NOW }, s);
 
-    expect(s.setTaskDateString).toHaveBeenCalledWith("task-1", "every month", NOW);
+    expect(s.setTaskDateString).toHaveBeenCalledWith("task-1", "every month", NOW_DAY);
   });
 
   it("skips setTaskDateString when the resolved recurrence already equals the Task's own", async () => {

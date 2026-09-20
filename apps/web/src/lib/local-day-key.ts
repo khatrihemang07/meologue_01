@@ -1,4 +1,4 @@
-import type { LocalDayKey } from "@meologue/core";
+import type { LocalDateTimeKey, LocalDayKey } from "@meologue/core";
 
 /**
  * `localDayKey`/`parseDayKey` — a `Date` <-> `YYYY-MM-DD` conversion pair
@@ -100,6 +100,23 @@ export function localDayKey(date: Date): LocalDayKey {
   const month = String(date.getMonth() + 1).padStart(2, "0");
   const day = String(date.getDate()).padStart(2, "0");
   return `${year}-${month}-${day}` as LocalDayKey;
+}
+
+/**
+ * `localDayKey`'s own sibling for `QuickAddOptions.now` (issue #383) —
+ * the identical local-fields discipline this file's own header comment
+ * describes (never a UTC accessor), extended to hour/minute. This is now
+ * the one producer every real `QuickAddOptions` construction site in this
+ * app uses in place of `localDayKey(new Date())`, so "noon" typed after
+ * noon has already passed can actually tell — a bare day alone no longer
+ * compiles where `QuickAddOptions.now` is expected (`@meologue/core`'s
+ * own `LocalDateTimeKey` brand refuses it).
+ */
+export function localDateTimeKey(date: Date): LocalDateTimeKey {
+  const day = localDayKey(date);
+  const hour = String(date.getHours()).padStart(2, "0");
+  const minute = String(date.getMinutes()).padStart(2, "0");
+  return `${day}T${hour}:${minute}` as LocalDateTimeKey;
 }
 
 /**

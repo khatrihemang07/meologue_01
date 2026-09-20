@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { uiPriorityOf } from "../task-types";
-import { dayKey } from "../test-support/day-key-fixture";
+import { dateTimeKey } from "../test-support/day-key-fixture";
+import { addDays } from "./date-math";
 import corpus from "./detection-corpus.json";
 import { parseQuickAdd } from "./parse-quick-add";
 import type { QuickAddToken } from "./types";
@@ -24,9 +25,23 @@ import type { QuickAddToken } from "./types";
  * down about itself.
  *
  * **Reference "now"**, matching the capture window, fixed for every row
- * in this file:
+ * in this file. Issue #383 pins it to a single *instant*, not just a day
+ * — `13:06 IST`, derived (not guessed) from the two rows whose own
+ * matchId only makes sense at that exact minute: `"in 30 min"` ->
+ * `13:36` implies `now + 30min = 13:36`, and `"in an hour"` -> `14:06`
+ * implies `now + 60min = 14:06` — both independently solve to `13:06`,
+ * which is why this is a derivation, not a guess: two unrelated rows
+ * agreeing on the identical instant is not a coincidence a wrong guess
+ * could produce. (The header's own "~13:36–14:18" is the outer range
+ * across the *whole* 117-row session, not a claim that every individual
+ * row was captured inside it — the two time-arithmetic rows were
+ * evidently among the first, just ahead of that range's stated start.)
+ * Every other time-of-day row is consistent with this instant too:
+ * `noon`/`midnight`/`morning` (12:00/00:00/09:00, all before 13:06) all
+ * roll to tomorrow; `evening`/`tonight` (19:00/22:00, both after 13:06)
+ * stay today; `at 5` (05:00, before 13:06) rolls to tomorrow.
  */
-const NOW = dayKey("2026-09-19"); // Saturday.
+const NOW = dateTimeKey("2026-09-19T13:06"); // Saturday.
 const REF_YEAR = 2026;
 
 interface CorpusMatch {
@@ -103,18 +118,30 @@ function todoistDateTime(isoDate: string, time: string): string {
 }
 
 /**
- * A `time` token carries no date of its own — same rule
- * ../parse-quick-add.ts's `mergeDateAndTime` already applies ("a lone
- * time token with no date token attaches to *today*"), reused here
- * rather than re-derived, since it's the one place this parser commits to
- * what a bare time means.
+ * A `time` token carries no date of its own — resolving what a bare time
+ * means is ../parse-quick-add.ts's `mergeDateAndTime`'s job, not
+ * re-derived by *calling* that function here (which would only prove the
+ * production code agrees with itself), but recomputed independently
+ * against the identical rule issue #383 gives it: a time already past
+ * `NOW`'s own time-of-day means tomorrow, strict less-than, matching
+ * `mergeDateAndTime`'s own choice of boundary.
  */
 function resolvedValueOf(token: QuickAddToken): string {
   switch (token.kind) {
     case "date":
-      return todoistDate(token.date);
-    case "time":
-      return todoistDateTime(NOW, token.time);
+      // Issue #383: `matchArithmeticDate`'s hour/minute loop ("in an
+      // hour", "in 30 min") produces a `date` token that already carries
+      // a time-of-day suffix (`YYYY-MM-DDTHH:MM`, longer than a bare
+      // `YYYY-MM-DD`) — `todoistDate` alone would silently drop it.
+      return token.date.length > 10
+        ? todoistDateTime(token.date.slice(0, 10), token.date.slice(11, 16))
+        : todoistDate(token.date);
+    case "time": {
+      const nowDay = NOW.slice(0, 10);
+      const nowTime = NOW.slice(11, 16);
+      const day = token.time < nowTime ? addDays(nowDay, 1) : nowDay;
+      return todoistDateTime(day, token.time);
+    }
     case "priority":
       // Todoist's matchId is the *UI* priority level (`p1` -> `"1"`), not
       // ../task-types.ts's stored/inverted value `token.priority` already
@@ -210,27 +237,17 @@ function checkRow(row: CorpusRow): RowCheck {
 const PENDING: ReadonlyArray<{ reason: string; inputs: readonly string[] }> = [
   {
     reason:
-      "#383 — QuickAddLanguage.arithmeticUnits has no hour/minute unit at all, and even adding one would need a time-of-day-bearing `now` (QuickAddOptions.now is date-only, LocalDayKey) to resolve 'in an hour'/'in 30 min' to a clock time",
-    inputs: ["in an hour", "in 30 min"],
-  },
-  {
-    reason:
-      "#383 — 'at 5' (a bare hour, no am/pm) was investigated for #382: the corpus's own measured value ('20 Sep 05:00', i.e. tomorrow) only makes sense if 5am *today* has already passed by the time of typing, which needs live clock time — the identical time-of-day-`now` gap the 'in an hour'/'in 30 min' row above has, not a separate one. Recognising 'at 5' at all (as a span) is straightforward; resolving it to the *correct* value is not, without #383.",
-    inputs: ["at 5"],
-  },
-  {
-    reason:
-      "no ticket filed yet — 'Today's' should fail the same exact-token test 'todays' does (both fail in Todoist); meologue's \\b boundary treats the apostrophe as a separator and matches anyway",
+      "#384 — 'Today's' should fail the same exact-token test 'todays' does (both fail in Todoist); meologue's \\b boundary treats the apostrophe as a separator and matches anyway",
     inputs: ["Today's standup"],
   },
   {
     reason:
-      "no ticket filed yet — Todoist's matched span swallows adjacent punctuation/quotes; meologue's word-boundary match stops at the bare word",
+      "#384 — Todoist's matched span swallows adjacent punctuation/quotes; meologue's word-boundary match stops at the bare word",
     inputs: ["Call mom today.", "Call mom today,", 'Call mom "today"'],
   },
   {
     reason:
-      "no ticket filed yet — Todoist merges an adjacent date+time (or recurrence+time) phrase into one match; meologue always keeps them as separate tokens",
+      "#384 — Todoist merges an adjacent date+time (or recurrence+time) phrase into one match; meologue always keeps them as separate tokens",
     inputs: [
       "today at 5pm",
       "tomorrow morning",
@@ -238,11 +255,6 @@ const PENDING: ReadonlyArray<{ reason: string; inputs: readonly string[] }> = [
       "every day starting next monday",
       "Buy milk tomorrow at 5pm every week p2",
     ],
-  },
-  {
-    reason:
-      "no ticket filed yet — QuickAddOptions.now is date-only (LocalDayKey), so a fuzzy/explicit time can never roll to tomorrow the way Todoist does once that time-of-day has already passed today",
-    inputs: ["noon", "midnight", "morning"],
   },
 ];
 

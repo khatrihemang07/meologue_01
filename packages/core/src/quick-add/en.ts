@@ -115,10 +115,25 @@ export const englishQuickAddLanguage: QuickAddLanguage = {
     years: "years",
   },
 
+  // Issue #383's own corpus rows ("in an hour", "in 30 min") — the
+  // full-instant sibling `arithmeticUnits` above deliberately isn't
+  // widened to cover, per QuickAddLanguage.timeArithmeticUnits' own doc
+  // comment.
+  timeArithmeticUnits: {
+    hour: "hours",
+    hours: "hours",
+    min: "minutes",
+    mins: "minutes",
+    minute: "minutes",
+    minutes: "minutes",
+  },
+
   // Issue #382's own corpus row ("in three days") — see
   // QuickAddLanguage.numberWords' own doc comment for why this is a
   // small closed set, not a general number-word parser.
   numberWords: {
+    a: 1,
+    an: 1,
     one: 1,
     two: 2,
     three: 3,

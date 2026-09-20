@@ -40,7 +40,7 @@ import { useWideLayout } from "@/hooks/use-wide-layout";
 import { deviceUtcOffsetMinutes, formatClockTime, formatCommentTimestamp } from "@/lib/entry-day";
 import { formatDay, formatTaskDate } from "@/lib/format-task-date";
 import { isRenderableEvent } from "@/lib/is-renderable-event";
-import { localDayKey } from "@/lib/local-day-key";
+import { localDateTimeKey, localDayKey } from "@/lib/local-day-key";
 import type { QuickAddAutocompleteOptions } from "@/lib/quick-add-autocomplete";
 import { useSettingsStore } from "@/lib/settings";
 import { taskDetailPath } from "@/lib/task-detail-route";
@@ -892,8 +892,8 @@ function TaskDetailBody({
   const [titleDraft, setTitleDraft] = useState(task.content);
   const [descriptionDraft, setDescriptionDraft] = useState(task.description ?? "");
   const smartDates = useSettingsStore((state) => state.smartDatesEnabled);
-  const titleRecognitionOptionsRef = useRef({ now: localDayKey(new Date()), smartDates });
-  titleRecognitionOptionsRef.current = { now: localDayKey(new Date()), smartDates };
+  const titleRecognitionOptionsRef = useRef({ now: localDateTimeKey(new Date()), smartDates });
+  titleRecognitionOptionsRef.current = { now: localDateTimeKey(new Date()), smartDates };
   const autocompleteOutlet = useOutletContext<EntryStoreOutletContext | undefined>();
   const titleAutocomplete: QuickAddAutocompleteOptions = {
     getProjects: () => projects,

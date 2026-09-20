@@ -1,6 +1,7 @@
 import { parseRecurrence } from "../recurrence";
 import {
   addDays,
+  addMinutes,
   addMonths,
   addYears,
   daysInMonth,
@@ -340,9 +341,14 @@ function resolveAmount(
 }
 
 /**
- * `in 3 days`, `in 2 weeks`, and — issue #382's own corpus row — `in
- * three days`, the identical grammar with a spelled-out amount
- * (`QuickAddLanguage.numberWords`) in place of a bare `\d+`.
+ * `in 3 days`, `in 2 weeks`, `in three days` (issue #382's own corpus
+ * row, a spelled-out amount via `QuickAddLanguage.numberWords` in place
+ * of a bare `\d+`), and — issue #383 — `in an hour`/`in 30 min`: a
+ * second loop against `timeArithmeticUnits` rather than widening
+ * `arithmeticUnits` itself, since an hour/minute amount needs the full
+ * `now` instant (`date-math.ts`'s `addMinutes`) where a day/week/month/
+ * year amount only ever needed the day (`addByUnit`'s own day-only
+ * family) — see `QuickAddLanguage.timeArithmeticUnits`' own doc comment.
  */
 export function matchArithmeticDate(input: string, ctx: DateRuleContext): QuickAddToken[] {
   const unitAlt = alternation(Object.keys(ctx.language.arithmeticUnits));
@@ -368,6 +374,30 @@ export function matchArithmeticDate(input: string, ctx: DateRuleContext): QuickA
       date: addByUnit(ctx.now, amount, unit),
     });
   }
+
+  const timeUnitAlt = alternation(Object.keys(ctx.language.timeArithmeticUnits));
+  const timeRegex = new RegExp(
+    `\\b${escapeRegExp(ctx.language.inWord)}\\s+(\\d+|${amountAlt})\\s+(${timeUnitAlt})\\b`,
+    "gi",
+  );
+  for (const match of input.matchAll(timeRegex)) {
+    // biome-ignore lint/style/noNonNullAssertion: the alternation is built from this exact table's own keys, or the regex's own `\d+` branch
+    const amount = resolveAmount(match[1]!, ctx.language.numberWords);
+    // biome-ignore lint/style/noNonNullAssertion: the alternation is built from this exact table's own keys
+    const unit = ctx.language.timeArithmeticUnits[match[2]!.toLowerCase()]!;
+    if (amount === undefined) {
+      continue;
+    }
+    const minutes = unit === "hours" ? amount * 60 : amount;
+    tokens.push({
+      kind: "date",
+      start: match.index,
+      end: match.index + match[0].length,
+      raw: match[0],
+      date: addMinutes(ctx.now, minutes),
+    });
+  }
+
   return tokens;
 }
 
@@ -652,6 +682,31 @@ export function matchExplicitTime(input: string, ctx: DateRuleContext): QuickAdd
       end: match.index + match[0].length,
       raw: match[0],
       time: formatTime(Number(match[1]), Number(match[2])),
+    });
+  }
+
+  // `at 5` (issue #383) — a bare hour with no meridiem and no minute at
+  // all, 1-12 only (the "bare hour" reading is inherently a 12-hour one;
+  // a caller meaning the 24-hour clock already has `matchExplicitTime`'s
+  // other two forms). Minute defaults to `:00`, the identical default
+  // `at 9` (with a meridiem) already takes above. Whether this resolves
+  // to today or tomorrow is never decided here — this rule only ever
+  // flags the span and a literal hour, exactly as `matchFuzzyTime` does;
+  // ../parse-quick-add.ts's `mergeDateAndTime` is the one place that
+  // already-past-today question is answered, uniformly for every `time`
+  // token regardless of which rule produced it.
+  const bareHour = /\bat\s+(\d{1,2})\b(?!\s*:)/gi;
+  for (const match of input.matchAll(bareHour)) {
+    const hour = Number(match[1]);
+    if (hour < 1 || hour > 12) {
+      continue;
+    }
+    tokens.push({
+      kind: "time",
+      start: match.index,
+      end: match.index + match[0].length,
+      raw: match[0],
+      time: formatTime(hour, 0),
     });
   }
 

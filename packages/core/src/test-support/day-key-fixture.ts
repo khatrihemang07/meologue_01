@@ -1,5 +1,5 @@
-import type { LocalDayKey } from "../local-day-key";
-import { mustParseLocalDayKey } from "../local-day-key";
+import type { LocalDateTimeKey, LocalDayKey } from "../local-day-key";
+import { mustParseLocalDateTimeKey, mustParseLocalDayKey } from "../local-day-key";
 
 /**
  * `mustParseLocalDayKey`, named the way `./task-fixture.ts`'s own `task()`
@@ -12,4 +12,15 @@ import { mustParseLocalDayKey } from "../local-day-key";
  */
 export function dayKey(value: string): LocalDayKey {
   return mustParseLocalDayKey(value);
+}
+
+/**
+ * `dayKey`'s own sibling for `QuickAddOptions.now` (issue #383) — a
+ * `"YYYY-MM-DDTHH:MM"` literal a test already knows is well-formed,
+ * parsed for real rather than cast. Every quick-add test's own `NOW`
+ * gained an explicit time-of-day once `QuickAddOptions.now` stopped
+ * accepting a bare `LocalDayKey`.
+ */
+export function dateTimeKey(value: string): LocalDateTimeKey {
+  return mustParseLocalDateTimeKey(value);
 }

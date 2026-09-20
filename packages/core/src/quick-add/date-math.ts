@@ -85,6 +85,32 @@ export function daysInMonth(year: number, month: number): number {
   return new Date(Date.UTC(year, month, 0)).getUTCDate();
 }
 
+/**
+ * Adds `minutes` (negative allowed) to a `YYYY-MM-DDTHH:MM`-prefixed
+ * string, returning the identical shape — issue #383's `in an hour`/
+ * `in 30 min`, the one place this module does minute-granular arithmetic
+ * rather than the whole-day granularity every other function here keeps
+ * to. Reads the time-of-day directly off fixed offsets into `dateTime`
+ * (`../local-day-key.ts`'s `LocalDateTimeKey` brand guarantees this
+ * shape, the same "the brand already promises what this file only has to
+ * trust" reasoning `parseDateOnly` takes for its own callers), rather
+ * than a second regex — this function is only ever called with a value
+ * that already passed that brand's own check.
+ */
+export function addMinutes(dateTime: string, minutes: number): string {
+  const parsed = parseDateOnly(dateTime);
+  const hour = Number(dateTime.slice(11, 13));
+  const minute = Number(dateTime.slice(14, 16));
+  const ts = toUtcTimestamp(parsed) + (hour * 60 + minute + minutes) * 60_000;
+  const d = new Date(ts);
+  const year = d.getUTCFullYear();
+  const month = String(d.getUTCMonth() + 1).padStart(2, "0");
+  const day = String(d.getUTCDate()).padStart(2, "0");
+  const hh = String(d.getUTCHours()).padStart(2, "0");
+  const mm = String(d.getUTCMinutes()).padStart(2, "0");
+  return `${year}-${month}-${day}T${hh}:${mm}`;
+}
+
 /** ISO weekday of a `YYYY-MM-DD`-prefixed string: 1 (Monday) through 7 (Sunday), matching QuickAddLanguage.weekdays' own convention. */
 export function isoWeekday(date: string): number {
   const parsed = parseDateOnly(date);

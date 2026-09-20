@@ -16,7 +16,7 @@ import type {
   QuickAddToken,
   QuickAddTokenKind,
 } from "@meologue/core";
-import { firstOccurrence } from "@meologue/core";
+import { firstOccurrence, localDayKeyOf } from "@meologue/core";
 
 /**
  * Every `QuickAddTokenKind` the parser recognises but this app never turns
@@ -307,9 +307,13 @@ function resolveRecurrence(
  * function never has to know about that itself; it only ever decides,
  * given the tokens `parseQuickAdd` already settled on, which of them have
  * a real Task field to land in. `options.now` is `result`'s own reference
- * instant, read straight through to `resolveRecurrence` below rather than
- * re-derived, so a recognised recurrence resolves against the identical
- * "now" the rest of `result` was already computed from.
+ * instant — `resolveRecurrence` below takes only the day
+ * (`../../packages/core`'s `RecurrenceReference.now` stays `LocalDayKey`,
+ * unaffected by issue #383's `QuickAddOptions.now` change), derived here
+ * with `localDayKeyOf` rather than re-resolved, so a recognised
+ * recurrence still resolves against the identical "now" the rest of
+ * `result` was already computed from — just its day, since that engine
+ * has no time-of-day of its own to agree or disagree with.
  */
 export function taskFieldsFromQuickAdd(
   input: string,
@@ -319,7 +323,7 @@ export function taskFieldsFromQuickAdd(
   const recurrence = resolveRecurrence(
     findRecurrenceToken(result.tokens),
     result.date,
-    options.now,
+    localDayKeyOf(options.now),
   );
   return {
     content: contentKeepingUnsupported(input, result.tokens),

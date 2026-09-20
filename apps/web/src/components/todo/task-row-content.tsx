@@ -48,7 +48,7 @@ import { taskTitleText } from "@/components/todo/task-title-text";
 import { SWIPE_TARGET_ATTRIBUTE } from "@/hooks/use-swipe-actions";
 import { useTaskDateState } from "@/hooks/use-task-date-state";
 import { formatTaskDate } from "@/lib/format-task-date";
-import { localDayKey } from "@/lib/local-day-key";
+import { localDateTimeKey, localDayKey } from "@/lib/local-day-key";
 import { projectNameFor } from "@/lib/project-name";
 import type { QuickAddAutocompleteOptions } from "@/lib/quick-add-autocomplete";
 import { useSettingsStore } from "@/lib/settings";
@@ -173,8 +173,8 @@ export function TaskRowContent({
   // editor only mounts while `editingTitle` is true, so each edit is a
   // fresh mount with nothing stale to carry over from the last one.
   const smartDates = useSettingsStore((state) => state.smartDatesEnabled);
-  const optionsRef = useRef<QuickAddOptions>({ now: localDayKey(new Date()), smartDates });
-  optionsRef.current = { now: localDayKey(new Date()), smartDates };
+  const optionsRef = useRef<QuickAddOptions>({ now: localDateTimeKey(new Date()), smartDates });
+  optionsRef.current = { now: localDateTimeKey(new Date()), smartDates };
 
   const autocompleteOutlet = useOutletContext<EntryStoreOutletContext | undefined>();
   const autocomplete: QuickAddAutocompleteOptions = {

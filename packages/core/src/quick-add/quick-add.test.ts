@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { storedPriorityOf } from "../task-types";
-import { dayKey } from "../test-support/day-key-fixture";
+import { dateTimeKey } from "../test-support/day-key-fixture";
 import { demoteQuickAddToken, parseQuickAdd } from "./parse-quick-add";
 import type { QuickAddOptions, QuickAddToken } from "./types";
 
@@ -16,8 +16,16 @@ import type { QuickAddOptions, QuickAddToken } from "./types";
  * out against that fact, not against whatever this parser happens to
  * compute, so a regression in the weekday math has something external to
  * disagree with.
+ *
+ * Issue #383 gave `QuickAddOptions.now` a time-of-day, and every table
+ * below was written against a *day*, not a moment — `00:00` is the one
+ * time-of-day no fuzzy/explicit time in this file's own tables (`00:00`
+ * itself, midnight, included — strict less-than, `mergeDateAndTime`'s own
+ * comment) can ever already be "past," so every existing expectation
+ * stays today exactly as before this issue. The dedicated "already past
+ * rolls to tomorrow" cases below use their own, later `now` explicitly.
  */
-const NOW = dayKey("2026-09-02"); // Wednesday.
+const NOW = dateTimeKey("2026-09-02T00:00"); // Wednesday, midnight.
 
 function parse(input: string, options: Partial<QuickAddOptions> = {}) {
   return parseQuickAdd(input, { now: NOW, ...options });
@@ -118,13 +126,13 @@ describe("dates", () => {
   });
 
   it("'next week' resolves to the next Monday", () => {
-    expect(parseQuickAdd("buy milk next week", { now: dayKey("2026-09-12") }).date).toBe(
+    expect(parseQuickAdd("buy milk next week", { now: dateTimeKey("2026-09-12T00:00") }).date).toBe(
       "2026-09-14",
     );
   });
 
   it("'next week' typed on a Monday is the Monday after, never today", () => {
-    expect(parseQuickAdd("buy milk next week", { now: dayKey("2026-09-14") }).date).toBe(
+    expect(parseQuickAdd("buy milk next week", { now: dateTimeKey("2026-09-14T00:00") }).date).toBe(
       "2026-09-21",
     );
   });
@@ -139,7 +147,7 @@ describe("dates", () => {
     // docs/adr/0088-todoists-add-task-parser-is-cloned-verbatim-defects-included.md.
     // "this monday" and bare "monday" are unaffected: both still resolve
     // to the coming Monday, correctly.
-    const now = dayKey("2026-09-19"); // Saturday — the corpus's own capture date.
+    const now = dateTimeKey("2026-09-19T00:00"); // Saturday — the corpus's own capture date.
     expect(parseQuickAdd("buy milk last monday", { now }).date).toBe("2026-09-28");
     expect(parseQuickAdd("buy milk next monday", { now }).date).toBe("2026-09-28");
     expect(parseQuickAdd("buy milk this monday", { now }).date).toBe("2026-09-21");
@@ -156,7 +164,9 @@ describe("dates", () => {
     // no invalid-month fallback to reach for — the day-first reading
     // wins outright, the same disambiguation the three-part form already
     // applied to "5/9/2026".
-    expect(parseQuickAdd("do it 25/12", { now: dayKey("2026-09-02") }).date).toBe("2026-12-25");
+    expect(parseQuickAdd("do it 25/12", { now: dateTimeKey("2026-09-02T00:00") }).date).toBe(
+      "2026-12-25",
+    );
   });
 
   it("falls back to the other reading when the day-first one has no valid month, rather than refusing the match", () => {
@@ -165,14 +175,16 @@ describe("dates", () => {
     // instead of staying unrecognised. Without this fallback, this
     // fix would regress the corpus's already-passing "9/24" row (see
     // the table above and resolveTwoPartMonthDay's own doc comment).
-    expect(parseQuickAdd("do it 12/25", { now: dayKey("2026-09-02") }).date).toBe("2026-12-25");
+    expect(parseQuickAdd("do it 12/25", { now: dateTimeKey("2026-09-02T00:00") }).date).toBe(
+      "2026-12-25",
+    );
   });
 
   it("still refuses a two-part pair where neither reading has a valid month", () => {
     // "13/25": day-first reads month 25 (invalid); the fallback reads
     // month 13 (also invalid). No reading of this pair is a real
     // calendar date, so it stays unrecognised.
-    expect(parseQuickAdd("do it 13/25", { now: dayKey("2026-09-02") }).date).toBeNull();
+    expect(parseQuickAdd("do it 13/25", { now: dateTimeKey("2026-09-02T00:00") }).date).toBeNull();
   });
 
   describe("fuzzy weekend range (issue #366)", () => {
@@ -276,6 +288,64 @@ describe("fuzzy times", () => {
     it(`resolves to ${expectedDate}`, () => {
       expect(parse(input).date).toBe(expectedDate);
     });
+  });
+});
+
+describe("a time already past rolls to tomorrow, one still ahead stays today (issue #383)", () => {
+  // A later `now` than this file's own default (`00:00`, chosen so every
+  // pre-#383 table above stays valid unchanged) — 14:00, deliberately
+  // between "morning"'s 09:00 and "evening"'s 19:00, so this one `now`
+  // exercises both sides of the roll-forward decision across a single
+  // table: fuzzy and explicit times below it roll to tomorrow, ones above
+  // it stay today.
+  const laterNow = dateTimeKey("2026-09-02T14:00");
+
+  describe.each<[string, string]>([
+    ["buy milk noon", "2026-09-03T12:00"], // 12:00 < 14:00 -> tomorrow
+    ["buy milk midnight", "2026-09-03T00:00"], // 00:00 < 14:00 -> tomorrow
+    ["buy milk morning", "2026-09-03T09:00"], // 09:00 < 14:00 -> tomorrow
+    ["buy milk evening", "2026-09-02T19:00"], // 19:00 still ahead -> today
+    ["buy milk 1pm", "2026-09-03T13:00"], // an explicit time rolls too, not just fuzzy ones
+    ["buy milk 5pm", "2026-09-02T17:00"], // 17:00 still ahead -> today
+    // Issue #383's own new form: a bare hour with no meridiem ("at 5").
+    ["buy milk at 5", "2026-09-03T05:00"],
+  ])("%s", (input, expectedDate) => {
+    it(`resolves to ${expectedDate}`, () => {
+      expect(parseQuickAdd(input, { now: laterNow }).date).toBe(expectedDate);
+    });
+  });
+
+  it("a time exactly equal to now's own stays today — strict less-than, not less-than-or-equal", () => {
+    // Unmeasured by the corpus either way (this file's own header comment
+    // on `mergeDateAndTime`'s choice) — this is the boundary the choice
+    // actually governs, pinned down explicitly rather than left implicit.
+    expect(parseQuickAdd("buy milk 2pm", { now: laterNow }).date).toBe("2026-09-02T14:00");
+  });
+
+  it("an explicit date token pins the day outright — no roll-forward question even arises", () => {
+    // "5pm" alone (17:00) is still ahead of 14:00 and wouldn't roll
+    // anyway at this `now`, so this specifically needs a time that
+    // *would* roll if it were bare, to prove the explicit date is what's
+    // actually suppressing the roll-forward check, not a coincidence of
+    // this particular hour.
+    expect(parseQuickAdd("buy milk 1pm 25 dec", { now: laterNow }).date).toBe("2026-12-25T13:00");
+  });
+
+  // Issue #383's own new arithmetic forms — full-instant results, not
+  // merged from a separate date+time pair, so they're unaffected by
+  // (and don't need) the roll-forward question above: they're already
+  // computed straight off `now`'s own instant.
+  it('"in an hour" adds 60 minutes to the full instant', () => {
+    expect(parseQuickAdd("buy milk in an hour", { now: laterNow }).date).toBe("2026-09-02T15:00");
+  });
+
+  it('"in 30 min" adds 30 minutes to the full instant', () => {
+    expect(parseQuickAdd("buy milk in 30 min", { now: laterNow }).date).toBe("2026-09-02T14:30");
+  });
+
+  it('"in an hour" rolls the calendar day too, when the addition crosses midnight', () => {
+    const lateNow = dateTimeKey("2026-09-02T23:30");
+    expect(parseQuickAdd("buy milk in an hour", { now: lateNow }).date).toBe("2026-09-03T00:30");
   });
 });
 

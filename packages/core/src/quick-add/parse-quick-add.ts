@@ -1,3 +1,4 @@
+import { addDays } from "./date-math";
 import type { DateRuleContext } from "./date-rules";
 import {
   matchAbsoluteDate,
@@ -290,14 +291,28 @@ function buildResult(input: string, tokens: QuickAddToken[], now: string): Quick
 
 // A lone `time` token with no `date` token attaches to *today* — "5pm"
 // typed alone means "today at 5pm" (this module's own required test
-// table has the worked case). Merging happens here, once, rather than
-// each date-family rule having to know whether a time rule also fired
-// elsewhere in the same input.
+// table has the worked case) — *unless* that time has already passed
+// today, in which case it means tomorrow (issue #383, Todoist's own
+// measured behaviour: "noon" typed at 14:00 resolves to tomorrow's
+// noon). "Already passed" is strict-less-than, not less-than-or-equal:
+// a time exactly equal to `now`'s own is still today, not yet behind
+// it — the boundary the corpus itself never measures either way, so this
+// is the narrower, more defensible reading rather than a guess dressed
+// as a fact. A `date` token already present pins the day explicitly, so
+// no roll-forward question even arises — "25 dec at 5pm" always means
+// 25 Dec's own 5pm, whatever "now" is. Merging happens here, once,
+// rather than each date-family rule having to know whether a time rule
+// also fired elsewhere in the same input.
 function mergeDateAndTime(date: string | null, time: string | null, now: string): string | null {
   if (time === null) {
     return date;
   }
-  const day = date === null ? now.slice(0, 10) : date.slice(0, 10);
+  if (date !== null) {
+    return `${date.slice(0, 10)}T${time}`;
+  }
+  const nowDay = now.slice(0, 10);
+  const nowTime = now.slice(11, 16);
+  const day = time < nowTime ? addDays(nowDay, 1) : nowDay;
   return `${day}T${time}`;
 }
 

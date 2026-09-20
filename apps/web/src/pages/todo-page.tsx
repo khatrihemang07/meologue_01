@@ -35,7 +35,7 @@ import { useTodoKeymap } from "@/hooks/use-todo-keymap";
 import { useTodoSidebarLayout } from "@/hooks/use-wide-layout";
 import { commentCountForTask, commentsForTask } from "@/lib/comment-counts";
 import { writeLastTodoView } from "@/lib/last-todo-view";
-import { localDayKey } from "@/lib/local-day-key";
+import { localDateTimeKey, localDayKey } from "@/lib/local-day-key";
 import { sectionsQueryKey, tasksInProjectQueryKey } from "@/lib/query-keys";
 import type { QuickAddTaskFields } from "@/lib/quick-add-task";
 import { useSettingsStore } from "@/lib/settings";
@@ -749,7 +749,7 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
     void commitTaskTitle(
       task,
       content,
-      { now: localDayKey(new Date()), smartDates },
+      { now: localDateTimeKey(new Date()), smartDates },
       {
         renameTask,
         setTaskDate,
