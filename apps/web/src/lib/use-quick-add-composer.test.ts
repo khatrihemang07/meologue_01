@@ -21,7 +21,14 @@ describe("useQuickAddComposer", () => {
   it("calls onAdd with the parsed fields, clears value/seed and bumps resetKey on a real commit", () => {
     const onAdd = vi.fn();
     const onCommitted = vi.fn();
-    const { result } = renderHook(() => useQuickAddComposer({ onAdd, onCommitted }));
+    // Issue #388: `@errands` only matches once "errands" is a real Label
+    // this hook knows about — the composer always supplies `labelNames`
+    // (even `[]`, once a caller wires `labels` at all), so an unmatched
+    // `@errands` would otherwise stay literal in `content` instead of
+    // resolving.
+    const { result } = renderHook(() =>
+      useQuickAddComposer({ onAdd, onCommitted, labels: [{ id: "l1", name: "errands" }] }),
+    );
 
     act(() => {
       result.current.setValue("buy milk @errands");

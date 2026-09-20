@@ -26,6 +26,8 @@ export interface AddTaskFormProps {
   onCreateLabel?: (name: string) => void;
   datesWithTasks?: ReadonlyMap<string, number>;
   ambientProjectName?: string;
+  /** Issue #388 — forwarded straight into `useQuickAddComposer`'s own identically-named option; `todo-page.tsx`'s own doc comment on building this Map has the full reasoning. Omitted keeps `/section` on its pre-#388 permissive behaviour, the same as every other caller that doesn't wire this. */
+  sectionNamesByProject?: ReadonlyMap<string, readonly string[]>;
 }
 
 const TRIGGER_CLASSES =
@@ -49,6 +51,7 @@ export function AddTaskForm({
   onCreateLabel,
   datesWithTasks,
   ambientProjectName,
+  sectionNamesByProject,
 }: AddTaskFormProps) {
   const [open, setOpen] = useState(false);
   const touch = touchOnlyDevice();
@@ -78,6 +81,13 @@ export function AddTaskForm({
     onCreateProject,
     onCreateLabel,
     open,
+    // Issue #388: the identical `touch ? "Inbox" : ambientProjectName`
+    // resolution `content` below already applies for the chip's own
+    // display text — `/section` has to scope against the same Project
+    // the reader sees named on screen, not a second, silently different
+    // one.
+    ambientProjectName: touch ? "Inbox" : ambientProjectName,
+    sectionNamesByProject,
     onCommitted: () => {
       if (!touch) {
         setOpen(false);

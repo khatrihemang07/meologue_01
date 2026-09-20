@@ -49,6 +49,45 @@ describe("findTrigger", () => {
   it("allows letters, digits, underscore and hyphen in the query — matchProject's own name pattern", () => {
     expect(findTrigger("#q1-goals", 9)).toEqual({ sigil: "#", from: 0, query: "q1-goals" });
   });
+
+  // Issue #388: crossing exactly one interior space keeps the trigger
+  // alive across a real two-word name, so the popup can keep
+  // incrementally filtering past the first word instead of closing the
+  // instant the space is typed.
+  describe("multi-word query (issue #388)", () => {
+    it("keeps the trigger alive across one interior space, carrying both words as the query", () => {
+      expect(findTrigger("#Aurora migration", 17)).toEqual({
+        sigil: "#",
+        from: 0,
+        query: "Aurora migration",
+      });
+    });
+
+    it("still closes once a completed multi-word entry is followed by its own trailing space", () => {
+      expect(findTrigger("#Aurora migration ", 18)).toBeNull();
+    });
+
+    it("does not cross a double space — that ends a word normally, not the middle of a name", () => {
+      expect(findTrigger("#Aurora  migration", 18)).toBeNull();
+    });
+
+    it("caps at one crossed space, not an unbounded scan back to the previous sigil", () => {
+      // A known, accepted imprecision (this function's own doc comment):
+      // capping at one crossing still swallows an unrelated NEXT word
+      // once a name is already complete, rather than knowing the name
+      // was already exactly two words long — but it never reaches all
+      // the way back past a second space to an earlier, unrelated run.
+      expect(findTrigger("Buy milk #Home tomorrow", 23)).toEqual({
+        sigil: "#",
+        from: 9,
+        query: "Home tomorrow",
+      });
+    });
+
+    it("does not cross a space with nothing consumed yet — the plain trailing-space case stays null", () => {
+      expect(findTrigger("#work ", 6)).toBeNull();
+    });
+  });
 });
 
 describe("filterEntries", () => {

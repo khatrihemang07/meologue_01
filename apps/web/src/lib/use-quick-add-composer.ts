@@ -30,6 +30,30 @@ export interface UseQuickAddComposerOptions {
   onCreateProject?: (name: string) => void;
   onCreateLabel?: (name: string) => void;
   /**
+   * Issue #388 — threaded straight into `QuickAddOptions.activeProjectName`
+   * (`optionsRef.current` below), the identical value `add-task-form.tsx`/
+   * `quick-add-dialog.tsx` already forward to `QuickAddContent` for the
+   * Project chip's own display text. Not a second "active project"
+   * concept: what `/section` falls back to scoping against when no
+   * `#project` token wins in the same line IS the view's ambient Project,
+   * so this hook reuses that one value rather than asking a caller to
+   * supply it twice under two different names.
+   */
+  ambientProjectName?: string | null;
+  /**
+   * Issue #388 — threaded straight into `QuickAddOptions.
+   * sectionNamesByProject`, `undefined` in and `undefined` out. Unlike
+   * `projects`/`labels` just above (which this hook always turns into a
+   * real, possibly-empty `projectNames`/`labelNames` array once a caller
+   * wires them at all — see `optionsRef.current` below), an empty `Map`
+   * and "no lookup available" mean genuinely different things for
+   * `/section` (`QuickAddOptions.sectionNamesByProject`'s own doc
+   * comment): a caller with no Section data to offer yet should leave
+   * this `undefined`, not synthesise an empty `Map`, or `/section` would
+   * stop matching anything instead of staying permissive.
+   */
+  sectionNamesByProject?: ReadonlyMap<string, readonly string[]>;
+  /**
    * Fires once a commit actually added something — after `onAdd`, after
    * the field is cleared. Not fired for a blank/token-only line (the
    * identical "nothing to add" case `onAdd` itself is skipped for) — a
@@ -128,13 +152,29 @@ export function useQuickAddComposer(options: UseQuickAddComposerOptions): QuickA
     wasOpenRef.current = isOpen;
   }, [options.open]);
 
-  const optionsRef = useRef<QuickAddOptions>({ now: localDateTimeKey(new Date()), smartDates });
-  optionsRef.current = { now: localDateTimeKey(new Date()), smartDates };
-
   const projectsRef = useRef<readonly AutocompleteEntry[]>(options.projects ?? []);
   projectsRef.current = options.projects ?? [];
   const labelsRef = useRef<readonly AutocompleteEntry[]>(options.labels ?? []);
   labelsRef.current = options.labels ?? [];
+
+  // Issue #388: `projectNames`/`labelNames` are built from the identical
+  // `projectsRef`/`labelsRef` the autocomplete popup already reads above —
+  // no new prop needed for those two. `options.projects`/`options.labels`
+  // default to `[]` the moment a caller wires either prop at all
+  // (`add-task-form.tsx`/`quick-add-dialog.tsx` both destructure `projects
+  // = []`/`labels = []`), so in every real caller this hook has, these are
+  // always a real (possibly-empty) array, never `undefined` — "only the
+  // composer supplies them" (this ticket's own brief) is true by
+  // construction here, not by a conditional this hook has to get right.
+  const optionsRef = useRef<QuickAddOptions>({ now: localDateTimeKey(new Date()), smartDates });
+  optionsRef.current = {
+    now: localDateTimeKey(new Date()),
+    smartDates,
+    projectNames: projectsRef.current.map((project) => project.name),
+    labelNames: labelsRef.current.map((label) => label.name),
+    activeProjectName: options.ambientProjectName ?? null,
+    sectionNamesByProject: options.sectionNamesByProject,
+  };
 
   const onAddRef = useRef(options.onAdd);
   onAddRef.current = options.onAdd;
