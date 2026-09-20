@@ -73,7 +73,11 @@ const Chip = forwardRef<
       ref={ref}
       type="button"
       className={cn(
-        "inline-flex h-7 shrink-0 items-center gap-1 rounded-[length:var(--td-quick-add-chip-radius)] px-1.5 text-[13px] text-[color:var(--td-quick-add-chip-color)] hover:bg-muted",
+        // `web/07-native-colours.md`'s own table: every chip (Project,
+        // Date, Priority) is a transparent-background, bordered pill —
+        // border and text the identical neutral colour, never a filled
+        // background of its own.
+        "inline-flex h-7 shrink-0 items-center gap-1 rounded-[length:var(--td-quick-add-chip-radius)] border border-[color:var(--td-quick-add-chip-color)] px-1.5 text-[13px] text-[color:var(--td-quick-add-chip-color)] hover:bg-muted",
         className,
       )}
       {...props}
@@ -333,7 +337,13 @@ export function QuickAddContent({
               (D11's "send-only, no mic" reading also drops the row it
               would have sat in). */}
           {!touch && (
-            <Button type="button" variant="outline" size="xs" onClick={onCancel}>
+            <Button
+              type="button"
+              variant="outline"
+              size="xs"
+              onClick={onCancel}
+              className="text-[color:var(--td-quick-add-cancel-color)]"
+            >
               Cancel
             </Button>
           )}
