@@ -1,5 +1,6 @@
 import type { Task } from "@meologue/core";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import type { ReactElement } from "react";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { swipeDown, swipeLeft } from "@/test/swipe";
 import { UpcomingView } from "./upcoming-view";
@@ -39,7 +40,16 @@ function task(overrides: Partial<Task> = {}): Task {
   };
 }
 
-function renderUpcomingView(overrides: Partial<Parameters<typeof UpcomingView>[0]> = {}) {
+/**
+ * `wrap` (default identity): lets one test — the `<summary>` no-collapse
+ * guard below — mount `UpcomingView` inside its own ancestor with an
+ * `onClick` of its own, so it can tell whether a click's own
+ * `stopPropagation()` reaches that ancestor. Every other caller omits it.
+ */
+function renderUpcomingView(
+  overrides: Partial<Parameters<typeof UpcomingView>[0]> = {},
+  wrap: (ui: ReactElement) => ReactElement = (ui) => ui,
+) {
   const props = {
     tasks: [] as Task[],
     detailActions: {
@@ -61,9 +71,10 @@ function renderUpcomingView(overrides: Partial<Parameters<typeof UpcomingView>[0
     onRequestDelete: vi.fn(),
     onOpenSchedule: vi.fn(),
     onSetDate: vi.fn(),
+    onSetDateString: vi.fn(),
     ...overrides,
   };
-  render(<UpcomingView {...props} />);
+  render(wrap(<UpcomingView {...props} />));
   return props;
 }
 
@@ -275,43 +286,95 @@ describe("UpcomingView", () => {
       expect(button.style.color).toBe("var(--td-overdue-reschedule)");
     });
 
-    it("rescheduling sets the date of every overdue Task to the chosen day, and touches nothing else", () => {
+    // Issue #435: Reschedule now opens the identical `TaskSchedulePopover`
+    // a Task's own Date button opens, not the old tap-then-Confirm
+    // `DatePickerSheet` — today-view.test.tsx's own "Reschedule" describe
+    // block has the fuller per-behaviour tests (day-pick preserving time
+    // and Recurrence, bulk Time, bulk Recurrence, No Date); this one test
+    // proves the identical wiring reaches Upcoming too.
+    it("picking a day moves every overdue Task, keeping each one's own time and Recurrence untouched", () => {
       const onSetDate = vi.fn();
+      const onSetDateString = vi.fn();
       renderUpcomingView({
         tasks: [
-          task({ id: "a", content: "a", date: "2026-08-30" }),
-          // Before #375 an undated Task with a passed deadline also counted
-          // as overdue (task-views.ts's own former union arm) — deadline is
-          // never read now, so this second overdue Task needs its own real
-          // `date` to stay in the section this test is about.
-          task({ id: "b", content: "b", date: "2026-08-31" }),
+          task({ id: "a", content: "a", date: "2026-08-30T21:00" }),
+          task({ id: "b", content: "b", date: "2026-08-31", dateString: "every day" }),
         ],
         onSetDate,
+        onSetDateString,
       });
 
       fireEvent.click(screen.getByRole("button", { name: "Reschedule" }));
-      // The nested DatePickerSheet's own tap-then-confirm: pick a day, then
-      // confirm — Confirm stays disabled until a day is tapped.
       fireEvent.click(screen.getByRole("button", { name: /September 20th, 2026/ }));
-      fireEvent.click(screen.getByRole("button", { name: /^Confirm/ }));
 
       expect(onSetDate).toHaveBeenCalledTimes(2);
-      expect(onSetDate).toHaveBeenCalledWith("a", expect.any(String));
-      expect(onSetDate).toHaveBeenCalledWith("b", expect.any(String));
+      expect(onSetDate).toHaveBeenCalledWith("a", "2026-09-20T21:00");
+      expect(onSetDate).toHaveBeenCalledWith("b", "2026-09-20");
+      expect(onSetDateString).not.toHaveBeenCalled();
     });
 
-    // NOT tested here: overdue-reschedule-action.tsx's own
-    // `event.stopPropagation()` guards against a real browser's native
-    // <summary> toggling its <details> on any bubbled click, Reschedule's
-    // own click included. Mutation-tested that guard by deleting the
-    // `stopPropagation()` call and re-running this file: nothing failed
-    // — jsdom does not reproduce that toggle-on-bubbled-click behaviour
-    // (fireEvent.click here never collapses the disclosure either way),
-    // so no test in this file can discriminate the guard's presence.
-    // The `stopPropagation()` call stays, for the real-browser behaviour
-    // its own comment documents, but is only verifiable by driving an
-    // actual browser — flagging for that pass rather than keeping a test
-    // that would pass with the guard deleted.
+    // Issue #435's own acceptance criterion: the calendar's busy-day marks
+    // are the same real Task data a Task's own picker reads. This view
+    // has its own `datesWithTasks` wiring (`detailActions.datesWithTasks`,
+    // threaded through `OverdueSectionSummary` the same way TodayView's
+    // own identical test proves) — checked here too, not assumed shared.
+    it("the calendar's busy-day marks reflect the real datesWithTasks map, not just the overdue Tasks", () => {
+      renderUpcomingView({
+        tasks: [task({ id: "a", content: "a", date: "2026-09-01" })],
+        detailActions: {
+          projects: [],
+          labels: [],
+          onOpenDetail: vi.fn(),
+          onSetPriority: vi.fn(),
+          onSetDate: vi.fn(),
+          onSetDateString: vi.fn(),
+          datesWithTasks: new Map([["2026-09-20", 3]]),
+          onSetProject: vi.fn(),
+          onSetLabels: vi.fn(),
+          onCopyLink: vi.fn(),
+          onRename: vi.fn(),
+          commentCountFor: vi.fn(() => 0),
+        },
+      });
+
+      fireEvent.click(screen.getByRole("button", { name: "Reschedule" }));
+
+      const busyCell = document.querySelector('[data-day="2026-09-20"]');
+      const quietCell = document.querySelector('[data-day="2026-09-21"]');
+      expect(busyCell?.className).toContain("before:content-['']");
+      expect(quietCell?.className).not.toContain("before:content-['']");
+    });
+
+    // overdue-reschedule-action.tsx's own `event.stopPropagation()` guards
+    // against a real browser's native <summary> toggling its <details> on
+    // any bubbled click, Reschedule's own click included — but jsdom does
+    // not reproduce that native toggle-on-bubbled-click behaviour at all
+    // (fireEvent.click here never collapses a <details> either way, guard
+    // or no guard), so no test can observe THAT outcome directly. What
+    // jsdom's own event system does reproduce correctly is React's own
+    // synthetic bubbling — a `stopPropagation()` call inside a click
+    // handler reliably keeps an ANCESTOR component's own `onClick` from
+    // firing for that same click, in jsdom exactly as in a real browser —
+    // so this test proves the guard's actual mechanism (the click stops
+    // there) rather than its real-browser consequence (the section stays
+    // open), the same way `isOwnedPortalTarget`'s own tests in
+    // task-schedule-popover.test.tsx prove a classification rather than
+    // the Radix dismiss race it feeds.
+    it("stops the Reschedule click from reaching an ancestor's own onClick, the mechanism the real <summary> guard needs", () => {
+      const onAncestorClick = vi.fn();
+      renderUpcomingView(
+        { tasks: [task({ id: "late", content: "late task", date: "2026-09-01" })] },
+        // biome-ignore lint/a11y/noStaticElementInteractions: this stand-in ancestor only exists to prove the click doesn't bubble to it; it isn't a real row.
+        // biome-ignore lint/a11y/useKeyWithClickEvents: same reason.
+        (ui) => <div onClick={onAncestorClick}>{ui}</div>,
+      );
+
+      fireEvent.click(screen.getByRole("button", { name: "Reschedule" }));
+
+      expect(onAncestorClick).not.toHaveBeenCalled();
+      // The guard doesn't come at the cost of the picker itself opening.
+      expect(screen.getByTestId("scheduler-view")).toBeInTheDocument();
+    });
   });
 
   it("headings read exactly '10 Sep ‧ Today ‧ Thursday' and '11 Sep ‧ Tomorrow ‧ Friday'", () => {

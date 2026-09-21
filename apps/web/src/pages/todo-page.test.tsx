@@ -562,7 +562,17 @@ describe("TodoPage", () => {
     // `LazyTaskDetailView` resolves its `import()` asynchronously
     // (lazy-task-detail-view.ts's own header comment) — `findByRole`,
     // not `getByRole`, tolerates the one microtask/render that takes.
-    const dialog = await screen.findByRole("dialog");
+    // The explicit `{ timeout: 5000 }` (default 1000ms is otherwise plenty
+    // here) is issue #435's own finding, not a papered-over flake: that
+    // ticket added a second lazily-loaded chunk elsewhere on this page
+    // (`overdue-reschedule-action.tsx`'s own `LazyTaskSchedulePopover`),
+    // and the FIRST dynamic import() any test in this file triggers pays
+    // the one-time cost of the larger module graph that chunk split adds
+    // — this is that first test. Later `findByRole("dialog")` calls in
+    // this same file stay under the default because the module is already
+    // resolved and cached by then (confirmed by running this test alone,
+    // repeatedly, both before and after that ticket's own change).
+    const dialog = await screen.findByRole("dialog", {}, { timeout: 5000 });
     expect(dialog).toBeInTheDocument();
     // "Inbox" appears twice inside the dialog — the breadcrumb and the
     // Project attribute row both say it, for different reasons (this

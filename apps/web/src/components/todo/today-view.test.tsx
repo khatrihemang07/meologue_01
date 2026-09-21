@@ -68,6 +68,7 @@ function renderTodayView(overrides: Partial<Parameters<typeof TodayView>[0]> = {
     onRequestDelete: vi.fn(),
     onOpenSchedule: vi.fn(),
     onSetDate: vi.fn(),
+    onSetDateString: vi.fn(),
     ...overrides,
   };
   render(<TodayView {...props} />);
@@ -295,29 +296,141 @@ describe("TodayView", () => {
       expect(button.style.color).toBe("var(--td-overdue-reschedule)");
     });
 
-    it("rescheduling sets the date of every overdue Task to the chosen day, and touches nothing else", () => {
+    // Issue #435: Reschedule now opens the identical `TaskSchedulePopover`
+    // a Task's own Date button opens (task-row-content.tsx's own instance),
+    // not the old tap-then-Confirm `DatePickerSheet` — Todoist treats the
+    // two as one component. The only difference here is the empty starting
+    // state: no date/time/Recurrence of its own to seed the picker with.
+    it("opens the Task date picker with an empty 'Type a date' input and a plain 'Time' button, not the old Confirm sheet", () => {
+      renderTodayView({
+        tasks: [task({ id: "a", content: "a", date: "2026-08-30" })],
+      });
+
+      fireEvent.click(screen.getByRole("button", { name: "Reschedule" }));
+
+      const view = screen.getByTestId("scheduler-view");
+      expect(within(view).getByPlaceholderText("Type a date")).toHaveValue("");
+      expect(within(view).getByRole("button", { name: "Time" })).toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: /^Confirm/ })).not.toBeInTheDocument();
+    });
+
+    it("picking a day moves every overdue Task, keeping each one's own time and Recurrence untouched", () => {
+      const onSetDate = vi.fn();
+      const onSetDateString = vi.fn();
+      renderTodayView({
+        tasks: [
+          // Carries its own time-of-day — must keep it on the new day.
+          task({ id: "a", content: "a", date: "2026-08-30T21:00" }),
+          // Carries its own Recurrence — must keep it, untouched, on the
+          // new day (issue #435's own acceptance criterion).
+          task({ id: "b", content: "b", date: "2026-08-31", dateString: "every day" }),
+        ],
+        onSetDate,
+        onSetDateString,
+      });
+
+      fireEvent.click(screen.getByRole("button", { name: "Reschedule" }));
+      fireEvent.click(screen.getByRole("button", { name: /September 20th, 2026/ }));
+
+      expect(onSetDate).toHaveBeenCalledTimes(2);
+      expect(onSetDate).toHaveBeenCalledWith("a", "2026-09-20T21:00");
+      expect(onSetDate).toHaveBeenCalledWith("b", "2026-09-20");
+      expect(onSetDateString).not.toHaveBeenCalled();
+    });
+
+    it("picking a Time gives it to every overdue Task, keeping each one's own day", () => {
       const onSetDate = vi.fn();
       renderTodayView({
         tasks: [
           task({ id: "a", content: "a", date: "2026-08-30" }),
-          // Before #375 an undated Task with a passed deadline also counted
-          // as overdue (task-views.ts's own former union arm) — deadline is
-          // never read now, so this second overdue Task needs its own real
-          // `date` to stay in the section this test is about.
-          task({ id: "b", content: "b", date: "2026-08-31" }),
+          task({ id: "b", content: "b", date: "2026-08-31T09:00" }),
         ],
         onSetDate,
       });
 
       fireEvent.click(screen.getByRole("button", { name: "Reschedule" }));
-      // The nested DatePickerSheet's own tap-then-confirm: pick a day, then
-      // confirm — Confirm stays disabled until a day is tapped.
-      fireEvent.click(screen.getByRole("button", { name: /September 20th, 2026/ }));
-      fireEvent.click(screen.getByRole("button", { name: /^Confirm/ }));
+      fireEvent.click(screen.getByRole("button", { name: "Time" }));
+      fireEvent.click(screen.getByLabelText("Add a time"));
+      fireEvent.change(screen.getByLabelText("Start time"), { target: { value: "16:00" } });
+      fireEvent.click(screen.getByRole("button", { name: "Save" }));
 
       expect(onSetDate).toHaveBeenCalledTimes(2);
-      expect(onSetDate).toHaveBeenCalledWith("a", expect.any(String));
-      expect(onSetDate).toHaveBeenCalledWith("b", expect.any(String));
+      expect(onSetDate).toHaveBeenCalledWith("a", "2026-08-30T16:00");
+      expect(onSetDate).toHaveBeenCalledWith("b", "2026-08-31T16:00");
+    });
+
+    it("picking a Recurrence gives it to every overdue Task, anchored to each Task's own date", () => {
+      const onSetDateString = vi.fn();
+      renderTodayView({
+        tasks: [
+          task({ id: "a", content: "a", date: "2026-08-30" }),
+          task({ id: "b", content: "b", date: "2026-08-31" }),
+        ],
+        onSetDateString,
+      });
+
+      fireEvent.click(screen.getByRole("button", { name: "Reschedule" }));
+      fireEvent.pointerDown(screen.getByRole("button", { name: "Repeat" }));
+      const menu = screen.getByTestId("repeat-menu");
+      fireEvent.click(within(menu).getByRole("menuitem", { name: "Every day" }));
+
+      expect(onSetDateString).toHaveBeenCalledTimes(2);
+      // "today", the recurrence engine's own anchor (localDayKey(new
+      // Date())) — the fake system time this suite's own beforeEach pins.
+      expect(onSetDateString).toHaveBeenCalledWith("a", "every day", "2026-09-02");
+      expect(onSetDateString).toHaveBeenCalledWith("b", "every day", "2026-09-02");
+    });
+
+    it("No Date clears every overdue Task's date, and its Recurrence with it", () => {
+      const onSetDate = vi.fn();
+      const onSetDateString = vi.fn();
+      renderTodayView({
+        tasks: [
+          task({ id: "a", content: "a", date: "2026-08-30" }),
+          task({ id: "b", content: "b", date: "2026-08-31", dateString: "every day" }),
+        ],
+        onSetDate,
+        onSetDateString,
+      });
+
+      fireEvent.click(screen.getByRole("button", { name: "Reschedule" }));
+      fireEvent.click(screen.getByRole("button", { name: "No Date" }));
+
+      expect(onSetDate).toHaveBeenCalledTimes(2);
+      expect(onSetDate).toHaveBeenCalledWith("a", null);
+      expect(onSetDate).toHaveBeenCalledWith("b", null);
+      expect(onSetDateString).toHaveBeenCalledTimes(1);
+      expect(onSetDateString).toHaveBeenCalledWith("b", null, "2026-09-02");
+    });
+
+    // Issue #435's own acceptance criterion: the calendar's busy-day marks
+    // are the same real Task data a Task's own picker reads, not just the
+    // Overdue bucket this action applies to.
+    it("the calendar's busy-day marks reflect the real datesWithTasks map, not just the overdue Tasks", () => {
+      renderTodayView({
+        tasks: [task({ id: "a", content: "a", date: "2026-08-30" })],
+        detailActions: {
+          projects: [],
+          labels: [],
+          onOpenDetail: vi.fn(),
+          onSetPriority: vi.fn(),
+          onSetDate: vi.fn(),
+          onSetDateString: vi.fn(),
+          datesWithTasks: new Map([["2026-09-20", 3]]),
+          onSetProject: vi.fn(),
+          onSetLabels: vi.fn(),
+          onCopyLink: vi.fn(),
+          onRename: vi.fn(),
+          commentCountFor: vi.fn(() => 0),
+        },
+      });
+
+      fireEvent.click(screen.getByRole("button", { name: "Reschedule" }));
+
+      const busyCell = document.querySelector('[data-day="2026-09-20"]');
+      const quietCell = document.querySelector('[data-day="2026-09-21"]');
+      expect(busyCell?.className).toContain("before:content-['']");
+      expect(quietCell?.className).not.toContain("before:content-['']");
     });
   });
 

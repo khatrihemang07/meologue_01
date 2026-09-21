@@ -445,6 +445,18 @@ alone, and adds nothing of its own: a Task appears in it because of when it is p
 because of where it lives or what it says. A Task with no Date appears nowhere in it — there is no
 day to put it under.
 
+### Overdue
+
+A Task whose Date is a day before today and that is not yet done. Overdue is a state, not a place:
+a Task stops being Overdue the moment it is done or given a Date of today or later.
+
+### Reschedule
+
+Moving every Overdue Task at once, with one pick, in the same way a single Task's Date is set. A
+picked day moves each Task and leaves its own time and Recurrence as they were; a picked time or
+Recurrence is given to every one of them; No Date clears every one of them.
+_Avoid_: bulk date, postpone
+
 ### Occurrence
 
 One instance of a recurring Task, recorded as finished. An Occurrence is a record of work already

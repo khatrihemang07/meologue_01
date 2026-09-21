@@ -240,6 +240,16 @@ export interface TaskSchedulePopoverProps {
    */
   onPickDay: (day: string | null) => void;
   onPickRecurrence: (dateString: string, day: string) => void;
+  /**
+   * Shows the Time button and the "No Date" quick option even while
+   * `dateDay` is `null` — issue #435's Reschedule action, whose bulk Time
+   * pick and bulk clear both apply to every Overdue Task's own existing
+   * date, not to a single date this popover itself chose (it has none:
+   * see this popover's own `dateDay` doc comment). Every other caller
+   * omits this (defaults `false`) and keeps the ordinary "nothing to set
+   * or clear on an unset date" gates below.
+   */
+  alwaysDated?: boolean;
   /** Read once per popover open, not per render — every quick option and the typed preview need the identical "today," and a fresh `new Date()` on each keystroke risks "Today" itself rolling over mid-interaction. Defaults to `new Date()` for callers (tests) that don't need to pin it. */
   now?: Date;
   /**
@@ -266,6 +276,7 @@ export function TaskSchedulePopover({
   datesWithTasks,
   onPickDay,
   onPickRecurrence,
+  alwaysDated = false,
   now = new Date(),
   open: openProp,
   onOpenChange,
@@ -653,7 +664,13 @@ export function TaskSchedulePopover({
             onClick={() => commitDay(option.day)}
           />
         ))}
-        {dateDay !== null && (
+        {/*
+            `alwaysDated` (this popover's own doc comment above): issue
+            #435's Reschedule keeps this option reachable even with no
+            `dateDay` of its own — every Overdue Task it would clear
+            already has a date, this popover just has none picked yet.
+          */}
+        {(dateDay !== null || alwaysDated) && (
           <QuickOption
             icon={CircleSlash}
             label="No Date"
@@ -762,9 +779,12 @@ export function TaskSchedulePopover({
         {/*
             Gated on `dateDay !== null` for the identical reason the
             former inline checkbox was: there is no time-of-day to attach
-            to an unset date.
+            to an unset date. `alwaysDated` (this popover's own doc
+            comment above) is the one deliberate escape hatch — Reschedule
+            has no single `dateDay` of its own to gate on, but every
+            Overdue Task it applies to already carries a real day.
           */}
-        {dateDay !== null && (
+        {(dateDay !== null || alwaysDated) && (
           <Button
             type="button"
             variant="ghost"

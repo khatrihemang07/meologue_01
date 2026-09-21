@@ -129,7 +129,7 @@ export { toPositionalRow, toPositionalRows } from "./sqlite/row-mapping";
 export type { EntryPage, EntryStore } from "./store";
 export type { SyncEngineOptions, SyncTransport } from "./sync-engine";
 export { sync } from "./sync-engine";
-export { hasTime, MAX_TASK_NESTING_DEPTH } from "./task-fields";
+export { dayOf, hasTime, MAX_TASK_NESTING_DEPTH, timeOf, withDay, withTime } from "./task-fields";
 export { matchesSubstring, matchesWholeWord, normalize } from "./task-search";
 export type { TaskSearchOptions, TaskStore } from "./task-store";
 export type { Task } from "./task-types";
