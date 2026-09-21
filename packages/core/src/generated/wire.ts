@@ -1737,6 +1737,20 @@ export interface components {
             /** Format: int32 */
             last_warning_count: number;
             name: string;
+            /**
+             * Format: date-time
+             * @description `max(ended_at)` of this source's stored Activity intervals — `None`
+             *     before its first record ever lands.
+             *
+             *     This exists because "Refresh now" can correctly report 0 new records
+             *     while looking healthy: a source pointed at a stale snapshot copy of a
+             *     recorder database imports nothing on every run, forever, and nothing
+             *     else in this struct says so. `last_success_at` only says a run
+             *     finished, not that the *data* moved. Reading the newest record next to
+             *     it is what turns "0 new, again" into "and the file hasn't grown since
+             *     yesterday" — a diagnosable fact instead of a shrug.
+             */
+            newest_record_at?: string | null;
             path: string;
             /**
              * @description Where this source is in the run happening *now*, which is memory, not

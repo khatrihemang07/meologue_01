@@ -2657,3 +2657,106 @@ async fn invalid_json_is_ignored_rather_than_fatal(pool: PgPool) {
     let source = create_toggl_source(&pool, "Added by hand", &path).await;
     wait_for_intervals(&pool, source, 1).await;
 }
+
+// ---------------------------------------------------------------------------
+// `newest_record_at` (issue #418's refresh-observability follow-up)
+//
+// "Refresh now" imported nothing and gave no clue why. The root cause was
+// operational (sources pointed at stale snapshot copies of the recorder
+// databases, so every refresh correctly found 0 new records), but Settings
+// had no way to *see* that: nothing showed which file a source reads or how
+// recent its data already is. `newest_record_at` — the latest `ended_at`
+// this source has ever stored — is what makes a frozen recorder file
+// diagnosable from the source list alone, without opening a day.
+// ---------------------------------------------------------------------------
+
+/// A second, later record for the same fixture file. `AFTERNOON_START`/`END`
+/// rather than new constants, so the "later than `one_activity`" relationship
+/// is visible at the call site instead of hidden behind two more names.
+fn later_activity<'a>(id: &'a [u8], filename: &'a str) -> Activity<'a> {
+    Activity {
+        id,
+        start: AFTERNOON_START,
+        end: Some(AFTERNOON_END),
+        filename,
+        title: None,
+        idle: 0,
+        client: &[],
+    }
+}
+
+#[sqlx::test]
+async fn a_source_with_no_intervals_reports_a_null_newest_record(pool: PgPool) {
+    let dir = scratch_dir("newest-empty");
+    let path = dir.join("db.sqlite");
+    write_toggl_db(&path, &[]);
+
+    let source = create_toggl_source(&pool, "Empty", &path).await;
+    wait_for_attempts(&pool, source, 1).await;
+
+    let status = source_status(&pool, source).await;
+    assert!(
+        status["newest_record_at"].is_null(),
+        "a source that has stored nothing has no newest record: {status}"
+    );
+}
+
+#[sqlx::test]
+async fn newest_record_at_is_the_latest_stored_end_time(pool: PgPool) {
+    let dir = scratch_dir("newest-latest");
+    let path = dir.join("db.sqlite");
+    // Written out of order on purpose: the later record is the FIRST row, so
+    // a query that simply read the last row rather than taking a real max
+    // would still pass — measured, by reversing this order, that it would not.
+    write_toggl_db(
+        &path,
+        &[
+            later_activity(&[0xa1], "Mail"),
+            one_activity(&[0xa0], "Xcode"),
+        ],
+    );
+
+    let source = create_toggl_source(&pool, "Two records", &path).await;
+    wait_for_intervals(&pool, source, 2).await;
+
+    let status = source_status(&pool, source).await;
+    assert_eq!(
+        status["newest_record_at"], "2026-03-15T14:05:00Z",
+        "newest_record_at should be the later of the two stored ended_at values: {status}"
+    );
+}
+
+#[sqlx::test]
+async fn a_later_import_advances_the_newest_record(pool: PgPool) {
+    let dir = scratch_dir("newest-advances");
+    let path = dir.join("db.sqlite");
+    write_toggl_db(&path, &[one_activity(&[0xb0], "Xcode")]);
+
+    let source = create_toggl_source(&pool, "Growing", &path).await;
+    wait_for_intervals(&pool, source, 1).await;
+    assert_eq!(
+        source_status(&pool, source).await["newest_record_at"],
+        "2026-03-15T11:45:30.500Z"
+    );
+
+    // The recorder wrote a later record onto the same file; a second import
+    // (the "Refresh now" path, not a re-create) picks it up.
+    let connection = Connection::open(&path).unwrap();
+    insert_rows(&connection, &[later_activity(&[0xb1], "Mail")]);
+    connection.close().unwrap();
+
+    let (status, body) = post_refresh(app(&pool, false)).await;
+    assert_eq!(
+        status,
+        StatusCode::ACCEPTED,
+        "{}",
+        String::from_utf8_lossy(&body)
+    );
+    wait_for_intervals(&pool, source, 2).await;
+
+    assert_eq!(
+        source_status(&pool, source).await["newest_record_at"],
+        "2026-03-15T14:05:00Z",
+        "a later import must advance newest_record_at, not just the first import"
+    );
+}

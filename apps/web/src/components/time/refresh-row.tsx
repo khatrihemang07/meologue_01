@@ -1,6 +1,7 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
+import { formatNewestRecord, importSummary } from "@/lib/time-status";
 import { refreshTimeSources, type TimeSource } from "@/lib/time-transport";
 
 /**
@@ -10,6 +11,15 @@ import { refreshTimeSources, type TimeSource } from "@/lib/time-transport";
  * recorder must not be able to make every other recorder's result unreadable,
  * which is the whole reason the importer records outcomes against sources
  * rather than against runs (issue #421).
+ *
+ * Issue #418's own complaint: a refresh that correctly found 0 new records
+ * (every source pointed at a stale snapshot file) looked identical to a
+ * healthy no-op refresh, because nothing here said which file a source reads
+ * or how recent its data already is. The finish message now names each
+ * source's newest stored record when nothing came in (`importSummary`), and
+ * the status list below always shows a source's newest record and the file
+ * path it reads — truncated, with the full path in `title` — so a frozen
+ * recorder is diagnosable without opening a day at all.
  */
 export function RefreshRow({
   sources,
@@ -46,10 +56,15 @@ export function RefreshRow({
   // the first time a real import finished. No unit test caught it because
   // none of them moved a source from running back to idle.
   const wasRunning = useRef(running);
+  // `sources` deliberately excluded from the dependency list below: this
+  // must fire exactly once per running -> idle transition, using whichever
+  // `sources` snapshot is current AT that instant, not re-run every time a
+  // later poll updates `sources` while nothing about `running` changed.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: see the comment above.
   useEffect(() => {
     if (wasRunning.current && !running) {
       void queryClient.invalidateQueries({ queryKey: ["time", "intervals"] });
-      setMessage("Import finished.");
+      setMessage(importSummary(sources, new Date()));
     }
     wasRunning.current = running;
   }, [running, queryClient]);
@@ -89,6 +104,7 @@ export function RefreshRow({
                 )}
               </span>
               <SourceStatusLine source={source} />
+              <SourceFileLine source={source} />
             </li>
           ))}
         </ul>
@@ -129,6 +145,37 @@ function SourceStatusLine({ source }: { source: TimeSource }) {
       ) : (
         <> · no nightly run yet</>
       )}
+    </span>
+  );
+}
+
+/**
+ * The file a source reads, and how recent its newest stored record is.
+ *
+ * Both facts together are what make a frozen source diagnosable: a path
+ * pointed at a stale snapshot copy and a genuinely idle-but-healthy source
+ * report the identical `last_inserted_count: 0` on every run — the newest
+ * record's own age is the only thing that tells them apart (issue #418).
+ * `title` carries the full path: Settings-configured paths are often long
+ * absolute ones, and truncating them here without a way to read the whole
+ * thing would trade one kind of illegibility for another.
+ */
+function SourceFileLine({ source }: { source: TimeSource }) {
+  return (
+    <span className="flex items-center gap-1 text-muted-foreground">
+      {/* `shrink-0 whitespace-nowrap`: beside a long path on a phone this
+          otherwise gave up its width to the truncating path and wrapped into
+          three stacked words. The time is the part a reader needs; the path
+          is the part that can afford to be cut. */}
+      <span className="shrink-0 whitespace-nowrap">
+        Newest record {formatNewestRecord(source.newest_record_at, new Date())}
+      </span>
+      <span aria-hidden="true" className="shrink-0">
+        ·
+      </span>
+      <span className="min-w-0 truncate" title={source.path}>
+        {source.path}
+      </span>
     </span>
   );
 }

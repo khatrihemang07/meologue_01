@@ -2657,6 +2657,14 @@
           "name": {
             "type": "string"
           },
+          "newest_record_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "`max(ended_at)` of this source's stored Activity intervals — `None`\nbefore its first record ever lands.\n\nThis exists because \"Refresh now\" can correctly report 0 new records\nwhile looking healthy: a source pointed at a stale snapshot copy of a\nrecorder database imports nothing on every run, forever, and nothing\nelse in this struct says so. `last_success_at` only says a run\nfinished, not that the *data* moved. Reading the newest record next to\nit is what turns \"0 new, again\" into \"and the file hasn't grown since\nyesterday\" — a diagnosable fact instead of a shrug."
+          },
           "path": {
             "type": "string"
           },

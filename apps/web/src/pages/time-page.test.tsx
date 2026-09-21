@@ -69,6 +69,11 @@ function sourceFixture(overrides: Record<string, unknown>) {
     last_warning_count: 0,
     last_error: null,
     last_scheduled_run_on: null,
+    // Issue #418: `null` here (rather than omitted) matches what a real
+    // Server sends for a source with no stored records — same reason
+    // `last_attempt_at`/`last_success_at` are stated explicitly above rather
+    // than left to accidentally read as "an import is running".
+    newest_record_at: null,
     state: "idle",
     ...overrides,
   };
@@ -614,12 +619,93 @@ describe("TimePage", () => {
     // Once it ends the page is still alive, says so, and has re-read the day
     // the run may have imported into.
     expect(await screen.findByRole("button", { name: "Refresh now" })).toBeEnabled();
-    expect(await screen.findByText("Import finished.")).toBeInTheDocument();
+    // Issue #418: the finish message now names each source's own result
+    // (`importSummary`) rather than a flat "Import finished." — here, one
+    // source that found nothing new and has no stored record of its own yet.
+    expect(
+      await screen.findByText("Nothing new. Newest records: Toggl Track never."),
+    ).toBeInTheDocument();
     await waitFor(() => expect(intervalRequests).toBeGreaterThan(1));
 
     // And it settles: no render loop, so the message does not keep churning.
     const settled = intervalRequests;
     await new Promise((resolve) => setTimeout(resolve, 300));
     expect(intervalRequests).toBe(settled);
+  });
+
+  it("names each source's new count when a refresh finishes having imported something", async () => {
+    // The other half of `importSummary`: once at least one source actually
+    // found something, the message is the per-source new-count line, not the
+    // all-zero "Nothing new" phrasing above.
+    useSettingsStore.setState({ serverUrl: "https://server.example", capabilities: SUPPORTED });
+    let running = true;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        const parsed = new URL(url);
+        if (parsed.pathname === "/v1/time/refresh" && init?.method === "POST") {
+          return { ok: true, status: 202, json: async () => ({ queued: 2 }) };
+        }
+        if (parsed.pathname === "/v1/time/sources") {
+          const state = running ? "running" : "idle";
+          // The next poll sees the run finished.
+          running = false;
+          return {
+            ok: true,
+            status: 200,
+            json: async () => [
+              sourceFixture({
+                id: "toggl-source",
+                name: "Toggl Track",
+                last_inserted_count: 25,
+                state,
+              }),
+              sourceFixture({
+                id: "clockify-source",
+                name: "Clockify Desktop",
+                last_inserted_count: 20,
+                state,
+              }),
+            ],
+          };
+        }
+        if (parsed.pathname === "/v1/time/intervals") {
+          return { ok: true, status: 200, json: async () => [] };
+        }
+        return { ok: false, status: 404, json: async () => ({}) };
+      }),
+    );
+
+    renderPage();
+
+    expect(await screen.findByRole("button", { name: "Importing…" })).toBeDisabled();
+    expect(await screen.findByRole("button", { name: "Refresh now" })).toBeEnabled();
+    expect(
+      await screen.findByText("Import finished — Toggl Track: 25 new · Clockify Desktop: 20 new"),
+    ).toBeInTheDocument();
+  });
+
+  it("shows each source's file path and newest record, so a frozen source is diagnosable", async () => {
+    // Issue #418: "Refresh now" imported nothing and gave no clue why — the
+    // sources pointed at stale snapshot copies of the recorder databases.
+    // Neither fact (which file, how recent its data) was visible anywhere.
+    useSettingsStore.setState({ serverUrl: "https://server.example", capabilities: SUPPORTED });
+    stubServer({
+      sources: [
+        sourceFixture({
+          path: "/Users/me/Library/Application Support/stale-copy/Toggl.sqlite",
+          newest_record_at: todayAt(8, 12),
+        }),
+      ],
+      intervals: [],
+    });
+
+    renderPage();
+
+    const status = within(await screen.findByRole("list", { name: "Time source status" }));
+    expect(
+      status.getByText("/Users/me/Library/Application Support/stale-copy/Toggl.sqlite"),
+    ).toBeInTheDocument();
+    expect(status.getByText(/Newest record 08:12/)).toBeInTheDocument();
   });
 });

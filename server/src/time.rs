@@ -155,6 +155,17 @@ pub struct TimeSource {
     /// "running" would leave a source stuck that way after a crash.
     #[sqlx(skip)]
     pub state: SourceRunState,
+    /// `max(ended_at)` of this source's stored Activity intervals — `None`
+    /// before its first record ever lands.
+    ///
+    /// This exists because "Refresh now" can correctly report 0 new records
+    /// while looking healthy: a source pointed at a stale snapshot copy of a
+    /// recorder database imports nothing on every run, forever, and nothing
+    /// else in this struct says so. `last_success_at` only says a run
+    /// finished, not that the *data* moved. Reading the newest record next to
+    /// it is what turns "0 new, again" into "and the file hasn't grown since
+    /// yesterday" — a diagnosable fact instead of a shrug.
+    pub newest_record_at: Option<DateTime<Utc>>,
 }
 
 /// The columns `time_sources` actually stores, for the queries that read one.
@@ -164,7 +175,9 @@ pub struct TimeSource {
 macro_rules! source_columns {
     () => {
         "id, name, kind, path, enabled, last_attempt_at, last_success_at, \
-         last_inserted_count, last_warning_count, last_error, last_scheduled_run_on"
+         last_inserted_count, last_warning_count, last_error, last_scheduled_run_on, \
+         (select max(ended_at) from activity_intervals \
+            where activity_intervals.source_id = time_sources.id) as newest_record_at"
     };
 }
 
@@ -402,6 +415,9 @@ pub async fn create_source_handler(
         last_error: None,
         last_scheduled_run_on: None,
         state: SourceRunState::Queued,
+        // A source that has just been saved cannot have a stored record yet
+        // — its first import is queued below, not finished.
+        newest_record_at: None,
     };
     sqlx::query("insert into time_sources (id,name,kind,path,enabled) values ($1,$2,$3,$4,$5)")
         .bind(source.id)
