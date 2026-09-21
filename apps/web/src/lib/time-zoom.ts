@@ -86,6 +86,15 @@ const STEP_MINUTES = [1, 2, 5, 10, 15, 30, 60, 120] as const;
 /** How far apart two labels have to stay for both to stay readable. */
 const MIN_LABEL_SPACING_PX = 40;
 
+/**
+ * How far apart two grid LINES (major or minor, unlabelled included) have to
+ * stay for both to still read as separate lines rather than merging into a
+ * solid band — issue #431. Much smaller than `MIN_LABEL_SPACING_PX`: a line
+ * has no text to clip or overlap, only itself, so it can pack far denser
+ * than a label ever could.
+ */
+const MIN_GRIDLINE_SPACING_PX = 8;
+
 function stepMinutesFor(pxPerHour: number): number {
   const pxPerMinute = pxPerHour / 60;
   for (const candidate of STEP_MINUTES) {
@@ -103,37 +112,117 @@ function stepMinutesFor(pxPerHour: number): number {
 }
 
 /**
- * The clock marks a day's shared scale is drawn against, at a given zoom.
- *
- * Marks are placed at `dayStart + k * step`, walking forward in real elapsed
- * time — not at fixed fractions of the day the way the fixed-scale predecessor
- * `time-lanes.ts` used to compute (`hourMarks`, retired by this issue). Each
- * mark is then *labelled* by reading the clock at the instant it lands on,
- * which keeps the same DST-agnostic property `hourMarks`'s own comment
- * documented: placing or labelling by "local hour N" only works when the
- * window happens to begin at local midnight, and silently collapses onto the
- * top edge when it does not (which is exactly what the Server's UTC-resolved
- * day boundary used to do to a Device several hours off UTC — see ADR 0092).
- * On a daylight-saving day the elapsed-time steps stay even while the day
- * itself is 23 or 25 hours long, so a label may repeat or skip an hour; the
- * labels stay truthful about the instants they sit on, which is what matters
- * for reading a timeline.
+ * Minor-gridline step candidates, in seconds, finest first — issue #431. 15
+ * divides every one of `STEP_MINUTES`'s label steps once converted to
+ * seconds (60 through 7200), so any candidate this list can return divides
+ * evenly into whichever label step `stepMinutesFor` picked at the same zoom
+ * — the exact-division property `gridMarks` relies on to make a labelled
+ * mark's `top` and an unlabelled minor mark's `top` fall out of literally
+ * the same walk, rather than two separately-rounded computations that could
+ * drift apart by a pixel.
  */
-export function scaleMarks(dayStart: number, dayEnd: number, pxPerHour: number): ScaleMark[] {
-  const stepMs = stepMinutesFor(pxPerHour) * 60_000;
-  const marks: ScaleMark[] = [];
+const MINOR_STEP_SECONDS = [15, 30, 60, 120, 300, 600, 900, 1800, 3600, 7200] as const;
+
+function minorStepSecondsFor(pxPerHour: number, labelStepSeconds: number): number {
+  const pxPerSecond = pxPerHour / 3600;
+  for (const candidate of MINOR_STEP_SECONDS) {
+    if (candidate > labelStepSeconds || labelStepSeconds % candidate !== 0) {
+      continue;
+    }
+    if (candidate * pxPerSecond >= MIN_GRIDLINE_SPACING_PX) {
+      return candidate;
+    }
+  }
+  // Unreachable: `labelStepSeconds` itself is always in `MINOR_STEP_SECONDS`
+  // (every `STEP_MINUTES` entry converted to seconds is one of this list's
+  // values) and always clears `MIN_GRIDLINE_SPACING_PX` — `stepMinutesFor`
+  // only ever picks a label step that already clears the much taller
+  // `MIN_LABEL_SPACING_PX` floor. Kept as a fallback for the same reason
+  // `stepMinutesFor`'s own fallback is: a render that hits it draws grid
+  // lines exactly where the labels are, one line, not a crash.
+  return labelStepSeconds;
+}
+
+/** `HH:mm`, read off the clock at `instant` — the one place both the scale's
+ * labels (`scaleMarks`) and the now marker's own time (`comparative-
+ * timeline.tsx`'s `ScaleGutter`) format a clock reading, so neither can ever
+ * show a different string for the same instant. */
+export function formatClock(instant: number): string {
+  const at = new Date(instant);
+  return `${String(at.getHours()).padStart(2, "0")}:${String(at.getMinutes()).padStart(2, "0")}`;
+}
+
+/**
+ * One line on the day's shared grid, at a given zoom level — issue #431.
+ * `scaleMarks` (below) is a `labelled`-only filter over this, not a second
+ * computation of the same positions, so a label and its line can never
+ * drift apart: see `gridMarks`' own header comment for why the minor step it
+ * walks at is always an exact divisor of the label step, which is what
+ * makes that filter produce byte-identical `instant`/`top` values to what
+ * `scaleMarks` used to compute directly.
+ */
+export type GridMark = {
+  /** The instant this mark sits on. */
+  instant: number;
+  /** Distance from the top of the day, as a fraction of the whole day. */
+  top: number;
+  /** True on the hour, for a heavier line at low zoom. */
+  major: boolean;
+  /** True for the marks `scaleMarks` also returns, with a label attached. */
+  labelled: boolean;
+};
+
+/**
+ * The grid lines a day's timeline is drawn against, at a given zoom —
+ * labelled marks (identical to `scaleMarks`' own output) plus, at zoom
+ * levels with room, unlabelled minor lines between them. Toggl Track's
+ * Calendar is the visual reference (issue #431): a line at every label,
+ * strong on the hour, fainter minor lines between that get denser the
+ * further in a reader zooms.
+ *
+ * Walks forward in real elapsed time from `dayStart`, exactly like
+ * `scaleMarks`' own header comment documents for the same DST-agnostic
+ * reason — labelling (and here, "major") by reading the clock at the
+ * instant a mark actually lands on, never by assuming the window began at
+ * local midnight.
+ */
+export function gridMarks(dayStart: number, dayEnd: number, pxPerHour: number): GridMark[] {
+  const labelStepSeconds = stepMinutesFor(pxPerHour) * 60;
+  const labelStepMs = labelStepSeconds * 1000;
+  const stepMs = minorStepSecondsFor(pxPerHour, labelStepSeconds) * 1000;
+  const marks: GridMark[] = [];
   for (let instant = dayStart; instant < dayEnd; instant += stepMs) {
     const at = new Date(instant);
-    const hours = at.getHours();
-    const minutes = at.getMinutes();
     marks.push({
       instant,
       top: dayFraction(instant, dayStart, dayEnd),
-      label: `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}`,
-      major: minutes === 0,
+      major: at.getMinutes() === 0 && at.getSeconds() === 0,
+      labelled: (instant - dayStart) % labelStepMs === 0,
     });
   }
   return marks;
+}
+
+/**
+ * The clock marks a day's shared scale is drawn against, at a given zoom —
+ * the `labelled` subset of `gridMarks`' own output (see that function's
+ * header comment for why lines and labels are one seam, not two), each
+ * given the `label` text a plain grid line has no use for.
+ *
+ * Kept as its own exported function, not inlined at every call site, both
+ * because it predates `gridMarks` (issue #418) and because most callers
+ * only ever want the labels — `ScaleGutter` is the one place that needs the
+ * full grid.
+ */
+export function scaleMarks(dayStart: number, dayEnd: number, pxPerHour: number): ScaleMark[] {
+  return gridMarks(dayStart, dayEnd, pxPerHour)
+    .filter((mark) => mark.labelled)
+    .map((mark) => ({
+      instant: mark.instant,
+      top: mark.top,
+      major: mark.major,
+      label: formatClock(mark.instant),
+    }));
 }
 
 /** What `anchoredScrollTop` needs to keep one instant fixed on screen. */

@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import {
   anchoredScrollTop,
   DEFAULT_ZOOM_INDEX,
+  formatClock,
+  gridMarks,
   minimumFraction,
   scaleMarks,
   ZOOM_LEVELS,
@@ -166,5 +168,99 @@ describe("anchoredScrollTop", () => {
       newPxPerHour: 30,
     });
     expect(next).toBeGreaterThanOrEqual(0);
+  });
+});
+
+/**
+ * Issue #431: Toggl Track's Calendar draws a horizontal line across the
+ * whole day at every scale label, plus unlabelled minor lines between them
+ * that get denser as a reader zooms in. `gridMarks` is the single pure
+ * function both the gridline overlay (`comparative-timeline.tsx`'s
+ * `TimelineGridlines`) and the scale's own labels (`scaleMarks`, now
+ * implemented as a filter over this) read — see this file's `scaleMarks` for
+ * why that has to be true rather than two functions computing "the same"
+ * marks independently.
+ */
+describe("gridMarks", () => {
+  const DAY_START = Date.parse("2026-03-15T00:00:00Z");
+  const DAY_END = Date.parse("2026-03-16T00:00:00Z");
+
+  it("keeps every mark at least 8px from its neighbour, at every zoom level", () => {
+    for (const pxPerHour of ZOOM_LEVELS) {
+      const marks = gridMarks(DAY_START, DAY_END, pxPerHour);
+      const pxPerMs = pxPerHour / 3_600_000;
+      for (let i = 1; i < marks.length; i += 1) {
+        const gapPx = (nth(marks, i).instant - nth(marks, i - 1).instant) * pxPerMs;
+        expect(gapPx).toBeGreaterThanOrEqual(8);
+      }
+    }
+  });
+
+  it("reaches 15-second minor lines at the top zoom level (3840px/hour = 64px/min, 15s = 16px)", () => {
+    const marks = gridMarks(DAY_START, DAY_END, 3840);
+    const secondsBetween = (nth(marks, 1).instant - nth(marks, 0).instant) / 1000;
+    expect(secondsBetween).toBe(15);
+  });
+
+  it("never gives a coarser zoom level MORE lines per hour than a finer one", () => {
+    const linesPerHour = ZOOM_LEVELS.map((pxPerHour) => {
+      const marks = gridMarks(DAY_START, DAY_END, pxPerHour);
+      // A full day (24h) worth of marks, evenly spaced by construction —
+      // dividing the day's mark count by 24 gives the per-hour density
+      // without depending on where exactly the day boundary falls.
+      return marks.length / 24;
+    });
+    for (let i = 1; i < linesPerHour.length; i += 1) {
+      expect(nth(linesPerHour, i)).toBeGreaterThanOrEqual(nth(linesPerHour, i - 1));
+    }
+    // At least one step must show a STRICT increase — density that never
+    // actually changes would technically satisfy "never fewer" while failing
+    // the acceptance criterion that it "visibly increases".
+    expect(Math.max(...linesPerHour)).toBeGreaterThan(Math.min(...linesPerHour));
+  });
+
+  it("labels every mark scaleMarks would label, at the identical instant and top", () => {
+    for (const pxPerHour of ZOOM_LEVELS) {
+      const grid = gridMarks(DAY_START, DAY_END, pxPerHour);
+      const labelled = grid.filter((mark) => mark.labelled);
+      const labels = scaleMarks(DAY_START, DAY_END, pxPerHour);
+      expect(labelled.map((mark) => mark.instant)).toEqual(labels.map((mark) => mark.instant));
+      expect(labelled.map((mark) => mark.top)).toEqual(labels.map((mark) => mark.top));
+      expect(labelled.map((mark) => mark.major)).toEqual(labels.map((mark) => mark.major));
+    }
+  });
+
+  it("has unlabelled minor marks strictly between labelled ones once zoom allows it", () => {
+    // At the default 120px/hour minor lines land every 5 minutes between
+    // 30-minute labels (see the lines-per-hour table this ticket's report
+    // documents), so the grid must have more marks than the scale has labels.
+    const grid = gridMarks(DAY_START, DAY_END, 120);
+    const labels = scaleMarks(DAY_START, DAY_END, 120);
+    expect(grid.length).toBeGreaterThan(labels.length);
+    expect(grid.some((mark) => !mark.labelled)).toBe(true);
+  });
+
+  it("flags major only on the hour, whatever the step", () => {
+    const marks = gridMarks(DAY_START, DAY_END, 960);
+    for (const mark of marks) {
+      const at = new Date(mark.instant);
+      expect(mark.major).toBe(at.getMinutes() === 0 && at.getSeconds() === 0);
+    }
+  });
+
+  it("marks every mark's top as strictly increasing, starting at 0", () => {
+    const marks = gridMarks(DAY_START, DAY_END, 240);
+    expect(marks[0]?.top).toBe(0);
+    for (let i = 1; i < marks.length; i += 1) {
+      expect(nth(marks, i).top).toBeGreaterThan(nth(marks, i - 1).top);
+    }
+  });
+});
+
+describe("formatClock", () => {
+  it("reads HH:mm off the clock at a given instant, matching scaleMarks' own label format", () => {
+    const at = Date.parse("2026-03-15T08:05:00Z");
+    const marks = scaleMarks(at, at + 60 * 60_000, 120);
+    expect(formatClock(at)).toBe(marks[0]?.label);
   });
 });

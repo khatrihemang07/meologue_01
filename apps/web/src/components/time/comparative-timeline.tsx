@@ -9,7 +9,15 @@ import {
   placeLane,
 } from "@/lib/time-lanes";
 import type { ActivityInterval } from "@/lib/time-transport";
-import { MIN_TARGET_PX, minimumFraction, type ScaleMark, scaleMarks } from "@/lib/time-zoom";
+import {
+  formatClock,
+  type GridMark,
+  gridMarks,
+  MIN_TARGET_PX,
+  minimumFraction,
+  type ScaleMark,
+  scaleMarks,
+} from "@/lib/time-zoom";
 
 /**
  * The shared 24-hour clock every source lane is drawn against (issue #420),
@@ -122,7 +130,18 @@ export function ComparativeTimeline({
 }) {
   const scaleHeight = pxPerHour * 24;
   const marks = scaleMarks(dayStart, dayEnd, pxPerHour);
+  const grid = gridMarks(dayStart, dayEnd, pxPerHour);
   const minFraction = minimumFraction(pxPerHour);
+
+  // Read ONCE here rather than once per lane (the plain now-line's previous
+  // `useNowTick` call inside `LaneColumn`) — issue #431's dot and time label
+  // in the gutter (`ScaleGutter`) must sit at the exact same height as every
+  // lane's own now-line, and a single shared `nowTop` computed from a single
+  // `now` is what makes that true by construction rather than by three
+  // separately-ticking hooks landing on the same millisecond by luck.
+  const now = useNowTick(isToday);
+  const nowTop = now === null ? null : dayFraction(now, dayStart, dayEnd);
+  const nowLabel = now === null ? null : formatClock(now);
 
   const { scrollElement } = useContext(HistoryScrollContext);
   const scaleRef = useRef<HTMLDivElement | null>(null);
@@ -194,9 +213,27 @@ export function ComparativeTimeline({
     // both to attach its ctrl/⌘+wheel listener to and to measure for its
     // scroll-anchoring math — see that hook's own header comment.
     <div ref={timelineRef} {...timelineProps} className="-mx-4 flex gap-2 px-4 outline-none">
-      <ScaleGutter marks={marks} scaleHeight={scaleHeight} scaleRef={scaleRef} />
+      <ScaleGutter
+        marks={marks}
+        scaleHeight={scaleHeight}
+        scaleRef={scaleRef}
+        nowTop={nowTop}
+        nowLabel={nowLabel}
+      />
       <div className="min-w-0 flex-1 overflow-x-auto" data-testid="time-lane-scroller">
-        <div className="flex min-w-max gap-2">
+        {/* `relative`: `TimelineGridlines` positions itself with `inset-0`
+            against THIS box, not the scroller outside it — sizing against
+            the scroller would clip the overlay to whatever is currently
+            visible instead of covering the full scrollable width every lane
+            actually occupies (issue #431: gridlines must still be there once
+            a reader scrolls past the first lane, not just painted into the
+            slice on screen at mount). `isolate`: the overlay's `zIndex: -1`
+            is only "behind the records" inside a stacking context of its
+            own; without one it fell behind the page's own background and
+            every line was measured in place yet never painted (seen on the
+            device). */}
+        <div className="relative isolate flex min-w-max gap-2">
+          <TimelineGridlines marks={grid} scaleHeight={scaleHeight} />
           {lanes.map((lane) => (
             <LaneColumn
               key={lane.sourceId}
@@ -205,7 +242,7 @@ export function ComparativeTimeline({
               dayEnd={dayEnd}
               scaleHeight={scaleHeight}
               minFraction={minFraction}
-              isToday={isToday}
+              nowTop={nowTop}
               openIntervalId={openIntervalId}
               onOpen={onOpen}
             />
@@ -229,15 +266,47 @@ export function ComparativeTimeline({
  * boxes cannot drift apart: one shows a lane's name, the other is hidden with
  * `invisible`, which reserves the identical box.
  */
+/**
+ * How close a scale label can sit to the now marker's own time label before
+ * the two visually pile on each other — issue #431, an explicit complaint
+ * about labels piling up. Roughly a label's own line box (`text-[10px]`
+ * with a little breathing room): closer than this and the two strings start
+ * to overlap rather than merely sit near one another.
+ */
+const NOW_LABEL_COLLISION_PX = 14;
+
 function ScaleGutter({
   marks,
   scaleHeight,
   scaleRef,
+  nowTop,
+  nowLabel,
 }: {
   marks: ScaleMark[];
   scaleHeight: number;
   scaleRef: React.RefObject<HTMLDivElement | null>;
+  /** Today's current position as a fraction of the day, or `null` off
+   * today — the SAME fraction every lane's own now-line reads too
+   * (`ComparativeTimeline`'s single `useNowTick` call), so the dot below,
+   * the line across every lane, and this gutter's own time label can never
+   * draw at a different height from one another. */
+  nowTop: number | null;
+  /** `formatClock` of that SAME `now` instant, passed rather than
+   * re-derived from a fresh `Date.now()` here — a second read could land a
+   * tick after the one `nowTop` was computed from, and a marker whose own
+   * dot and label disagree on the time is worse than one that ticks a
+   * minute slower than the wall clock. `null` exactly when `nowTop` is. */
+  nowLabel: string | null;
 }) {
+  // The now label wins any collision: an ordinary scale label this close to
+  // it is dropped rather than the two piling on top of each other. The LINE
+  // for that hidden label still exists — see `TimelineGridlines`, which does
+  // not read `nowTop` at all — only the text in the gutter is what piles up.
+  const visibleMarks =
+    nowTop === null
+      ? marks
+      : marks.filter((mark) => Math.abs(mark.top - nowTop) * scaleHeight >= NOW_LABEL_COLLISION_PX);
+
   return (
     <div aria-hidden="true" className="w-12 shrink-0">
       <LaneHeading hidden>0</LaneHeading>
@@ -253,7 +322,7 @@ function ScaleGutter({
           measured: all 48 default-zoom labels landed within 1px of each
           other, at the top of the gutter. */}
       <div ref={scaleRef} className="relative" data-time-scale="" style={{ height: scaleHeight }}>
-        {marks.map((mark) => (
+        {visibleMarks.map((mark) => (
           <span
             key={mark.instant}
             className={`-translate-y-1/2 absolute right-1 tabular-nums ${
@@ -265,6 +334,69 @@ function ScaleGutter({
           >
             {mark.label}
           </span>
+        ))}
+        {nowTop !== null && (
+          <>
+            {/* The dot sits AT the gutter's own right edge — the boundary
+                with the lanes — rather than fully inside it, matching
+                Toggl Track's Calendar reference: the marker belongs to the
+                whole row, not just the time column. */}
+            <span
+              aria-hidden="true"
+              data-time-now-dot=""
+              className="pointer-events-none absolute right-0 size-2 -translate-y-1/2 translate-x-1/2 rounded-full bg-destructive"
+              style={{ top: `${nowTop * 100}%` }}
+            />
+            <span
+              data-time-now-label=""
+              className="-translate-y-1/2 absolute right-1 font-medium text-[10px] text-destructive tabular-nums"
+              style={{ top: `${nowTop * 100}%` }}
+            >
+              {nowLabel}
+            </span>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Horizontal lines across the FULL WIDTH of the lanes area — issue #431,
+ * Toggl Track's Calendar reference. One overlay rather than a border on
+ * each lane's own `<ol>` (the way the now-line already worked): a per-lane
+ * border only ever spans that one lane's own width, and the whole point of
+ * a shared clock (this file's own header comment) is that its lines read
+ * across every lane at once, including one a reader has scrolled past
+ * horizontally — this sits inside the SAME horizontally-scrolling content
+ * the lanes do, so it scrolls with them rather than being clipped to
+ * whatever is on screen at mount.
+ *
+ * `pointer-events-none`: decorative only, and MUST NOT ever intercept a
+ * click a record underneath needs — the same rule `LaneHeading`'s own
+ * comment gives for the identical reason.
+ *
+ * `zIndex: -1`: painted behind every record. `IntervalBlock`'s own `<li>`
+ * sets `zIndex: layer` (0 or 1) to keep a short record on top of a long one
+ * it visually sits on; a gridline at the default `z-index: auto` (0 for a
+ * flex item) would paint ON TOP of a layer-0 block's own opaque background
+ * — a stray line crossing a record — instead of only ever showing in the
+ * empty space around one.
+ */
+function TimelineGridlines({ marks, scaleHeight }: { marks: GridMark[]; scaleHeight: number }) {
+  return (
+    <div aria-hidden="true" className="pointer-events-none absolute inset-0" style={{ zIndex: -1 }}>
+      <LaneHeading hidden>0</LaneHeading>
+      <div className="relative" style={{ height: scaleHeight }}>
+        {marks.map((mark) => (
+          <div
+            key={mark.instant}
+            data-time-gridline={mark.major ? "major" : "minor"}
+            className={`pointer-events-none absolute inset-x-0 border-t ${
+              mark.major ? "border-border" : "border-border/40"
+            }`}
+            style={{ top: `${mark.top * 100}%` }}
+          />
         ))}
       </div>
     </div>
@@ -303,7 +435,7 @@ function LaneColumn({
   dayEnd,
   scaleHeight,
   minFraction,
-  isToday,
+  nowTop,
   openIntervalId,
   onOpen,
 }: {
@@ -312,12 +444,14 @@ function LaneColumn({
   dayEnd: number;
   scaleHeight: number;
   minFraction: number;
-  isToday: boolean;
+  /** `null` off today — see `ComparativeTimeline`'s own `useNowTick` call,
+   * the single shared fraction every lane's own now-line draws from so it
+   * can never disagree with the gutter's now dot and time label. */
+  nowTop: number | null;
   openIntervalId: string | null;
   onOpen: (id: string | null) => void;
 }) {
   const placed = placeLane(lane.intervals, dayStart, dayEnd, minFraction);
-  const now = useNowTick(isToday);
 
   return (
     <section
@@ -346,13 +480,15 @@ function LaneColumn({
             onOpen={onOpen}
           />
         ))}
-        {isToday && now !== null && (
-          // A plain line for now, every lane crossed the same way — the dot
-          // plus time label is #431.
+        {nowTop !== null && (
+          // The line across every lane — issue #418. The dot and time label
+          // in the gutter are issue #431's own addition (`ScaleGutter`);
+          // both draw from the identical `nowTop` this component passes
+          // down, so neither can ever land at a different height.
           <li
             aria-hidden="true"
             className="pointer-events-none absolute inset-x-0 border-destructive border-t-2"
-            style={{ top: `${dayFraction(now, dayStart, dayEnd) * 100}%` }}
+            style={{ top: `${nowTop * 100}%` }}
           />
         )}
       </ol>

@@ -157,7 +157,19 @@ function DailyComparison({
   const zoomPercent = Math.round((zoom.pxPerHour / 120) * 100);
 
   return (
-    <section aria-labelledby="time-day-heading" className="flex min-h-0 flex-col gap-3">
+    // `pb-24`: trailing blank scroll room after `ZoomControls`, not decoration
+    // — issue #431. `ZoomControls` is `position: sticky; bottom: 1rem`, which
+    // keeps it floating that 1rem clear of the SCROLL VIEWPORT's own bottom
+    // edge for as long as there is any more of the page below the current
+    // scroll position, INCLUDING at the page's true maximum scrollTop: sticky
+    // positioning never creates scroll room of its own, so without slack
+    // AFTER it, the last ~68px of any day (the control row's own `h-11`
+    // buttons plus `p-1` wrapper = 52px, plus that 1rem offset) can never be
+    // scrolled above the floating controls — there is nowhere further to
+    // scroll TO. `pb-24` (96px) gives that scroll room back: the LAST record
+    // moves clear once the reader scrolls into what is now blank padding
+    // instead of running out of document.
+    <section aria-labelledby="time-day-heading" className="flex min-h-0 flex-col gap-3 pb-24">
       <DayNavigator
         day={day}
         onChange={(next) => {

@@ -1306,4 +1306,90 @@ describe("TimePage", () => {
       container.querySelector('li[aria-hidden="true"].border-destructive'),
     ).not.toBeInTheDocument();
   });
+
+  describe("gridlines and the now marker (issue #431, Toggl Track's Calendar reference)", () => {
+    it("draws a gridline for every grid mark, major on the hour and minor between, all decorative", async () => {
+      useSettingsStore.setState({ serverUrl: "https://server.example", capabilities: SUPPORTED });
+      stubServer({ sources: [sourceFixture({})], intervals: [intervalFixture({})] });
+
+      const { container } = renderPage();
+      await screen.findByRole("region", { name: "Toggl Track lane" });
+
+      // Default zoom is 120px/hour: `time-zoom.test.ts` establishes `gridMarks`
+      // gives 288 lines a day at this level (30-minute labels, 5-minute minor
+      // steps between them), 24 of them on the hour.
+      const gridlines = container.querySelectorAll("[data-time-gridline]");
+      expect(gridlines).toHaveLength(288);
+      expect(container.querySelectorAll('[data-time-gridline="major"]')).toHaveLength(24);
+      expect(container.querySelectorAll('[data-time-gridline="minor"]')).toHaveLength(288 - 24);
+
+      // Gridlines must never intercept a click a record underneath needs.
+      for (const line of gridlines) {
+        expect(line).toHaveClass("pointer-events-none");
+      }
+    });
+
+    it("draws the now dot, its time label, and every lane's now line from the identical top fraction", async () => {
+      useSettingsStore.setState({ serverUrl: "https://server.example", capabilities: SUPPORTED });
+      vi.useFakeTimers({ toFake: ["Date"] });
+      // 13:30 -> 13.5 / 24 = 56.25%, deliberately not a round number so a
+      // passing test cannot be a coincidence of rounding.
+      vi.setSystemTime(new Date(2026, 8, 2, 13, 30));
+      stubServer({
+        sources: [sourceFixture({})],
+        intervals: [intervalFixture({ started_at: todayAt(8), ended_at: todayAt(8, 5) })],
+      });
+
+      const { container } = renderPage();
+      await screen.findByRole("region", { name: "Toggl Track lane" });
+
+      const dot = container.querySelector("[data-time-now-dot]");
+      const label = container.querySelector("[data-time-now-label]");
+      const line = container.querySelector('li[aria-hidden="true"].border-destructive');
+      expect(dot).toHaveStyle({ top: "56.25%" });
+      expect(label).toHaveStyle({ top: "56.25%" });
+      expect(line).toHaveStyle({ top: "56.25%" });
+      expect(label).toHaveTextContent("13:30");
+
+      vi.useRealTimers();
+    });
+
+    it("hides the scale label the now label would collide with, on today only", async () => {
+      useSettingsStore.setState({ serverUrl: "https://server.example", capabilities: SUPPORTED });
+      vi.useFakeTimers({ toFake: ["Date"] });
+      // Noon: exactly on the hour, exactly on a labelled 30-minute mark — the
+      // ordinary "12:00" scale label sits at the SAME instant as the now
+      // label, guaranteeing a collision rather than depending on the exact
+      // collision threshold.
+      vi.setSystemTime(new Date(2026, 8, 2, 12, 0));
+      stubServer({
+        sources: [sourceFixture({})],
+        intervals: [intervalFixture({ started_at: todayAt(8), ended_at: todayAt(8, 5) })],
+      });
+
+      const { container } = renderPage();
+      await screen.findByRole("region", { name: "Toggl Track lane" });
+
+      const ordinaryLabels = Array.from(
+        container.querySelectorAll("[data-time-scale] > span:not([data-time-now-label])"),
+      );
+      expect(ordinaryLabels.some((el) => el.textContent === "12:00")).toBe(false);
+      expect(container.querySelector("[data-time-now-label]")).toHaveTextContent("12:00");
+
+      // A day with no now marker at all keeps every one of its own labels —
+      // there is nothing for them to collide with off today.
+      fireEvent.click(screen.getByRole("button", { name: "Previous day" }));
+      await waitFor(() =>
+        expect(screen.queryByRole("heading", { name: "Today" })).not.toBeInTheDocument(),
+      );
+      const yesterdayLabels = Array.from(
+        container.querySelectorAll("[data-time-scale] > span:not([data-time-now-label])"),
+      );
+      expect(yesterdayLabels.some((el) => el.textContent === "12:00")).toBe(true);
+      expect(container.querySelector("[data-time-now-dot]")).not.toBeInTheDocument();
+      expect(container.querySelector("[data-time-now-label]")).not.toBeInTheDocument();
+
+      vi.useRealTimers();
+    });
+  });
 });
