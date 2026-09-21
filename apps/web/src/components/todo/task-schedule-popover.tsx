@@ -13,7 +13,7 @@ import {
   X,
 } from "lucide-react";
 import { DropdownMenu } from "radix-ui";
-import { useEffect, useId, useRef, useState } from "react";
+import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Calendar } from "@/components/ui/calendar";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -21,6 +21,10 @@ import { Sheet, SheetContent, SheetTitle, SheetTrigger } from "@/components/ui/s
 import { localDateTimeKey, localDayKey, parseDayKey } from "@/lib/local-day-key";
 import { touchOnlyDevice } from "@/lib/pointer";
 import { resolveRecurrencePhrase } from "@/lib/quick-add-task";
+import {
+  computeSchedulePopoverPlacement,
+  type SchedulePopoverPlacement,
+} from "@/lib/schedule-popover-placement";
 import { cn } from "@/lib/utils";
 import { TaskCustomRepeatDialog } from "./task-custom-repeat-dialog";
 import { TaskTimeDialog } from "./task-time-dialog";
@@ -344,6 +348,78 @@ export function TaskSchedulePopover({
   // names the one still-mounted, stable anchor instead: the Repeat
   // trigger button below.
   const repeatTriggerRef = useRef<HTMLButtonElement>(null);
+  // Issue #440: the two real DOM nodes the desktop placement below measures
+  // — every current `trigger` caller (task-row-content.tsx's own Date
+  // button, overdue-reschedule-action.tsx's Reschedule button, quick-add-
+  // content.tsx's `Chip`, task-detail-view.tsx's `AttributePill`/
+  // `AttributeRow`) already forwards a ref to a real `<button>`, the same
+  // node Radix's own `PopoverTrigger` would anchor to internally regardless
+  // — and the popover's own content node. State, not a plain `useRef`
+  // (React's own documented "measure a DOM node" pattern): Radix's
+  // `Popover.Content` sits behind its own `Presence`, which — unlike the
+  // trigger, always mounted — only actually renders the content node on the
+  // render *after* `open` first flips true, one commit later than a
+  // `useLayoutEffect` keyed on `[open]` alone would see. Setting these via
+  // `ref={setTriggerEl}`/`ref={setContentEl}` and keying the effect below
+  // off the resulting state, rather than off `open`, means it reruns
+  // exactly when either node actually shows up, whichever commit that
+  // turns out to be — react to the DOM being there, not to when a fixed
+  // number of renders should have made it so. Unused by the touch branch
+  // below (its `SheetTrigger`/`SheetContent` never receive these refs),
+  // which is fine: the effect that reads them bails out whenever either is
+  // still `null`.
+  const [triggerEl, setTriggerEl] = useState<HTMLButtonElement | null>(null);
+  const [contentEl, setContentEl] = useState<HTMLDivElement | null>(null);
+  // `null` while unopened or not yet measured (see the effect below) — the
+  // desktop branch falls back to an arbitrary `side`/`alignOffset` in that
+  // window, which is never actually painted (`useLayoutEffect`'s own
+  // comment on the effect just below).
+  const [placement, setPlacement] = useState<SchedulePopoverPlacement | null>(null);
+
+  // Issue #440: recomputes once per open (and once more the commit after,
+  // when `contentEl` itself lands — this effect's own header comment above
+  // on why), against the trigger's and the card's own real rendered
+  // geometry (`computeSchedulePopoverPlacement`'s own header comment on why
+  // this can't be a Radix `side`/`avoidCollisions` prop combination alone)
+  // — not continuously: nothing here re-measures on a keystroke that
+  // changes the card's own height (typed preview appearing, say), only on
+  // open/mount and on the window resizing while still open (the ticket's
+  // own 800×600 trap is about the window's size, which *can* change after
+  // open, unlike the card's). `useLayoutEffect`, not `useEffect`: it runs
+  // before the browser paints, so the arbitrary position the very first
+  // (unmeasured) commit below renders at is never actually shown — the
+  // measured, correct position from this effect's own synchronous
+  // `setPlacement` is what the browser paints instead, the identical trick
+  // Radix's own `PopperContent` uses for its `isPositioned` case
+  // (`components/ui/popover.tsx`'s own header comment references the same
+  // file this was read from).
+  useLayoutEffect(() => {
+    if (!open || triggerEl === null || contentEl === null) {
+      setPlacement(null);
+      return;
+    }
+    function recomputePlacement() {
+      // Narrowed again inside the closure: TypeScript can't see that the
+      // outer `null` checks still hold by the time a later `resize` fires
+      // this same function.
+      if (triggerEl === null || contentEl === null) {
+        return;
+      }
+      setPlacement(
+        computeSchedulePopoverPlacement(
+          triggerEl.getBoundingClientRect(),
+          contentEl.getBoundingClientRect(),
+          {
+            width: window.innerWidth,
+            height: window.innerHeight,
+          },
+        ),
+      );
+    }
+    recomputePlacement();
+    window.addEventListener("resize", recomputePlacement);
+    return () => window.removeEventListener("resize", recomputePlacement);
+  }, [open, triggerEl, contentEl]);
 
   // Re-seed on every open, mirroring DatePickerSheet's own identical
   // reasoning (date-picker-sheet.tsx's header comment): a dismiss never
@@ -954,9 +1030,41 @@ export function TaskSchedulePopover({
 
   return (
     <Popover open={open} onOpenChange={setOpen}>
-      <PopoverTrigger asChild>{trigger}</PopoverTrigger>
+      <PopoverTrigger ref={setTriggerEl} asChild>
+        {trigger}
+      </PopoverTrigger>
       <PopoverContent
+        ref={setContentEl}
         data-testid="scheduler-view"
+        // Issue #440: below → above → beside, computed by `recomputePlacement`
+        // above from the trigger's and this card's own real geometry — see
+        // `computeSchedulePopoverPlacement`'s own header comment for why
+        // `side`/`align: "start"`/`alignOffset` (never `"center"`) is how that
+        // result reaches Radix. `avoidCollisions={false}`: Radix's own
+        // flip/shift middleware would otherwise second-guess a placement this
+        // component already chose with the real viewport in hand, undoing the
+        // beside branch's own deliberate vertical clamp in particular.
+        //
+        // `data-side`/`data-align-offset` are this component's own, not
+        // Radix's — deliberately shadowing the `data-side` Radix's own
+        // `PopperContent` already sets from `placedSide` (`components/ui/
+        // popover.tsx`'s own `{...props}` spreads after Radix's internal
+        // "data-side" key, so a caller-supplied one wins): floating-ui
+        // resolves `useFloating`'s returned `placement` — and so Radix's own
+        // `data-side` — through a promise-based `computePosition()`, a real
+        // (if usually sub-frame) microtask hop behind the `side` prop it was
+        // just given, which a synchronous `render`/`fireEvent` test (no
+        // intervening `await`) never observes resolve; this component's own
+        // `placement` state has no such lag, so asserting against these two
+        // attributes instead is what actually lets a test see this
+        // component's own choice rather than racing floating-ui's.
+        data-side={placement?.side ?? "bottom"}
+        data-align-offset={placement === null ? undefined : placement.alignOffset}
+        side={placement?.side ?? "bottom"}
+        align="start"
+        sideOffset={placement?.sideOffset ?? 0}
+        alignOffset={placement?.alignOffset ?? 0}
+        avoidCollisions={false}
         className="flex flex-col gap-2 p-2 text-sm"
         style={{
           width: "var(--td-popover-width)",

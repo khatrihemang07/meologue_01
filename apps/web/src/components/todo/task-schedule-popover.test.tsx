@@ -1,5 +1,5 @@
 import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { WIDE_LAYOUT_QUERY } from "@/hooks/use-wide-layout";
 import { isOwnedPortalTarget, TaskSchedulePopover } from "./task-schedule-popover";
 
@@ -99,6 +99,77 @@ function renderPopover(props: Partial<Parameters<typeof TaskSchedulePopover>[0]>
 
 function open() {
   fireEvent.click(screen.getByRole("button", { name: "Pick a date" }));
+}
+
+/**
+ * Issue #440's desktop placement measures two real DOM nodes at open time
+ * — the trigger (`getBoundingClientRect()`) and the popover card itself
+ * (also `getBoundingClientRect()`, for its actual rendered size) — plus
+ * `window.innerWidth`/`innerHeight`. jsdom lays nothing out (`virtualized-
+ * scroll.ts`'s own header comment: every element's box reads all-zero,
+ * forever), so all three have to be stubbed by hand for this component's
+ * own placement math to have anything real to react to. Keyed by identity
+ * (`el === triggerEl`) rather than a selector, since the trigger is
+ * whatever `renderPopover`'s own `trigger` prop rendered — a plain
+ * `<button>` in every test here — and the card is found by its own
+ * `data-testid` once open.
+ */
+function stubDesktopMeasurements({
+  trigger,
+  card,
+  viewport,
+}: {
+  trigger: { top: number; left: number; width: number; height: number };
+  card: { width: number; height: number };
+  viewport: { width: number; height: number };
+}) {
+  Object.defineProperty(window, "innerWidth", {
+    value: viewport.width,
+    configurable: true,
+  });
+  Object.defineProperty(window, "innerHeight", {
+    value: viewport.height,
+    configurable: true,
+  });
+  vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(function (this: Element) {
+    if (this === screen.queryByRole("button", { name: "Pick a date" })) {
+      return {
+        top: trigger.top,
+        left: trigger.left,
+        bottom: trigger.top + trigger.height,
+        right: trigger.left + trigger.width,
+        width: trigger.width,
+        height: trigger.height,
+        x: trigger.left,
+        y: trigger.top,
+        toJSON: () => ({}),
+      };
+    }
+    if (this.getAttribute("data-testid") === "scheduler-view") {
+      return {
+        top: 0,
+        left: 0,
+        bottom: card.height,
+        right: card.width,
+        width: card.width,
+        height: card.height,
+        x: 0,
+        y: 0,
+        toJSON: () => ({}),
+      };
+    }
+    return {
+      top: 0,
+      left: 0,
+      bottom: 0,
+      right: 0,
+      width: 0,
+      height: 0,
+      x: 0,
+      y: 0,
+      toJSON: () => ({}),
+    };
+  });
 }
 
 describe("shell by touch capability (issue #282, moved off width by #365)", () => {
@@ -1236,6 +1307,149 @@ describe("TaskSchedulePopover", () => {
       // Still open: a controlled caller decides, and this test double never
       // fed the `open` prop back in.
       expect(screen.getByTestId("scheduler-view")).toBeInTheDocument();
+    });
+  });
+
+  // Issue #440: where the desktop popover opens. `computeSchedulePopover
+  // Placement`'s own unit tests (schedule-popover-placement.test.ts) cover
+  // the placement math itself against the ticket's measured examples; these
+  // exercise the *wiring* — that this component measures the real trigger
+  // and card DOM nodes at open time and hands the result to Radix — so a
+  // seam only a mounted component can prove. `data-side` comes from Radix
+  // itself (`PopperContent`'s own `placedSide`, driven by the `side` prop
+  // this component passes through and `avoidCollisions={false}`, which
+  // keeps Radix from second-guessing a placement this component already
+  // computed with the real viewport in hand); `data-align-offset` is this
+  // component's own, since Radix has nothing else to expose the *position*
+  // along the cross axis through.
+  describe("desktop popover placement (issue #440)", () => {
+    afterEach(() => {
+      vi.restoreAllMocks();
+      // `stubDesktopMeasurements`'s own header comment: an own property
+      // shadowing jsdom's real `Window.prototype` accessor — deleting it
+      // uncovers that accessor again for every test after this block.
+      Reflect.deleteProperty(window, "innerWidth");
+      Reflect.deleteProperty(window, "innerHeight");
+    });
+
+    it("opens beside the trigger, left side, top clamped to 48px, when neither below nor above fits", () => {
+      stubLayout(true);
+      renderPopover();
+      stubDesktopMeasurements({
+        // The ticket's own Reschedule-at-scroll-0 example: bottom 172, near
+        // the page top, so the 250x555 card fits neither below nor above.
+        trigger: { top: 140, left: 280, width: 80, height: 32 },
+        card: { width: 250, height: 555 },
+        viewport: { width: 1260, height: 696 },
+      });
+
+      open();
+
+      const view = screen.getByTestId("scheduler-view");
+      expect(view.getAttribute("data-side")).toBe("left");
+      expect(view.getAttribute("data-align-offset")).toBe(String(48 - 140));
+    });
+
+    it("opens below, centred, when the whole card fits below the trigger", () => {
+      stubLayout(true);
+      renderPopover();
+      stubDesktopMeasurements({
+        // After 32px+ of scroll the ticket measured space below Reschedule
+        // as >=555px — represented here as a trigger bottom (140) that
+        // leaves 556px of a 696px-tall viewport below it.
+        trigger: { top: 100, left: 600, width: 80, height: 40 },
+        card: { width: 250, height: 555 },
+        viewport: { width: 1260, height: 696 },
+      });
+
+      open();
+
+      const view = screen.getByTestId("scheduler-view");
+      expect(view.getAttribute("data-side")).toBe("bottom");
+      // Centred: card left = trigger centre (640) - half the card width
+      // (125) = 515, i.e. -85 from the trigger's own left edge (600).
+      expect(view.getAttribute("data-align-offset")).toBe(String(-85));
+    });
+
+    it("opens above, centred, when a last-row trigger near the window bottom leaves no room below", () => {
+      stubLayout(true);
+      renderPopover();
+      stubDesktopMeasurements({
+        trigger: { top: 650, left: 600, width: 80, height: 30 },
+        card: { width: 250, height: 555 },
+        viewport: { width: 1260, height: 696 },
+      });
+
+      open();
+
+      expect(screen.getByTestId("scheduler-view").getAttribute("data-side")).toBe("top");
+    });
+
+    it("keeps the whole card inside the macOS app's default 800x600 window instead of pushing it off-screen below", () => {
+      stubLayout(true);
+      renderPopover();
+      stubDesktopMeasurements({
+        trigger: { top: 300, left: 100, width: 80, height: 32 },
+        card: { width: 250, height: 555 },
+        viewport: { width: 800, height: 600 },
+      });
+
+      open();
+
+      const view = screen.getByTestId("scheduler-view");
+      // Beside, not below/above: a 555px card can't fit either way in a
+      // 600px-tall window from a mid-page trigger.
+      expect(view.getAttribute("data-side")).toBe("right");
+      const alignOffset = Number(view.getAttribute("data-align-offset"));
+      const top = 300 + alignOffset;
+      expect(top).toBeGreaterThanOrEqual(0);
+      expect(top + 555).toBeLessThanOrEqual(600);
+    });
+
+    it("opens on the right side, flush, when there is no room to the trigger's left", () => {
+      stubLayout(true);
+      renderPopover();
+      stubDesktopMeasurements({
+        trigger: { top: 140, left: 100, width: 80, height: 32 }, // left (100) < card width (250)
+        card: { width: 250, height: 555 },
+        viewport: { width: 1260, height: 696 },
+      });
+
+      open();
+
+      expect(screen.getByTestId("scheduler-view").getAttribute("data-side")).toBe("right");
+    });
+
+    // The ticket's own last acceptance criterion: "Nothing on the page
+    // moves when the picker opens." Unchanged by issue #440's own placement
+    // work (`Popover`/`PopoverContent` were already a portalled, `position:
+    // fixed` overlay before this ticket) but not previously asserted here —
+    // a regression guard against a future change (e.g. dropping
+    // `avoidCollisions` or the portal itself) silently turning this back
+    // into a layout-affecting element.
+    it("floats over the page — fixed-position, not a layout sibling of the trigger", () => {
+      stubLayout(true);
+      renderPopover();
+      stubDesktopMeasurements({
+        trigger: { top: 100, left: 600, width: 80, height: 40 },
+        card: { width: 250, height: 555 },
+        viewport: { width: 1260, height: 696 },
+      });
+
+      open();
+
+      const view = screen.getByTestId("scheduler-view");
+      // Radix's own Popper wrapper (`@radix-ui/react-popper`'s
+      // `PopperContent`) is the one DOM node whose inline style actually
+      // carries `position: fixed` — this card's own immediate parent.
+      const wrapper = view.parentElement;
+      expect(wrapper?.hasAttribute("data-radix-popper-content-wrapper")).toBe(true);
+      expect(wrapper?.style.position).toBe("fixed");
+      // Not a DOM sibling of the trigger's own parent, i.e. not part of the
+      // page's normal layout flow — Radix portals `Popover.Content` to
+      // `document.body` regardless of where `trigger` itself renders.
+      const trigger = screen.getByRole("button", { name: "Pick a date" });
+      expect(view.parentElement?.parentElement).not.toBe(trigger.parentElement);
     });
   });
 });
