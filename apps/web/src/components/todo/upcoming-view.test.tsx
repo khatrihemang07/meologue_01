@@ -1,5 +1,6 @@
 import type { Task } from "@meologue/core";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import type { ReactElement } from "react";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { swipeDown, swipeLeft } from "@/test/swipe";
 import { UpcomingView } from "./upcoming-view";
@@ -39,7 +40,16 @@ function task(overrides: Partial<Task> = {}): Task {
   };
 }
 
-function renderUpcomingView(overrides: Partial<Parameters<typeof UpcomingView>[0]> = {}) {
+/**
+ * `wrap` (default identity): lets one test — the `<summary>` no-collapse
+ * guard below — mount `UpcomingView` inside its own ancestor with an
+ * `onClick` of its own, so it can tell whether a click's own
+ * `stopPropagation()` reaches that ancestor. Every other caller omits it.
+ */
+function renderUpcomingView(
+  overrides: Partial<Parameters<typeof UpcomingView>[0]> = {},
+  wrap: (ui: ReactElement) => ReactElement = (ui) => ui,
+) {
   const props = {
     tasks: [] as Task[],
     detailActions: {
@@ -64,7 +74,7 @@ function renderUpcomingView(overrides: Partial<Parameters<typeof UpcomingView>[0
     onSetDateString: vi.fn(),
     ...overrides,
   };
-  render(<UpcomingView {...props} />);
+  render(wrap(<UpcomingView {...props} />));
   return props;
 }
 
@@ -335,18 +345,36 @@ describe("UpcomingView", () => {
       expect(quietCell?.className).not.toContain("before:content-['']");
     });
 
-    // NOT tested here: overdue-reschedule-action.tsx's own
-    // `event.stopPropagation()` guards against a real browser's native
-    // <summary> toggling its <details> on any bubbled click, Reschedule's
-    // own click included. Mutation-tested that guard by deleting the
-    // `stopPropagation()` call and re-running this file: nothing failed
-    // — jsdom does not reproduce that toggle-on-bubbled-click behaviour
-    // (fireEvent.click here never collapses the disclosure either way),
-    // so no test in this file can discriminate the guard's presence.
-    // The `stopPropagation()` call stays, for the real-browser behaviour
-    // its own comment documents, but is only verifiable by driving an
-    // actual browser — flagging for that pass rather than keeping a test
-    // that would pass with the guard deleted.
+    // overdue-reschedule-action.tsx's own `event.stopPropagation()` guards
+    // against a real browser's native <summary> toggling its <details> on
+    // any bubbled click, Reschedule's own click included — but jsdom does
+    // not reproduce that native toggle-on-bubbled-click behaviour at all
+    // (fireEvent.click here never collapses a <details> either way, guard
+    // or no guard), so no test can observe THAT outcome directly. What
+    // jsdom's own event system does reproduce correctly is React's own
+    // synthetic bubbling — a `stopPropagation()` call inside a click
+    // handler reliably keeps an ANCESTOR component's own `onClick` from
+    // firing for that same click, in jsdom exactly as in a real browser —
+    // so this test proves the guard's actual mechanism (the click stops
+    // there) rather than its real-browser consequence (the section stays
+    // open), the same way `isOwnedPortalTarget`'s own tests in
+    // task-schedule-popover.test.tsx prove a classification rather than
+    // the Radix dismiss race it feeds.
+    it("stops the Reschedule click from reaching an ancestor's own onClick, the mechanism the real <summary> guard needs", () => {
+      const onAncestorClick = vi.fn();
+      renderUpcomingView(
+        { tasks: [task({ id: "late", content: "late task", date: "2026-09-01" })] },
+        // biome-ignore lint/a11y/noStaticElementInteractions: this stand-in ancestor only exists to prove the click doesn't bubble to it; it isn't a real row.
+        // biome-ignore lint/a11y/useKeyWithClickEvents: same reason.
+        (ui) => <div onClick={onAncestorClick}>{ui}</div>,
+      );
+
+      fireEvent.click(screen.getByRole("button", { name: "Reschedule" }));
+
+      expect(onAncestorClick).not.toHaveBeenCalled();
+      // The guard doesn't come at the cost of the picker itself opening.
+      expect(screen.getByTestId("scheduler-view")).toBeInTheDocument();
+    });
   });
 
   it("headings read exactly '10 Sep ‧ Today ‧ Thursday' and '11 Sep ‧ Tomorrow ‧ Friday'", () => {

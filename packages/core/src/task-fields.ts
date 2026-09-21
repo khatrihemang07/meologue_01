@@ -38,6 +38,58 @@ export function hasTime(date: string | null | undefined): boolean {
 }
 
 /**
+ * `date`'s day component (`YYYY-MM-DD`), or `null` when `date` itself is
+ * `null`. The one place this slice is written — `useTaskDateState`'s own
+ * `dateDay` (apps/web) and `withTime` below both took it independently
+ * before issue #435's code review asked for one door instead of two.
+ */
+export function dayOf(date: string | null): string | null {
+  return date === null ? null : date.slice(0, 10);
+}
+
+/**
+ * `date`'s time-of-day component (`HH:MM`), or `null` for an all-day date
+ * or `null` itself — `hasTime` above decides which. The time-of-day twin
+ * of `dayOf`, for the identical "one door" reason.
+ */
+export function timeOf(date: string | null): string | null {
+  return hasTime(date) ? (date as string).slice(11, 16) : null;
+}
+
+/**
+ * `date` moved to `day`, keeping `date`'s own time-of-day (or staying
+ * all-day if it had none). Issue #256 first extracted this arithmetic out
+ * of `task-row-content.tsx`/`task-detail-view.tsx` into
+ * `useTaskDateState`'s own `setScheduleDay` so the two Date-button call
+ * sites couldn't drift; issue #435 needed the identical arithmetic a
+ * second time, per overdue Task, for `OverdueRescheduleAction`'s own bulk
+ * day-pick — rather than that file hand-copying `hasTime`/`.slice(11, 16)`
+ * a second time (the exact drift #256 already existed to prevent), both
+ * callers now call this instead.
+ */
+export function withDay(date: string | null, day: string): string {
+  const time = timeOf(date);
+  return time === null ? day : `${day}T${time}`;
+}
+
+/**
+ * `date`'s own day combined with `time` (or left bare, all-day, when
+ * `time` is `null`) — the Time-button half of the identical pairing
+ * `withDay` above is the day-pick half of, extracted for the same reason
+ * (this function's own sibling doc comment). `null` when `date` itself is
+ * `null`: there is no day to attach a time to — `useTaskDateState`'s own
+ * `setScheduleTime` doc comment (apps/web) is why that stays a deliberate
+ * no-op at the call site rather than this function inventing a day.
+ */
+export function withTime(date: string | null, time: string | null): string | null {
+  const day = dayOf(date);
+  if (day === null) {
+    return null;
+  }
+  return time === null ? day : `${day}T${time}`;
+}
+
+/**
  * Throws unless `date` is `null`, all-day (`YYYY-MM-DD`) or floating-timed
  * (`YYYY-MM-DDTHH:MM`) — see DATE_PATTERN's own comment for why this
  * exists at all: it's the one place a `Z`-suffixed or offset instant

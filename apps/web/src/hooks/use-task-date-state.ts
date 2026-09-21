@@ -1,5 +1,5 @@
 import type { Task } from "@meologue/core";
-import { hasTime } from "@meologue/core";
+import { dayOf, timeOf, withDay, withTime } from "@meologue/core";
 
 /** `useTaskDateState`'s own return shape — see that function's header comment for what each field is for. */
 export interface TaskDateState {
@@ -56,27 +56,38 @@ export interface TaskDateState {
  *
  * Both former call sites agreed on every edge above — nothing here papers
  * over a divergence between the row and the detail view.
+ *
+ * Issue #435's own code review: the day/time split-and-combine below —
+ * `setScheduleDay` moving the day while keeping the Task's own time,
+ * `setScheduleTime` combining a new time with the Task's own day — used to
+ * be re-typed here directly (`hasTime`/`.slice`). `OverdueRescheduleAction`
+ * needed the identical arithmetic a second time, per overdue Task, for its
+ * own bulk day/Time pick; rather than that file hand-copying it again (the
+ * exact drift #256 already existed to prevent), both now call
+ * `dayOf`/`timeOf`/`withDay`/`withTime` (`@meologue/core`'s task-fields.ts,
+ * that module's own doc comments have the arithmetic).
  */
 export function useTaskDateState(
   task: Task,
   onSetDate: (id: string, date: string | null) => void,
 ): TaskDateState {
-  const dateDay = task.date === null ? null : task.date.slice(0, 10);
-  const dateTime = task.date !== null && hasTime(task.date) ? task.date.slice(11, 16) : null;
+  const dateDay = dayOf(task.date);
+  const dateTime = timeOf(task.date);
 
   function setScheduleDay(day: string | null) {
     if (day === null) {
       onSetDate(task.id, null);
       return;
     }
-    onSetDate(task.id, dateTime === null ? day : `${day}T${dateTime}`);
+    onSetDate(task.id, withDay(task.date, day));
   }
 
   function setScheduleTime(time: string | null) {
-    if (dateDay === null) {
+    const next = withTime(task.date, time);
+    if (next === null) {
       return;
     }
-    onSetDate(task.id, time === null ? dateDay : `${dateDay}T${time}`);
+    onSetDate(task.id, next);
   }
 
   return { dateDay, dateTime, setScheduleDay, setScheduleTime };

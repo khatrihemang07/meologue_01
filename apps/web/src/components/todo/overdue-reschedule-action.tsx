@@ -24,19 +24,22 @@
  *
  * - `onPickDay` (a quick option, a calendar click, or a typed plain date):
  *   moves each Task's own day while re-attaching that Task's own existing
- *   time-of-day (`hasTime`/`.slice(11, 16)`, mirroring `useTaskDateState`'s
- *   `setScheduleDay`) — `onSetDate` alone never touches `dateString`
- *   (`TaskStore.setDate`'s own implementation confirms this), so a Task's
- *   Recurrence rides along untouched for free, the identical thing
- *   `task-row-content.tsx`'s own `onPickDay` wiring already relies on for
- *   a non-`null` day. `null` (the picker's own "No Date" quick option)
- *   clears both `date` and, for any Task that still carries one,
- *   `dateString` too — the same pairing that same call site's `day ===
- *   null` branch already does, since a cleared date leaves no day left for
- *   a Recurrence to land on.
+ *   time-of-day (`withDay`, `@meologue/core`'s task-fields.ts — the same
+ *   function `useTaskDateState`'s own `setScheduleDay` calls, issue #435's
+ *   own code review asked for one door instead of two hand-copied
+ *   `hasTime`/`.slice` reimplementations) — `onSetDate` alone never
+ *   touches `dateString` (`TaskStore.setDate`'s own implementation
+ *   confirms this), so a Task's Recurrence rides along untouched for
+ *   free, the identical thing `task-row-content.tsx`'s own `onPickDay`
+ *   wiring already relies on for a non-`null` day. `null` (the picker's
+ *   own "No Date" quick option) clears both `date` and, for any Task that
+ *   still carries one, `dateString` too — the same pairing that same call
+ *   site's `day === null` branch already does, since a cleared date
+ *   leaves no day left for a Recurrence to land on.
  * - `onSetTime`: sets or clears the time-of-day on each Task's own
- *   existing day (never `null` — every Task this action ever sees carries
- *   a real `date`, this file's own next paragraph explains why).
+ *   existing day via `withTime` (`task-fields.ts`'s own doc comment) —
+ *   never `null` in practice — every Task this action ever sees carries a
+ *   real `date`, this file's own next paragraph explains why.
  * - `onPickRecurrence`: sets the same phrase on every Task via
  *   `onSetDateString`, ignoring the popover's own resolved `day` argument
  *   — that argument is only a preview computed against "today" as a
@@ -107,7 +110,7 @@
  * state was never measured; only idle was).
  */
 import type { LocalDayKey, Task } from "@meologue/core";
-import { hasTime } from "@meologue/core";
+import { withDay, withTime } from "@meologue/core";
 import { Suspense, useState } from "react";
 import { LazyTaskSchedulePopover } from "@/components/todo/lazy-task-schedule-popover";
 import { buttonVariants } from "@/components/ui/button";
@@ -148,17 +151,16 @@ export function OverdueRescheduleAction({
       return;
     }
     for (const task of overdue) {
-      const time = task.date !== null && hasTime(task.date) ? task.date.slice(11, 16) : null;
-      onSetDate(task.id, time === null ? day : `${day}T${time}`);
+      onSetDate(task.id, withDay(task.date, day));
     }
   }
 
   function applyTime(time: string | null) {
     for (const task of overdue) {
-      // Every overdue Task carries a real `date` (this file's own header
-      // comment) — its first ten characters are always a real day.
-      const day = (task.date ?? "").slice(0, 10);
-      onSetDate(task.id, time === null ? day : `${day}T${time}`);
+      // `withTime` returns `null` only when the Task itself has no `date`
+      // to attach a time to — never reachable here (this file's own header
+      // comment: every overdue Task carries a real `date`).
+      onSetDate(task.id, withTime(task.date, time));
     }
   }
 

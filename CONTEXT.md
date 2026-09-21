@@ -454,7 +454,7 @@ a Task stops being Overdue the moment it is done or given a Date of today or lat
 
 Moving every Overdue Task at once, with one pick, in the same way a single Task's Date is set. A
 picked day moves each Task and leaves its own time and Recurrence as they were; a picked time or
-Recurrence is given to every one of them.
+Recurrence is given to every one of them; No Date clears every one of them.
 _Avoid_: bulk date, postpone
 
 ### Occurrence
