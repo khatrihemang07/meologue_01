@@ -1,4 +1,4 @@
-import type { Task } from "@meologue/core";
+import type { LocalDayKey, Task } from "@meologue/core";
 import { today } from "@meologue/core";
 import { CheckCircle2 } from "lucide-react";
 import { useCallback, useState } from "react";
@@ -19,8 +19,10 @@ export interface TodayViewProps {
   /** Shift+Click on a recurring Task's checkbox, or its touch-reachable button (task-row.tsx's own doc comments) — "Complete and archive recurring task," ending the series. */
   onCompleteForever: (id: string, content: string) => void;
   onRequestDelete: (id: string) => void;
-  /** Rescheduling only ever calls this — see overdue-reschedule-action.tsx's own comment on why Reschedule touches `date` alone. */
+  /** Rescheduling calls this — see overdue-reschedule-action.tsx's own doc comment on how each of the picker's commit doors applies across every overdue Task. */
   onSetDate: (id: string, date: string | null) => void;
+  /** Rescheduling's own Recurrence pick calls this — overdue-reschedule-action.tsx's own doc comment. */
+  onSetDateString: (id: string, dateString: string | null, today: LocalDayKey) => void;
 }
 
 export function TodayView({
@@ -30,6 +32,7 @@ export function TodayView({
   onCompleteForever,
   onRequestDelete,
   onSetDate,
+  onSetDateString,
 }: TodayViewProps) {
   const [grouping, setGrouping] = useState<TodayGrouping>("none");
 
@@ -96,7 +99,12 @@ export function TodayView({
         // before #337; Todoist's own reference capture
         // (a03-todoist-today.json) has a collapse control on Today too.
         <details open className="group">
-          <OverdueSectionSummary overdue={overdue} onSetDate={onSetDate} />
+          <OverdueSectionSummary
+            overdue={overdue}
+            onSetDate={onSetDate}
+            onSetDateString={onSetDateString}
+            datesWithTasks={detailActions.datesWithTasks}
+          />
           {/*
             Always chronological, even though `todo-page.tsx`'s Inbox
             supports manual drag-to-reorder — this ticket's own acceptance

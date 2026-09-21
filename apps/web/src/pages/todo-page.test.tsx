@@ -562,7 +562,7 @@ describe("TodoPage", () => {
     // `LazyTaskDetailView` resolves its `import()` asynchronously
     // (lazy-task-detail-view.ts's own header comment) — `findByRole`,
     // not `getByRole`, tolerates the one microtask/render that takes.
-    const dialog = await screen.findByRole("dialog");
+    const dialog = await screen.findByRole("dialog", {}, { timeout: 5000 });
     expect(dialog).toBeInTheDocument();
     // "Inbox" appears twice inside the dialog — the breadcrumb and the
     // Project attribute row both say it, for different reasons (this

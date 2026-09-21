@@ -61,6 +61,7 @@ function renderUpcomingView(overrides: Partial<Parameters<typeof UpcomingView>[0
     onRequestDelete: vi.fn(),
     onOpenSchedule: vi.fn(),
     onSetDate: vi.fn(),
+    onSetDateString: vi.fn(),
     ...overrides,
   };
   render(<UpcomingView {...props} />);
@@ -275,29 +276,63 @@ describe("UpcomingView", () => {
       expect(button.style.color).toBe("var(--td-overdue-reschedule)");
     });
 
-    it("rescheduling sets the date of every overdue Task to the chosen day, and touches nothing else", () => {
+    // Issue #435: Reschedule now opens the identical `TaskSchedulePopover`
+    // a Task's own Date button opens, not the old tap-then-Confirm
+    // `DatePickerSheet` — today-view.test.tsx's own "Reschedule" describe
+    // block has the fuller per-behaviour tests (day-pick preserving time
+    // and Recurrence, bulk Time, bulk Recurrence, No Date); this one test
+    // proves the identical wiring reaches Upcoming too.
+    it("picking a day moves every overdue Task, keeping each one's own time and Recurrence untouched", () => {
       const onSetDate = vi.fn();
+      const onSetDateString = vi.fn();
       renderUpcomingView({
         tasks: [
-          task({ id: "a", content: "a", date: "2026-08-30" }),
-          // Before #375 an undated Task with a passed deadline also counted
-          // as overdue (task-views.ts's own former union arm) — deadline is
-          // never read now, so this second overdue Task needs its own real
-          // `date` to stay in the section this test is about.
-          task({ id: "b", content: "b", date: "2026-08-31" }),
+          task({ id: "a", content: "a", date: "2026-08-30T21:00" }),
+          task({ id: "b", content: "b", date: "2026-08-31", dateString: "every day" }),
         ],
         onSetDate,
+        onSetDateString,
       });
 
       fireEvent.click(screen.getByRole("button", { name: "Reschedule" }));
-      // The nested DatePickerSheet's own tap-then-confirm: pick a day, then
-      // confirm — Confirm stays disabled until a day is tapped.
       fireEvent.click(screen.getByRole("button", { name: /September 20th, 2026/ }));
-      fireEvent.click(screen.getByRole("button", { name: /^Confirm/ }));
 
       expect(onSetDate).toHaveBeenCalledTimes(2);
-      expect(onSetDate).toHaveBeenCalledWith("a", expect.any(String));
-      expect(onSetDate).toHaveBeenCalledWith("b", expect.any(String));
+      expect(onSetDate).toHaveBeenCalledWith("a", "2026-09-20T21:00");
+      expect(onSetDate).toHaveBeenCalledWith("b", "2026-09-20");
+      expect(onSetDateString).not.toHaveBeenCalled();
+    });
+
+    // Issue #435's own acceptance criterion: the calendar's busy-day marks
+    // are the same real Task data a Task's own picker reads. This view
+    // has its own `datesWithTasks` wiring (`detailActions.datesWithTasks`,
+    // threaded through `OverdueSectionSummary` the same way TodayView's
+    // own identical test proves) — checked here too, not assumed shared.
+    it("the calendar's busy-day marks reflect the real datesWithTasks map, not just the overdue Tasks", () => {
+      renderUpcomingView({
+        tasks: [task({ id: "a", content: "a", date: "2026-09-01" })],
+        detailActions: {
+          projects: [],
+          labels: [],
+          onOpenDetail: vi.fn(),
+          onSetPriority: vi.fn(),
+          onSetDate: vi.fn(),
+          onSetDateString: vi.fn(),
+          datesWithTasks: new Map([["2026-09-20", 3]]),
+          onSetProject: vi.fn(),
+          onSetLabels: vi.fn(),
+          onCopyLink: vi.fn(),
+          onRename: vi.fn(),
+          commentCountFor: vi.fn(() => 0),
+        },
+      });
+
+      fireEvent.click(screen.getByRole("button", { name: "Reschedule" }));
+
+      const busyCell = document.querySelector('[data-day="2026-09-20"]');
+      const quietCell = document.querySelector('[data-day="2026-09-21"]');
+      expect(busyCell?.className).toContain("before:content-['']");
+      expect(quietCell?.className).not.toContain("before:content-['']");
     });
 
     // NOT tested here: overdue-reschedule-action.tsx's own

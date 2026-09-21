@@ -739,6 +739,28 @@ describe("TaskSchedulePopover", () => {
       expect(screen.queryByRole("button", { name: "Time" })).not.toBeInTheDocument();
     });
 
+    // Issue #435: Reschedule has no single `dateDay` of its own (a bulk
+    // move across Tasks with different existing dates has no single
+    // "current" one to seed the picker with), but every Overdue Task it
+    // applies a bulk Time to already carries a real day of its own —
+    // `alwaysDated` is that action's own escape hatch from the gate just
+    // above.
+    it("shows the Time button even with no date, when alwaysDated is set (issue #435's Reschedule)", () => {
+      renderPopover({ dateDay: null, alwaysDated: true });
+      open();
+
+      expect(screen.getByRole("button", { name: "Time" })).toBeInTheDocument();
+    });
+
+    // The identical escape hatch also keeps "No Date" itself reachable —
+    // it's gated the same way, for the same reason.
+    it("also shows the No Date quick option with no date, when alwaysDated is set", () => {
+      renderPopover({ dateDay: null, alwaysDated: true });
+      open();
+
+      expect(screen.getByRole("button", { name: "No Date" })).toBeInTheDocument();
+    });
+
     it("the inline time field is gone — no bare time input renders in the scheduler itself", () => {
       renderPopover({ dateDay: "2026-09-05", dateTime: "14:30" });
       open();

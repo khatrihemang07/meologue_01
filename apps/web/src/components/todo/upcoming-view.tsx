@@ -1,4 +1,4 @@
-import type { Task } from "@meologue/core";
+import type { LocalDayKey, Task } from "@meologue/core";
 import { today, upcoming, upcomingDayHeading, upcomingWeekStrip } from "@meologue/core";
 import { CalendarClock } from "lucide-react";
 import { useCallback, useRef, useState } from "react";
@@ -19,8 +19,10 @@ export interface UpcomingViewProps {
   /** Shift+Click on a recurring Task's checkbox, or its touch-reachable button — "Complete and archive recurring task," ending the series. */
   onCompleteForever: (id: string, content: string) => void;
   onRequestDelete: (id: string) => void;
-  /** The Overdue section's own bulk Reschedule button calls this — see `overdue-reschedule-action.tsx`'s own doc comment on why `onSetDate` alone. */
+  /** The Overdue section's own bulk Reschedule button calls this — see `overdue-reschedule-action.tsx`'s own doc comment on how each of the picker's commit doors applies across every overdue Task. */
   onSetDate: (id: string, date: string | null) => void;
+  /** Rescheduling's own Recurrence pick calls this — overdue-reschedule-action.tsx's own doc comment. */
+  onSetDateString: (id: string, dateString: string | null, today: LocalDayKey) => void;
 }
 
 export function UpcomingView({
@@ -30,6 +32,7 @@ export function UpcomingView({
   onCompleteForever,
   onRequestDelete,
   onSetDate,
+  onSetDateString,
 }: UpcomingViewProps) {
   // Issue #303: reuses `use-swipe-actions.ts`'s shared recogniser —
   // today-view.tsx's own identical wiring has the fuller reasoning, both
@@ -155,7 +158,12 @@ export function UpcomingView({
             // overdue-section-summary.tsx's own chevron reads this element's
             // `open` state through it.
             <details open className="group">
-              <OverdueSectionSummary overdue={overdue} onSetDate={onSetDate} />
+              <OverdueSectionSummary
+                overdue={overdue}
+                onSetDate={onSetDate}
+                onSetDateString={onSetDateString}
+                datesWithTasks={detailActions.datesWithTasks}
+              />
               <ul className="flex flex-col">
                 {overdue.map((task) => (
                   <TaskRow

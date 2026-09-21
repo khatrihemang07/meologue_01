@@ -1015,6 +1015,7 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
           onCompleteForever={handleCompleteForever}
           onRequestDelete={handleRequestDelete}
           onSetDate={setTaskDate}
+          onSetDateString={setTaskDateString}
         />
       )}
 
@@ -1026,6 +1027,7 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
           onCompleteForever={handleCompleteForever}
           onRequestDelete={handleRequestDelete}
           onSetDate={setTaskDate}
+          onSetDateString={setTaskDateString}
         />
       )}
 
