@@ -158,10 +158,20 @@ describe("TimePage", () => {
     expect(await screen.findByRole("heading", { name: "Today" })).toBeInTheDocument();
     expect(await screen.findByRole("region", { name: "Toggl Track lane" })).toBeInTheDocument();
     expect(screen.getByRole("region", { name: "Clockify Desktop lane" })).toBeInTheDocument();
-    expect(screen.getByRole("list", { name: "Toggl Track activity" })).toHaveTextContent("Code");
-    expect(screen.getByRole("list", { name: "Clockify Desktop activity" })).toHaveTextContent(
-      "Figma",
-    );
+    // The accessible name, not visible text content: issue #429 draws a
+    // record this short (75s, well under the minimum span) at a fixed 8px
+    // with no inline label at all — the tooltip and accessible name are what
+    // carry its facts at that size, which is exactly what this asserts.
+    expect(
+      within(screen.getByRole("list", { name: "Toggl Track activity" })).getByRole("button", {
+        name: /^Code,/,
+      }),
+    ).toBeInTheDocument();
+    expect(
+      within(screen.getByRole("list", { name: "Clockify Desktop activity" })).getByRole("button", {
+        name: /^Figma,/,
+      }),
+    ).toBeInTheDocument();
 
     // One request for the whole day, not one per source — the response already
     // says which recorder each record came from.
@@ -453,11 +463,17 @@ describe("TimePage", () => {
 
     const block = await screen.findByRole("button", { name: /^Code,/ });
     expect(block).toHaveAttribute("aria-expanded", "false");
+    // Issue #429: the hover tooltip carries what a block this small cannot
+    // show in its own text.
+    expect(block).toHaveAttribute("title", expect.stringContaining("Code"));
     expect(detailRequests).toBe(0);
 
     fireEvent.click(block);
 
-    const detail = await screen.findByRole("region", { name: "Activity interval" });
+    // The below-the-timeline panel is gone (issue #429): detail is now a
+    // Radix Popover anchored to the block, `role="dialog"` rather than
+    // `role="region"`.
+    const detail = await screen.findByRole("dialog", { name: "Activity interval" });
     await waitFor(() => expect(detailRequests).toBe(1));
 
     const facts = within(detail);
@@ -471,8 +487,165 @@ describe("TimePage", () => {
 
     fireEvent.click(facts.getByRole("button", { name: "Close" }));
     await waitFor(() =>
-      expect(screen.queryByRole("region", { name: "Activity interval" })).not.toBeInTheDocument(),
+      expect(screen.queryByRole("dialog", { name: "Activity interval" })).not.toBeInTheDocument(),
     );
+    // Closing returns focus to the record that opened it, rather than
+    // leaving focus nowhere (Radix's own default has nothing real to
+    // restore it to — see `comparative-timeline.tsx`'s own comment on why
+    // `IntervalBlock` owns this itself).
+    expect(block).toHaveFocus();
+  });
+
+  describe("a short block's click target stays inside its own slot (issue #429)", () => {
+    it("draws a sub-minimum record's <li> at exactly the 8px floor, with a button carrying no vertical padding or loose line height that could push it taller", async () => {
+      // Measured in a real browser: the button's content (`py-0.5` padding
+      // plus a 10px text line at `leading-tight`) rendered ~18px tall inside
+      // an 8px `<li>`, so a "short" block's real click target reached into
+      // its neighbours regardless of how tightly `time-lanes.ts` packed
+      // them. jsdom cannot measure the button's own rendered box (no layout
+      // engine), but it CAN read back the exact inline style React set on
+      // the `<li>` slot, and the exact classes the button was given — which
+      // is what this asserts instead: the slot is genuinely 8px, and the
+      // button's own classes guarantee nothing inside it can exceed that
+      // (`h-full`/`min-h-0` rather than a content-driven height, no `py-*`,
+      // `leading-none` rather than `leading-tight`), plus the label line
+      // itself is absent below `LABEL_MIN_PX` rather than merely small.
+      useSettingsStore.setState({ serverUrl: "https://server.example", capabilities: SUPPORTED });
+      // 75s, well under the 4-minute minimum span at the default 120px/hour
+      // zoom (`minimumFraction(120)`), so `placeLane` inflates it to the
+      // minimum and `IntervalBlock` floors its rendered height at
+      // `MIN_TARGET_PX` (8px).
+      stubServer({ sources: [sourceFixture({})], intervals: [intervalFixture({})] });
+
+      renderPage();
+
+      const block = await screen.findByRole("button", { name: /^Code,/ });
+      const slot = block.closest("li");
+      expect(slot).toHaveStyle({ height: "8px" });
+
+      expect(block.className).toContain("h-full");
+      expect(block.className).toContain("min-h-0");
+      expect(block.className).toContain("leading-none");
+      expect(block.className).not.toMatch(/\bpy-\d/);
+      expect(block.className).not.toContain("leading-tight");
+
+      // Too short to fit even the label — the tooltip and accessible name
+      // carry its facts instead.
+      expect(block).toHaveTextContent("");
+    });
+  });
+
+  describe("record detail popover (issue #429)", () => {
+    function stubDetailServer() {
+      let detailRequests = 0;
+      const fetchMock = vi.fn(async (url: string) => {
+        const parsed = new URL(url);
+        if (parsed.pathname === "/v1/time/sources") {
+          return { ok: true, status: 200, json: async () => [sourceFixture({})] };
+        }
+        if (parsed.pathname === "/v1/time/intervals") {
+          return { ok: true, status: 200, json: async () => [intervalFixture({})] };
+        }
+        if (parsed.pathname === "/v1/time/intervals/interval-1") {
+          detailRequests += 1;
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({ ...intervalFixture({}), raw_row: {} }),
+          };
+        }
+        return { ok: false, status: 404, json: async () => ({}) };
+      });
+      vi.stubGlobal("fetch", fetchMock);
+      return () => detailRequests;
+    }
+
+    it("closes on Escape and returns focus to the record", async () => {
+      useSettingsStore.setState({ serverUrl: "https://server.example", capabilities: SUPPORTED });
+      stubDetailServer();
+      renderPage();
+
+      const block = await screen.findByRole("button", { name: /^Code,/ });
+      fireEvent.click(block);
+      await screen.findByRole("dialog", { name: "Activity interval" });
+
+      fireEvent.keyDown(document, { key: "Escape" });
+
+      await waitFor(() =>
+        expect(screen.queryByRole("dialog", { name: "Activity interval" })).not.toBeInTheDocument(),
+      );
+      expect(block).toHaveFocus();
+    });
+
+    it("closes on an outside click and returns focus to the record", async () => {
+      useSettingsStore.setState({ serverUrl: "https://server.example", capabilities: SUPPORTED });
+      stubDetailServer();
+      renderPage();
+
+      const block = await screen.findByRole("button", { name: /^Code,/ });
+      fireEvent.click(block);
+      await screen.findByRole("dialog", { name: "Activity interval" });
+
+      // Radix's DismissableLayer registers its own `document` pointerdown
+      // listener in a `setTimeout(0)` after mount — the same race a real
+      // browser has for a click in the same tick a popover opens
+      // (task-detail-view.test.tsx's own `clickOutside` helper documents
+      // the identical wait). Without it this dispatches into a listener
+      // that doesn't exist yet.
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      fireEvent.pointerDown(document.body);
+      fireEvent.click(document.body);
+
+      await waitFor(() =>
+        expect(screen.queryByRole("dialog", { name: "Activity interval" })).not.toBeInTheDocument(),
+      );
+      expect(block).toHaveFocus();
+    });
+
+    it("toggles closed when the same open record is clicked again", async () => {
+      useSettingsStore.setState({ serverUrl: "https://server.example", capabilities: SUPPORTED });
+      stubDetailServer();
+      renderPage();
+
+      const block = await screen.findByRole("button", { name: /^Code,/ });
+      fireEvent.click(block);
+      await screen.findByRole("dialog", { name: "Activity interval" });
+
+      fireEvent.click(block);
+
+      await waitFor(() =>
+        expect(screen.queryByRole("dialog", { name: "Activity interval" })).not.toBeInTheDocument(),
+      );
+    });
+
+    it("carries the Android back-button opt-in marker so hardware Back closes it instead of leaving Time", async () => {
+      // platform/back-button.android.ts's own DISMISSIBLE_OVERLAY_SELECTOR
+      // only recognizes an overlay it can positively identify — this
+      // popover matches none of its other fingerprints (a plain Radix
+      // Popover, `role="dialog"`, no `data-slot`), so it opts in with this
+      // marker. That file's own suite proves the selector; this proves the
+      // marker is actually on the element it depends on, in the real DOM
+      // Radix renders, and that a dispatched Escape (what a positive match
+      // triggers) really does close a REAL Radix Popover, not just a
+      // hand-built stand-in div.
+      useSettingsStore.setState({ serverUrl: "https://server.example", capabilities: SUPPORTED });
+      stubDetailServer();
+      renderPage();
+
+      const block = await screen.findByRole("button", { name: /^Code,/ });
+      fireEvent.click(block);
+      const detail = await screen.findByRole("dialog", { name: "Activity interval" });
+      expect(detail).toHaveAttribute("data-back-dismissible", "");
+      expect(detail).toHaveAttribute("data-state", "open");
+
+      document.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }),
+      );
+
+      await waitFor(() =>
+        expect(screen.queryByRole("dialog", { name: "Activity interval" })).not.toBeInTheDocument(),
+      );
+    });
   });
 
   it("starts a refresh and says how many sources it queued", async () => {

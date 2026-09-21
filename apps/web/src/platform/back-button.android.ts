@@ -62,6 +62,20 @@ import { App } from "@capacitor/app";
  *   route-backed modal built on the identical Radix `Dialog.Root` primitive
  *   is never mistaken for a state-backed one.
  *
+ *   Time's record popover (`components/time/interval-popover.tsx`, issue
+ *   #429) is a fourth case that does not fit any of the three fingerprints
+ *   above: it is a plain Radix `Popover`, `role="dialog"` (the same default
+ *   role `TaskDetailView`'s route-backed dialog carries, which is exactly
+ *   why this file cannot match on role alone here) and no `data-slot`.
+ *   Rather than add a Popover-shaped entry that would also match every
+ *   OTHER Popover in the app — `TaskSchedulePopover`'s own date picker
+ *   included, which is not meant to be Back-dismissible at all — it opts in
+ *   with a generic `data-back-dismissible` marker instead, set only on the
+ *   one `PopoverContent` this criterion actually applies to. Without this,
+ *   pressing hardware Back with the record popover open would navigate the
+ *   whole app back to `/` instead of closing it, because it matched none of
+ *   the three selectors above.
+ *
  * When a state-backed dialog is open, this dispatches a synthetic Escape
  * `keydown` rather than inventing an Android-specific "how do I close this"
  * path: every one of those four is built on a Radix primitive whose
@@ -76,6 +90,13 @@ const DISMISSIBLE_OVERLAY_SELECTOR = [
   '[data-slot="sheet-content"][data-state="open"]',
   '[role="alertdialog"][data-state="open"]',
   '[role="menu"][data-state="open"]',
+  // The opt-in marker this file's own header comment describes (issue
+  // #429's Time record popover) — a generic entry rather than one shaped
+  // around Popover/role/data-slot specifically, so a future state-backed
+  // overlay this file has never heard of can ask to be Back-dismissible by
+  // setting one attribute, instead of this selector growing a new
+  // fingerprint every time.
+  '[data-back-dismissible][data-state="open"]',
 ].join(", ");
 
 export function subscribeToBackButton(canGoBack: () => boolean): () => void {

@@ -1,16 +1,15 @@
 import type React from "react";
-import { useContext, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { lazy, Suspense, useContext, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { HistoryScrollContext } from "@/components/shell";
 import {
   dayFraction,
   formatDuration,
   type Lane,
-  MINIMUM_INTERVAL_FRACTION,
   type PlacedInterval,
   placeLane,
 } from "@/lib/time-lanes";
 import type { ActivityInterval } from "@/lib/time-transport";
-import { minimumFraction, type ScaleMark, scaleMarks } from "@/lib/time-zoom";
+import { MIN_TARGET_PX, minimumFraction, type ScaleMark, scaleMarks } from "@/lib/time-zoom";
 
 /**
  * The shared 24-hour clock every source lane is drawn against (issue #420),
@@ -20,8 +19,59 @@ import { minimumFraction, type ScaleMark, scaleMarks } from "@/lib/time-zoom";
  * reader on the day's activity instead of its empty hours: today opens near
  * "now" (with a line across every lane that moves with the clock), and
  * another day opens at its first record — never at a position computed from
- * whatever day's data was still on screen a moment before.
+ * whatever day's data was still on screen a moment before. Issue #429 makes
+ * every record individually clickable: `time-lanes.ts`'s `placeLane` keeps
+ * long records at full lane width while short ones layer on top of them
+ * instead of narrowing the lane, every block is drawn at least
+ * `MIN_TARGET_PX` tall with a hover tooltip, and opening one shows its
+ * detail as a popover anchored to the exact point it was clicked
+ * (`IntervalBlock` below, `interval-popover.tsx`) rather than at the bottom
+ * of the page.
  */
+
+/**
+ * Where, within a block, its detail popover should anchor — issue #429.
+ * Factored out as a pure function (rather than left inline in
+ * `IntervalBlock`'s click handler) for the same reason `time-lanes.ts`'s own
+ * header comment gives for keeping lane geometry pure: an exact number is
+ * testable, and a click's exact screen position is not, in jsdom.
+ *
+ * `clientY` truthy means a real pointer position (a mouse or touch click) —
+ * anchor to exactly that point. `clientY` falsy (0, the value a
+ * keyboard-triggered `click` event carries — Enter/Space on a focused
+ * button) means there was no real pointer position to anchor to; the
+ * vertical middle of whatever part of the block is actually VISIBLE within
+ * Shell's own scroll region is what keeps the popover on screen for a block
+ * taller than the viewport (an 8-hour record, easily) instead of anchoring
+ * to a point that may be scrolled out of view entirely.
+ */
+export function clickOffsetWithinBlock({
+  clientY,
+  blockRect,
+  scrollerRect,
+}: {
+  clientY: number;
+  blockRect: { top: number; bottom: number };
+  scrollerRect: { top: number; bottom: number } | null;
+}): number {
+  if (clientY) {
+    return clientY - blockRect.top;
+  }
+  const visibleTop = scrollerRect ? Math.max(blockRect.top, scrollerRect.top) : blockRect.top;
+  const visibleBottom = scrollerRect
+    ? Math.min(blockRect.bottom, scrollerRect.bottom)
+    : blockRect.bottom;
+  return (visibleTop + visibleBottom) / 2 - blockRect.top;
+}
+
+// Lazy for the bundle budget — see `interval-popover.tsx`'s own header
+// comment on why Radix's popover has to stay out of this route's eager
+// chunk.
+const AnchoredIntervalDetail = lazy(() =>
+  import("@/components/time/interval-popover").then((m) => ({
+    default: m.AnchoredIntervalDetail,
+  })),
+);
 
 /** How far below the anchored instant the scroll lands, so it isn't pinned to the very top edge of the scroll region. */
 const TOP_SCROLL_MARGIN_PX = 60;
@@ -65,7 +115,7 @@ export function ComparativeTimeline({
    */
   dataReady: boolean;
   openIntervalId: string | null;
-  onOpen: (id: string) => void;
+  onOpen: (id: string | null) => void;
   pxPerHour: number;
   timelineRef: React.RefCallback<HTMLDivElement>;
   timelineProps: React.HTMLAttributes<HTMLDivElement> & { tabIndex: number };
@@ -225,11 +275,20 @@ function ScaleGutter({
  * One heading above a scale. Rendered by every lane and, hidden, by the hour
  * gutter — see `ScaleGutter` for why that has to be the same component rather
  * than a matching height copied into two places.
+ *
+ * `pointer-events-none`: `sticky` keeps this pinned to the top of Shell's
+ * scroll region once a reader scrolls past its natural position, which means
+ * it then sits *on top of* whatever scale content is currently there — at
+ * high zoom (issue #429) an 8px block can land entirely underneath it. A
+ * heading is a passive label with nothing interactive inside, so letting
+ * clicks pass straight through to the block underneath costs nothing and is
+ * what keeps "every record with data is easily clickable" true at the one
+ * scroll position where the heading would otherwise cover one.
  */
 function LaneHeading({ children, hidden }: { children: React.ReactNode; hidden?: boolean }) {
   return (
     <h3
-      className={`sticky top-0 z-10 truncate bg-background pb-1 font-medium text-xs ${
+      className={`pointer-events-none sticky top-0 z-10 truncate bg-background pb-1 font-medium text-xs ${
         hidden ? "invisible" : ""
       }`}
     >
@@ -255,7 +314,7 @@ function LaneColumn({
   minFraction: number;
   isToday: boolean;
   openIntervalId: string | null;
-  onOpen: (id: string) => void;
+  onOpen: (id: string | null) => void;
 }) {
   const placed = placeLane(lane.intervals, dayStart, dayEnd, minFraction);
   const now = useNowTick(isToday);
@@ -282,6 +341,7 @@ function LaneColumn({
           <IntervalBlock
             key={entry.interval.id}
             placed={entry}
+            scaleHeight={scaleHeight}
             open={entry.interval.id === openIntervalId}
             onOpen={onOpen}
           />
@@ -319,50 +379,170 @@ function useNowTick(enabled: boolean): number | null {
   return now;
 }
 
+/**
+ * Below this a block cannot fit even its own label without visibly clipping
+ * it — nothing renders instead of a half-cut line; the `title` tooltip and
+ * the accessible name below already carry the same facts for anything this
+ * small. Room for the clock line underneath only once a block clears twice
+ * that.
+ */
+const LABEL_MIN_PX = 10;
+const SECOND_LINE_MIN_PX = 22;
+
 function IntervalBlock({
   placed,
+  scaleHeight,
   open,
   onOpen,
 }: {
   placed: PlacedInterval;
+  scaleHeight: number;
   open: boolean;
-  onOpen: (id: string) => void;
+  onOpen: (id: string | null) => void;
 }) {
-  const { interval, top, height, column, columns } = placed;
+  const { interval, top, height, column, columns, layer, topInset } = placed;
   const clock = intervalClock(interval);
   const duration = formatDuration(Date.parse(interval.ended_at) - Date.parse(interval.started_at));
+  const blockRef = useRef<HTMLButtonElement | null>(null);
+  const { scrollElement } = useContext(HistoryScrollContext);
+
+  // Focus restoration on close, owned HERE rather than by `IntervalPopover`'s
+  // `onCloseAutoFocus` — Radix's own default (`context.triggerRef.current?.
+  // focus()`) has nothing to restore to: `PopoverAnchor` below is virtual
+  // (see the comment on `virtualAnchorRef`), not a real `Popover.Trigger`.
+  // This button is rendered unconditionally regardless of `open` — no
+  // element-type swap on open/close — so `blockRef.current` is always the
+  // right node to hand focus back to the instant `open` flips false.
+  const wasOpenRef = useRef(open);
+  useLayoutEffect(() => {
+    if (wasOpenRef.current && !open) {
+      blockRef.current?.focus({ preventScroll: true });
+    }
+    wasOpenRef.current = open;
+  }, [open]);
 
   // Overlapping records share the lane's width side by side rather than
   // stacking, so neither disappears behind the other.
   const width = 100 / columns;
 
+  // px, not a CSS `%`, and an explicit floor at `MIN_TARGET_PX` — not
+  // because the fraction math (`time-lanes.ts`'s `placeLane`) is wrong, but
+  // because a percentage-of-container height is not exact once a real
+  // browser lays it out: measured 7.992px rendered for an 8px floor. A
+  // record whose click target can round UNDER the floor defeats the whole
+  // reason the floor exists. `topPx` is expressed in the same unit for the
+  // same reason `time-lanes.ts`'s own comment on `drawnEnd` gives elsewhere
+  // — one unit throughout is what keeps a box and the slot it was given
+  // from ever being able to disagree.
+  const topPx = top * scaleHeight;
+  const heightPx = Math.max(MIN_TARGET_PX, height * scaleHeight);
+  // The label starts below any short records drawn over this block's top
+  // (`PlacedInterval.topInset`), and only the room left under them counts
+  // towards whether a line fits.
+  const insetPx = Math.min(heightPx, topInset * scaleHeight);
+  const textRoomPx = heightPx - insetPx;
+
+  // Issue #429: the popover anchors to the CLICK POINT within the block, not
+  // the whole block — a block taller than the viewport (an 8-hour record,
+  // easily) otherwise anchors Radix's own positioning at the block's own top
+  // or centre, which can render the popover off-screen entirely (measured:
+  // dialog top 828 in a 696px viewport). `clickOffsetRef` is the click's
+  // distance from the block's own top, captured once per open;
+  // `virtualAnchorRef` re-reads the block's LIVE rect every time Radix asks
+  // for it (a `Measurable`, not a DOM node — see `PopoverAnchor`'s own
+  // `virtualRef` prop in `interval-popover.tsx`), which is what keeps the
+  // popover attached to the same point in the record while the page scrolls.
+  const clickOffsetRef = useRef(0);
+  const virtualAnchorRef = useRef<{ getBoundingClientRect: () => DOMRect }>({
+    getBoundingClientRect: () => {
+      const rect = blockRef.current?.getBoundingClientRect();
+      if (!rect) {
+        return new DOMRect();
+      }
+      return new DOMRect(rect.left, rect.top + clickOffsetRef.current, rect.width, 0);
+    },
+  });
+
+  const handleActivate = (event: React.MouseEvent<HTMLButtonElement>) => {
+    if (open) {
+      onOpen(null);
+      return;
+    }
+    const rect = blockRef.current?.getBoundingClientRect();
+    clickOffsetRef.current = rect
+      ? clickOffsetWithinBlock({
+          clientY: event.clientY,
+          blockRect: rect,
+          scrollerRect: scrollElement?.getBoundingClientRect() ?? null,
+        })
+      : 0;
+    onOpen(interval.id);
+  };
+
   return (
     <li
       className="absolute"
       style={{
-        top: `${top * 100}%`,
-        height: `${height * 100}%`,
+        top: `${topPx}px`,
+        height: `${heightPx}px`,
         left: `${column * width}%`,
         width: `${width}%`,
+        // A short record (layer 1) is drawn on top of any long record
+        // (layer 0) it visually sits on rather than the two being
+        // clustered together and narrowing the long block — see
+        // `time-lanes.ts`'s own comment on `PlacedInterval.layer`.
+        zIndex: layer,
       }}
     >
       <button
+        ref={blockRef}
         type="button"
-        onClick={() => onOpen(interval.id)}
+        onClick={handleActivate}
         aria-expanded={open}
-        // The accessible name carries what the block is too small to show.
+        // The accessible name — and the `title` tooltip below — carry what a
+        // block this small (as little as `MIN_TARGET_PX` at high zoom)
+        // cannot show in its own text.
         aria-label={`${interval.label}, ${clock}, ${duration}${interval.idle ? ", idle" : ""}`}
-        className={`size-full overflow-hidden rounded border px-1 py-0.5 text-left text-[10px] leading-tight ${
+        title={`${interval.label}\n${clock} · ${duration}`}
+        // No vertical padding, and `leading-none` rather than
+        // `leading-tight`: with `py-0.5` and a 10px line's default line
+        // height this button measured ~18px tall inside an 8px `<li>`, so a
+        // "short" block's real click target reached into its neighbours no
+        // matter how tightly `time-lanes.ts` had packed them. `min-h-0` is
+        // what actually lets `h-full` win — a flex column's items default to
+        // a content-driven minimum height, which `size-full` alone did not
+        // override.
+        className={`flex h-full min-h-0 w-full cursor-pointer flex-col overflow-hidden rounded border px-1 text-left text-[10px] leading-none transition-colors hover:border-foreground/60 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-ring ${
           open ? "border-foreground bg-muted" : "border-border bg-background"
         } ${interval.idle ? "border-dashed text-muted-foreground" : ""}`}
+        style={insetPx > 0 ? { paddingTop: insetPx } : undefined}
       >
-        <span className="block truncate font-medium">{interval.label}</span>
-        {/* Only tall enough blocks get a second line; a short record would
-            otherwise clip its own label away to show a time nobody can read. */}
-        {height > MINIMUM_INTERVAL_FRACTION * 4 && (
+        {/* Only a block with room for it gets a label, and only one with room
+            for both lines gets the clock underneath — a clipped half line is
+            worse than none, and the tooltip/accessible name above already
+            carry the same facts for anything smaller. */}
+        {textRoomPx >= LABEL_MIN_PX && (
+          <span className="block truncate font-medium">{interval.label}</span>
+        )}
+        {textRoomPx >= SECOND_LINE_MIN_PX && (
           <span className="block truncate text-muted-foreground tabular-nums">{clock}</span>
         )}
       </button>
+      {open && (
+        // Only the open block ever mounts a Popover — one per block would
+        // mean hundreds on a dense day, almost all of them permanently
+        // closed. `fallback={null}`, not the button again: the button above
+        // is rendered unconditionally, not swapped out while the popover's
+        // chunk loads, so there is nothing left for a fallback to stand in
+        // for.
+        <Suspense fallback={null}>
+          <AnchoredIntervalDetail
+            id={interval.id}
+            virtualRef={virtualAnchorRef}
+            onClose={() => onOpen(null)}
+          />
+        </Suspense>
+      )}
     </li>
   );
 }

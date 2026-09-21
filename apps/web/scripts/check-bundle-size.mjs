@@ -304,6 +304,13 @@ const CHUNK_BUDGETS = {
   // inspector had all landed on it — 12,708 was the first slice alone.
   // Headroom is the ~1.3x every other route entry here uses.
   "src/pages/time-page.tsx": { ceilingBytes: 21_200, baselineBytes: 16_288 },
+  // The Time record popover (issue #429), lazy from `comparative-
+  // timeline.tsx`'s `IntervalBlock` — only the one block a reader actually
+  // opens ever mounts it. Almost all of it is Radix's `Popover` and
+  // floating-ui, which Todo's own popovers (`task-schedule-popover.tsx`
+  // above) also load; measured at 21,031 gzip including those shared
+  // chunks. Headroom is the ~1.3x every other route entry here uses.
+  "src/components/time/interval-popover.tsx": { ceilingBytes: 27_300, baselineBytes: 21_031 },
   "src/pages/todo-page.tsx": { ceilingBytes: 92_832, baselineBytes: 92_795 },
 };
 

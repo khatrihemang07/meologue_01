@@ -7,7 +7,6 @@ import { ServerUnreachableBanner } from "@/components/server-unreachable-banner"
 import { Shell } from "@/components/shell";
 import { ComparativeTimeline } from "@/components/time/comparative-timeline";
 import { DayNavigator } from "@/components/time/day-navigator";
-import { IntervalDetail } from "@/components/time/interval-detail";
 import { LanePicker } from "@/components/time/lane-picker";
 import { RefreshRow } from "@/components/time/refresh-row";
 import { SearchField } from "@/components/time/search-field";
@@ -227,10 +226,6 @@ function DailyComparison({
           onZoomOut={zoom.zoomOut}
           onZoomIn={zoom.zoomIn}
         />
-      )}
-
-      {openIntervalId && (
-        <IntervalDetail id={openIntervalId} onClose={() => setOpenIntervalId(null)} />
       )}
     </section>
   );
