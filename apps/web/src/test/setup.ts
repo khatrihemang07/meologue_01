@@ -82,3 +82,31 @@ beforeEach(() => {
     })),
   );
 });
+
+/**
+ * jsdom implements no `ResizeObserver` at all (`@/test/virtualized-
+ * scroll.ts`'s own header comment). A handful of components (task-
+ * schedule-popover.tsx, use-pinned-scroll.ts, digest-page.tsx) construct
+ * one unconditionally as soon as they mount the element they observe —
+ * not behind a feature check, since every real browser this app ships to
+ * has one — so without a stand-in, a plain jsdom render throws the moment
+ * any of those code paths runs, for reasons that have nothing to do with
+ * what a given test is actually about (issue #440's own defect fix is what
+ * surfaced this: task-schedule-popover.tsx's desktop popover didn't
+ * construct one before that fix, and every test anywhere that opens it —
+ * dozens of files, not just its own — started throwing). A no-op default,
+ * same as `matchMedia` above: a test that actually wants to fire a resize
+ * callback replaces this with `@/test/virtualized-scroll`'s own
+ * `installResizeObserverStub()`, which tracks observed targets and can
+ * trigger them — this one exists only so the constructor itself, and
+ * `observe`/`unobserve`/`disconnect`, never throw.
+ */
+class NoOpResizeObserver implements ResizeObserver {
+  observe(): void {}
+  unobserve(): void {}
+  disconnect(): void {}
+}
+
+beforeEach(() => {
+  vi.stubGlobal("ResizeObserver", NoOpResizeObserver);
+});

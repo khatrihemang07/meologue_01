@@ -1,7 +1,36 @@
-import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { WIDE_LAYOUT_QUERY } from "@/hooks/use-wide-layout";
+// `import * as`, not a named import: `vi.spyOn` needs the module namespace
+// object itself to intercept a call task-schedule-popover.tsx makes to its
+// own named import of the same function — the identical pattern entry-
+// row.test.tsx's own `entryDayModule` already uses for the same reason.
+import * as schedulePopoverPlacement from "@/lib/schedule-popover-placement";
+import { installResizeObserverStub } from "@/test/virtualized-scroll";
 import { isOwnedPortalTarget, TaskSchedulePopover } from "./task-schedule-popover";
+
+/**
+ * Issue #440: the desktop popover's own placement effect (task-schedule-
+ * popover.tsx) constructs a real `ResizeObserver` the moment it opens, to
+ * re-measure the card whenever its own size changes. `src/test/setup.ts`'s
+ * own file-wide `NoOpResizeObserver` already keeps that constructor from
+ * throwing everywhere (its own header comment: this exact fix is what
+ * surfaced the need for it, in dozens of files besides this one) — this
+ * file's own installation on top of that default is only for the tests
+ * that actually want to fire one (`triggerResize`, read by
+ * `stubDesktopMeasurements` below), overriding the global no-op for the
+ * duration of each test here.
+ */
+let resizeObserverStub: ReturnType<typeof installResizeObserverStub> | null = null;
+
+beforeEach(() => {
+  resizeObserverStub = installResizeObserverStub();
+});
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+  vi.restoreAllMocks();
+});
 
 const NOW = new Date(2026, 8, 10, 12, 0); // Thu 10 Sep 2026, local noon
 
@@ -99,6 +128,111 @@ function renderPopover(props: Partial<Parameters<typeof TaskSchedulePopover>[0]>
 
 function open() {
   fireEvent.click(screen.getByRole("button", { name: "Pick a date" }));
+}
+
+/**
+ * Issue #440's desktop placement measures two real DOM nodes at open time
+ * — the trigger (`getBoundingClientRect()`, its position) and the popover
+ * card itself (`offsetWidth`/`offsetHeight`, its real laid-out size — NOT
+ * `getBoundingClientRect()`, deliberately: that reports the card's visual,
+ * post-transform box, and Radix's own Popper wrapper transforms it while
+ * still positioning it; `task-schedule-popover.tsx`'s own comment above its
+ * placement effect has the full defect this was fixed for) — plus
+ * `window.innerWidth`/`innerHeight`. jsdom lays nothing out (`virtualized-
+ * scroll.ts`'s own header comment: every element's box reads all-zero,
+ * forever), so all three have to be stubbed by hand for this component's
+ * own placement math to have anything real to react to. Keyed by identity
+ * (`el === triggerEl`) rather than a selector, since the trigger is
+ * whatever `renderPopover`'s own `trigger` prop rendered — a plain
+ * `<button>` in every test here — and the card is found by its own
+ * `data-testid` once open.
+ *
+ * The card's own size — and the trigger's own rect — are read from mutable
+ * boxes, not fixed values: issue #440's own fix needs tests that change
+ * what's reported mid-test (the card's real height landing after a short
+ * first reading; the trigger's own rect moving, standing in for a page
+ * scroll) and observe this component react — `setCardSize`/`setTrigger`
+ * are those seams. `installResizeObserverStub` (`@/test/virtualized-
+ * scroll`, this codebase's own stand-in for jsdom's total absence of a
+ * real `ResizeObserver`) is installed unconditionally here, not only by
+ * callers that need to fire one by hand: `task-schedule-popover.tsx`'s own
+ * effect constructs a real `ResizeObserver` the moment the desktop popover
+ * opens, which throws in plain jsdom with nothing else in this file's own
+ * `afterEach` currently restoring `vi.unstubAllGlobals()` —
+ * `desktop popover placement`'s own `afterEach` (below) is what does.
+ */
+function stubDesktopMeasurements({
+  trigger,
+  card,
+  viewport,
+}: {
+  trigger: { top: number; left: number; width: number; height: number };
+  card: { width: number; height: number };
+  viewport: { width: number; height: number };
+}): {
+  setCardSize: (size: { width: number; height: number }) => void;
+  setTrigger: (rect: { top: number; left: number; width: number; height: number }) => void;
+  triggerResize: (target: Element) => void;
+} {
+  Object.defineProperty(window, "innerWidth", {
+    value: viewport.width,
+    configurable: true,
+  });
+  Object.defineProperty(window, "innerHeight", {
+    value: viewport.height,
+    configurable: true,
+  });
+  let triggerRect = trigger;
+  vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(function (this: Element) {
+    if (this === screen.queryByRole("button", { name: "Pick a date" })) {
+      return {
+        top: triggerRect.top,
+        left: triggerRect.left,
+        bottom: triggerRect.top + triggerRect.height,
+        right: triggerRect.left + triggerRect.width,
+        width: triggerRect.width,
+        height: triggerRect.height,
+        x: triggerRect.left,
+        y: triggerRect.top,
+        toJSON: () => ({}),
+      };
+    }
+    return {
+      top: 0,
+      left: 0,
+      bottom: 0,
+      right: 0,
+      width: 0,
+      height: 0,
+      x: 0,
+      y: 0,
+      toJSON: () => ({}),
+    };
+  });
+  let cardSize = card;
+  vi.spyOn(HTMLElement.prototype, "offsetWidth", "get").mockImplementation(function (
+    this: HTMLElement,
+  ) {
+    return this.getAttribute("data-testid") === "scheduler-view" ? cardSize.width : 0;
+  });
+  vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockImplementation(function (
+    this: HTMLElement,
+  ) {
+    return this.getAttribute("data-testid") === "scheduler-view" ? cardSize.height : 0;
+  });
+  return {
+    setCardSize(size) {
+      cardSize = size;
+    },
+    setTrigger(rect) {
+      triggerRect = rect;
+    },
+    triggerResize(target) {
+      // Non-null by construction: the file-wide `beforeEach` above always
+      // runs before any test's own body does.
+      resizeObserverStub?.triggerResize(target);
+    },
+  };
 }
 
 describe("shell by touch capability (issue #282, moved off width by #365)", () => {
@@ -1236,6 +1370,282 @@ describe("TaskSchedulePopover", () => {
       // Still open: a controlled caller decides, and this test double never
       // fed the `open` prop back in.
       expect(screen.getByTestId("scheduler-view")).toBeInTheDocument();
+    });
+  });
+
+  // Issue #440: where the desktop popover opens. `computeSchedulePopover
+  // Placement`'s own unit tests (schedule-popover-placement.test.ts) cover
+  // the placement math itself against the ticket's measured examples; these
+  // exercise the *wiring* — that this component measures the real trigger
+  // and card DOM nodes at open time and hands the result to Radix — so a
+  // seam only a mounted component can prove. `data-side` comes from Radix
+  // itself (`PopperContent`'s own `placedSide`, driven by the `side` prop
+  // this component passes through and `avoidCollisions={false}`, which
+  // keeps Radix from second-guessing a placement this component already
+  // computed with the real viewport in hand); `data-align-offset` is this
+  // component's own, since Radix has nothing else to expose the *position*
+  // along the cross axis through.
+  describe("desktop popover placement (issue #440)", () => {
+    afterEach(() => {
+      vi.restoreAllMocks();
+      // The file-wide `afterEach` above already covers `vi.unstubAllGlobals()`
+      // (the `ResizeObserver` stub every test now installs).
+      // `stubDesktopMeasurements`'s own header comment: an own property
+      // shadowing jsdom's real `Window.prototype` accessor — deleting it
+      // uncovers that accessor again for every test after this block.
+      Reflect.deleteProperty(window, "innerWidth");
+      Reflect.deleteProperty(window, "innerHeight");
+    });
+
+    it("opens beside the trigger, left side, top clamped to 48px, when neither below nor above fits", () => {
+      stubLayout(true);
+      renderPopover();
+      stubDesktopMeasurements({
+        // The ticket's own Reschedule-at-scroll-0 example: bottom 172, near
+        // the page top, so the 250x555 card fits neither below nor above.
+        trigger: { top: 140, left: 280, width: 80, height: 32 },
+        card: { width: 250, height: 555 },
+        viewport: { width: 1260, height: 696 },
+      });
+
+      open();
+
+      const view = screen.getByTestId("scheduler-view");
+      expect(view.getAttribute("data-side")).toBe("left");
+      expect(view.getAttribute("data-align-offset")).toBe(String(48 - 140));
+    });
+
+    it("opens below, centred, when the whole card fits below the trigger", () => {
+      stubLayout(true);
+      renderPopover();
+      stubDesktopMeasurements({
+        // After 32px+ of scroll the ticket measured space below Reschedule
+        // as >=555px — represented here as a trigger bottom (140) that
+        // leaves 556px of a 696px-tall viewport below it.
+        trigger: { top: 100, left: 600, width: 80, height: 40 },
+        card: { width: 250, height: 555 },
+        viewport: { width: 1260, height: 696 },
+      });
+
+      open();
+
+      const view = screen.getByTestId("scheduler-view");
+      expect(view.getAttribute("data-side")).toBe("bottom");
+      // Centred: card left = trigger centre (640) - half the card width
+      // (125) = 515, i.e. -85 from the trigger's own left edge (600).
+      expect(view.getAttribute("data-align-offset")).toBe(String(-85));
+    });
+
+    it("opens above, centred, when a last-row trigger near the window bottom leaves no room below", () => {
+      stubLayout(true);
+      renderPopover();
+      stubDesktopMeasurements({
+        trigger: { top: 650, left: 600, width: 80, height: 30 },
+        card: { width: 250, height: 555 },
+        viewport: { width: 1260, height: 696 },
+      });
+
+      open();
+
+      expect(screen.getByTestId("scheduler-view").getAttribute("data-side")).toBe("top");
+    });
+
+    it("keeps the whole card inside the macOS app's default 800x600 window instead of pushing it off-screen below", () => {
+      stubLayout(true);
+      renderPopover();
+      stubDesktopMeasurements({
+        trigger: { top: 300, left: 100, width: 80, height: 32 },
+        card: { width: 250, height: 555 },
+        viewport: { width: 800, height: 600 },
+      });
+
+      open();
+
+      const view = screen.getByTestId("scheduler-view");
+      // Beside, not below/above: a 555px card can't fit either way in a
+      // 600px-tall window from a mid-page trigger.
+      expect(view.getAttribute("data-side")).toBe("right");
+      const alignOffset = Number(view.getAttribute("data-align-offset"));
+      const top = 300 + alignOffset;
+      expect(top).toBeGreaterThanOrEqual(0);
+      expect(top + 555).toBeLessThanOrEqual(600);
+    });
+
+    it("opens on the right side, flush, when there is no room to the trigger's left", () => {
+      stubLayout(true);
+      renderPopover();
+      stubDesktopMeasurements({
+        trigger: { top: 140, left: 100, width: 80, height: 32 }, // left (100) < card width (250)
+        card: { width: 250, height: 555 },
+        viewport: { width: 1260, height: 696 },
+      });
+
+      open();
+
+      expect(screen.getByTestId("scheduler-view").getAttribute("data-side")).toBe("right");
+    });
+
+    // The ticket's own last acceptance criterion: "Nothing on the page
+    // moves when the picker opens." Unchanged by issue #440's own placement
+    // work (`Popover`/`PopoverContent` were already a portalled, `position:
+    // fixed` overlay before this ticket) but not previously asserted here —
+    // a regression guard against a future change (e.g. dropping
+    // `avoidCollisions` or the portal itself) silently turning this back
+    // into a layout-affecting element.
+    it("floats over the page — fixed-position, not a layout sibling of the trigger", () => {
+      stubLayout(true);
+      renderPopover();
+      stubDesktopMeasurements({
+        trigger: { top: 100, left: 600, width: 80, height: 40 },
+        card: { width: 250, height: 555 },
+        viewport: { width: 1260, height: 696 },
+      });
+
+      open();
+
+      const view = screen.getByTestId("scheduler-view");
+      // Radix's own Popper wrapper (`@radix-ui/react-popper`'s
+      // `PopperContent`) is the one DOM node whose inline style actually
+      // carries `position: fixed` — this card's own immediate parent.
+      const wrapper = view.parentElement;
+      expect(wrapper?.hasAttribute("data-radix-popper-content-wrapper")).toBe(true);
+      expect(wrapper?.style.position).toBe("fixed");
+      // Not a DOM sibling of the trigger's own parent, i.e. not part of the
+      // page's normal layout flow — Radix portals `Popover.Content` to
+      // `document.body` regardless of where `trigger` itself renders.
+      const trigger = screen.getByRole("button", { name: "Pick a date" });
+      expect(view.parentElement?.parentElement).not.toBe(trigger.parentElement);
+    });
+
+    // Issue #440's own real-browser regression, found after this ticket's
+    // first landing (verified in a real browser, 3/3): the card was briefly
+    // visible BELOW the trigger, overflowing the viewport, before jumping
+    // to the correct beside position — `task-schedule-popover.tsx`'s own
+    // comment above its placement effect has the full root-cause writeup.
+    // jsdom's total absence of real layout is exactly why none of the six
+    // tests above ever caught it: every measurement there, right or wrong,
+    // resolves through the identical zero-cost synchronous path, so there
+    // was never a "short reading, then the real one" to be wrong *between*.
+    // These two pin the two mechanisms the fix actually added.
+    describe("re-measurement (issue #440's real-browser jump)", () => {
+      it("re-evaluates the side when the card's real height lands after a shorter first reading", () => {
+        stubLayout(true);
+        renderPopover();
+        const { setCardSize, triggerResize } = stubDesktopMeasurements({
+          trigger: { top: 140, left: 280, width: 80, height: 32 },
+          // Short, but non-zero — content genuinely not at its final
+          // height yet (a typed-preview line not showing yet, the Repeat
+          // control's two-part layout not swapped in yet): a real
+          // measurement, just an early one — the field defect's own shape,
+          // not a "not laid out at all" one.
+          card: { width: 250, height: 200 },
+          viewport: { width: 1260, height: 696 },
+        });
+
+        open();
+
+        const view = screen.getByTestId("scheduler-view");
+        // The field defect's own first frame: a short card genuinely
+        // "fits below" (172 + 200 ≤ 696), so this is shown — correctly,
+        // for what was measured — at the wrong side for the card's real
+        // height.
+        expect(view.getAttribute("data-side")).toBe("bottom");
+        expect(view.style.visibility).toBe("visible");
+
+        setCardSize({ width: 250, height: 555 }); // the card's real height
+        triggerResize(view);
+
+        // 172 + 555 > 696 (no longer fits below) and 140 - 555 < 0
+        // (doesn't fit above either) — left, the same geometry `opens
+        // beside the trigger...` above already established.
+        expect(view.getAttribute("data-side")).toBe("left");
+      });
+
+      it("re-evaluates the side on a page scroll while the popover stays open", async () => {
+        stubLayout(true);
+        renderPopover();
+        const { setTrigger } = stubDesktopMeasurements({
+          trigger: { top: 100, left: 600, width: 80, height: 40 },
+          card: { width: 250, height: 555 },
+          viewport: { width: 1260, height: 696 },
+        });
+
+        open();
+
+        const view = screen.getByTestId("scheduler-view");
+        expect(view.getAttribute("data-side")).toBe("bottom");
+
+        // Stands in for the page scrolling while the popover stays open —
+        // a real scroll moves the trigger's own viewport-relative rect the
+        // identical way; the "scroll" event is what tells this component
+        // to re-read it, per `task-schedule-popover.tsx`'s own capture-
+        // phase `window` listener.
+        setTrigger({ top: 650, left: 600, width: 80, height: 30 });
+        await act(async () => {
+          window.dispatchEvent(new Event("scroll"));
+          // rAF-throttled (that same listener's own comment) — one real
+          // frame is what flushes it, the identical pattern use-pinned-
+          // scroll.test.tsx's own rAF-driven assertions already use.
+          await new Promise((resolve) => requestAnimationFrame(resolve));
+        });
+
+        // 680 + 555 > 696 (no longer fits below); 650 - 555 ≥ 0 (fits
+        // above) — the same "last-row trigger near the bottom" geometry
+        // `opens above, centred...` above already established.
+        expect(view.getAttribute("data-side")).toBe("top");
+      });
+
+      // Issue #440's own second real-browser finding: even with the fixes
+      // above, every BESIDE case still showed one wrong-shaped frame
+      // (below, overflowing the viewport) before snapping to the correct
+      // spot — `task-schedule-popover.tsx`'s own header comment above
+      // `useLayoutEffect` has the full mechanism (Radix's own async
+      // `computePosition()` lagging one frame behind a prop change). The
+      // fix moved the correct computation to the FIRST render, before
+      // `PopoverContent` mounts at all, using the trigger's real rect plus
+      // a card size known WITHOUT mounting the card (`cardSizeFromCssTokens`
+      // — CSS-token-derived in jsdom's own no-real-stylesheet case, which
+      // resolves to a documented, literal fallback: 250×525). This test
+      // proves that render actually happened, and with the right numbers —
+      // not merely that the FINAL state converges there (every test above
+      // already shows that) — by spying on `computeSchedulePopoverPlacement`
+      // itself and reading its very first call, before this popover's own
+      // post-mount measurement effect could have run at all.
+      it("computes the correct beside placement on the FIRST render, before the post-mount measurement effect ever runs", () => {
+        stubLayout(true);
+        renderPopover();
+        // The real, post-mount card size deliberately differs from the
+        // 250×525 CSS-token fallback above, so the two call sites are
+        // distinguishable by their own `card` argument alone.
+        stubDesktopMeasurements({
+          trigger: { top: 140, left: 280, width: 80, height: 32 },
+          card: { width: 250, height: 600 },
+          viewport: { width: 1260, height: 696 },
+        });
+        const computeSpy = vi.spyOn(schedulePopoverPlacement, "computeSchedulePopoverPlacement");
+
+        open();
+
+        expect(computeSpy.mock.calls.length).toBeGreaterThanOrEqual(2);
+        const firstCall = computeSpy.mock.calls.at(0);
+        // The render-time estimate's own card argument — the CSS-token
+        // fallback (525), not the stubbed real measurement (600): proof
+        // this call happened before `contentEl` was ever read.
+        expect(firstCall?.[1]).toEqual({ width: 250, height: 525 });
+        const firstResult = computeSpy.mock.results.at(0)?.value;
+        expect(firstResult?.side).toBe("left");
+
+        // And a later call — the post-mount correction path — did use the
+        // real, stubbed measurement, confirming that path still runs too
+        // (`re-evaluates the side when the card's real height lands...`,
+        // above, already covers what it does when the two disagree).
+        expect(computeSpy.mock.calls.some((call) => call[1].height === 600)).toBe(true);
+
+        // What was actually on screen matches the FIRST call's own result
+        // — this open never showed anything else.
+        const view = screen.getByTestId("scheduler-view");
+        expect(view.getAttribute("data-side")).toBe("left");
+      });
     });
   });
 });
