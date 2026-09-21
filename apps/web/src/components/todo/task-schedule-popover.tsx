@@ -1,7 +1,8 @@
 import type { LocalDateTimeKey, QuickAddToken } from "@meologue/core";
 import { firstOccurrence, localDayKeyOf, parseQuickAdd, parseRecurrence } from "@meologue/core";
-import { addDays, format, nextMonday, nextSaturday } from "date-fns";
+import { addDays, format, nextMonday, nextSaturday, subDays } from "date-fns";
 import {
+  CalendarClock,
   CalendarDays,
   CalendarRange,
   Check,
@@ -18,6 +19,7 @@ import { Button, buttonVariants } from "@/components/ui/button";
 import { Calendar } from "@/components/ui/calendar";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Sheet, SheetContent, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
+import { formatDay } from "@/lib/format-task-date";
 import { localDateTimeKey, localDayKey, parseDayKey } from "@/lib/local-day-key";
 import { touchOnlyDevice } from "@/lib/pointer";
 import { resolveRecurrencePhrase } from "@/lib/quick-add-task";
@@ -93,18 +95,61 @@ function ordinal(day: number): string {
 }
 
 /**
+ * Issue #436's own comment correction (2026-09-21): Todoist replaces an
+ * elided Today/Tomorrow with "Later this week" rather than just dropping
+ * it, driven exactly once — "Mon -> Wed", two days out — with no other
+ * example and no icon colour read off it either. Not otherwise specified,
+ * so this picks the same two-day reading and clamps it to the last weekday
+ * before the weekend it would otherwise land in (`nextSaturday`, the same
+ * boundary `This weekend`'s own quick option already anchors to), so
+ * "later this week" never quietly means "this weekend" — that meaning
+ * already has its own option, right after this one.
+ *
+ * `now` itself being Thursday or Friday leaves no third weekday before that
+ * boundary, so the clamp can land back on Tomorrow's own date (Thursday) or
+ * even on `now` itself (Friday) — an accepted, disclosed gap in a rule this
+ * ticket's own single data point can't rule out either way, not a defect
+ * introduced by the two-day reading on every other day of the week.
+ */
+function laterThisWeekDay(now: Date): Date {
+  const twoDaysOut = addDays(now, 2);
+  const weekendStart = nextSaturday(now);
+  return twoDaysOut < weekendStart ? twoDaysOut : subDays(weekendStart, 1);
+}
+
+/**
+ * "Opened from a Task: the input is pre-filled with the Task's date text
+ * ('19 Sep 21:00', or '19 Sep' without time)" (issue #436's own ticket
+ * body) — `formatDay` (`@/lib/format-task-date`) already renders the exact
+ * "d MMM" half of that for the row/detail/sidebar (that file's own doc
+ * comment: one formatter so those three agree by construction), reused
+ * here rather than re-derived so this picker's own prefill can't drift
+ * from what the row beside it already shows for the identical day.
+ * `time` is `Task.date`'s own `HH:MM` component, concatenated verbatim —
+ * Todoist's own captured text is 24-hour, not `formatTaskDate`'s relative
+ * "Today"/"Tomorrow" labels or its 12-hour "h:mm a" (that formatter's own
+ * job is a row's relative-to-now label, not this field's literal value).
+ */
+function formatScheduleInputText(day: string, time: string | null): string {
+  const datePart = formatDay(day);
+  return time === null ? datePart : `${datePart} ${time}`;
+}
+
+/**
  * Issue #440's own real-browser follow-up: the card's size *before* it has
  * ever been measured on this popover instance (`lastMeasuredCardSize`,
  * inside the component below) — read from its own sizing tokens
  * (index.css's own `--td-popover-width`/`--td-popover-min-height`,
  * `:root`-scoped, so this resolves identically wherever it's read from,
- * a portalled card included) rather than a hardcoded literal, so #436's
- * own future fixed 250×555 needs no matching change here — one source of
- * truth, the CSS itself. The `Number.isFinite` fallback only fires if the
- * custom property can't be read at all (a test environment with no real
- * stylesheet loaded, `getPropertyValue` returning `""`, `parseFloat`ing to
- * `NaN`) — its two literals are kept in sync with index.css's own current
- * defaults, not a second design decision about what this card's size is.
+ * a portalled card included) rather than a hardcoded literal — one source
+ * of truth, the CSS itself. The `Number.isFinite` fallback only fires if
+ * the custom property can't be read at all (a test environment with no
+ * real stylesheet loaded, `getPropertyValue` returning `""`, `parseFloat`ing
+ * to `NaN`) — its two literals are kept in sync with index.css's own
+ * current defaults (issue #436's own fixed 250×555, the five-option
+ * baseline — that CSS token's own comment on why a shorter four-option
+ * card doesn't get a second, conditionally-read token here), not a second
+ * design decision about what this card's size is.
  */
 function cardSizeFromCssTokens(): PlacementSize {
   const style = getComputedStyle(document.documentElement);
@@ -112,7 +157,7 @@ function cardSizeFromCssTokens(): PlacementSize {
   const height = Number.parseFloat(style.getPropertyValue("--td-popover-min-height"));
   return {
     width: Number.isFinite(width) ? width : 250,
-    height: Number.isFinite(height) ? height : 525,
+    height: Number.isFinite(height) ? height : 555,
   };
 }
 
@@ -331,6 +376,21 @@ export function TaskSchedulePopover({
     onOpenChange?.(next);
   }
   const [typed, setTyped] = useState("");
+  // Issue #436: the exact text `typed` was seeded with at open, but ONLY
+  // when that seed came from `dateDay` (a Task's own plain date, formatted
+  // via `formatScheduleInputText`) rather than from an existing
+  // `dateString` (Recurrence) or an empty field — `null` in both of those
+  // other cases. Read once, in the preview computation below: as long as
+  // `typed` still equals this ref's own value, the field reads as "the
+  // reader hasn't touched the pre-filled text yet", which is the one state
+  // Todoist's own screenshot shows with NO preview row underneath the
+  // input (just the quick options, immediately) — unlike a Recurrence
+  // seed, which has always shown its own preview immediately on open (the
+  // suite's own pre-existing "hides the Repeat entry point..." test), a
+  // contract this ref deliberately leaves alone. Cleared to `null` the
+  // moment the input's own `onChange` fires, so any real edit — even
+  // retyping the identical text — starts resolving a preview again.
+  const plainDateSeedRef = useRef<string | null>(null);
   const [month, setMonth] = useState<Date>(() => parseDayKey(dateDay) ?? now);
   const inputId = useId();
   // Whether `TaskTimeDialog` is open. Before issue #326's real fix (see
@@ -539,17 +599,67 @@ export function TaskSchedulePopover({
   // (not blank) is this file's own departure from that precedent — see
   // the header comment on why an existing Recurrence has to start
   // visible for "editable" to mean anything.
+  //
+  // Issue #436 adds a third seed: a Task with a plain `dateDay` and no
+  // Recurrence gets `formatScheduleInputText`'s own rendering of it
+  // ("19 Sep 21:00"/"19 Sep") instead of staying blank — the ticket's own
+  // "Opened from a Task" state — with the WHOLE text selected
+  // (`select()`, below `focus()`; Todoist's own screenshot shows it
+  // highlighted, ready to be typed straight over). `plainDateSeedRef`'s
+  // own header comment is what keeps that prefill from also showing a
+  // preview row nobody asked for yet.
   // biome-ignore lint/correctness/useExhaustiveDependencies: re-seed only on the open/close transition, not on every `now` tick or `dateDay`/`dateString` change while already open — `now` in particular has no stable identity across renders (its own default-parameter `new Date()`), so including it here would re-run this effect on every render the popover is open for, not just at open.
   useEffect(() => {
     if (open) {
-      setTyped(dateString ?? "");
+      let seed: string;
+      if (dateString !== null) {
+        seed = dateString;
+        plainDateSeedRef.current = null;
+      } else if (dateDay !== null) {
+        seed = formatScheduleInputText(dateDay, dateTime);
+        plainDateSeedRef.current = seed;
+      } else {
+        seed = "";
+        plainDateSeedRef.current = null;
+      }
+      setTyped(seed);
       setMonth(parseDayKey(dateDay) ?? now);
+      if (seed !== "") {
+        // `typedInputRef` already points at the real, mounted `<input>` by
+        // the time a `useEffect` (as against `useLayoutEffect`) fires, the
+        // same ordering this file's own placement effect leans on for
+        // `triggerEl`/`contentEl` above. But `setTyped` just above hasn't
+        // reached the DOM yet — React processes a state update from inside
+        // an effect on a LATER render, not before this same synchronous
+        // call returns — so reading `.value`/calling `.select()` right
+        // after it would still see whatever text was on screen before this
+        // open (empty, or a previous session's abandoned draft), not
+        // `seed`. Writing `el.value` directly first is what makes the
+        // selection land on the text this popover is actually about to
+        // show; the later re-render's own `value={typed}` reconciles to
+        // the identical string, so nothing fights this write afterwards.
+        const el = typedInputRef.current;
+        if (el !== null) {
+          el.value = seed;
+          el.select();
+        }
+      }
     }
   }, [open]);
 
   const nowKey = localDayKey(now);
   const nowDateTimeKey = localDateTimeKey(now);
-  const preview = resolveSchedulePreview(typed, nowDateTimeKey, dateDay);
+  // `null` while `typed` is still exactly the plain-date prefill this
+  // popover seeded on open (`plainDateSeedRef`'s own header comment) —
+  // Todoist's own screenshot shows no preview row under a freshly-opened,
+  // untouched prefill. An existing Recurrence's own seed is NOT gated the
+  // same way (`plainDateSeedRef` stays `null` for it), preserving this
+  // suite's own pre-existing contract that a Recurrence's preview shows
+  // immediately.
+  const preview =
+    typed === plainDateSeedRef.current
+      ? null
+      : resolveSchedulePreview(typed, nowDateTimeKey, dateDay);
 
   function commitDay(day: string | null) {
     onPickDay(day);
@@ -734,42 +844,75 @@ export function TaskSchedulePopover({
   };
 
   const tomorrow = addDays(now, 1);
+  const tomorrowKey = localDayKey(tomorrow);
   const nextWeek = nextMonday(now);
-  const nextWeekend = nextSaturday(now);
+  const thisWeekend = nextSaturday(now);
+  const laterThisWeek = laterThisWeekDay(now);
 
-  const quickOptionDefs = [
-    {
-      key: "today",
-      icon: CalendarDays,
-      label: "Today",
-      hint: format(now, "EEE"),
-      day: nowKey,
-    },
-    {
-      key: "tomorrow",
-      icon: Sun,
-      label: "Tomorrow",
-      hint: format(tomorrow, "EEE"),
-      day: localDayKey(tomorrow),
-    },
-    {
-      key: "next-week",
-      icon: CalendarRange,
-      label: "Next week",
-      hint: format(nextWeek, "EEE d MMM"),
-      day: localDayKey(nextWeek),
-    },
-    {
-      key: "next-weekend",
-      icon: Sofa,
-      label: "Next weekend",
-      hint: format(nextWeekend, "EEE d MMM"),
-      day: localDayKey(nextWeekend),
-    },
-  ].filter(
-    (option, index, all) =>
-      option.day !== dateDay && all.findIndex((other) => other.day === option.day) === index,
-  );
+  const todayOption = {
+    key: "today",
+    icon: CalendarDays,
+    iconColorVar: "--td-schedule-today",
+    label: "Today",
+    hint: format(now, "EEE"),
+    day: nowKey,
+  };
+  const tomorrowOption = {
+    key: "tomorrow",
+    icon: Sun,
+    iconColorVar: "--td-schedule-tomorrow",
+    label: "Tomorrow",
+    hint: format(tomorrow, "EEE"),
+    day: tomorrowKey,
+  };
+  const laterThisWeekOption = {
+    key: "later-this-week",
+    icon: CalendarClock,
+    iconColorVar: "--td-schedule-later-this-week",
+    label: "Later this week",
+    hint: format(laterThisWeek, "EEE"),
+    day: localDayKey(laterThisWeek),
+  };
+  const thisWeekendOption = {
+    key: "this-weekend",
+    icon: Sofa,
+    iconColorVar: "--td-schedule-this-weekend",
+    label: "This weekend",
+    // Always a Saturday (`nextSaturday`), so `format`'s own weekday token
+    // already renders the fixed "Sat" the ticket's own comment measured —
+    // no separate literal needed.
+    hint: format(thisWeekend, "EEE"),
+    day: localDayKey(thisWeekend),
+  };
+  const nextWeekOption = {
+    key: "next-week",
+    icon: CalendarRange,
+    iconColorVar: "--td-schedule-next-week",
+    label: "Next week",
+    hint: format(nextWeek, "EEE d MMM"),
+    day: localDayKey(nextWeek),
+  };
+
+  /**
+   * Issue #436's own comment correction (2026-09-21) replaces the old
+   * "drop whatever quick option matches `dateDay`" rule entirely — Todoist
+   * only ever elides Today, Tomorrow, or No Date, and only when each one
+   * individually equals the CURRENT value, never This weekend or Next
+   * week (a Task due next Monday still offers "Next week", unlike this
+   * component's own pre-#436 behaviour). An elided Today or Tomorrow is
+   * replaced by "Later this week" in the SECOND slot — the measured order
+   * for both rows is `[the surviving one of Today/Tomorrow, Later this
+   * week, This weekend, Next week, No Date]` — not by simply dropping
+   * Today/Tomorrow's own first-or-second slot in place, which the
+   * comment's own two example rows would not produce identically.
+   */
+  const leadingOptions =
+    dateDay === nowKey
+      ? [tomorrowOption, laterThisWeekOption]
+      : dateDay === tomorrowKey
+        ? [todayOption, laterThisWeekOption]
+        : [todayOption, tomorrowOption];
+  const quickOptionDefs = [...leadingOptions, thisWeekendOption, nextWeekOption];
 
   // One body, two shells. Everything below renders identically whichever
   // shell wraps it, so the anchored and bottom-sheet variants cannot drift
@@ -780,7 +923,9 @@ export function TaskSchedulePopover({
   // drift apart.
   const scheduleFields = (
     <>
-      <div className="relative">
+      {/* Issue #436's own fixed 36px input row — `h-9` pins that height
+          regardless of the placeholder/value text's own line box. */}
+      <div className="relative h-9 shrink-0">
         <label htmlFor={inputId} className="sr-only">
           Type a date
         </label>
@@ -791,20 +936,31 @@ export function TaskSchedulePopover({
           placeholder="Type a date"
           maxLength={150}
           value={typed}
-          onChange={(event) => setTyped(event.target.value)}
+          onChange={(event) => {
+            setTyped(event.target.value);
+            // Any real edit — the reader retyping the identical prefilled
+            // text included — ends the "untouched prefill" state
+            // `plainDateSeedRef` tracks, so the preview starts resolving
+            // again from here on (this ref's own header comment above).
+            plainDateSeedRef.current = null;
+          }}
           onKeyDown={(event) => {
             if (event.key === "Enter") {
               event.preventDefault();
               commitPreview();
             }
           }}
-          className="w-full rounded-md border border-border bg-background px-2 py-1 pr-7 text-sm outline-none focus-visible:ring-1 focus-visible:ring-ring"
+          style={{ color: "var(--td-schedule-input-text)" }}
+          className="h-9 w-full rounded-md border border-border bg-background px-2 py-1 pr-7 text-[14px] outline-none placeholder:text-[color:var(--td-schedule-input-placeholder)] focus-visible:ring-1 focus-visible:ring-ring"
         />
         {typed !== "" && (
           <button
             type="button"
             aria-label="Clear"
-            onClick={() => setTyped("")}
+            onClick={() => {
+              setTyped("");
+              plainDateSeedRef.current = null;
+            }}
             className="-translate-y-1/2 absolute top-1/2 right-1.5 rounded-sm p-0.5 text-muted-foreground hover:text-foreground"
           >
             <X className="size-3.5" />
@@ -812,12 +968,20 @@ export function TaskSchedulePopover({
         )}
       </div>
 
+      {/* Issue #436's own divider — between the input and whatever renders
+          next (the typed preview when one resolves, otherwise the quick
+          options directly, exactly as Todoist's own screenshots show). */}
+      <div
+        data-testid="schedule-divider"
+        className="h-px shrink-0 bg-[color:var(--td-popover-divider)]"
+      />
+
       {preview !== null && (
         <button
           type="button"
           data-testid="scheduler-date-preview"
           onClick={commitPreview}
-          className="flex flex-col items-start gap-0.5 rounded-md border border-border px-2 py-1.5 text-left hover:bg-accent"
+          className="my-1 flex shrink-0 flex-col items-start gap-0.5 rounded-md border border-border px-2 py-1.5 text-left hover:bg-accent"
         >
           <span className="flex items-center gap-1.5 font-medium">
             {preview.dateString !== null ? (
@@ -841,11 +1005,16 @@ export function TaskSchedulePopover({
         </button>
       )}
 
-      <div className="flex flex-col">
+      {/* Issue #436's own 160px (five options) / 128px (four) quick-
+          options block — no wrapper height of its own: each `QuickOption`
+          is a fixed 32px (`h-8`) and they stack with no gap, so the
+          block's real height already IS `optionCount * 32`. */}
+      <div data-testid="quick-options" className="flex shrink-0 flex-col">
         {quickOptionDefs.map((option) => (
           <QuickOption
             key={option.key}
             icon={option.icon}
+            iconColorVar={option.iconColorVar}
             label={option.label}
             hint={option.hint}
             onClick={() => commitDay(option.day)}
@@ -856,10 +1025,15 @@ export function TaskSchedulePopover({
             #435's Reschedule keeps this option reachable even with no
             `dateDay` of its own — every Overdue Task it would clear
             already has a date, this popover just has none picked yet.
+            Doubles as issue #436's own "current value is No Date" row of
+            the elision table: an ordinary undated caller (no `dateDay`,
+            no `alwaysDated`) drops this option and nothing else, landing
+            the block at four options instead of five.
           */}
         {(dateDay !== null || alwaysDated) && (
           <QuickOption
             icon={CircleSlash}
+            iconColorVar="--td-schedule-no-date"
             label="No Date"
             hint={null}
             onClick={() => commitDay(null)}
@@ -867,102 +1041,122 @@ export function TaskSchedulePopover({
         )}
       </div>
 
-      <Calendar
-        mode="single"
-        weekStartsOn={1}
-        today={now}
-        formatters={{
-          formatWeekdayName: (day) => format(day, "EEEEE"),
-          // Defect 6 (measured 2026-09-15): Todoist's own caption reads
-          // "Sep 2026" — react-day-picker's default `formatCaption`
-          // (`DateLib.formatMonthYear`) renders the locale's full month
-          // name instead ("September 2026"). Same override mechanism as
-          // `formatWeekdayName` above, for the identical reason: left at
-          // the default, this ticket's own reference measurement would
-          // silently diverge from it.
-          formatCaption: (month) => format(month, "MMM yyyy"),
-        }}
-        month={month}
-        onMonthChange={setMonth}
-        selected={parseDayKey(dateDay)}
-        onSelect={(day) => {
-          if (day !== undefined) {
-            commitDay(localDayKey(day));
-          }
-        }}
-        modifiers={{
-          weekend: (day) => day.getDay() === 0 || day.getDay() === 6,
-          busy: (day) => datesWithTasks.has(localDayKey(day)),
-        }}
-        modifiersClassNames={{
-          weekend: "[&>button]:text-muted-foreground",
-          busy: "before:absolute before:bottom-0.5 before:left-1/2 before:size-[3px] before:-translate-x-1/2 before:rounded-full before:bg-[color:var(--td-calendar-busy-dot)] before:content-['']",
-        }}
-        classNames={{
-          today:
-            "[&>button]:font-bold [&:not([data-selected=true])>button]:text-[color:var(--td-calendar-today)]!",
-          selected:
-            "[&>button]:bg-[color:var(--td-calendar-selected)] [&>button]:text-white [&>button]:font-bold [&>button]:hover:bg-[color:var(--td-calendar-selected)]",
-          // Defect 4 (measured 2026-09-15): Todoist gave next-month days
-          // shown in its grid (it had Oct 1–11 visible) no distinguishing
-          // class at all — a next-month Saturday read exactly like a
-          // current-month Saturday. The base `Calendar` primitive
-          // (calendar.tsx) dims every `outside` cell
-          // (`text-muted-foreground opacity-50`) for its two other
-          // callers (the History date picker, the Custom-repeat end-date
-          // picker), neither of which this ticket measured against
-          // Todoist — so the dimming is cleared here, at this call site
-          // only, rather than in the shared primitive. An outside day now
-          // falls through to whichever of `weekend`/`today`/`selected`
-          // actually applies to it, same as a current-month day.
-          outside: "",
-          day_button: cn(
-            buttonVariants({ variant: "ghost" }),
-            "p-0 font-normal aria-selected:opacity-100",
-            "h-7 w-[30px] rounded-[12px]",
-            // Defect 3 (measured 2026-09-15): Todoist's hover is an
-            // OPAQUE rgb(77,77,77) pill, not `ghost`'s translucent
-            // `hover:bg-muted` (this theme's `oklab(0.2686 … / 0.5)`) —
-            // overridden with the shared `--td-calendar-cell-hover`
-            // token (index.css) rather than a second literal, since
-            // defect 2's focus pill below is the identical grey at
-            // partial opacity. `ghost`'s OWN hover is really two rules —
-            // plain `hover:bg-muted` and, separately, `dark:hover:bg-
-            // muted/50` (button.tsx) — and only the plain one shares this
-            // override's specificity; `.dark .cls:hover` outranks a bare
-            // `.cls:hover` regardless of source order, so without a
-            // `dark:` twin of this same override, dark mode (the ONLY
-            // theme Todoist was ever measured in — this file's own
-            // `[data-surface="todo"]` header comment) would keep showing
-            // the old translucent wash on top. Repeated rather than
-            // computed from the plain class so `cn`'s tailwind-merge sees
-            // the identical `dark:hover:bg-*` group and drops `ghost`'s
-            // version outright, instead of leaving two same-specificity
-            // rules to fight over stylesheet order.
-            //
-            // Defect 2 (measured 2026-09-15): a focused day cell computed
-            // `outline-style: none` and an all-zero `box-shadow` live —
-            // no visible focus state at all, unlike every other control
-            // in this popover. `ghost`'s own `focus-visible:ring-3
-            // focus-visible:ring-ring/50 focus-visible:border-ring`
-            // (button.tsx) is neutralised here (`ring-0`/
-            // `border-transparent`) and replaced with Todoist's own
-            // measured focus-visible pill: `rgba(77, 77, 77, 0.306)`,
-            // i.e. the hover token's grey at 30.6% opacity —
-            // `color-mix`'s opacity modifier scales a colour's alpha
-            // alone when mixed with fully-transparent (CSS Color 4), so
-            // `/[30.6%]` on the token reproduces the measured rgba
-            // exactly without a second literal. It deliberately sets no
-            // text colour, so a focused "today" cell stays today-red —
-            // Todoist's own measured behaviour ("inheriting the cell's
-            // own text colour").
-            "hover:bg-[color:var(--td-calendar-cell-hover)] dark:hover:bg-[color:var(--td-calendar-cell-hover)] focus-visible:border-transparent focus-visible:ring-0 focus-visible:bg-[color:var(--td-calendar-cell-hover)]/[30.6%]",
-          ),
-        }}
-        className="mx-auto"
+      <div
+        data-testid="schedule-divider"
+        className="h-px shrink-0 bg-[color:var(--td-popover-divider)]"
       />
 
-      <div className="flex items-center gap-2">
+      {/* Issue #436's own fixed 236px calendar area — #439's own endless
+          month list will make the inner list scroll; for now this just
+          keeps the calendar body inside the measured area, overflow
+          hidden rather than growing the card. */}
+      <div className="h-[236px] shrink-0 overflow-hidden">
+        <Calendar
+          mode="single"
+          weekStartsOn={1}
+          today={now}
+          formatters={{
+            formatWeekdayName: (day) => format(day, "EEEEE"),
+            // Defect 6 (measured 2026-09-15): Todoist's own caption reads
+            // "Sep 2026" — react-day-picker's default `formatCaption`
+            // (`DateLib.formatMonthYear`) renders the locale's full month
+            // name instead ("September 2026"). Same override mechanism as
+            // `formatWeekdayName` above, for the identical reason: left at
+            // the default, this ticket's own reference measurement would
+            // silently diverge from it.
+            formatCaption: (month) => format(month, "MMM yyyy"),
+          }}
+          month={month}
+          onMonthChange={setMonth}
+          selected={parseDayKey(dateDay)}
+          onSelect={(day) => {
+            if (day !== undefined) {
+              commitDay(localDayKey(day));
+            }
+          }}
+          modifiers={{
+            weekend: (day) => day.getDay() === 0 || day.getDay() === 6,
+            busy: (day) => datesWithTasks.has(localDayKey(day)),
+          }}
+          modifiersClassNames={{
+            weekend: "[&>button]:text-muted-foreground",
+            busy: "before:absolute before:bottom-0.5 before:left-1/2 before:size-[3px] before:-translate-x-1/2 before:rounded-full before:bg-[color:var(--td-calendar-busy-dot)] before:content-['']",
+          }}
+          classNames={{
+            today:
+              "[&>button]:font-bold [&:not([data-selected=true])>button]:text-[color:var(--td-calendar-today)]!",
+            selected:
+              "[&>button]:bg-[color:var(--td-calendar-selected)] [&>button]:text-white [&>button]:font-bold [&>button]:hover:bg-[color:var(--td-calendar-selected)]",
+            // Defect 4 (measured 2026-09-15): Todoist gave next-month days
+            // shown in its grid (it had Oct 1–11 visible) no distinguishing
+            // class at all — a next-month Saturday read exactly like a
+            // current-month Saturday. The base `Calendar` primitive
+            // (calendar.tsx) dims every `outside` cell
+            // (`text-muted-foreground opacity-50`) for its two other
+            // callers (the History date picker, the Custom-repeat end-date
+            // picker), neither of which this ticket measured against
+            // Todoist — so the dimming is cleared here, at this call site
+            // only, rather than in the shared primitive. An outside day now
+            // falls through to whichever of `weekend`/`today`/`selected`
+            // actually applies to it, same as a current-month day.
+            outside: "",
+            day_button: cn(
+              buttonVariants({ variant: "ghost" }),
+              "p-0 font-normal aria-selected:opacity-100",
+              "h-7 w-[30px] rounded-[12px]",
+              // Defect 3 (measured 2026-09-15): Todoist's hover is an
+              // OPAQUE rgb(77,77,77) pill, not `ghost`'s translucent
+              // `hover:bg-muted` (this theme's `oklab(0.2686 … / 0.5)`) —
+              // overridden with the shared `--td-calendar-cell-hover`
+              // token (index.css) rather than a second literal, since
+              // defect 2's focus pill below is the identical grey at
+              // partial opacity. `ghost`'s OWN hover is really two rules —
+              // plain `hover:bg-muted` and, separately, `dark:hover:bg-
+              // muted/50` (button.tsx) — and only the plain one shares this
+              // override's specificity; `.dark .cls:hover` outranks a bare
+              // `.cls:hover` regardless of source order, so without a
+              // `dark:` twin of this same override, dark mode (the ONLY
+              // theme Todoist was ever measured in — this file's own
+              // `[data-surface="todo"]` header comment) would keep showing
+              // the old translucent wash on top. Repeated rather than
+              // computed from the plain class so `cn`'s tailwind-merge sees
+              // the identical `dark:hover:bg-*` group and drops `ghost`'s
+              // version outright, instead of leaving two same-specificity
+              // rules to fight over stylesheet order.
+              //
+              // Defect 2 (measured 2026-09-15): a focused day cell computed
+              // `outline-style: none` and an all-zero `box-shadow` live —
+              // no visible focus state at all, unlike every other control
+              // in this popover. `ghost`'s own `focus-visible:ring-3
+              // focus-visible:ring-ring/50 focus-visible:border-ring`
+              // (button.tsx) is neutralised here (`ring-0`/
+              // `border-transparent`) and replaced with Todoist's own
+              // measured focus-visible pill: `rgba(77, 77, 77, 0.306)`,
+              // i.e. the hover token's grey at 30.6% opacity —
+              // `color-mix`'s opacity modifier scales a colour's alpha
+              // alone when mixed with fully-transparent (CSS Color 4), so
+              // `/[30.6%]` on the token reproduces the measured rgba
+              // exactly without a second literal. It deliberately sets no
+              // text colour, so a focused "today" cell stays today-red —
+              // Todoist's own measured behaviour ("inheriting the cell's
+              // own text colour").
+              "hover:bg-[color:var(--td-calendar-cell-hover)] dark:hover:bg-[color:var(--td-calendar-cell-hover)] focus-visible:border-transparent focus-visible:ring-0 focus-visible:bg-[color:var(--td-calendar-cell-hover)]/[30.6%]",
+            ),
+          }}
+          className="mx-auto"
+        />
+      </div>
+
+      <div
+        data-testid="schedule-divider"
+        className="h-px shrink-0 bg-[color:var(--td-popover-divider)]"
+      />
+
+      {/* Issue #436's own stacked Time/Repeat rows — each 40px
+          (`h-10`), Time's own 226×32 button first and Repeat's own
+          directly below it, no divider between the two (Todoist's own
+          screenshot shows none), replacing the old side-by-side row. */}
+      <div className="flex shrink-0 flex-col">
         {/*
             Gated on `dateDay !== null` for the identical reason the
             former inline checkbox was: there is no time-of-day to attach
@@ -972,19 +1166,52 @@ export function TaskSchedulePopover({
             Overdue Task it applies to already carries a real day.
           */}
         {(dateDay !== null || alwaysDated) && (
-          <Button
-            type="button"
-            variant="ghost"
-            onClick={() => setTimeDialogOpen(true)}
-            className="h-8 w-fit justify-start gap-2 px-2 font-normal text-muted-foreground"
-          >
-            <Clock className="size-4" />
-            Time
-          </Button>
+          <div className="relative flex h-10 shrink-0 items-center">
+            <Button
+              type="button"
+              variant="ghost"
+              onClick={() => setTimeDialogOpen(true)}
+              // `aria-label` pins the accessible name to "Time" even once
+              // the visible text becomes the value ("21:00") below —
+              // every existing Time-dialog test in this file finds this
+              // button `{ name: "Time" }` regardless of whether a value is
+              // set, and Todoist's own picker keeps the identical control
+              // labelled "Time" either way (the value augments it, the
+              // clear button below removes the value, neither renames the
+              // control itself).
+              aria-label="Time"
+              className="h-8 w-[226px] justify-start gap-2 rounded-[5px] border px-2 font-normal"
+              style={{
+                borderColor: "var(--td-schedule-field-border)",
+                color: "var(--td-schedule-field-text)",
+              }}
+            >
+              <Clock className="size-4" />
+              {dateTime ?? "Time"}
+            </Button>
+            {dateTime !== null && (
+              <button
+                type="button"
+                aria-label="Clear time"
+                onClick={(event) => {
+                  // Stops the click from also reaching the Time button
+                  // underneath it (they overlap at this corner) and
+                  // opening the dialog it exists to avoid — clearing is
+                  // meant to be a one-click affordance, not a shortcut
+                  // into the dialog it also happens to be inside of.
+                  event.stopPropagation();
+                  onSetTime(null);
+                }}
+                className="-translate-y-1/2 absolute top-1/2 right-2 rounded-sm p-0.5 text-muted-foreground hover:text-foreground"
+              >
+                <X className="size-3.5" />
+              </button>
+            )}
+          </div>
         )}
 
         {showRepeatControl && (
-          <div className="flex w-fit items-center gap-0.5">
+          <div className="flex h-10 w-fit shrink-0 items-center gap-0.5">
             <DropdownMenu.Root>
               <DropdownMenu.Trigger asChild>
                 <Button
@@ -995,7 +1222,21 @@ export function TaskSchedulePopover({
                   // rule's own name, and the menu it opens is named for the
                   // rule rather than for "Repeat" — both driven on Todoist.
                   aria-label={recurrenceLabel ?? "Repeat"}
-                  className="h-8 w-fit justify-start gap-2 px-2 font-normal text-muted-foreground"
+                  className={cn(
+                    "h-8 justify-start gap-2 rounded-[5px] border px-2 font-normal",
+                    // Issue #436's own measured empty-state width (226px) —
+                    // widened to fit content (`w-fit`) instead once a rule
+                    // is active, so the standalone `Clear recurrence`
+                    // button below still has the two-part control's own
+                    // pre-#436 room to sit beside it rather than wrap or
+                    // overflow the card. Todoist's own active-recurrence
+                    // frame was never measured for this ticket.
+                    activeRecurrence === null ? "w-[226px]" : "w-fit",
+                  )}
+                  style={{
+                    borderColor: "var(--td-schedule-field-border)",
+                    color: "var(--td-schedule-field-text)",
+                  }}
                 >
                   <Repeat className="size-4" />
                   {recurrenceLabel ?? "Repeat"}
@@ -1200,7 +1441,18 @@ export function TaskSchedulePopover({
         sideOffset={displayPlacement?.sideOffset ?? 0}
         alignOffset={displayPlacement?.alignOffset ?? 0}
         avoidCollisions={false}
-        className="flex flex-col gap-2 p-2 text-sm"
+        // Issue #436's own fixed frame: no `gap-*` between children — the
+        // dividers between sections (`bg-[color:var(--td-popover-divider)]`
+        // 1px strips, inline in `scheduleFields`) supply the visual
+        // separation Todoist's own screenshots show, so a flex gap on top
+        // of them would double it. `px-3 py-5` is what turns the measured
+        // 250×555 card into exactly that: 12px of horizontal padding each
+        // side leaves 226px of content width — the same 226px Time/Repeat
+        // are measured at — and 20px top/bottom padding is what the
+        // section heights below (36 input + 3×1 dividers + 160 five-option
+        // quick options + 236 calendar + 40 Time + 40 Repeat = 515) need
+        // added to reach 555.
+        className="flex flex-col px-3 py-5 text-sm"
         style={{
           width: "var(--td-popover-width)",
           minHeight: "var(--td-popover-min-height)",
@@ -1268,11 +1520,14 @@ export function TaskSchedulePopover({
 
 function QuickOption({
   icon: Icon,
+  iconColorVar,
   label,
   hint,
   onClick,
 }: {
   icon: typeof CalendarDays;
+  /** A bare `--td-schedule-*` custom-property name (no `var(...)` wrapper) — read via `style`, not a class, the same convention `overdue-reschedule-action.tsx`'s own header comment already documents for this app's `--td-*` colour consumers. */
+  iconColorVar: string;
   label: string;
   hint: string | null;
   onClick: () => void;
@@ -1282,7 +1537,15 @@ function QuickOption({
       type="button"
       variant="ghost"
       onClick={onClick}
-      className="h-8 justify-between px-2 font-normal"
+      // `rounded-none`: Todoist's own measured row has no radius, unlike
+      // `ghost`'s default. `hover:bg-*` is repeated under `dark:` for the
+      // identical reason the calendar day button's own override needs
+      // it (that call site's own comment, above): `ghost`'s own
+      // `dark:hover:bg-muted/50` (button.tsx) is a two-class selector
+      // that outranks a bare `hover:` override by specificity regardless
+      // of source order, so only an explicit `dark:` twin actually wins
+      // in dark theme.
+      className="h-8 w-full justify-between rounded-none px-2 font-normal hover:bg-[color:var(--td-schedule-option-hover)] dark:hover:bg-[color:var(--td-schedule-option-hover)]"
       // Explicit, rather than left to the browser's own name-from-content
       // algorithm: the label and hint sit in two sibling `<span>`s with no
       // literal whitespace between them in the DOM, which concatenates to
@@ -1291,10 +1554,19 @@ function QuickOption({
       aria-label={hint === null ? label : `${label} ${hint}`}
     >
       <span className="flex items-center gap-2">
-        <Icon className="size-4 text-muted-foreground" />
-        {label}
+        <Icon className="size-4" style={{ color: `var(${iconColorVar})` }} />
+        <span
+          className="text-[13px] font-medium leading-6"
+          style={{ color: "var(--td-schedule-option-label)" }}
+        >
+          {label}
+        </span>
       </span>
-      {hint !== null && <span className="text-muted-foreground text-xs">{hint}</span>}
+      {hint !== null && (
+        <span className="text-[13px]" style={{ color: "var(--td-schedule-option-hint)" }}>
+          {hint}
+        </span>
+      )}
     </Button>
   );
 }

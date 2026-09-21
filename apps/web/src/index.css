@@ -395,13 +395,81 @@
      second time. */
   --td-calendar-cell-hover: rgb(77, 77, 77);
 
-  --td-popover-background: var(--muted);
+  /*
+   * Issue #436: the light card is white, per the light reference screenshot
+   * (`todoist-picker-internals/01-picker-open.png`) — not `var(--muted)`,
+   * this token's own value before this ticket, which reads `rgb(246,246,246)`
+   * and was never actually measured against Todoist's own picker (it was
+   * carried over from a generic "popover" default). Dark's own measured
+   * card ground is `rgb(38,38,38)` — exactly `var(--muted)`'s dark value —
+   * so `.dark` below re-points this back to `--muted` explicitly rather
+   * than let it inherit `var(--background)`'s dark value instead
+   * (`rgb(31,31,31)`, close enough to look right and wrong regardless).
+   */
+  --td-popover-background: var(--background);
   --td-popover-border: var(--border);
   --td-popover-radius: var(--radius);
   --td-popover-width: 250px;
-  --td-popover-min-height: 525px;
+  /*
+   * Issue #436's own fixed frame: 555px tall at Todoist's own default five
+   * quick options (36 input + 1 divider + 160 five-option block + 1 divider
+   * + 236 calendar + 1 divider + 40 Time row + 40 Repeat row = 515, plus
+   * this card's own 20px top/bottom padding = 555 — matches both the light
+   * and dark measurements exactly). Four options (the "current value is
+   * already No Date" row of the elision table) render a genuinely shorter
+   * card — 128px of options instead of 160 — but this token stays pinned to
+   * the five-option baseline rather than tracking that: it is read only as
+   * `cardSizeFromCssTokens`' own PRE-MOUNT estimate for issue #440's
+   * placement math (that function's own doc comment), and #440's existing
+   * post-mount `ResizeObserver` measurement already corrects a wrong
+   * estimate before the reader can see it, the identical mechanism that
+   * already tolerates a typed-preview row or the Repeat control's two-part
+   * layout changing this card's real height today. A slightly-tall guess
+   * for the four-option case is harmless by that same mechanism; a second,
+   * conditionally-read CSS token would not be a single source of truth so
+   * much as two that could drift.
+   */
+  --td-popover-min-height: 555px;
   --td-popover-shadow: 0 10px 20px 0 rgba(0, 0, 0, 0.19), 0 6px 6px 0 rgba(0, 0, 0, 0.23);
   --td-modal-shadow: 0 2px 8px rgba(0, 0, 0, 0.16);
+
+  /*
+   * Issue #436's own frame tokens — the date picker's dividers, "Type a
+   * date" input, quick-option rows, and Time/Repeat fields. Light values
+   * measured directly (issue #436's own ticket body); dark values from a
+   * read-only look at Todoist's Dark preset (issue #436's own comment
+   * correction, 2026-09-21) — recorded in full in that comment, not
+   * re-derived from Todoist's `theme_todoist` account (which has no dark
+   * preset of its own — `--td-quick-add-*`'s own header comment a few
+   * lines up has the full story on why this app's `.dark` targets
+   * Todoist's explicit Dark preset instead).
+   */
+  --td-popover-divider: rgb(238, 238, 238);
+  --td-schedule-input-text: rgb(32, 32, 32);
+  --td-schedule-input-placeholder: rgb(153, 153, 153);
+  --td-schedule-option-label: rgb(32, 32, 32);
+  --td-schedule-option-hint: rgb(128, 128, 128);
+  --td-schedule-option-hover: rgb(243, 243, 243);
+  --td-schedule-today: rgb(75, 146, 68);
+  --td-schedule-tomorrow: rgb(173, 98, 0);
+  /*
+   * "Later this week" (issue #436's own comment correction) was never
+   * measured on its own — Todoist showed it only once, replacing an
+   * elided Today/Tomorrow, and its icon colour was never read off. Given
+   * the Tomorrow/Today family to choose from, this reuses Tomorrow's own
+   * token rather than a third literal: both name a specific, soon,
+   * still-this-week day (as against Today's "now" or the two-week-out
+   * family), and `var()` here — not a repeated literal — is what keeps
+   * dark theme's own equivalent choice (`.dark` below never re-declares
+   * this one) following Tomorrow's dark value automatically rather than
+   * risking the two drifting apart on a future re-measure of only one.
+   */
+  --td-schedule-later-this-week: var(--td-schedule-tomorrow);
+  --td-schedule-this-weekend: rgb(36, 111, 224);
+  --td-schedule-next-week: rgb(105, 46, 194);
+  --td-schedule-no-date: rgb(128, 128, 128);
+  --td-schedule-field-border: rgb(230, 230, 230);
+  --td-schedule-field-text: rgb(102, 102, 102);
 
   --td-row-font-size: 14px;
   --td-row-line-height: 21px;
@@ -513,6 +581,34 @@
      of this bug the ticket's own report says must NOT change). */
   --td-recognition-background: rgb(111, 38, 37);
   --td-recognition-foreground: rgb(255, 255, 255);
+
+  /*
+   * Issue #436's own dark picker frame — not required by check-css-
+   * cascade.mjs (none of these are set by the base `.dark` block above),
+   * but required for correctness regardless: `--td-popover-background`
+   * genuinely needs its own re-point now that light points at
+   * `var(--background)` instead of `var(--muted)` (this `:root` block's own
+   * comment on that token) — without this, dark would inherit
+   * `var(--background)` too and paint `rgb(31,31,31)`, not the measured
+   * `rgb(38,38,38)`. `--td-schedule-later-this-week` is deliberately absent
+   * here — it's a `var()` reference onto `--td-schedule-tomorrow`, which
+   * this block already re-points, so it resolves correctly with no second
+   * declaration (this `:root` block's own comment on that token).
+   */
+  --td-popover-background: var(--muted);
+  --td-popover-divider: rgb(61, 61, 61);
+  --td-schedule-input-text: rgb(255, 255, 255);
+  --td-schedule-input-placeholder: rgb(128, 128, 128);
+  --td-schedule-option-label: rgb(255, 255, 255);
+  --td-schedule-option-hint: rgb(204, 204, 204);
+  --td-schedule-option-hover: rgb(54, 54, 54);
+  --td-schedule-today: rgb(28, 140, 58);
+  --td-schedule-tomorrow: rgb(235, 134, 0);
+  --td-schedule-this-weekend: rgb(41, 126, 255);
+  --td-schedule-next-week: rgb(145, 71, 255);
+  --td-schedule-no-date: rgb(128, 128, 128);
+  --td-schedule-field-border: rgb(61, 61, 61);
+  --td-schedule-field-text: rgb(209, 209, 209);
 }
 
 @layer base {
