@@ -708,4 +708,62 @@ describe("TimePage", () => {
     ).toBeInTheDocument();
     expect(status.getByText(/Newest record 08:12/)).toBeInTheDocument();
   });
+
+  it("changes the timeline's scale height and disables zoom buttons at each end", async () => {
+    // Issue #418: the page used to render every day at one fixed 120px/hour
+    // scale, unreadable for records a few seconds long. `use-timeline-zoom.ts`
+    // owns the gesture wiring (its own test file covers ctrl+wheel, pinch and
+    // the keyboard); this only has to prove the buttons this page renders are
+    // actually wired to it — the lane element's own drawn height changes, and
+    // both buttons disable at the ends of `ZOOM_LEVELS`.
+    useSettingsStore.setState({ serverUrl: "https://server.example", capabilities: SUPPORTED });
+    stubServer({ sources: [sourceFixture({})], intervals: [intervalFixture({})] });
+
+    renderPage();
+
+    const lane = await screen.findByRole("list", { name: "Toggl Track activity" });
+    // 120px/hour, the default (`zoomLevelAt`'s own `DEFAULT_ZOOM_INDEX`).
+    expect(lane).toHaveStyle({ height: "2880px" });
+
+    const zoomIn = screen.getByRole("button", { name: "Zoom in" });
+    const zoomOut = screen.getByRole("button", { name: "Zoom out" });
+    expect(zoomOut).toBeEnabled();
+
+    fireEvent.click(zoomIn);
+    expect(lane).toHaveStyle({ height: "5760px" });
+
+    // Walk to the top of ZOOM_LEVELS and confirm it stops growing and disables.
+    for (let i = 0; i < 6; i += 1) {
+      fireEvent.click(zoomIn);
+    }
+    expect(zoomIn).toBeDisabled();
+    expect(lane).toHaveStyle({ height: `${3840 * 24}px` });
+
+    // And down to the bottom.
+    for (let i = 0; i < 8; i += 1) {
+      fireEvent.click(zoomOut);
+    }
+    expect(zoomOut).toBeDisabled();
+    expect(lane).toHaveStyle({ height: `${30 * 24}px` });
+  });
+
+  it("gives the scale gutter an explicit height that tracks the current zoom", async () => {
+    // Defect fixed by this issue: the gutter's positioned container (the div
+    // `scaleMarks`' labels are placed inside, marked `data-time-scale`) had no
+    // height of its own — it holds only absolutely-positioned `<span>` marks,
+    // which do not contribute to a parent's height — so every mark's `top: N%`
+    // resolved against a ZERO-height box and every label collapsed onto the
+    // same spot at the gutter's top instead of spreading down the scale.
+    useSettingsStore.setState({ serverUrl: "https://server.example", capabilities: SUPPORTED });
+    stubServer({ sources: [sourceFixture({})], intervals: [intervalFixture({})] });
+
+    const { container } = renderPage();
+    await screen.findByRole("list", { name: "Toggl Track activity" });
+
+    const scale = container.querySelector("[data-time-scale]");
+    expect(scale).toHaveStyle({ height: "2880px" });
+
+    fireEvent.click(screen.getByRole("button", { name: "Zoom in" }));
+    expect(scale).toHaveStyle({ height: "5760px" });
+  });
 });

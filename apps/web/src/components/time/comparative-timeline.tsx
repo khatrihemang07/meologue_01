@@ -1,32 +1,42 @@
+import type React from "react";
 import {
   formatDuration,
-  hourMarks,
   type Lane,
   MINIMUM_INTERVAL_FRACTION,
   type PlacedInterval,
   placeLane,
 } from "@/lib/time-lanes";
 import type { ActivityInterval } from "@/lib/time-transport";
+import { minimumFraction, type ScaleMark, scaleMarks } from "@/lib/time-zoom";
 
-/** 120px an hour. See `MINIMUM_INTERVAL_FRACTION` for why this number. */
-const HOUR_HEIGHT = 120;
-const SCALE_HEIGHT = HOUR_HEIGHT * 24;
-
-/** The shared 24-hour clock every source lane is drawn against (issue #420). */
+/**
+ * The shared 24-hour clock every source lane is drawn against (issue #420),
+ * now zoomable (issue #418) instead of fixed at 120px/hour — see
+ * `use-timeline-zoom.ts` for the gestures and `time-zoom.ts` for the pure
+ * scale math this component only turns into styles.
+ */
 export function ComparativeTimeline({
   lanes,
   dayStart,
   dayEnd,
   openIntervalId,
   onOpen,
+  pxPerHour,
+  timelineRef,
+  timelineProps,
 }: {
   lanes: Lane[];
   dayStart: number;
   dayEnd: number;
   openIntervalId: string | null;
   onOpen: (id: string) => void;
+  pxPerHour: number;
+  timelineRef: React.RefCallback<HTMLDivElement>;
+  timelineProps: React.HTMLAttributes<HTMLDivElement> & { tabIndex: number };
 }) {
-  const marks = hourMarks(dayStart, dayEnd);
+  const scaleHeight = pxPerHour * 24;
+  const marks = scaleMarks(dayStart, dayEnd, pxPerHour);
+  const minFraction = minimumFraction(pxPerHour);
 
   return (
     // Horizontal scrolling rather than a narrower lane or a collapse into a
@@ -40,8 +50,12 @@ export function ComparativeTimeline({
     // measured on the device, the leftmost lane lost about 50px of its 192 to
     // the gutter at full scroll. Beside the scroller it costs the same width
     // and hides nothing.
-    <div className="-mx-4 flex gap-2 px-4">
-      <HourGutter marks={marks} />
+    //
+    // `ref`/`{...timelineProps}`: `use-timeline-zoom.ts` needs this element
+    // both to attach its ctrl/⌘+wheel listener to and to measure for its
+    // scroll-anchoring math — see that hook's own header comment.
+    <div ref={timelineRef} {...timelineProps} className="-mx-4 flex gap-2 px-4 outline-none">
+      <ScaleGutter marks={marks} scaleHeight={scaleHeight} />
       <div className="min-w-0 flex-1 overflow-x-auto" data-testid="time-lane-scroller">
         <div className="flex min-w-max gap-2">
           {lanes.map((lane) => (
@@ -50,6 +64,8 @@ export function ComparativeTimeline({
               lane={lane}
               dayStart={dayStart}
               dayEnd={dayEnd}
+              scaleHeight={scaleHeight}
+              minFraction={minFraction}
               openIntervalId={openIntervalId}
               onOpen={onOpen}
             />
@@ -73,18 +89,33 @@ export function ComparativeTimeline({
  * boxes cannot drift apart: one shows a lane's name, the other is hidden with
  * `invisible`, which reserves the identical box.
  */
-function HourGutter({ marks }: { marks: { hour: number; top: number }[] }) {
+function ScaleGutter({ marks, scaleHeight }: { marks: ScaleMark[]; scaleHeight: number }) {
   return (
-    <div aria-hidden="true" className="w-10 shrink-0">
+    <div aria-hidden="true" className="w-12 shrink-0">
       <LaneHeading hidden>0</LaneHeading>
-      <div className="relative" style={{ height: SCALE_HEIGHT }}>
+      {/* `data-time-scale`: `use-timeline-zoom.ts`'s own anchor-drift fix
+          reads THIS element's position, not the timeline wrapper's — the
+          wrapper also contains the `LaneHeading` above, which sits one
+          heading's height higher than where the scale (and so every record)
+          actually starts.
+          `style={{ height: scaleHeight }}`: without an explicit height this
+          div has none at all (it holds only absolutely-positioned `<span>`
+          marks, which do not contribute to their parent's own height), so
+          every mark's `top: N%` resolved against a ZERO-height container —
+          measured: all 48 default-zoom labels landed within 1px of each
+          other, at the top of the gutter. */}
+      <div className="relative" data-time-scale="" style={{ height: scaleHeight }}>
         {marks.map((mark) => (
           <span
-            key={mark.top}
-            className="-translate-y-1/2 absolute right-1 text-[10px] text-muted-foreground tabular-nums"
+            key={mark.instant}
+            className={`-translate-y-1/2 absolute right-1 tabular-nums ${
+              mark.major
+                ? "text-[10px] text-muted-foreground"
+                : "text-[9px] text-muted-foreground/70"
+            }`}
             style={{ top: `${mark.top * 100}%` }}
           >
-            {String(mark.hour).padStart(2, "0")}
+            {mark.label}
           </span>
         ))}
       </div>
@@ -94,7 +125,7 @@ function HourGutter({ marks }: { marks: { hour: number; top: number }[] }) {
 
 /**
  * One heading above a scale. Rendered by every lane and, hidden, by the hour
- * gutter — see `HourGutter` for why that has to be the same component rather
+ * gutter — see `ScaleGutter` for why that has to be the same component rather
  * than a matching height copied into two places.
  */
 function LaneHeading({ children, hidden }: { children: React.ReactNode; hidden?: boolean }) {
@@ -113,16 +144,20 @@ function LaneColumn({
   lane,
   dayStart,
   dayEnd,
+  scaleHeight,
+  minFraction,
   openIntervalId,
   onOpen,
 }: {
   lane: Lane;
   dayStart: number;
   dayEnd: number;
+  scaleHeight: number;
+  minFraction: number;
   openIntervalId: string | null;
   onOpen: (id: string) => void;
 }) {
-  const placed = placeLane(lane.intervals, dayStart, dayEnd);
+  const placed = placeLane(lane.intervals, dayStart, dayEnd, minFraction);
 
   return (
     <section
@@ -140,7 +175,7 @@ function LaneColumn({
       <ol
         aria-label={`${lane.sourceName} activity`}
         className="relative rounded-md border border-border bg-muted/30"
-        style={{ height: SCALE_HEIGHT }}
+        style={{ height: scaleHeight }}
       >
         {placed.map((entry) => (
           <IntervalBlock

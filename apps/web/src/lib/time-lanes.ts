@@ -27,22 +27,18 @@ export type PlacedInterval = {
 };
 
 /**
- * The smallest height an interval is drawn at, as a fraction of a day.
+ * The default smallest height an interval is drawn at, as a fraction of a
+ * day, when a caller does not pass one of its own.
  *
- * Three minutes. Real recorders emit records of a few seconds — the Toggl
- * database this was built against has a ten-second minimum, and over half of
- * one real day's 104 records are under a minute — and at a true fraction those
- * would be sub-pixel and so impossible to point at. A record nobody can land
- * on is not "individually accessible", which is the behaviour this protects.
- *
- * The number is tied to the scale `time-page.tsx` renders at: 120px per hour
- * makes this 6px, which is the smallest target still worth having. Changing
- * either without the other is what would make this meaningless, so
- * `MINIMUM_INTERVAL_FRACTION` is exported for the page to state the
- * relationship rather than re-derive it.
+ * Three minutes at the scale `time-page.tsx` used to render at unconditionally
+ * (120px per hour, 6px). Issue #418 made the scale zoomable, which means the
+ * true "smallest target still worth having" now depends on the current zoom
+ * level rather than being fixed — `lib/time-zoom.ts`'s `minimumFraction`
+ * computes it from `MIN_TARGET_PX` and the live px-per-hour, and the page
+ * passes that in. This constant only has to cover the callers (and this
+ * file's own default-argument tests) that have no zoom level to ask.
  */
 export const MINIMUM_INTERVAL_FRACTION = 1 / (24 * 20);
-const MINIMUM_HEIGHT = MINIMUM_INTERVAL_FRACTION;
 
 /**
  * Where an instant sits within the day, as a fraction from 0 to 1.
@@ -76,6 +72,11 @@ export function placeLane(
   intervals: ActivityInterval[],
   dayStart: number,
   dayEnd: number,
+  // Issue #418: the caller's current zoom level decides this now, via
+  // `lib/time-zoom.ts`'s `minimumFraction`. Defaulted rather than required so
+  // every test above that predates zoom keeps asserting the same fixed
+  // number it always did.
+  minimumHeight: number = MINIMUM_INTERVAL_FRACTION,
 ): PlacedInterval[] {
   const sorted = [...intervals].sort((a, b) => {
     const byStart = Date.parse(a.started_at) - Date.parse(b.started_at);
@@ -83,13 +84,13 @@ export function placeLane(
   });
 
   // How long a record has to run before it is drawn at its true height. Below
-  // this it is drawn at `MINIMUM_HEIGHT` instead, which means two records that
+  // this it is drawn at `minimumHeight` instead, which means two records that
   // do NOT overlap in time can still overlap *on screen* — and the columns
   // have to be decided against what is drawn, not against the clock. Measured
   // on a real day this is not an edge case: a run of twenty-second records
   // around 21:15 sat 1.2px apart at 6px tall, so every one of them covered the
   // one before it while the clock said none of them overlapped at all.
-  const minimumSpan = MINIMUM_HEIGHT * (dayEnd - dayStart);
+  const minimumSpan = minimumHeight * (dayEnd - dayStart);
   const drawnEnd = (start: number, end: number) => Math.max(end, start + minimumSpan);
 
   const placed: PlacedInterval[] = [];
@@ -128,7 +129,7 @@ export function placeLane(
       interval,
       // Derived from the same `drawnEnd` the columns were decided against, so
       // the box and the slot it was given can never disagree.
-      height: Math.max(MINIMUM_HEIGHT, dayFraction(end, dayStart, dayEnd) - top),
+      height: Math.max(minimumHeight, dayFraction(end, dayStart, dayEnd) - top),
       top,
       column,
       columns: 1,
@@ -188,30 +189,6 @@ export function lanesFor(intervals: ActivityInterval[]): Lane[] {
     }
     return a.sourceName.localeCompare(b.sourceName);
   });
-}
-
-/**
- * The hour marks a day's shared scale is drawn against.
- *
- * Deliberately frame-agnostic: the scale is cut into twenty-four even steps
- * and each one is *labelled* by reading the clock at the instant it falls on,
- * rather than being placed by asking for local hour N. Placing by local hour
- * only works when the window happens to begin at local midnight, and silently
- * collapses every early mark onto the top edge when it does not — which is
- * exactly what the Server's current UTC day boundary would do to a Device
- * several hours off UTC (see `time-page.tsx` and issue #424).
- *
- * On a daylight-saving transition the steps are even while the day is 23 or 25
- * hours long, so a label may repeat or skip an hour. The labels stay truthful
- * about the instants they sit on, which is the property that matters for
- * reading a timeline.
- */
-export function hourMarks(dayStart: number, dayEnd: number): { hour: number; top: number }[] {
-  const span = dayEnd - dayStart;
-  return Array.from({ length: 24 }, (_, step) => ({
-    hour: new Date(dayStart + (span * step) / 24).getHours(),
-    top: step / 24,
-  }));
 }
 
 /** `1h 5m`, `5m 30s`, `30s` — the same rendering the single-lane list used. */

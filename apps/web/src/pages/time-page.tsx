@@ -11,6 +11,8 @@ import { IntervalDetail } from "@/components/time/interval-detail";
 import { LanePicker } from "@/components/time/lane-picker";
 import { RefreshRow } from "@/components/time/refresh-row";
 import { SearchField } from "@/components/time/search-field";
+import { ZoomControls } from "@/components/time/zoom-controls";
+import { useTimelineZoom } from "@/hooks/use-timeline-zoom";
 import { activityIntervalsQueryKey, TIME_SOURCES_QUERY_KEY } from "@/lib/query-keys";
 import { refreshCapabilities, useCapabilities, useSyncEnabled } from "@/lib/settings";
 import { lanesFor } from "@/lib/time-lanes";
@@ -24,7 +26,9 @@ import { listActivityIntervals, listTimeSources, type TimeSource } from "@/lib/t
  * question Time exists to answer is what one recorder saw while another saw
  * something else. Issue #424 makes a dense day explorable — move between
  * days, choose lanes, search the text recorders wrote down, and open one
- * record to see the provider's own row behind it.
+ * record to see the provider's own row behind it. Issue #418 adds zoom — the
+ * shortest real records are a few seconds long and were unreadable at the
+ * one fixed scale this page used to render at.
  *
  * This file is composition and page-level state; the pieces themselves live
  * under `@/components/time/` (issue #432).
@@ -146,6 +150,12 @@ function DailyComparison({
   const dayStart = parseISO(`${day}T00:00:00`);
   const dayEnd = addDays(dayStart, 1);
 
+  const zoom = useTimelineZoom();
+  // A percentage of the page's original 120px/hour scale reads more plainly
+  // than a raw px-per-hour number, and does not require knowing what "120"
+  // meant in the first place.
+  const zoomPercent = Math.round((zoom.pxPerHour / 120) * 100);
+
   return (
     <section aria-labelledby="time-day-heading" className="flex min-h-0 flex-col gap-3">
       <DayNavigator
@@ -187,6 +197,25 @@ function DailyComparison({
           dayEnd={dayEnd.getTime()}
           openIntervalId={openIntervalId}
           onOpen={setOpenIntervalId}
+          pxPerHour={zoom.pxPerHour}
+          timelineRef={zoom.timelineRef}
+          timelineProps={zoom.timelineProps}
+        />
+      )}
+
+      {/* After the timeline and sticky to the bottom, so the controls float over
+          the bottom of the screen for as long as any of the day is on it.
+          Above the timeline they scrolled away: zooming keeps the instant
+          under the reader's focus still, which means the page scrolls, and
+          after two zoom-ins on a phone the buttons sat 38px above the top of
+          the screen with no way to zoom back out short of scrolling up. */}
+      {lanes.length > 0 && intervalsQuery.data?.ok !== false && (
+        <ZoomControls
+          levelLabel={`${zoomPercent}%`}
+          canZoomOut={zoom.canZoomOut}
+          canZoomIn={zoom.canZoomIn}
+          onZoomOut={zoom.zoomOut}
+          onZoomIn={zoom.zoomIn}
         />
       )}
 

@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 import {
   dayFraction,
   formatDuration,
-  hourMarks,
   lanesFor,
   MINIMUM_INTERVAL_FRACTION,
   placeLane,
@@ -297,39 +296,20 @@ describe("lanesFor", () => {
   });
 });
 
-describe("hourMarks", () => {
-  // The page builds its window from the Device's own local midnight, so that
-  // is the window these assert against rather than the UTC one the lane maths
-  // above can use frame-agnostically.
-  const LOCAL_DAY_START = new Date(2026, 2, 15).getTime();
-  const LOCAL_DAY_END = new Date(2026, 2, 16).getTime();
+describe("placeLane with a caller-supplied minimum", () => {
+  it("draws a short record at the minimum the caller asked for, not the default", () => {
+    // Issue #418: at high zoom the minimum comes from `time-zoom.ts`'s
+    // `minimumFraction`, not the fixed three-minute default below — a
+    // caller that passes a smaller minimum must see it actually used.
+    const tighterMinimum = 1 / (24 * 200); // ~18 seconds of a day
+    const heights = placeLane(
+      [interval({ started_at: at("09:00"), ended_at: "2026-03-15T09:00:10Z" })],
+      DAY_START,
+      DAY_END,
+      tighterMinimum,
+    ).map((entry) => entry.height);
 
-  it("marks every hour of the day exactly once", () => {
-    const marks = hourMarks(LOCAL_DAY_START, LOCAL_DAY_END);
-    expect(marks).toHaveLength(24);
-    expect(marks.map((mark) => mark.hour)).toEqual([...Array(24).keys()]);
-    // Every mark is inside the scale and they only ever move downwards.
-    expect(marks.map((mark) => mark.top)).toEqual(
-      Array.from({ length: 24 }, (_, step) => expect.closeTo(step / 24, 10)),
-    );
-  });
-
-  it("labels marks by the clock at the instant, not by assuming local midnight", () => {
-    // The Server currently resolves a day against UTC (issue #424). On a
-    // Device east of UTC that window does not begin at local midnight, and an
-    // implementation that placed marks by local hour would pile the first
-    // several of them onto the top edge. These stay evenly spaced and stay
-    // truthful about what time each one is.
-    const marks = hourMarks(DAY_START, DAY_END);
-
-    expect(marks).toHaveLength(24);
-    expect(new Set(marks.map((mark) => mark.top)).size).toBe(24);
-    expect(marks).toEqual(
-      Array.from({ length: 24 }, (_, step) => ({
-        top: expect.closeTo(step / 24, 10),
-        hour: new Date(DAY_START + (step * (DAY_END - DAY_START)) / 24).getHours(),
-      })),
-    );
+    expect(heights).toEqual([expect.closeTo(tighterMinimum, 10)]);
   });
 });
 
