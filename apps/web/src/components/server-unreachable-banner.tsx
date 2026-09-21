@@ -1,7 +1,7 @@
 import { Button } from "@/components/ui/button";
 
 /**
- * The persistent notice a Reflection or Digest screen shows once the
+ * The persistent notice a Reflection, Digest or Time screen shows once the
  * Server has stopped answering — issue #133's "Unreachable" state,
  * "known only from a request that failed, and the answer expires
  * immediately" (the ticket's own words for `settings.ts`'s
@@ -24,10 +24,11 @@ import { Button } from "@/components/ui/button";
  *
  * `onRetry` is the caller's own re-probe, not a call this component makes
  * itself — `refreshCapabilities()` (`settings.ts`) is what every caller
- * uses to learn whether the Server has come back, but each of the two
+ * uses to learn whether the Server has come back, but each of the three
  * pages that render this also has its own cached read to nudge once that
- * happens (Reflection's Session, Digest's cards), so the composition lives
- * with them rather than being guessed at here.
+ * happens (Reflection's Session, Digest's cards, Time's sources and
+ * intervals), so the composition lives with them rather than being guessed
+ * at here.
  */
 export function ServerUnreachableBanner({
   message,

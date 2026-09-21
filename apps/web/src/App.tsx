@@ -37,6 +37,7 @@ const DigestReaderPage = lazy(() =>
   import("@/pages/digest-reader-page").then((m) => ({ default: m.DigestReaderPage })),
 );
 const TodoPage = lazy(() => import("@/pages/todo-page").then((m) => ({ default: m.TodoPage })));
+const TimePage = lazy(() => import("@/pages/time-page").then((m) => ({ default: m.TimePage })));
 const SettingsPage = lazy(() =>
   import("@/pages/settings-page").then((m) => ({ default: m.SettingsPage })),
 );
@@ -277,6 +278,9 @@ function App() {
               stripped of everything but `[a-z0-9-]` by the same module,
               for the identical reason. */}
               <Route path="/todo/task/:taskSlugId" element={<TodoPage />} />
+              {/* Time is Server-owned, but remains inside this layout so
+              visiting it never pauses the Device's ordinary Sync loop. */}
+              <Route path="/time" element={<TimePage />} />
             </Route>
             {/* A sibling of EntryStoreLayout's children above, not nested under
               it — see this file's own top comment for why that has to hold

@@ -559,8 +559,8 @@ export function Shell({
   // without either caller having to know the other exists.
   const searchLabel = `Search ${search?.label ?? "History"}`;
 
-  // Which Destination this pane is (CONTEXT.md lists five: Composer,
-  // Reflection, Digest, Todo, Settings). Drives the `key` below and
+  // Which Destination this pane is (CONTEXT.md lists six: Composer,
+  // Reflection, Digest, Todo, Time, Settings). Drives the `key` below and
   // nothing else — Shell stays ignorant of what any particular route means,
   // the same way it does for `action` and `back`.
   const location = useLocation();

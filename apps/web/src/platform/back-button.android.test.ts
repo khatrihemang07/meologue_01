@@ -189,6 +189,61 @@ describe("back-button.android", () => {
     expect(back).toHaveBeenCalledOnce();
   });
 
+  it("dismisses an open Time record popover (data-back-dismissible marker) instead of navigating", async () => {
+    // Issue #429: Time's record popover is a plain Radix `Popover`,
+    // `role="dialog"` — the same role `TaskDetailView`'s own route-backed
+    // dialog carries — and no `data-slot`, so it matches none of the three
+    // fingerprints above and Back used to navigate the whole app back to
+    // `/` instead of closing it. `interval-popover.tsx` opts it in with a
+    // generic `data-back-dismissible` marker instead of a Popover-shaped
+    // selector that would also match popovers not meant to be dismissed
+    // this way (e.g. `TaskSchedulePopover`'s date picker).
+    const { subscribeToBackButton } = await import("./back-button.android");
+    subscribeToBackButton(() => true);
+    const back = historyBackSpy();
+
+    const popover = document.createElement("div");
+    popover.setAttribute("role", "dialog");
+    popover.setAttribute("data-back-dismissible", "");
+    popover.setAttribute("data-state", "open");
+    document.body.appendChild(popover);
+    let escapeSeen = false;
+    document.addEventListener(
+      "keydown",
+      (event) => {
+        if (event.key === "Escape") {
+          escapeSeen = true;
+        }
+      },
+      { once: true },
+    );
+
+    backButtonListener?.();
+
+    expect(escapeSeen).toBe(true);
+    expect(back).not.toHaveBeenCalled();
+    expect(exitAppMock).not.toHaveBeenCalled();
+  });
+
+  it("does not treat every popover as Back-dismissible, only ones carrying the marker", async () => {
+    // The control for the case above: a Popover-shaped overlay that has NOT
+    // opted in (no `data-back-dismissible`) — e.g. `TaskSchedulePopover`'s
+    // own date picker — must fall through to ordinary history navigation,
+    // not be swallowed by a selector shaped around Popover/role generally.
+    const { subscribeToBackButton } = await import("./back-button.android");
+    subscribeToBackButton(() => true);
+    const back = historyBackSpy();
+
+    const popover = document.createElement("div");
+    popover.setAttribute("role", "dialog");
+    popover.setAttribute("data-state", "open");
+    document.body.appendChild(popover);
+
+    backButtonListener?.();
+
+    expect(back).toHaveBeenCalledOnce();
+  });
+
   it("does not mistake TaskDetailView's route-backed dialog (no data-slot, default role) for a dismissible overlay", async () => {
     const { subscribeToBackButton } = await import("./back-button.android");
     subscribeToBackButton(() => true);

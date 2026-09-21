@@ -488,10 +488,316 @@
           }
         }
       }
+    },
+    "/v1/time/intervals": {
+      "get": {
+        "tags": [
+          "crate::time"
+        ],
+        "operationId": "list_intervals_handler",
+        "parameters": [
+          {
+            "name": "day",
+            "in": "path",
+            "description": "A calendar date, `YYYY-MM-DD`. Which instants it covers is the\nServer's answer rather than each Device's — see `day_bounds`.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "source_ids",
+            "in": "path",
+            "description": "Comma-separated source ids. Absent means every source; present and\nempty means none, which is what a reader who has switched every lane\noff has actually asked for.",
+            "required": true,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "q",
+            "in": "path",
+            "description": "Free text matched against an interval's label and detail, case\ninsensitively. Nothing here reaches outside `activity_intervals`:\nTime searches what recorders observed, not Entries or Tasks.",
+            "required": true,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ActivityInterval"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/time/intervals/{id}": {
+      "get": {
+        "tags": [
+          "crate::time"
+        ],
+        "operationId": "interval_detail_handler",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ActivityIntervalDetail"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": ""
+          }
+        }
+      }
+    },
+    "/v1/time/refresh": {
+      "post": {
+        "tags": [
+          "crate::time"
+        ],
+        "operationId": "refresh_handler",
+        "responses": {
+          "202": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RefreshAccepted"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": ""
+          },
+          "423": {
+            "description": ""
+          }
+        }
+      }
+    },
+    "/v1/time/sources": {
+      "get": {
+        "tags": [
+          "crate::time"
+        ],
+        "operationId": "list_sources_handler",
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/TimeSource"
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "crate::time"
+        ],
+        "operationId": "create_source_handler",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateTimeSource"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TimeSource"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": ""
+          },
+          "409": {
+            "description": ""
+          },
+          "423": {
+            "description": ""
+          }
+        }
+      }
+    },
+    "/v1/time/sources/{id}": {
+      "patch": {
+        "tags": [
+          "crate::time"
+        ],
+        "operationId": "update_source_handler",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateTimeSource"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TimeSource"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": ""
+          },
+          "404": {
+            "description": ""
+          },
+          "409": {
+            "description": ""
+          },
+          "423": {
+            "description": ""
+          }
+        }
+      }
     }
   },
   "components": {
     "schemas": {
+      "ActivityInterval": {
+        "type": "object",
+        "description": "One immutable stretch of activity, in provider-neutral terms.\n\nThe source's name, kind and enabled flag are carried on every interval\nrather than being left for the client to join: a timeline showing several\nlanes needs to name each lane's recorder, and an archived source's rows\nstill have to be identifiable on the days they cover long after the source\nstopped importing (issue #423).",
+        "required": [
+          "id",
+          "source_id",
+          "source_name",
+          "source_kind",
+          "source_enabled",
+          "provider_record_id",
+          "started_at",
+          "ended_at",
+          "label",
+          "idle"
+        ],
+        "properties": {
+          "detail": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "ended_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "idle": {
+            "type": "boolean",
+            "description": "Whether the recorder reported idleness on this record. This is\ndeliberately weaker than \"the whole interval was idle\": Toggl stores a\nflag and Clockify stores a count of idle seconds inside the record, and\ncollapsing both to a boolean is the most the two honestly share. The\nexact provider value is in `raw_row` on the single-interval route."
+          },
+          "label": {
+            "type": "string"
+          },
+          "provider_record_id": {
+            "type": "string"
+          },
+          "source_enabled": {
+            "type": "boolean"
+          },
+          "source_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "source_kind": {
+            "type": "string"
+          },
+          "source_name": {
+            "type": "string"
+          },
+          "started_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "ActivityIntervalDetail": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/ActivityInterval"
+          },
+          {
+            "type": "object",
+            "required": [
+              "raw_row"
+            ],
+            "properties": {
+              "raw_row": {}
+            }
+          }
+        ]
+      },
       "CommentInput": {
         "type": "object",
         "description": "The Comment-shaped sibling of `TaskInput` — `task_id` is a plain\nrequired `Uuid`, unvalidated against `tasks` for the identical reason\n`SectionInput::project_id`'s own doc comment gives.",
@@ -724,6 +1030,25 @@
             "type": "integer",
             "format": "int64",
             "description": "`select count(*) from entries where embedding is null and deleted_at\nis null` — see `count_unembedded`. Reported here rather than left\nfor a Device to ask the embedding worker directly (there is no such\nroute, and there should not be one just for this): Settings is\nwhere a reader already comes to ask \"what is this Server doing,\"\nand a backlog count answers \"is embedding still catching up\" without\na second endpoint."
+          }
+        }
+      },
+      "CreateTimeSource": {
+        "type": "object",
+        "required": [
+          "name",
+          "kind",
+          "path"
+        ],
+        "properties": {
+          "kind": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
           }
         }
       },
@@ -1058,12 +1383,13 @@
       },
       "HealthCapabilities": {
         "type": "object",
-        "description": "Which Server-backed features this Server can actually serve right now,\nderived from the same configuration `main.rs` already used to decide\nwhether `/v1/reflect`, `/v1/digests/*` and the embedding worker exist at\nall (issue #133). Reported alongside `HealthResponse` rather than left\nfor a Device to infer from probing each route in turn: a Device that only\nasked \"does `/v1/reflect` 404\" would still show a working-looking\nReflect row on a Server that has the route but no model behind it, since\n`router_with_digests` only ever gates *registration*, not per-request\nconfiguration checks.\n\n- `reflect` mirrors `reflect.is_some()` — the exact condition\n  `router_with_digests` gates `/v1/reflect`, `/v1/sessions*` and\n  `/v1/models` on.\n- `digest` mirrors `digests_enabled` — the exact bool `main.rs` computes\n  from `LlmConfig::digest_worker_config().is_some()` and\n  `router_with_digests` gates `/v1/digests/*` on.\n- `embeddings` reports whether Reflection's own embed client resolved\n  (`ReflectState::embed_client`). Issue #130: `reflect_config()` now\n  needs chat alone and hands back `None` for the embed half when no\n  embed config is resolvable, so a chat-only Server still reports\n  `reflect: true` while `embeddings: false` — exactly the Server on\n  which `reflect.rs`'s tool loop quietly omits `similar_entries`.\n\n  **Issue #201 amends all three of `reflect`/`digest`/`embeddings` to\n  read \"configured AND switched on,\" not \"configured\" alone — see ADR\n  0063, whose headline this is.** ADR 0010 pinned this handler to\n  touching nothing but its own two constants — no state extraction, no\n  query — specifically so a Server whose Postgres is down still answers\n  correctly. ADR 0037 already relaxed \"no state extraction\" once, to\n  add the two `AppState` reads above; what stayed load-bearing through\n  that change, in writing, was narrower: this handler never touches\n  `PgPool`. That is still exactly what holds here. `RuntimeFlags` reads\n  three atomics with no pool anywhere in its type — Postgres is read\n  for these flags twice per configuration change (once at boot, once on\n  a `PATCH`), never per `/v1/health` request, so a Server whose\n  database dies after boot keeps answering this route with whatever\n  capability state it last knew, exactly as before this ticket.\n- `todo` — issue #172 / ADR 0051 — is **unconditionally `true`**, not\n  read off any `LlmConfig`. Task Sync has no model behind it and no\n  configuration that can disable it: any Server that answers\n  `/v1/health` at all is one that runs `sync_handler` and speaks\n  `PROTOCOL_VERSION` 5 (or the transitional 4), so it always accepts\n  Tasks the moment it accepts Entries. This is deliberately unlike the\n  three capabilities above, all of which name a real \"maybe not\" —\n  `todo` names a \"yes, structurally.\" It is reported anyway, rather\n  than left off `HealthCapabilities` entirely, because it exists for a\n  *different* reader than `chat-list.tsx`'s lock check\n  (`apps/web/src/components/chat-list.tsx`'s own header comment: Todo's\n  row is never locked by this field, since Todo works fully offline\n  like Composer): issue #175's Digest and Reflection coverage of Tasks\n  is what actually consults it, to tell \"this Server has never heard of\n  Tasks\" (an old build, protocol 4 behaviour) apart from \"this Server\n  has Tasks but nothing configured to talk about them,\" which no other\n  field here can distinguish.",
+        "description": "Which Server-backed features this Server can actually serve right now,\nderived from the same configuration `main.rs` already used to decide\nwhether `/v1/reflect`, `/v1/digests/*` and the embedding worker exist at\nall (issue #133). Reported alongside `HealthResponse` rather than left\nfor a Device to infer from probing each route in turn: a Device that only\nasked \"does `/v1/reflect` 404\" would still show a working-looking\nReflect row on a Server that has the route but no model behind it, since\n`router_with_digests` only ever gates *registration*, not per-request\nconfiguration checks.\n\n- `reflect` mirrors `reflect.is_some()` — the exact condition\n  `router_with_digests` gates `/v1/reflect`, `/v1/sessions*` and\n  `/v1/models` on.\n- `digest` mirrors `digests_enabled` — the exact bool `main.rs` computes\n  from `LlmConfig::digest_worker_config().is_some()` and\n  `router_with_digests` gates `/v1/digests/*` on.\n- `embeddings` reports whether Reflection's own embed client resolved\n  (`ReflectState::embed_client`). Issue #130: `reflect_config()` now\n  needs chat alone and hands back `None` for the embed half when no\n  embed config is resolvable, so a chat-only Server still reports\n  `reflect: true` while `embeddings: false` — exactly the Server on\n  which `reflect.rs`'s tool loop quietly omits `similar_entries`.\n\n  **Issue #201 amends all three of `reflect`/`digest`/`embeddings` to\n  read \"configured AND switched on,\" not \"configured\" alone — see ADR\n  0063, whose headline this is.** ADR 0010 pinned this handler to\n  touching nothing but its own two constants — no state extraction, no\n  query — specifically so a Server whose Postgres is down still answers\n  correctly. ADR 0037 already relaxed \"no state extraction\" once, to\n  add the two `AppState` reads above; what stayed load-bearing through\n  that change, in writing, was narrower: this handler never touches\n  `PgPool`. That is still exactly what holds here. `RuntimeFlags` reads\n  three atomics with no pool anywhere in its type — Postgres is read\n  for these flags twice per configuration change (once at boot, once on\n  a `PATCH`), never per `/v1/health` request, so a Server whose\n  database dies after boot keeps answering this route with whatever\n  capability state it last knew, exactly as before this ticket.\n- `todo` — issue #172 / ADR 0051 — is **unconditionally `true`**, not\n  read off any `LlmConfig`. Task Sync has no model behind it and no\n  configuration that can disable it: any Server that answers\n  `/v1/health` at all is one that runs `sync_handler` and speaks\n  `PROTOCOL_VERSION` 5 (or the transitional 4), so it always accepts\n  Tasks the moment it accepts Entries. This is deliberately unlike the\n  three capabilities above, all of which name a real \"maybe not\" —\n  `todo` names a \"yes, structurally.\" It is reported anyway, rather\n  than left off `HealthCapabilities` entirely, because it exists for a\n  *different* reader than `chat-list.tsx`'s lock check\n  (`apps/web/src/components/chat-list.tsx`'s own header comment: Todo's\n  row is never locked by this field, since Todo works fully offline\n  like Composer): issue #175's Digest and Reflection coverage of Tasks\n  is what actually consults it, to tell \"this Server has never heard of\n  Tasks\" (an old build, protocol 4 behaviour) apart from \"this Server\n  has Tasks but nothing configured to talk about them,\" which no other\n  field here can distinguish.\n- `time` is **unconditionally `true`** for this generation of the\n  Server. Time's source configuration may be empty, but an empty source\n  list is a useful, supported state rather than an absent feature. Older\n  Servers omit this field altogether, which lets Devices distinguish the\n  two through the generated wire contract.",
         "required": [
           "reflect",
           "digest",
           "embeddings",
-          "todo"
+          "todo",
+          "time"
         ],
         "properties": {
           "digest": {
@@ -1073,6 +1399,9 @@
             "type": "boolean"
           },
           "reflect": {
+            "type": "boolean"
+          },
+          "time": {
             "type": "boolean"
           },
           "todo": {
@@ -1490,6 +1819,19 @@
           }
         }
       },
+      "RefreshAccepted": {
+        "type": "object",
+        "required": [
+          "queued"
+        ],
+        "properties": {
+          "queued": {
+            "type": "integer",
+            "description": "How many enabled sources this run will import, in order.",
+            "minimum": 0
+          }
+        }
+      },
       "ResolvedField": {
         "type": "object",
         "description": "One field's resolved value, paired with where it came from.",
@@ -1762,6 +2104,15 @@
           "stored",
           "env",
           "unset"
+        ]
+      },
+      "SourceRunState": {
+        "type": "string",
+        "description": "Where a source is in the current refresh run, if there is one.",
+        "enum": [
+          "idle",
+          "queued",
+          "running"
         ]
       },
       "SyncRequest": {
@@ -2243,6 +2594,86 @@
           }
         }
       },
+      "TimeSource": {
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "kind",
+          "path",
+          "enabled",
+          "last_inserted_count",
+          "last_warning_count",
+          "state"
+        ],
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "last_attempt_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "What the last import run made of this source (issue #421). Separate\nattempt and success timestamps because the difference between them is\nthe whole point: a recent attempt with a stale success is a recorder\nfailing right now."
+          },
+          "last_error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "last_inserted_count": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "last_scheduled_run_on": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date",
+            "description": "The Server-local day this source last completed a *scheduled* import\nfor (issue #422). Only the nightly and catch-up triggers write it, so\nit is what tells a completed daily run apart from a manual or initial\none — `last_success_at` moves on all of them."
+          },
+          "last_success_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "last_warning_count": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "name": {
+            "type": "string"
+          },
+          "newest_record_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "`max(ended_at)` of this source's stored Activity intervals — `None`\nbefore its first record ever lands.\n\nThis exists because \"Refresh now\" can correctly report 0 new records\nwhile looking healthy: a source pointed at a stale snapshot copy of a\nrecorder database imports nothing on every run, forever, and nothing\nelse in this struct says so. `last_success_at` only says a run\nfinished, not that the *data* moved. Reading the newest record next to\nit is what turns \"0 new, again\" into \"and the file hasn't grown since\nyesterday\" — a diagnosable fact instead of a shrug."
+          },
+          "path": {
+            "type": "string"
+          },
+          "state": {
+            "$ref": "#/components/schemas/SourceRunState",
+            "description": "Where this source is in the run happening *now*, which is memory, not\na column: a Server restart has no queued sources, and persisting\n\"running\" would leave a source stuck that way after a crash."
+          }
+        }
+      },
       "TogglePatch": {
         "type": "string",
         "description": "The wire value one tri-state toggle field of a `PATCH /v1/config` body\ncarries when the caller actually names it. Deliberately not\n`Option<Option<bool>>` with a `null`-means-clear convention: that shape\nonly works via `serde_with`'s `double_option` (not a dependency this\ncrate otherwise needs) or a hand-rolled deserializer, for a JSON\ncontract (\"send literal `null` to mean something other than absent\")\nthat reads as a trick rather than a fact about the domain. A named\nthree-variant enum says the same thing in the wire schema itself — a\nclient reads `\"unset\" | \"on\" | \"off\"` directly off the generated\nTypeScript type, rather than inferring a `null`-vs-absent convention\nfrom a doc comment.",
@@ -2251,6 +2682,36 @@
           "on",
           "off"
         ]
+      },
+      "UpdateTimeSource": {
+        "type": "object",
+        "description": "A change to one existing Time source. Every field is optional: this is a\npatch, and leaving one out means \"leave it alone\" rather than \"clear it\".\n\n`kind` and `path` are only accepted until the source's first successful\nimport (issue #423). After that they name the database a body of stored\nevidence actually came from, and repointing a source is how one recorder's\nhistory would quietly become another's — a different database is a new\nsource.",
+        "properties": {
+          "enabled": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "kind": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "path": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
       }
     }
   }

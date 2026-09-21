@@ -92,7 +92,7 @@ export function AiSection() {
       </h2>
       <DeviceGroup heading="On this device">
         {/*
-          Issue #134, extended to Todo by issue #168. Settings is never
+          Issue #134, extended to Todo by issue #168 and Time by issue #418. Settings is never
           offered a control here, because ADR 0008/0009 make it the
           recovery route when the Entry store won't open or the Server URL
           is wrong, and a control that could hide the way out of every
@@ -110,7 +110,7 @@ export function AiSection() {
         */}
         <SettingsSection
           label="Chat list"
-          hint="Hides the row only — the Destination itself keeps working. A hidden Composer, Reflect, Digest or Todo still opens at its own address; a hidden Entry-backed row still appears in Reflection's Grounding, is still summarised into Digests, is still included in an Export, and still Syncs to every other Device — Todo has no Server-side counterpart to any of that, but hiding its row is exactly as reversible."
+          hint="Hides the row only — the Destination itself keeps working. A hidden Composer, Reflect, Digest, Todo or Time still opens at its own address; a hidden Entry-backed row still appears in Reflection's Grounding, is still summarised into Digests, is still included in an Export, and still Syncs to every other Device. Hiding Time never changes the Server's Activity intervals or its Time sources."
         >
           {HIDEABLE_DESTINATIONS.map((destination) => (
             <SwitchRow

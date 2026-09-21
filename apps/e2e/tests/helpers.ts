@@ -601,10 +601,21 @@ export async function closeDevices(devices: TwoDevices): Promise<void> {
  */
 export async function openDestination(
   page: Page,
-  name: "Composer" | "Reflect" | "Digest" | "Todo" | "Settings",
+  name: "Composer" | "Reflect" | "Digest" | "Todo" | "Time" | "Settings",
 ): Promise<void> {
   await page.goto("/");
-  await page.getByRole("link", { name }).click();
+  // Scoped to the Chats list and matched on the row's own label element,
+  // exactly, rather than `getByRole("link", { name })` on the whole page.
+  // Playwright matches an accessible name by *substring* by default, and a
+  // row's accessible name is its label plus its summary — so `"Time"` also
+  // matched Digest's "What the Server wrote about a stretch of time", and
+  // three specs failed with a strict-mode violation the moment Time was
+  // added to this list (issue #418).
+  await page
+    .getByRole("navigation", { name: "Chats" })
+    .getByRole("link")
+    .filter({ has: page.getByText(name, { exact: true }) })
+    .click();
 }
 
 /**

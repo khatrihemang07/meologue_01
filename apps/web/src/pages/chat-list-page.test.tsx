@@ -217,7 +217,7 @@ describe("ChatListPage", () => {
     renderChatListPage(queryClient);
 
     expect(screen.getByRole("navigation", { name: "Chats" })).toBeInTheDocument();
-    expect(screen.getAllByRole("link")).toHaveLength(5);
+    expect(screen.getAllByRole("link")).toHaveLength(6);
     expect(screen.queryByText("Today")).not.toBeInTheDocument();
     expect(screen.queryByText("Continue")).not.toBeInTheDocument();
   });
@@ -436,7 +436,7 @@ describe("ChatListPage", () => {
   it("shows a calm placeholder when every hideable Destination is hidden and nothing is recorded to continue", () => {
     installWideMatchMedia();
     useSettingsStore.setState({
-      hiddenDestinations: new Set(["composer", "reflect", "digest", "todo"]),
+      hiddenDestinations: new Set(["composer", "reflect", "digest", "todo", "time"]),
     });
     const queryClient = new QueryClient();
     seedOpenedStore(queryClient);

@@ -348,10 +348,126 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/time/intervals": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["list_intervals_handler"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/time/intervals/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["interval_detail_handler"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/time/refresh": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["refresh_handler"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/time/sources": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["list_sources_handler"];
+        put?: never;
+        post: operations["create_source_handler"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/time/sources/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch: operations["update_source_handler"];
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /**
+         * @description One immutable stretch of activity, in provider-neutral terms.
+         *
+         *     The source's name, kind and enabled flag are carried on every interval
+         *     rather than being left for the client to join: a timeline showing several
+         *     lanes needs to name each lane's recorder, and an archived source's rows
+         *     still have to be identifiable on the days they cover long after the source
+         *     stopped importing (issue #423).
+         */
+        ActivityInterval: {
+            detail?: string | null;
+            /** Format: date-time */
+            ended_at: string;
+            /** Format: uuid */
+            id: string;
+            /**
+             * @description Whether the recorder reported idleness on this record. This is
+             *     deliberately weaker than "the whole interval was idle": Toggl stores a
+             *     flag and Clockify stores a count of idle seconds inside the record, and
+             *     collapsing both to a boolean is the most the two honestly share. The
+             *     exact provider value is in `raw_row` on the single-interval route.
+             */
+            idle: boolean;
+            label: string;
+            provider_record_id: string;
+            source_enabled: boolean;
+            /** Format: uuid */
+            source_id: string;
+            source_kind: string;
+            source_name: string;
+            /** Format: date-time */
+            started_at: string;
+        };
+        ActivityIntervalDetail: components["schemas"]["ActivityInterval"] & {
+            raw_row: unknown;
+        };
         /**
          * @description The Comment-shaped sibling of `TaskInput` — `task_id` is a plain
          *     required `Uuid`, unvalidated against `tasks` for the identical reason
@@ -447,6 +563,11 @@ export interface components {
              *     a second endpoint.
              */
             unembedded_entries: number;
+        };
+        CreateTimeSource: {
+            kind: string;
+            name: string;
+            path: string;
         };
         /**
          * @description The wire shape of one Digest — everything a client needs to render it
@@ -774,11 +895,17 @@ export interface components {
          *       Tasks" (an old build, protocol 4 behaviour) apart from "this Server
          *       has Tasks but nothing configured to talk about them," which no other
          *       field here can distinguish.
+         *     - `time` is **unconditionally `true`** for this generation of the
+         *       Server. Time's source configuration may be empty, but an empty source
+         *       list is a useful, supported state rather than an absent feature. Older
+         *       Servers omit this field altogether, which lets Devices distinguish the
+         *       two through the generated wire contract.
          */
         HealthCapabilities: {
             digest: boolean;
             embeddings: boolean;
             reflect: boolean;
+            time: boolean;
             todo: boolean;
         };
         HealthResponse: {
@@ -1059,6 +1186,10 @@ export interface components {
              */
             tool_called: boolean;
         };
+        RefreshAccepted: {
+            /** @description How many enabled sources this run will import, in order. */
+            queued: number;
+        };
         /** @description One field's resolved value, paired with where it came from. */
         ResolvedField: {
             source: components["schemas"]["Source"];
@@ -1226,6 +1357,11 @@ export interface components {
          * @enum {string}
          */
         Source: "stored" | "env" | "unset";
+        /**
+         * @description Where a source is in the current refresh run, if there is one.
+         * @enum {string}
+         */
+        SourceRunState: "idle" | "queued" | "running";
         SyncRequest: {
             comments?: components["schemas"]["CommentInput"][];
             /** Format: uuid */
@@ -1572,6 +1708,57 @@ export interface components {
              */
             updated_at: string;
         };
+        TimeSource: {
+            enabled: boolean;
+            /** Format: uuid */
+            id: string;
+            kind: string;
+            /**
+             * Format: date-time
+             * @description What the last import run made of this source (issue #421). Separate
+             *     attempt and success timestamps because the difference between them is
+             *     the whole point: a recent attempt with a stale success is a recorder
+             *     failing right now.
+             */
+            last_attempt_at?: string | null;
+            last_error?: string | null;
+            /** Format: int32 */
+            last_inserted_count: number;
+            /**
+             * Format: date
+             * @description The Server-local day this source last completed a *scheduled* import
+             *     for (issue #422). Only the nightly and catch-up triggers write it, so
+             *     it is what tells a completed daily run apart from a manual or initial
+             *     one — `last_success_at` moves on all of them.
+             */
+            last_scheduled_run_on?: string | null;
+            /** Format: date-time */
+            last_success_at?: string | null;
+            /** Format: int32 */
+            last_warning_count: number;
+            name: string;
+            /**
+             * Format: date-time
+             * @description `max(ended_at)` of this source's stored Activity intervals — `None`
+             *     before its first record ever lands.
+             *
+             *     This exists because "Refresh now" can correctly report 0 new records
+             *     while looking healthy: a source pointed at a stale snapshot copy of a
+             *     recorder database imports nothing on every run, forever, and nothing
+             *     else in this struct says so. `last_success_at` only says a run
+             *     finished, not that the *data* moved. Reading the newest record next to
+             *     it is what turns "0 new, again" into "and the file hasn't grown since
+             *     yesterday" — a diagnosable fact instead of a shrug.
+             */
+            newest_record_at?: string | null;
+            path: string;
+            /**
+             * @description Where this source is in the run happening *now*, which is memory, not
+             *     a column: a Server restart has no queued sources, and persisting
+             *     "running" would leave a source stuck that way after a crash.
+             */
+            state: components["schemas"]["SourceRunState"];
+        };
         /**
          * @description The wire value one tri-state toggle field of a `PATCH /v1/config` body
          *     carries when the caller actually names it. Deliberately not
@@ -1587,6 +1774,22 @@ export interface components {
          * @enum {string}
          */
         TogglePatch: "unset" | "on" | "off";
+        /**
+         * @description A change to one existing Time source. Every field is optional: this is a
+         *     patch, and leaving one out means "leave it alone" rather than "clear it".
+         *
+         *     `kind` and `path` are only accepted until the source's first successful
+         *     import (issue #423). After that they name the database a body of stored
+         *     evidence actually came from, and repointing a source is how one recorder's
+         *     history would quietly become another's — a different database is a new
+         *     source.
+         */
+        UpdateTimeSource: {
+            enabled?: boolean | null;
+            kind?: string | null;
+            name?: string | null;
+            path?: string | null;
+        };
     };
     responses: never;
     parameters: never;
@@ -2037,6 +2240,210 @@ export interface operations {
             };
             /** @description protocol_version is outside the range this server understands */
             426: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    list_intervals_handler: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description A calendar date, `YYYY-MM-DD`. Which instants it covers is the
+                 *     Server's answer rather than each Device's — see `day_bounds`.
+                 */
+                day: string;
+                /**
+                 * @description Comma-separated source ids. Absent means every source; present and
+                 *     empty means none, which is what a reader who has switched every lane
+                 *     off has actually asked for.
+                 */
+                source_ids: string | null;
+                /**
+                 * @description Free text matched against an interval's label and detail, case
+                 *     insensitively. Nothing here reaches outside `activity_intervals`:
+                 *     Time searches what recorders observed, not Entries or Tasks.
+                 */
+                q: string | null;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ActivityInterval"][];
+                };
+            };
+        };
+    };
+    interval_detail_handler: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ActivityIntervalDetail"];
+                };
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    refresh_handler: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RefreshAccepted"];
+                };
+            };
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            423: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    list_sources_handler: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TimeSource"][];
+                };
+            };
+        };
+    };
+    create_source_handler: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateTimeSource"];
+            };
+        };
+        responses: {
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TimeSource"];
+                };
+            };
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            423: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    update_source_handler: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateTimeSource"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TimeSource"];
+                };
+            };
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            423: {
                 headers: {
                     [name: string]: unknown;
                 };

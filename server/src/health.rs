@@ -65,12 +65,18 @@ const SERVICE_MARKER: &str = "meologue-server";
 ///   Tasks" (an old build, protocol 4 behaviour) apart from "this Server
 ///   has Tasks but nothing configured to talk about them," which no other
 ///   field here can distinguish.
+/// - `time` is **unconditionally `true`** for this generation of the
+///   Server. Time's source configuration may be empty, but an empty source
+///   list is a useful, supported state rather than an absent feature. Older
+///   Servers omit this field altogether, which lets Devices distinguish the
+///   two through the generated wire contract.
 #[derive(Debug, Clone, Copy, Serialize, ToSchema)]
 pub struct HealthCapabilities {
     pub reflect: bool,
     pub digest: bool,
     pub embeddings: bool,
     pub todo: bool,
+    pub time: bool,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -118,12 +124,17 @@ pub async fn health_handler(
     let capabilities = HealthCapabilities {
         reflect: reflect.is_some() && flags.reflect_enabled(),
         digest: digest && flags.digest_enabled(),
-        embeddings: reflect.as_ref().is_some_and(|state| state.embed_client.is_some())
+        embeddings: reflect
+            .as_ref()
+            .is_some_and(|state| state.embed_client.is_some())
             && flags.embeddings_enabled(),
         // See HealthCapabilities::todo's own doc comment for why this is a
         // bare `true` rather than reading anything off `LlmConfig` or
         // `RuntimeFlags` — Todo has no toggle to read in the first place.
         todo: true,
+        // Time's ingestion configuration arrives in the next ticket, but
+        // this Server already owns the Destination and its empty state.
+        time: true,
     };
 
     Json(HealthResponse {

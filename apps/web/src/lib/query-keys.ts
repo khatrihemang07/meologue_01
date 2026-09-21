@@ -19,6 +19,40 @@ export const MODELS_QUERY_KEY = ["models"] as const;
 // key) refetch the same write without a second round trip of its own.
 export const CONFIG_QUERY_KEY = ["config"] as const;
 
+// Time is Server-owned rather than a Sync stream. Its two reads have their
+// own prefix so creating a source can invalidate both the source list and
+// whichever day's timeline is currently open.
+export const TIME_SOURCES_QUERY_KEY = ["time", "sources"] as const;
+
+// Keyed by day alone, not by source. Since issue #420 the Time page fetches
+// the whole day once and splits it into one lane per recorder on the client:
+// a key per source would mean one request per lane and a separate cache entry
+// for each, which is a worse deal for a response that already carries its
+// source attribution and never carries raw provider rows.
+export function activityIntervalsQueryKey(
+  day: string,
+  sourceIds: readonly string[] | undefined,
+  search: string,
+) {
+  // The filters are part of the key, not arguments applied to a cached day:
+  // moving between days and toggling lanes both have to be instant on the way
+  // back, and a single key per day would refetch each time either changed.
+  // `sourceIds` is sorted so the same selection always produces the same key
+  // however the reader arrived at it.
+  return [
+    "time",
+    "intervals",
+    day,
+    sourceIds ? [...sourceIds].sort().join(",") : "all",
+    search.trim(),
+  ] as const;
+}
+
+/** One record and its provider evidence, fetched only when it is opened. */
+export function activityIntervalQueryKey(id: string) {
+  return ["time", "interval", id] as const;
+}
+
 /**
  * Digest's keys (issue #71), kept here rather than inline in
  * `digest-page.tsx`/`digest-reader-page.tsx` the way Reflection's own keys

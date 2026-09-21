@@ -1,5 +1,6 @@
 import {
   CalendarDays,
+  Clock3,
   Lightbulb,
   ListTodo,
   Lock,
@@ -17,7 +18,7 @@ import {
 import { cn } from "@/lib/utils";
 
 /**
- * The five rows the root screen is made of (ADR 0036). Four of them were
+ * The six rows the root screen is made of. Four of them were
  * ADR 0018's original bound, Material 3's three-to-five, and every ADR
  * since had kept the membership there unchanged — until Todo (issue #168,
  * ADR 0047), the first Destination to actually reach that fifth slot.
@@ -26,7 +27,7 @@ import { cn } from "@/lib/utils";
  * Destination already shows — it is a second root noun with its own
  * lifecycle, and a full-bleed row is what every other root noun here
  * already gets. Issue #134 lets a reader hide Composer, Reflect, Digest or
- * Todo from the *rendered* list without touching this array — see
+ * Todo or Time from the *rendered* list without touching this array — see
  * `useDestinations()` below for where that filter actually happens.
  *
  * `end` on Composer alone: every other route is a prefix of deeper routes
@@ -69,6 +70,7 @@ const DESTINATIONS = [
     summary: "Everything you have written, newest last",
     requiresSync: false,
     capability: undefined,
+    requiresKnownCapability: false,
   },
   {
     to: "/reflect",
@@ -78,6 +80,7 @@ const DESTINATIONS = [
     summary: "Ask a Question of your own History",
     requiresSync: true,
     capability: "reflect",
+    requiresKnownCapability: false,
   },
   {
     to: "/digest",
@@ -87,6 +90,7 @@ const DESTINATIONS = [
     summary: "What the Server wrote about a stretch of time",
     requiresSync: true,
     capability: "digest",
+    requiresKnownCapability: false,
   },
   {
     to: "/todo",
@@ -96,6 +100,20 @@ const DESTINATIONS = [
     summary: "Add, complete and reorder your Tasks",
     requiresSync: false,
     capability: undefined,
+    requiresKnownCapability: false,
+  },
+  {
+    to: "/time",
+    label: "Time",
+    Icon: Clock3,
+    end: false,
+    summary: "What you were doing throughout the day",
+    requiresSync: true,
+    capability: "time",
+    // Older Servers cannot report this new capability. Unlike the older
+    // rows' optimistic first paint, Time must not pretend an old Server can
+    // own a Destination it has never implemented.
+    requiresKnownCapability: true,
   },
   {
     to: "/settings",
@@ -105,6 +123,7 @@ const DESTINATIONS = [
     summary: "Theme, Server URL, Export, Backup, Restore",
     requiresSync: false,
     capability: undefined,
+    requiresKnownCapability: false,
   },
 ] as const;
 
@@ -159,15 +178,17 @@ export function useDestinations() {
   return DESTINATIONS.map((destination) => {
     const capabilityMissing =
       destination.capability !== undefined &&
-      capabilities !== null &&
-      capabilities[destination.capability] === false;
+      (capabilities === null
+        ? destination.requiresKnownCapability
+        : capabilities[destination.capability] !== true &&
+          (capabilities[destination.capability] === false || destination.requiresKnownCapability));
     const locked = destination.requiresSync && (!syncEnabled || capabilityMissing);
     return { ...destination, locked };
   }).filter((destination) => {
     if (destination.to === "/settings") {
       return true;
     }
-    // Every other `to` in `DESTINATIONS` is one of the four literal
+    // Every other `to` in `DESTINATIONS` is one of the five literal
     // hideable routes, so the slug this slice produces is always a real
     // `HideableDestinationId` — the cast repeats what `DESTINATIONS`'s own
     // `as const` already guarantees rather than asserting something new.

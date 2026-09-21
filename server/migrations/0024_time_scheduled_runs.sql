@@ -1,0 +1,14 @@
+-- Which Server-local day each Time source last completed a *scheduled* import
+-- for (issue #422).
+--
+-- A date, not a timestamp, and deliberately not the same column as
+-- `last_success_at`. That one moves on every import however it was triggered —
+-- creating a source, pressing Refresh now, the nightly run — and the question
+-- startup has to answer is narrower: did the night that has already passed
+-- actually run? Only the scheduled and catch-up triggers write here, which is
+-- what lets a completed daily run be told apart from a manual or initial one.
+--
+-- Null for existing rows: no scheduled run has ever happened, so the first
+-- startup after this migration queues one catch-up, which is the correct
+-- answer rather than a special case.
+alter table time_sources add column last_scheduled_run_on date;

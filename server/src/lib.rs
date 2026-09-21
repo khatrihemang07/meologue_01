@@ -12,6 +12,7 @@ pub mod reflect;
 pub mod sessions;
 pub mod settings;
 pub mod sync;
+pub mod time;
 
 use std::path::Path;
 use std::time::Duration;
@@ -102,6 +103,21 @@ pub struct AppState {
     /// since every handler that already extracts `Option<ReflectState>`
     /// gets the same atomics for free without a second extractor.
     pub flags: settings::RuntimeFlags,
+    /// Issue #424: the Server's configured `MEOLOGUE_TZ`, resolved once at
+    /// startup (`period::server_timezone`) for the same reason every other
+    /// startup-time fact on this struct is — and for one more that is
+    /// specific to it. A Time day is a calendar date, and which instants it
+    /// covers is the Server's answer, not each Device's: two Devices in
+    /// different zones asking for the same date have to get the same day.
+    /// Reading the environment inside the handler instead would also make
+    /// that boundary untestable, since `cargo test`'s threads share one
+    /// process environment (see `settings.rs`'s own test-module note).
+    pub timezone: chrono_tz::Tz,
+    /// Issue #421: the single refresh run this Server may have in flight,
+    /// shared across requests so a second "Refresh now" can be told one is
+    /// already going rather than starting a run that races the first one's
+    /// writes. A handle, not a snapshot — the same reasoning `flags` gives.
+    pub import_runs: time::ImportRuns,
 }
 
 impl FromRef<AppState> for PgPool {
@@ -175,6 +191,25 @@ impl FromRef<AppState> for ConfiguredEmbedModel {
 /// see that type's own doc comment.
 #[derive(Debug, Clone, Copy)]
 pub struct ConfigLocked(pub bool);
+
+/// The Server's configured timezone, as its own type for the same reason
+/// `ConfigLocked` is one: a bare `impl FromRef<AppState> for Tz` would be a
+/// blanket claim on a common type that any future state field could collide
+/// with.
+#[derive(Clone, Copy)]
+pub struct ServerTimezone(pub chrono_tz::Tz);
+
+impl FromRef<AppState> for ServerTimezone {
+    fn from_ref(state: &AppState) -> Self {
+        ServerTimezone(state.timezone)
+    }
+}
+
+impl FromRef<AppState> for time::ImportRuns {
+    fn from_ref(state: &AppState) -> Self {
+        state.import_runs.clone()
+    }
+}
 
 impl FromRef<AppState> for ConfigLocked {
     fn from_ref(state: &AppState) -> Self {
@@ -349,6 +384,10 @@ pub fn router_with_digests(
     digest: Option<digest::DigestState>,
 ) -> Router {
     router_with_everything(
+        // Tests and the narrower constructors get a guard of their own: a
+        // process-wide one would let one test's refresh block another's,
+        // since every `#[sqlx::test]` in a file shares one process.
+        time::ImportRuns::default(),
         pool,
         static_dir,
         embed_tx,
@@ -389,6 +428,10 @@ pub fn router_with_settings(
     mode: settings::InstanceMode,
 ) -> Router {
     router_with_everything(
+        // Tests and the narrower constructors get a guard of their own: a
+        // process-wide one would let one test's refresh block another's,
+        // since every `#[sqlx::test]` in a file shares one process.
+        time::ImportRuns::default(),
         pool,
         static_dir,
         embed_tx,
@@ -424,6 +467,10 @@ pub fn router_with_backup(
     embed_model: Option<String>,
 ) -> Router {
     router_with_everything(
+        // Tests and the narrower constructors get a guard of their own: a
+        // process-wide one would let one test's refresh block another's,
+        // since every `#[sqlx::test]` in a file shares one process.
+        time::ImportRuns::default(),
         pool,
         static_dir,
         embed_tx,
@@ -460,6 +507,10 @@ pub fn router_with_flags(
     flags: settings::RuntimeFlags,
 ) -> Router {
     router_with_everything(
+        // Tests and the narrower constructors get a guard of their own: a
+        // process-wide one would let one test's refresh block another's,
+        // since every `#[sqlx::test]` in a file shares one process.
+        time::ImportRuns::default(),
         pool,
         static_dir,
         embed_tx,
@@ -494,6 +545,7 @@ pub fn router_with_flags(
 // suite has to update when a new capability arrives.
 #[allow(clippy::too_many_arguments)]
 pub fn router_with_everything(
+    import_runs: time::ImportRuns,
     pool: PgPool,
     static_dir: impl AsRef<Path>,
     embed_tx: Option<Sender<Uuid>>,
@@ -563,6 +615,23 @@ pub fn router_with_everything(
         .route(
             "/v1/config",
             get(settings::get_config_handler).patch(settings::patch_config_handler),
+        )
+        .route(
+            "/v1/time/sources",
+            get(time::list_sources_handler).post(time::create_source_handler),
+        )
+        .route(
+            "/v1/time/sources/{id}",
+            axum::routing::patch(time::update_source_handler),
+        )
+        .route(
+            "/v1/time/refresh",
+            axum::routing::post(time::refresh_handler),
+        )
+        .route("/v1/time/intervals", get(time::list_intervals_handler))
+        .route(
+            "/v1/time/intervals/{id}",
+            get(time::interval_detail_handler),
         );
 
     if reflect.is_some() {
@@ -639,6 +708,8 @@ pub fn router_with_everything(
             settings_locked: locked,
             mode,
             flags,
+            timezone: period::server_timezone(),
+            import_runs,
         })
         .fallback_service(app_shell)
         .layer(axum::middleware::from_fn(metrics::track_metrics))

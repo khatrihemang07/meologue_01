@@ -5,6 +5,7 @@ import { AppearanceSection } from "@/components/settings/appearance-section";
 import { ComposerSection } from "@/components/settings/composer-section";
 import { DataSection } from "@/components/settings/data-section";
 import { SyncSection } from "@/components/settings/sync-section";
+import { TimeSourcesSection } from "@/components/settings/time-sources-section";
 import { Shell } from "@/components/shell";
 import { entryStoreQueryOptions } from "@/pages/entry-store-layout";
 
@@ -63,6 +64,7 @@ export function SettingsPage() {
         <ComposerSection />
         <AiSection />
         <SyncSection />
+        <TimeSourcesSection />
         <DataSection opened={opened} />
       </div>
     </Shell>

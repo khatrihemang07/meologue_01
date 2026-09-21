@@ -95,13 +95,14 @@ describe("AiSection", () => {
   // identical copy `SwitchRow` now produces from its own `onLabel`/
   // `offLabel` props.
   describe("chat list visibility", () => {
-    it("lists Composer, Reflect, Digest and Todo, each with a visibility control, and offers none for Settings", () => {
+    it("lists Composer, Reflect, Digest, Todo and Time, each with a visibility control, and offers none for Settings", () => {
       renderAiSection();
 
       expect(screen.getByRole("switch", { name: /Composer/ })).toBeInTheDocument();
       expect(screen.getByRole("switch", { name: /Reflect/ })).toBeInTheDocument();
       expect(screen.getByRole("switch", { name: /Digest/ })).toBeInTheDocument();
       expect(screen.getByRole("switch", { name: /Todo/ })).toBeInTheDocument();
+      expect(screen.getByRole("switch", { name: /Time/ })).toBeInTheDocument();
       expect(screen.queryByRole("switch", { name: /Settings/ })).not.toBeInTheDocument();
     });
 
