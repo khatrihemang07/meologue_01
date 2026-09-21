@@ -1,6 +1,6 @@
 import type { LocalDateTimeKey, QuickAddToken } from "@meologue/core";
 import { firstOccurrence, localDayKeyOf, parseQuickAdd, parseRecurrence } from "@meologue/core";
-import { addDays, format, nextMonday, nextSaturday, subDays } from "date-fns";
+import { addDays, format, nextMonday, nextSaturday } from "date-fns";
 import {
   CalendarClock,
   CalendarDays,
@@ -95,26 +95,48 @@ function ordinal(day: number): string {
 }
 
 /**
- * Issue #436's own comment correction (2026-09-21): Todoist replaces an
- * elided Today/Tomorrow with "Later this week" rather than just dropping
- * it, driven exactly once — "Mon -> Wed", two days out — with no other
- * example and no icon colour read off it either. Not otherwise specified,
- * so this picks the same two-day reading and clamps it to the last weekday
- * before the weekend it would otherwise land in (`nextSaturday`, the same
- * boundary `This weekend`'s own quick option already anchors to), so
- * "later this week" never quietly means "this weekend" — that meaning
- * already has its own option, right after this one.
- *
- * `now` itself being Thursday or Friday leaves no third weekday before that
- * boundary, so the clamp can land back on Tomorrow's own date (Thursday) or
- * even on `now` itself (Friday) — an accepted, disclosed gap in a rule this
- * ticket's own single data point can't rule out either way, not a defect
- * introduced by the two-day reading on every other day of the week.
+ * Issue #436's own comment correction (2026-09-21) measured "Mon -> Wed";
+ * this ticket's own real-browser follow-up pass added a second point,
+ * "Tue -> Thu" — both "today + 2 days", so that reading is the rule,
+ * applied uniformly to every `now`. `laterThisWeekVisible` below is what
+ * actually decides whether that reading belongs in the list it would sit
+ * in for the five weekdays neither point measured.
  */
 function laterThisWeekDay(now: Date): Date {
-  const twoDaysOut = addDays(now, 2);
-  const weekendStart = nextSaturday(now);
-  return twoDaysOut < weekendStart ? twoDaysOut : subDays(weekendStart, 1);
+  return addDays(now, 2);
+}
+
+/**
+ * Whether `laterThisWeekDay`'s own "+2 days" reading actually belongs in
+ * the quick-option list it would replace an elided Today/Tomorrow in.
+ * Todoist's two measured points (Mon->Wed, Tue->Thu) never tested a `now`
+ * where "+2" either spills past the coming weekend or lands on a day some
+ * OTHER option in that same list already names, so — beyond Monday and
+ * Tuesday — this is a mechanical consequence of the same "+2 days" reading
+ * applied to every weekday, not a third measured point:
+ *
+ * | `now` | +2 days | shown? | why |
+ * |---|---|---|---|
+ * | Mon | Wed | yes — measured | |
+ * | Tue | Thu | yes — measured | |
+ * | Wed | Fri | yes — inferred | before the weekend, no collision |
+ * | Thu | Sat | no — inferred | lands ON This weekend's own day |
+ * | Fri | Sun | no — inferred | spills past This weekend's Saturday |
+ * | Sat | Mon (+2) | no — inferred | collides with Next week's own Monday |
+ * | Sun | Tue | yes — inferred | before the (next) weekend, no collision |
+ *
+ * `otherVisibleDays` is every OTHER local-day-key this popover's own quick
+ * options would show alongside "Later this week" — the surviving one of
+ * Today/Tomorrow, This weekend, and Next week — passed in by the caller
+ * rather than re-derived here, so a future change to any of those three
+ * stays correct for free.
+ */
+function laterThisWeekVisible(
+  candidateDay: string,
+  thisWeekendDay: string,
+  otherVisibleDays: readonly string[],
+): boolean {
+  return candidateDay < thisWeekendDay && !otherVisibleDays.includes(candidateDay);
 }
 
 /**
@@ -139,22 +161,32 @@ function formatScheduleInputText(day: string, time: string | null): string {
  * Issue #440's own real-browser follow-up: the card's size *before* it has
  * ever been measured on this popover instance (`lastMeasuredCardSize`,
  * inside the component below) — read from its own sizing tokens
- * (index.css's own `--td-popover-width`/`--td-popover-min-height`,
+ * (index.css's own `--td-popover-width`/`--td-popover-max-height`,
  * `:root`-scoped, so this resolves identically wherever it's read from,
  * a portalled card included) rather than a hardcoded literal — one source
  * of truth, the CSS itself. The `Number.isFinite` fallback only fires if
  * the custom property can't be read at all (a test environment with no
  * real stylesheet loaded, `getPropertyValue` returning `""`, `parseFloat`ing
  * to `NaN`) — its two literals are kept in sync with index.css's own
- * current defaults (issue #436's own fixed 250×555, the five-option
- * baseline — that CSS token's own comment on why a shorter four-option
- * card doesn't get a second, conditionally-read token here), not a second
- * design decision about what this card's size is.
+ * current defaults, not a second design decision about what this card's
+ * size is.
+ *
+ * `--td-popover-max-height` (issue #436's own real-browser follow-up,
+ * renamed from `--td-popover-min-height`: that token's own comment in
+ * index.css has the full story) is a CEILING the card's real content sizes
+ * under, not a floor it gets padded out to — reading it here as this
+ * estimate's own height is still correct precisely because it's a safe
+ * UPPER bound: a real card is either at the cap (five options) or shorter
+ * (four), never taller, and the post-mount `ResizeObserver` measurement
+ * below (`recomputePlacement`) corrects a too-tall guess exactly the way
+ * it already corrects a typed-preview row or the Repeat control's two-part
+ * layout changing this card's real height — nothing new needed for the
+ * four-option case either.
  */
 function cardSizeFromCssTokens(): PlacementSize {
   const style = getComputedStyle(document.documentElement);
   const width = Number.parseFloat(style.getPropertyValue("--td-popover-width"));
-  const height = Number.parseFloat(style.getPropertyValue("--td-popover-min-height"));
+  const height = Number.parseFloat(style.getPropertyValue("--td-popover-max-height"));
   return {
     width: Number.isFinite(width) ? width : 250,
     height: Number.isFinite(height) ? height : 555,
@@ -905,12 +937,32 @@ export function TaskSchedulePopover({
    * week, This weekend, Next week, No Date]` — not by simply dropping
    * Today/Tomorrow's own first-or-second slot in place, which the
    * comment's own two example rows would not produce identically.
+   *
+   * "Later this week" is itself conditional (`laterThisWeekVisible`'s own
+   * table above) — on the five weekdays that table infers rather than
+   * measures, the replacement is dropped outright, leaving the surviving
+   * Today/Tomorrow as the list's own first item with nothing after it
+   * until This weekend, and the list one option shorter overall.
    */
+  const otherVisibleDaysWhenToday = [tomorrowKey, thisWeekendOption.day, nextWeekOption.day];
+  const otherVisibleDaysWhenTomorrow = [nowKey, thisWeekendOption.day, nextWeekOption.day];
   const leadingOptions =
     dateDay === nowKey
-      ? [tomorrowOption, laterThisWeekOption]
+      ? laterThisWeekVisible(
+          laterThisWeekOption.day,
+          thisWeekendOption.day,
+          otherVisibleDaysWhenToday,
+        )
+        ? [tomorrowOption, laterThisWeekOption]
+        : [tomorrowOption]
       : dateDay === tomorrowKey
-        ? [todayOption, laterThisWeekOption]
+        ? laterThisWeekVisible(
+            laterThisWeekOption.day,
+            thisWeekendOption.day,
+            otherVisibleDaysWhenTomorrow,
+          )
+          ? [todayOption, laterThisWeekOption]
+          : [todayOption]
         : [todayOption, tomorrowOption];
   const quickOptionDefs = [...leadingOptions, thisWeekendOption, nextWeekOption];
 
@@ -976,51 +1028,70 @@ export function TaskSchedulePopover({
         className="h-px shrink-0 bg-[color:var(--td-popover-divider)]"
       />
 
-      {preview !== null && (
-        <button
-          type="button"
-          data-testid="scheduler-date-preview"
-          onClick={commitPreview}
-          className="my-1 flex shrink-0 flex-col items-start gap-0.5 rounded-md border border-border px-2 py-1.5 text-left hover:bg-accent"
-        >
-          <span className="flex items-center gap-1.5 font-medium">
-            {preview.dateString !== null ? (
-              <Repeat className="size-3.5" />
-            ) : (
-              <CalendarDays className="size-3.5" />
-            )}
-            {format(parseDayKey(preview.day) ?? now, "EEE d MMM")}
-            {preview.dateString !== null && (
-              <span className="text-muted-foreground">
-                → {preview.forever ? "Forever" : "Ends"}
-              </span>
-            )}
-          </span>
-          <span className="text-muted-foreground text-xs">
-            {(() => {
-              const count = datesWithTasks.get(preview.day) ?? 0;
-              return count === 0 ? "No tasks" : `${count} task${count === 1 ? "" : "s"}`;
-            })()}
-          </span>
-        </button>
-      )}
+      {/*
+          Issue #436's own real-browser follow-up: Todoist's own card
+          pins ONLY the input (and its divider) above — everything below,
+          quick options through Repeat, lives in ONE `overflow-y: auto`
+          region (`.scheduler-scrollable`, that pass's own name for it).
+          Two real bugs traced back to NOT having this: a 236px, `overflow-
+          hidden` box around the calendar alone was clipping a 6-week
+          month's own last row unreachably (Nov 2026 needs 268px), and the
+          five-option/Time/Repeat combination laid out 2px over the card's
+          own measured 555px cap with nothing to absorb the overflow. One
+          scroll region fixes both at once: it can grow past 555 and
+          scroll instead of clipping OR forcing the card taller.
+          `min-h-0` is the standard flexbox fix for a `flex-1` child that
+          also needs to shrink below its own content size — without it, a
+          flex item's default `min-height: auto` would keep expanding this
+          region (and so the card around it) past `max-height` instead of
+          ever actually scrolling.
+        */}
+      <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
+        {preview !== null && (
+          <button
+            type="button"
+            data-testid="scheduler-date-preview"
+            onClick={commitPreview}
+            className="my-1 flex shrink-0 flex-col items-start gap-0.5 rounded-md border border-border px-2 py-1.5 text-left hover:bg-accent"
+          >
+            <span className="flex items-center gap-1.5 font-medium">
+              {preview.dateString !== null ? (
+                <Repeat className="size-3.5" />
+              ) : (
+                <CalendarDays className="size-3.5" />
+              )}
+              {format(parseDayKey(preview.day) ?? now, "EEE d MMM")}
+              {preview.dateString !== null && (
+                <span className="text-muted-foreground">
+                  → {preview.forever ? "Forever" : "Ends"}
+                </span>
+              )}
+            </span>
+            <span className="text-muted-foreground text-xs">
+              {(() => {
+                const count = datesWithTasks.get(preview.day) ?? 0;
+                return count === 0 ? "No tasks" : `${count} task${count === 1 ? "" : "s"}`;
+              })()}
+            </span>
+          </button>
+        )}
 
-      {/* Issue #436's own 160px (five options) / 128px (four) quick-
-          options block — no wrapper height of its own: each `QuickOption`
-          is a fixed 32px (`h-8`) and they stack with no gap, so the
-          block's real height already IS `optionCount * 32`. */}
-      <div data-testid="quick-options" className="flex shrink-0 flex-col">
-        {quickOptionDefs.map((option) => (
-          <QuickOption
-            key={option.key}
-            icon={option.icon}
-            iconColorVar={option.iconColorVar}
-            label={option.label}
-            hint={option.hint}
-            onClick={() => commitDay(option.day)}
-          />
-        ))}
-        {/*
+        {/* Issue #436's own 160px (five options) / 128px (four) quick-
+            options block — no wrapper height of its own: each `QuickOption`
+            is a fixed 32px (`h-8`) and they stack with no gap, so the
+            block's real height already IS `optionCount * 32`. */}
+        <div data-testid="quick-options" className="flex shrink-0 flex-col">
+          {quickOptionDefs.map((option) => (
+            <QuickOption
+              key={option.key}
+              icon={option.icon}
+              iconColorVar={option.iconColorVar}
+              label={option.label}
+              hint={option.hint}
+              onClick={() => commitDay(option.day)}
+            />
+          ))}
+          {/*
             `alwaysDated` (this popover's own doc comment above): issue
             #435's Reschedule keeps this option reachable even with no
             `dateDay` of its own — every Overdue Task it would clear
@@ -1030,27 +1101,32 @@ export function TaskSchedulePopover({
             no `alwaysDated`) drops this option and nothing else, landing
             the block at four options instead of five.
           */}
-        {(dateDay !== null || alwaysDated) && (
-          <QuickOption
-            icon={CircleSlash}
-            iconColorVar="--td-schedule-no-date"
-            label="No Date"
-            hint={null}
-            onClick={() => commitDay(null)}
-          />
-        )}
-      </div>
+          {(dateDay !== null || alwaysDated) && (
+            <QuickOption
+              icon={CircleSlash}
+              iconColorVar="--td-schedule-no-date"
+              label="No Date"
+              hint={null}
+              onClick={() => commitDay(null)}
+            />
+          )}
+        </div>
 
-      <div
-        data-testid="schedule-divider"
-        className="h-px shrink-0 bg-[color:var(--td-popover-divider)]"
-      />
+        <div
+          data-testid="schedule-divider"
+          className="h-px shrink-0 bg-[color:var(--td-popover-divider)]"
+        />
 
-      {/* Issue #436's own fixed 236px calendar area — #439's own endless
-          month list will make the inner list scroll; for now this just
-          keeps the calendar body inside the measured area, overflow
-          hidden rather than growing the card. */}
-      <div className="h-[236px] shrink-0 overflow-hidden">
+        {/* Issue #436's own real-browser follow-up: no fixed height or
+            `overflow-hidden` of its own any more — a 236px box here was
+            what clipped a 6-week month's own last row unreachably (Nov
+            2026 needs 268px). The calendar renders at its own natural
+            height now; the scroll region this sits inside (above) is what
+            absorbs a taller month instead of cutting one off. `shrink-0`
+            keeps flexbox from compressing it below that natural height to
+            make room for a sibling, the one thing still needed here.
+            #439's own endless month list is a separate, later change —
+            this is only the "don't clip" half of that follow-up. */}
         <Calendar
           mode="single"
           weekStartsOn={1}
@@ -1143,21 +1219,20 @@ export function TaskSchedulePopover({
               "hover:bg-[color:var(--td-calendar-cell-hover)] dark:hover:bg-[color:var(--td-calendar-cell-hover)] focus-visible:border-transparent focus-visible:ring-0 focus-visible:bg-[color:var(--td-calendar-cell-hover)]/[30.6%]",
             ),
           }}
-          className="mx-auto"
+          className="mx-auto shrink-0"
         />
-      </div>
 
-      <div
-        data-testid="schedule-divider"
-        className="h-px shrink-0 bg-[color:var(--td-popover-divider)]"
-      />
+        <div
+          data-testid="schedule-divider"
+          className="h-px shrink-0 bg-[color:var(--td-popover-divider)]"
+        />
 
-      {/* Issue #436's own stacked Time/Repeat rows — each 40px
+        {/* Issue #436's own stacked Time/Repeat rows — each 40px
           (`h-10`), Time's own 226×32 button first and Repeat's own
           directly below it, no divider between the two (Todoist's own
           screenshot shows none), replacing the old side-by-side row. */}
-      <div className="flex shrink-0 flex-col">
-        {/*
+        <div className="flex shrink-0 flex-col">
+          {/*
             Gated on `dateDay !== null` for the identical reason the
             former inline checkbox was: there is no time-of-day to attach
             to an unset date. `alwaysDated` (this popover's own doc
@@ -1165,180 +1240,181 @@ export function TaskSchedulePopover({
             has no single `dateDay` of its own to gate on, but every
             Overdue Task it applies to already carries a real day.
           */}
-        {(dateDay !== null || alwaysDated) && (
-          <div className="relative flex h-10 shrink-0 items-center">
-            <Button
-              type="button"
-              variant="ghost"
-              onClick={() => setTimeDialogOpen(true)}
-              // `aria-label` pins the accessible name to "Time" even once
-              // the visible text becomes the value ("21:00") below —
-              // every existing Time-dialog test in this file finds this
-              // button `{ name: "Time" }` regardless of whether a value is
-              // set, and Todoist's own picker keeps the identical control
-              // labelled "Time" either way (the value augments it, the
-              // clear button below removes the value, neither renames the
-              // control itself).
-              aria-label="Time"
-              className="h-8 w-[226px] justify-start gap-2 rounded-[5px] border px-2 font-normal"
-              style={{
-                borderColor: "var(--td-schedule-field-border)",
-                color: "var(--td-schedule-field-text)",
-              }}
-            >
-              <Clock className="size-4" />
-              {dateTime ?? "Time"}
-            </Button>
-            {dateTime !== null && (
-              <button
+          {(dateDay !== null || alwaysDated) && (
+            <div className="relative flex h-10 shrink-0 items-center">
+              <Button
                 type="button"
-                aria-label="Clear time"
-                onClick={(event) => {
-                  // Stops the click from also reaching the Time button
-                  // underneath it (they overlap at this corner) and
-                  // opening the dialog it exists to avoid — clearing is
-                  // meant to be a one-click affordance, not a shortcut
-                  // into the dialog it also happens to be inside of.
-                  event.stopPropagation();
-                  onSetTime(null);
+                variant="ghost"
+                onClick={() => setTimeDialogOpen(true)}
+                // `aria-label` pins the accessible name to "Time" even once
+                // the visible text becomes the value ("21:00") below —
+                // every existing Time-dialog test in this file finds this
+                // button `{ name: "Time" }` regardless of whether a value is
+                // set, and Todoist's own picker keeps the identical control
+                // labelled "Time" either way (the value augments it, the
+                // clear button below removes the value, neither renames the
+                // control itself).
+                aria-label="Time"
+                className="h-8 w-[226px] justify-start gap-2 rounded-[5px] border px-2 font-normal"
+                style={{
+                  borderColor: "var(--td-schedule-field-border)",
+                  color: "var(--td-schedule-field-text)",
                 }}
-                className="-translate-y-1/2 absolute top-1/2 right-2 rounded-sm p-0.5 text-muted-foreground hover:text-foreground"
               >
-                <X className="size-3.5" />
-              </button>
-            )}
-          </div>
-        )}
-
-        {showRepeatControl && (
-          <div className="flex h-10 w-fit shrink-0 items-center gap-0.5">
-            <DropdownMenu.Root>
-              <DropdownMenu.Trigger asChild>
-                <Button
-                  ref={repeatTriggerRef}
+                <Clock className="size-4" />
+                {dateTime ?? "Time"}
+              </Button>
+              {dateTime !== null && (
+                <button
                   type="button"
-                  variant="ghost"
-                  // Issue #293: once a rule is set the trigger carries the
-                  // rule's own name, and the menu it opens is named for the
-                  // rule rather than for "Repeat" — both driven on Todoist.
-                  aria-label={recurrenceLabel ?? "Repeat"}
-                  className={cn(
-                    "h-8 justify-start gap-2 rounded-[5px] border px-2 font-normal",
-                    // Issue #436's own measured empty-state width (226px) —
-                    // widened to fit content (`w-fit`) instead once a rule
-                    // is active, so the standalone `Clear recurrence`
-                    // button below still has the two-part control's own
-                    // pre-#436 room to sit beside it rather than wrap or
-                    // overflow the card. Todoist's own active-recurrence
-                    // frame was never measured for this ticket.
-                    activeRecurrence === null ? "w-[226px]" : "w-fit",
-                  )}
-                  style={{
-                    borderColor: "var(--td-schedule-field-border)",
-                    color: "var(--td-schedule-field-text)",
+                  aria-label="Clear time"
+                  onClick={(event) => {
+                    // Stops the click from also reaching the Time button
+                    // underneath it (they overlap at this corner) and
+                    // opening the dialog it exists to avoid — clearing is
+                    // meant to be a one-click affordance, not a shortcut
+                    // into the dialog it also happens to be inside of.
+                    event.stopPropagation();
+                    onSetTime(null);
                   }}
+                  className="-translate-y-1/2 absolute top-1/2 right-2 rounded-sm p-0.5 text-muted-foreground hover:text-foreground"
                 >
-                  <Repeat className="size-4" />
-                  {recurrenceLabel ?? "Repeat"}
-                </Button>
-              </DropdownMenu.Trigger>
-              <DropdownMenu.Portal>
-                <DropdownMenu.Content
-                  data-testid="repeat-menu"
-                  align="start"
-                  className="z-[70] flex w-[282px] flex-col gap-0.5 rounded-lg border border-border bg-popover p-1 text-popover-foreground text-sm shadow-lg"
-                  // The identical hand-off task-command-menu.tsx's own
-                  // "Date…" item needed for issue #255: focusing
-                  // `typedInputRef` straight from "Custom…"'s `onSelect`
-                  // would race this very menu's own `FocusScope` while it's
-                  // still tearing down mid-close-animation. Waiting for
-                  // `onCloseAutoFocus` — fired once that teardown is
-                  // actually done — and skipping its own default (return
-                  // focus to the trigger) is what lets the focus land on
-                  // the input instead and stick there.
-                  onCloseAutoFocus={(event) => {
-                    if (openCustomRepeatAfterRepeatCloseRef.current) {
-                      openCustomRepeatAfterRepeatCloseRef.current = false;
-                      // Same reason the focus case below preventDefault()s:
-                      // returning focus to the trigger here would yank it
-                      // back out of the dialog that is about to autofocus.
+                  <X className="size-3.5" />
+                </button>
+              )}
+            </div>
+          )}
+
+          {showRepeatControl && (
+            <div className="flex h-10 w-fit shrink-0 items-center gap-0.5">
+              <DropdownMenu.Root>
+                <DropdownMenu.Trigger asChild>
+                  <Button
+                    ref={repeatTriggerRef}
+                    type="button"
+                    variant="ghost"
+                    // Issue #293: once a rule is set the trigger carries the
+                    // rule's own name, and the menu it opens is named for the
+                    // rule rather than for "Repeat" — both driven on Todoist.
+                    aria-label={recurrenceLabel ?? "Repeat"}
+                    className={cn(
+                      "h-8 justify-start gap-2 rounded-[5px] border px-2 font-normal",
+                      // Issue #436's own measured empty-state width (226px) —
+                      // widened to fit content (`w-fit`) instead once a rule
+                      // is active, so the standalone `Clear recurrence`
+                      // button below still has the two-part control's own
+                      // pre-#436 room to sit beside it rather than wrap or
+                      // overflow the card. Todoist's own active-recurrence
+                      // frame was never measured for this ticket.
+                      activeRecurrence === null ? "w-[226px]" : "w-fit",
+                    )}
+                    style={{
+                      borderColor: "var(--td-schedule-field-border)",
+                      color: "var(--td-schedule-field-text)",
+                    }}
+                  >
+                    <Repeat className="size-4" />
+                    {recurrenceLabel ?? "Repeat"}
+                  </Button>
+                </DropdownMenu.Trigger>
+                <DropdownMenu.Portal>
+                  <DropdownMenu.Content
+                    data-testid="repeat-menu"
+                    align="start"
+                    className="z-[70] flex w-[282px] flex-col gap-0.5 rounded-lg border border-border bg-popover p-1 text-popover-foreground text-sm shadow-lg"
+                    // The identical hand-off task-command-menu.tsx's own
+                    // "Date…" item needed for issue #255: focusing
+                    // `typedInputRef` straight from "Custom…"'s `onSelect`
+                    // would race this very menu's own `FocusScope` while it's
+                    // still tearing down mid-close-animation. Waiting for
+                    // `onCloseAutoFocus` — fired once that teardown is
+                    // actually done — and skipping its own default (return
+                    // focus to the trigger) is what lets the focus land on
+                    // the input instead and stick there.
+                    onCloseAutoFocus={(event) => {
+                      if (openCustomRepeatAfterRepeatCloseRef.current) {
+                        openCustomRepeatAfterRepeatCloseRef.current = false;
+                        // Same reason the focus case below preventDefault()s:
+                        // returning focus to the trigger here would yank it
+                        // back out of the dialog that is about to autofocus.
+                        event.preventDefault();
+                        setCustomRepeatOpen(true);
+                        return;
+                      }
+                      if (!focusInputAfterRepeatCloseRef.current) {
+                        return;
+                      }
+                      focusInputAfterRepeatCloseRef.current = false;
                       event.preventDefault();
-                      setCustomRepeatOpen(true);
-                      return;
-                    }
-                    if (!focusInputAfterRepeatCloseRef.current) {
-                      return;
-                    }
-                    focusInputAfterRepeatCloseRef.current = false;
-                    event.preventDefault();
-                    typedInputRef.current?.focus();
-                  }}
-                  onEscapeKeyDown={() => setOpen(false)}
-                >
-                  {repeatOptions.map((option) => (
-                    <DropdownMenu.Item
-                      key={option.key}
-                      className={cn(repeatItemClassName, "justify-between")}
-                      onSelect={() => commitRepeatPhrase(option.phrase, option.day)}
-                    >
-                      {option.label}
-                      {/*
+                      typedInputRef.current?.focus();
+                    }}
+                    onEscapeKeyDown={() => setOpen(false)}
+                  >
+                    {repeatOptions.map((option) => (
+                      <DropdownMenu.Item
+                        key={option.key}
+                        className={cn(repeatItemClassName, "justify-between")}
+                        onSelect={() => commitRepeatPhrase(option.phrase, option.day)}
+                      >
+                        {option.label}
+                        {/*
                         Issue #293: the active rule carries a check that the
                         plain Repeat menu's items do not. Compared against the
                         stored phrase rather than the rendered label, since
                         the label is re-derived per open and the phrase is
                         what the Task actually holds.
                       */}
-                      {option.phrase === activeRecurrence && (
-                        <Check aria-hidden="true" className="size-3.5" />
-                      )}
+                        {option.phrase === activeRecurrence && (
+                          <Check aria-hidden="true" className="size-3.5" />
+                        )}
+                      </DropdownMenu.Item>
+                    ))}
+                    <DropdownMenu.Item
+                      className={repeatItemClassName}
+                      onSelect={() => {
+                        openCustomRepeatAfterRepeatCloseRef.current = true;
+                      }}
+                    >
+                      Custom…
                     </DropdownMenu.Item>
-                  ))}
-                  <DropdownMenu.Item
-                    className={repeatItemClassName}
-                    onSelect={() => {
-                      openCustomRepeatAfterRepeatCloseRef.current = true;
-                    }}
-                  >
-                    Custom…
-                  </DropdownMenu.Item>
-                  {/*
+                    {/*
                     Issue #293's seventh item, present only once a rule is
                     set. Removal has two doors in Todoist — this and the
                     standalone button beside the trigger — and both leave the
                     date alone.
                   */}
-                  {activeRecurrence !== null && (
-                    <DropdownMenu.Item
-                      className={repeatItemClassName}
-                      onSelect={clearRecurrenceKeepingDate}
-                    >
-                      Clear
-                    </DropdownMenu.Item>
-                  )}
-                </DropdownMenu.Content>
-              </DropdownMenu.Portal>
-            </DropdownMenu.Root>
-            {/*
+                    {activeRecurrence !== null && (
+                      <DropdownMenu.Item
+                        className={repeatItemClassName}
+                        onSelect={clearRecurrenceKeepingDate}
+                      >
+                        Clear
+                      </DropdownMenu.Item>
+                    )}
+                  </DropdownMenu.Content>
+                </DropdownMenu.Portal>
+              </DropdownMenu.Root>
+              {/*
                 The standalone half of the two-part control. `Clear
                 recurrence` is deliberately NOT `No Date`: it drops the rule
                 and keeps the day, which is the distinction meologue had no
                 way to express at all before this — `No Date` takes the date
                 with it.
               */}
-            {activeRecurrence !== null && (
-              <Button
-                type="button"
-                variant="ghost"
-                aria-label="Clear recurrence"
-                onClick={clearRecurrenceKeepingDate}
-                className="size-8 shrink-0 text-muted-foreground"
-              >
-                <X className="size-4" />
-              </Button>
-            )}
-          </div>
-        )}
+              {activeRecurrence !== null && (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  aria-label="Clear recurrence"
+                  onClick={clearRecurrenceKeepingDate}
+                  className="size-8 shrink-0 text-muted-foreground"
+                >
+                  <X className="size-4" />
+                </Button>
+              )}
+            </div>
+          )}
+        </div>
       </div>
     </>
   );
@@ -1451,11 +1527,20 @@ export function TaskSchedulePopover({
         // are measured at — and 20px top/bottom padding is what the
         // section heights below (36 input + 3×1 dividers + 160 five-option
         // quick options + 236 calendar + 40 Time + 40 Repeat = 515) need
-        // added to reach 555.
+        // added to reach 555. `flex-col` is also load-bearing for
+        // `min-h-0 flex-1 overflow-y-auto` below (`scheduleFields`'s own
+        // comment on that scroll region): a `flex-1` child only actually
+        // shrinks to make its parent's `max-height` real, rather than
+        // pushing that parent taller, inside a flex container.
         className="flex flex-col px-3 py-5 text-sm"
         style={{
           width: "var(--td-popover-width)",
-          minHeight: "var(--td-popover-min-height)",
+          // Issue #436's own real-browser follow-up (`--td-popover-max-
+          // height`'s own comment in index.css): a CEILING the card's real
+          // content — pinned input above, one scrolling region below —
+          // sizes under, not a floor forcing every state to 555 regardless
+          // of how many quick options are actually showing.
+          maxHeight: "var(--td-popover-max-height)",
           borderRadius: "var(--td-popover-radius)",
           background: "var(--td-popover-background)",
           border: "1px solid var(--td-popover-border)",

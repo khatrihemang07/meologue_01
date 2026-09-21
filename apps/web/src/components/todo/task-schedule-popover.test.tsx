@@ -1,6 +1,8 @@
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { addDays } from "date-fns";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { WIDE_LAYOUT_QUERY } from "@/hooks/use-wide-layout";
+import { localDayKey } from "@/lib/local-day-key";
 // `import * as`, not a named import: `vi.spyOn` needs the module namespace
 // object itself to intercept a call task-schedule-popover.tsx makes to its
 // own named import of the same function — the identical pattern entry-
@@ -484,7 +486,7 @@ describe("TaskSchedulePopover", () => {
       expect(names()).toHaveLength(5);
     });
 
-    it("current value = Today: Tomorrow, Later this week, This weekend, Next week, No Date — in that order", () => {
+    it("current value = Today (NOW is Thursday): Later this week is OMITTED — Thu+2 lands ON This weekend's own day", () => {
       renderPopover({ dateDay: "2026-09-10" }); // NOW's own today
       open();
 
@@ -495,45 +497,130 @@ describe("TaskSchedulePopover", () => {
         within(screen.getByTestId("quick-options")).queryByRole("button", { name: /^Today/ }),
       ).not.toBeInTheDocument();
       expect(screen.getByRole("button", { name: "Tomorrow Fri" })).toBeInTheDocument();
-      // NOW is a Thursday: `laterThisWeekDay`'s own two-days-out reading
-      // (Sat) lands on the weekend, so it clamps to the last weekday
-      // before it — Friday, the same date Tomorrow already names. A
-      // disclosed edge case (`laterThisWeekDay`'s own header comment,
-      // task-schedule-popover.tsx), not a defect this test is hiding.
-      expect(screen.getByRole("button", { name: "Later this week Fri" })).toBeInTheDocument();
+      // `laterThisWeekVisible`'s own table (task-schedule-popover.tsx):
+      // Thursday's own "+2" reading lands exactly on This weekend's own
+      // Saturday, so the replacement is OMITTED outright — the list is
+      // one option shorter, not a "Later this week" that happens to
+      // duplicate another option's own date (this ticket's prior guess).
+      expect(screen.queryByRole("button", { name: /^Later this week/ })).not.toBeInTheDocument();
       expect(screen.getByRole("button", { name: "This weekend Sat" })).toBeInTheDocument();
       expect(screen.getByRole("button", { name: "Next week Mon 14 Sep" })).toBeInTheDocument();
       expect(screen.getByRole("button", { name: "No Date" })).toBeInTheDocument();
-
-      const all = names();
-      expect(all.slice(0, 2)).toEqual(["Tomorrow Fri", "Later this week Fri"]);
+      expect(names()).toHaveLength(4);
     });
 
-    it("current value = Tomorrow: Today, Later this week, This weekend, Next week, No Date — in that order", () => {
+    it("current value = Tomorrow (NOW is Thursday): Later this week is OMITTED for the identical reason", () => {
       renderPopover({ dateDay: "2026-09-11" }); // NOW's own tomorrow
       open();
 
       expect(screen.getByRole("button", { name: "Today Thu" })).toBeInTheDocument();
       expect(screen.queryByRole("button", { name: /^Tomorrow/ })).not.toBeInTheDocument();
-      expect(screen.getByRole("button", { name: "Later this week Fri" })).toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: /^Later this week/ })).not.toBeInTheDocument();
       expect(screen.getByRole("button", { name: "This weekend Sat" })).toBeInTheDocument();
       expect(screen.getByRole("button", { name: "Next week Mon 14 Sep" })).toBeInTheDocument();
       expect(screen.getByRole("button", { name: "No Date" })).toBeInTheDocument();
-
-      const all = names();
-      expect(all.slice(0, 2)).toEqual(["Today Thu", "Later this week Fri"]);
+      expect(names()).toHaveLength(4);
     });
 
-    it("'Later this week' resolves the measured Mon -> Wed example cleanly when the clamp doesn't apply", () => {
+    it("current value = Today, NOW is Monday (measured): Tomorrow, Later this week Wed, This weekend, Next week, No Date — in that order", () => {
       const { onPickDay } = renderPopover({ dateDay: "2026-09-07", now: MONDAY_NOW });
       open();
 
       const laterThisWeek = screen.getByRole("button", { name: "Later this week Wed" });
       expect(laterThisWeek).toBeInTheDocument();
+      expect(names().slice(0, 2)).toEqual(["Tomorrow Tue", "Later this week Wed"]);
 
       fireEvent.click(laterThisWeek);
 
       expect(onPickDay).toHaveBeenCalledWith("2026-09-09");
+    });
+
+    // Issue #436's own real-browser follow-up: "Later this week" =
+    // today + 2 days, uniformly — no longer clamped to the last weekday
+    // before the weekend the way this ticket's first pass had it (that
+    // clamp duplicated Tomorrow's own date on a Thursday `now`, which a
+    // side-by-side check caught). Only Monday and Tuesday were ever
+    // actually measured against Todoist (the issue's own comment
+    // correction, plus this follow-up's second data point); Wednesday
+    // through Sunday below are a mechanical extension of the identical
+    // "+2 days" reading, gated by `laterThisWeekVisible`'s own two rules
+    // (before the weekend, and not equal to another option already
+    // shown) — see that function's own table in task-schedule-popover.tsx
+    // for why each of these five is inferred rather than measured.
+    describe("'Later this week' across every weekday (Wed-Sun inferred, not measured)", () => {
+      // Sep 2026: the 1st is a Tuesday (this file's own pre-existing
+      // calendar test), so 7-13 Sep is one full Mon-Sun week on that same
+      // fixed calendar every other date literal in this file already
+      // reads off.
+      const WEEKDAYS: ReadonlyArray<{
+        weekday: string;
+        now: Date;
+        laterThisWeek: { day: string; hint: string } | null;
+      }> = [
+        {
+          weekday: "Mon",
+          now: new Date(2026, 8, 7, 12, 0),
+          laterThisWeek: { day: "2026-09-09", hint: "Wed" },
+        },
+        {
+          weekday: "Tue",
+          now: new Date(2026, 8, 8, 12, 0),
+          laterThisWeek: { day: "2026-09-10", hint: "Thu" },
+        },
+        {
+          weekday: "Wed",
+          now: new Date(2026, 8, 9, 12, 0),
+          laterThisWeek: { day: "2026-09-11", hint: "Fri" },
+        },
+        // Thu+2 (Sat) lands ON This weekend's own day.
+        { weekday: "Thu", now: new Date(2026, 8, 10, 12, 0), laterThisWeek: null },
+        // Fri+2 (Sun) spills past This weekend's own Saturday.
+        { weekday: "Fri", now: new Date(2026, 8, 11, 12, 0), laterThisWeek: null },
+        // Sat+2 (Mon) collides with Next week's own Monday.
+        { weekday: "Sat", now: new Date(2026, 8, 12, 12, 0), laterThisWeek: null },
+        {
+          weekday: "Sun",
+          now: new Date(2026, 8, 13, 12, 0),
+          laterThisWeek: { day: "2026-09-15", hint: "Tue" },
+        },
+      ];
+
+      function laterThisWeekButton() {
+        return within(screen.getByTestId("quick-options")).queryByRole("button", {
+          name: /^Later this week/,
+        });
+      }
+
+      it.each(WEEKDAYS)("current value = Today, NOW = $weekday", ({ now, laterThisWeek }) => {
+        const today = localDayKey(now);
+        const { onPickDay } = renderPopover({ dateDay: today, now });
+        open();
+
+        if (laterThisWeek === null) {
+          expect(laterThisWeekButton()).not.toBeInTheDocument();
+          return;
+        }
+        const button = screen.getByRole("button", {
+          name: `Later this week ${laterThisWeek.hint}`,
+        });
+        expect(button).toBeInTheDocument();
+        fireEvent.click(button);
+        expect(onPickDay).toHaveBeenCalledWith(laterThisWeek.day);
+      });
+
+      it.each(WEEKDAYS)("current value = Tomorrow, NOW = $weekday", ({ now, laterThisWeek }) => {
+        const tomorrow = localDayKey(addDays(now, 1));
+        renderPopover({ dateDay: tomorrow, now });
+        open();
+
+        if (laterThisWeek === null) {
+          expect(laterThisWeekButton()).not.toBeInTheDocument();
+          return;
+        }
+        expect(
+          screen.getByRole("button", { name: `Later this week ${laterThisWeek.hint}` }),
+        ).toBeInTheDocument();
+      });
     });
 
     it("Next week is never elided, even when the current value is Next week's own day (only Today/Tomorrow/No Date ever are)", () => {
@@ -644,15 +731,78 @@ describe("TaskSchedulePopover", () => {
   // `check-css-cascade.mjs`'s own job (wired into `build:web`), verified
   // separately by reading `index.css` directly.
   describe("frame (issue #436)", () => {
-    it("reads the fixed 250×555 card size off its own CSS tokens, not a literal", () => {
+    it("reads the fixed 250px width and 555px height CAP off its own CSS tokens, not a literal", () => {
       renderPopover();
       open();
 
       const view = screen.getByTestId("scheduler-view");
       expect(view.style.width).toBe("var(--td-popover-width)");
-      expect(view.style.minHeight).toBe("var(--td-popover-min-height)");
+      // `maxHeight`, not `minHeight` — issue #436's own real-browser
+      // follow-up: a forced `min-height` was clipping a 6-week month's
+      // own last row inside a separately fixed-height calendar box AND
+      // still letting the five-option/Time/Repeat combination lay out
+      // past the measured 555. This card's content now sizes naturally
+      // under a 555px CEILING, with the scroll region below the input
+      // absorbing anything past it (`renders exactly one scroll region`,
+      // below).
+      expect(view.style.minHeight).toBe("");
+      expect(view.style.maxHeight).toBe("var(--td-popover-max-height)");
       expect(view.style.background).toBe("var(--td-popover-background)");
       expect(view.style.boxShadow).toBe("var(--td-popover-shadow)");
+    });
+
+    it("renders exactly one scroll region, holding everything below the pinned input", () => {
+      renderPopover();
+      open();
+
+      const view = screen.getByTestId("scheduler-view");
+      // The input itself sits directly in the card, NOT inside the scroll
+      // region — only what's below it (quick options, calendar, Time,
+      // Repeat) does, matching Todoist's own `.scheduler-scrollable`.
+      const input = screen.getByPlaceholderText("Type a date");
+      const scrollRegion = input.closest('[class*="overflow-y-auto"]');
+      expect(scrollRegion).toBeNull();
+
+      const quickOptions = screen.getByTestId("quick-options");
+      const quickOptionsScrollRegion = quickOptions.closest('[class*="overflow-y-auto"]');
+      expect(quickOptionsScrollRegion).not.toBeNull();
+      expect(quickOptionsScrollRegion?.className).toContain("overflow-y-auto");
+      // Exactly one such region in the whole card — not one per section.
+      const allScrollRegions = view.querySelectorAll('[class*="overflow-y-auto"]');
+      expect(allScrollRegions).toHaveLength(1);
+    });
+
+    // Issue #436's own real-browser follow-up: a fixed 236px, `overflow-
+    // hidden` box around the calendar ALONE (this ticket's first pass) was
+    // clipping a 6-week month's own last row unreachably — Nov 2026 needs
+    // 268px. jsdom lays nothing out, so this can't measure pixels the way
+    // the real bug was found; what it CAN prove is the structural cause is
+    // gone — no element inside the card clips its own content with
+    // `overflow-hidden` any more, and Nov 2026's own sixth week is present
+    // in the DOM regardless of month length (the one thing a real
+    // `overflow-hidden` ancestor would have made unreachable without
+    // deleting it from the DOM, which react-day-picker never does).
+    it("no element clips its own content — the fixed 236px overflow-hidden box around the calendar alone is gone", () => {
+      renderPopover();
+      open();
+
+      const view = screen.getByTestId("scheduler-view");
+      expect(view.querySelector('[class*="overflow-hidden"]')).toBeNull();
+    });
+
+    it("renders Nov 2026's own sixth week in the DOM (30 Nov) — a weaker check than the one above: jsdom can't see a CSS clip, only a missing node", () => {
+      // Nov 2026: the 1st is a Sunday, so a Monday-start grid needs six
+      // rows to reach the 30th — the exact "6-week month" shape the old
+      // fixed-height, `overflow-hidden` calendar box made visually
+      // unreachable without ever removing it from the DOM (CSS clipping
+      // hides paint, not markup) — so this alone would have passed even
+      // under the bug. Kept anyway as a plain sanity check that the
+      // calendar itself still renders every row a 6-week month needs; the
+      // test above is the one that actually guards the regression.
+      renderPopover({ now: new Date(2026, 10, 1, 12, 0) });
+      open();
+
+      expect(document.querySelector('[data-day="2026-11-30"]')).not.toBeNull();
     });
 
     it("renders exactly three dividers — after the input, after the quick options, and after the calendar", () => {
@@ -708,11 +858,14 @@ describe("TaskSchedulePopover", () => {
       expect(iconVarOf("No Date")).toBe("var(--td-schedule-no-date)");
     });
 
-    it("gives 'Later this week' its own token, family-linked to Tomorrow's rather than a fourth literal", () => {
-      renderPopover({ dateDay: "2026-09-10" }); // elides Today, adds Later this week
+    it("gives 'Later this week' its own token, family-linked to Next week's violet rather than a fourth literal", () => {
+      // NOW=Thursday elides Today into Later this week too, but that
+      // reading lands on the weekend and is OMITTED (`laterThisWeekVisible`'s
+      // own table) — Monday is where it actually renders.
+      renderPopover({ dateDay: "2026-09-07", now: MONDAY_NOW });
       open();
 
-      const icon = screen.getByRole("button", { name: "Later this week Fri" }).querySelector("svg");
+      const icon = screen.getByRole("button", { name: "Later this week Wed" }).querySelector("svg");
       expect(icon).toHaveStyle({ color: "var(--td-schedule-later-this-week)" });
     });
 
