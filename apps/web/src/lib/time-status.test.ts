@@ -122,4 +122,65 @@ describe("importSummary", () => {
   it("says nothing happened when the run touched no sources at all", () => {
     expect(importSummary([], now)).toBe("Import finished.");
   });
+
+  // The Server's refresh only runs enabled sources (`enabled_sources` /
+  // `run_enabled_sources` in server/src/time.rs), so an archived source's
+  // outcome fields are always stale — carried over from whichever run last
+  // touched it, possibly long ago. Quoting them as if this run produced them
+  // is the exact defect issue #427's code review caught.
+  it("omits an archived source's stale count from the finish message", () => {
+    const summary = importSummary(
+      [
+        source({ name: "Toggl Track", last_inserted_count: 25 }),
+        source({
+          id: "source-2",
+          name: "Old Clockify",
+          enabled: false,
+          last_inserted_count: 5,
+        }),
+      ],
+      now,
+    );
+    expect(summary).toBe("Import finished — Toggl Track: 25 new");
+    expect(summary).not.toContain("Old Clockify");
+  });
+
+  it("lets an archived source's stale non-zero count neither appear among newest records nor break the all-zero verdict", () => {
+    const summary = importSummary(
+      [
+        source({
+          name: "Toggl Track",
+          last_inserted_count: 0,
+          newest_record_at: localInstant(2026, 9, 20, 22, 25),
+        }),
+        source({
+          id: "source-2",
+          name: "Old Clockify",
+          enabled: false,
+          last_inserted_count: 5,
+          newest_record_at: localInstant(2026, 9, 21, 8, 12),
+        }),
+      ],
+      now,
+    );
+    expect(summary).toBe("Nothing new. Newest records: Toggl Track 22:25 yesterday.");
+    expect(summary).not.toContain("Old Clockify");
+  });
+
+  it("does not report an archived source's stale error as a failure of this run", () => {
+    const summary = importSummary(
+      [
+        source({ name: "Toggl Track", last_inserted_count: 5 }),
+        source({
+          id: "source-2",
+          name: "Old Clockify",
+          enabled: false,
+          last_error: "source database is unreadable",
+        }),
+      ],
+      now,
+    );
+    expect(summary).toBe("Import finished — Toggl Track: 5 new");
+    expect(summary).not.toContain("Old Clockify");
+  });
 });

@@ -141,6 +141,11 @@ function DailyComparison({
 
   const intervals = intervalsQuery.data?.ok ? intervalsQuery.data.intervals : [];
   const lanes = lanesFor(intervals);
+  // One name for "the timeline is on screen", read by both the timeline and
+  // its floating zoom controls: two separately written conditions had
+  // already drifted into different spellings, and controls shown without a
+  // timeline would zoom nothing.
+  const showTimeline = intervalsQuery.data?.ok !== false && lanes.length > 0;
 
   // The scale runs from this Device's local midnight to the next. The Server
   // decides which records belong to the day; this only decides where on the
@@ -202,7 +207,7 @@ function DailyComparison({
             void intervalsQuery.refetch();
           }}
         />
-      ) : lanes.length === 0 ? null : (
+      ) : !showTimeline ? null : (
         <ComparativeTimeline
           lanes={lanes}
           dayStart={dayStart.getTime()}
@@ -230,7 +235,7 @@ function DailyComparison({
           under the reader's focus still, which means the page scrolls, and
           after two zoom-ins on a phone the buttons sat 38px above the top of
           the screen with no way to zoom back out short of scrolling up. */}
-      {lanes.length > 0 && intervalsQuery.data?.ok !== false && (
+      {showTimeline && (
         <ZoomControls
           levelLabel={`${zoomPercent}%`}
           canZoomOut={zoom.canZoomOut}

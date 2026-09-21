@@ -53,19 +53,29 @@ function sourceClause(source: TimeSource): string {
  * named explicitly, alongside each source's newest stored record — the fact
  * that turns "0 new, again" from a shrug into something a reader can act on
  * (repoint the source, or accept the file really hasn't grown).
+ *
+ * Only enabled sources are considered: the Server's refresh only runs
+ * enabled sources (`enabled_sources` / `run_enabled_sources` in
+ * server/src/time.rs), so an archived source's `last_inserted_count` /
+ * `last_error` / `newest_record_at` are always left over from whichever run
+ * last touched it — quoting them here would re-report a past run's outcome
+ * as if this run produced it. The filter lives here, not in each caller, so
+ * a caller that (rightly) still renders archived rows in a status list — see
+ * `refresh-row.tsx` — cannot also leak them into the finish message.
  */
 export function importSummary(sources: readonly TimeSource[], now: Date): string {
-  if (sources.length === 0) {
+  const ran = sources.filter((source) => source.enabled);
+  if (ran.length === 0) {
     return "Import finished.";
   }
 
-  const failed = sources.filter((source) => source.last_error);
-  const attempted = sources.filter((source) => !source.last_error);
+  const failed = ran.filter((source) => source.last_error);
+  const attempted = ran.filter((source) => !source.last_error);
   const allFoundNothing =
     attempted.length > 0 && attempted.every((source) => source.last_inserted_count === 0);
 
   if (!allFoundNothing) {
-    return `Import finished — ${sources.map(sourceClause).join(" · ")}`;
+    return `Import finished — ${ran.map(sourceClause).join(" · ")}`;
   }
 
   const newest = attempted
