@@ -2,6 +2,7 @@ import type { Task } from "@meologue/core";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { swipeDown, swipeLeft } from "@/test/swipe";
+import { installResizeObserverStub } from "@/test/virtualized-scroll";
 import { TodayView } from "./today-view";
 
 /** The `[data-task-row-box]` `<div>` inside the row that renders `label` — the element `use-swipe-actions.ts` picks up (`SWIPE_TARGET_ATTRIBUTE`'s own doc comment), same as task-tree.test.tsx's identical helper. */
@@ -90,6 +91,13 @@ function renderTodayView(overrides: Partial<Parameters<typeof TodayView>[0]> = {
 // every fake-timer test after this one renders the already-resolved
 // component synchronously, with no Suspense retry needed at all.
 beforeAll(async () => {
+  // Issue #440: `TaskSchedulePopover`'s own desktop placement now
+  // constructs a real `ResizeObserver` the moment it opens — `src/test/
+  // setup.ts`'s own file-wide `NoOpResizeObserver` (its own header
+  // comment) covers every ordinary test via its `beforeEach`, but this
+  // warm-up runs in `beforeAll`, before any `beforeEach` — this file's
+  // own — has had a chance to run at all.
+  installResizeObserverStub();
   renderTodayView({
     tasks: [task({ id: "warm-lazy-schedule-popover", content: "warm task", date: "2026-09-02" })],
   });

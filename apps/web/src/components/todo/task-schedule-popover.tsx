@@ -370,29 +370,52 @@ export function TaskSchedulePopover({
   // still `null`.
   const [triggerEl, setTriggerEl] = useState<HTMLButtonElement | null>(null);
   const [contentEl, setContentEl] = useState<HTMLDivElement | null>(null);
-  // `null` while unopened or not yet measured (see the effect below) — the
-  // desktop branch falls back to an arbitrary `side`/`alignOffset` in that
-  // window, which is never actually painted (`useLayoutEffect`'s own
-  // comment on the effect just below).
+  // `null` until the trigger and the card have both mounted and been
+  // measured at least once — the desktop branch's own `style` keeps the
+  // card `visibility: hidden` for exactly as long as this stays `null`, so
+  // a reader never sees it sitting at the arbitrary `side`/`alignOffset`
+  // fallback the very first (unmeasured) commit below renders with.
   const [placement, setPlacement] = useState<SchedulePopoverPlacement | null>(null);
 
-  // Issue #440: recomputes once per open (and once more the commit after,
-  // when `contentEl` itself lands — this effect's own header comment above
-  // on why), against the trigger's and the card's own real rendered
-  // geometry (`computeSchedulePopoverPlacement`'s own header comment on why
-  // this can't be a Radix `side`/`avoidCollisions` prop combination alone)
-  // — not continuously: nothing here re-measures on a keystroke that
-  // changes the card's own height (typed preview appearing, say), only on
-  // open/mount and on the window resizing while still open (the ticket's
-  // own 800×600 trap is about the window's size, which *can* change after
-  // open, unlike the card's). `useLayoutEffect`, not `useEffect`: it runs
-  // before the browser paints, so the arbitrary position the very first
-  // (unmeasured) commit below renders at is never actually shown — the
-  // measured, correct position from this effect's own synchronous
-  // `setPlacement` is what the browser paints instead, the identical trick
-  // Radix's own `PopperContent` uses for its `isPositioned` case
-  // (`components/ui/popover.tsx`'s own header comment references the same
-  // file this was read from).
+  // Issue #440 (defect found after this ticket's first landing, verified in
+  // a real browser, 3/3): the card was briefly visible BELOW the trigger,
+  // overflowing the viewport, before jumping to the correct beside
+  // position — jsdom's own tests never caught it because jsdom lays
+  // nothing out at all (every measurement, right or wrong, resolves
+  // through the identical zero-cost synchronous path there). Two real
+  // causes, both fixed here:
+  //
+  // 1. This effect used to measure the card with `contentEl.
+  // getBoundingClientRect()` — the WRONG API on principle: that method
+  // reports the card's visual, post-transform box, and Radix's own
+  // PopperContent wrapper (`@radix-ui/react-popper`'s `dist/index.js`,
+  // the `style` object literal with the comment "keep off the page while
+  // measuring") applies `transform: translate(0, -200%)` to that wrapper
+  // — an ancestor of this card — for as long as ITS OWN `isPositioned` is
+  // `false`. `getBoundingClientRect()` is exactly the API that entangles a
+  // measurement with whatever transform happens to be live anywhere in the
+  // ancestor chain at that instant; `offsetWidth`/`offsetHeight` below
+  // read the card's own laid-out box directly, untouched by any ancestor's
+  // transform.
+  //
+  // 2. Nothing here re-measured once the card's real size became known.
+  // Radix's OWN `whileElementsMounted: autoUpdate` (`@radix-ui/react-
+  // popper`'s own `PopperContent`) *does* eventually re-run Radix's
+  // internal position computation on a resize/scroll/layout-shift — using
+  // whatever `side`/`alignOffset` props this component had most recently
+  // passed it — but that computation is unrelated to THIS component's own
+  // `placement` state, is promise-based (at least one microtask behind
+  // whatever triggered it — the "resolves eventually" of Radix's own
+  // `data-side`, the exact race `PopoverContent`'s own comment on the
+  // `data-side`/`data-align-offset` attributes below describes for jsdom's
+  // sync tests), and Chrome's own Layout Instability API — one of
+  // `autoUpdate`'s default triggers — reports shifts in batched
+  // "sessions," not the instant they happen. That combination is
+  // consistent with "held at the wrong position, then a single later
+  // jump" without this component ever owning a correction of its own. The
+  // `ResizeObserver` and `scroll` listener below make this component
+  // respond to its OWN measurement going stale directly, rather than
+  // depend on Radix noticing and eventually catching up.
   useLayoutEffect(() => {
     if (!open || triggerEl === null || contentEl === null) {
       setPlacement(null);
@@ -400,7 +423,7 @@ export function TaskSchedulePopover({
     }
     function recomputePlacement() {
       // Narrowed again inside the closure: TypeScript can't see that the
-      // outer `null` checks still hold by the time a later `resize` fires
+      // outer `null` checks still hold by the time a later event fires
       // this same function.
       if (triggerEl === null || contentEl === null) {
         return;
@@ -408,17 +431,55 @@ export function TaskSchedulePopover({
       setPlacement(
         computeSchedulePopoverPlacement(
           triggerEl.getBoundingClientRect(),
-          contentEl.getBoundingClientRect(),
-          {
-            width: window.innerWidth,
-            height: window.innerHeight,
-          },
+          { width: contentEl.offsetWidth, height: contentEl.offsetHeight },
+          { width: window.innerWidth, height: window.innerHeight },
         ),
       );
     }
     recomputePlacement();
+
+    // Re-measures when the card's own size changes for any reason — the
+    // typed-preview line appearing, the Repeat control's two-part layout
+    // swapping in — not just at open. `ResizeObserver`'s own `observe()`
+    // additionally fires its callback once, asynchronously, right after
+    // this call, which is harmless here (a no-op re-measurement whenever
+    // the size hasn't actually changed since the synchronous call above).
+    const resizeObserver = new ResizeObserver(recomputePlacement);
+    resizeObserver.observe(contentEl);
+
+    // Re-measures on a page scroll while open too — the ticket's own
+    // "space below" examples (Reschedule at scroll 0 vs. after 32px+) are
+    // exactly this: the trigger's own position moves relative to the
+    // viewport, which nothing else here watches for once the popover is
+    // already open. rAF-throttled: a real scroll fires many "scroll"
+    // events per frame on some inputs, and collapsing a burst to one
+    // recompute per frame is what keeps this from fighting the browser's
+    // own scroll handling rather than just following it. Capture phase, on
+    // `window`: a "scroll" event never bubbles (it targets the scrolling
+    // element itself), but it does fire on ancestors during the capture
+    // phase, which is what lets one `window`-level listener see a scroll
+    // on any scrollable ancestor between the trigger and the viewport, not
+    // only the window's own scroll.
+    let scrollFrame: number | null = null;
+    function onScroll() {
+      if (scrollFrame !== null) {
+        return;
+      }
+      scrollFrame = requestAnimationFrame(() => {
+        scrollFrame = null;
+        recomputePlacement();
+      });
+    }
+    window.addEventListener("scroll", onScroll, { capture: true, passive: true });
     window.addEventListener("resize", recomputePlacement);
-    return () => window.removeEventListener("resize", recomputePlacement);
+    return () => {
+      resizeObserver.disconnect();
+      window.removeEventListener("scroll", onScroll, { capture: true });
+      window.removeEventListener("resize", recomputePlacement);
+      if (scrollFrame !== null) {
+        cancelAnimationFrame(scrollFrame);
+      }
+    };
   }, [open, triggerEl, contentEl]);
 
   // Re-seed on every open, mirroring DatePickerSheet's own identical
@@ -1058,7 +1119,7 @@ export function TaskSchedulePopover({
         // `placement` state has no such lag, so asserting against these two
         // attributes instead is what actually lets a test see this
         // component's own choice rather than racing floating-ui's.
-        data-side={placement?.side ?? "bottom"}
+        data-side={placement === null ? undefined : placement.side}
         data-align-offset={placement === null ? undefined : placement.alignOffset}
         side={placement?.side ?? "bottom"}
         align="start"
@@ -1073,6 +1134,16 @@ export function TaskSchedulePopover({
           background: "var(--td-popover-background)",
           border: "1px solid var(--td-popover-border)",
           boxShadow: "var(--td-popover-shadow)",
+          // Issue #440's real-browser defect: this card used to be fully
+          // visible the instant it mounted, at whatever `side`/`alignOffset`
+          // guess `placement` still defaulted to before its first real
+          // measurement (`recomputePlacement`'s own comment above). Hidden
+          // — not `display: none`, which would make `offsetWidth`/
+          // `offsetHeight` read 0 and defeat the very measurement this
+          // gates — for exactly as long as `placement` stays `null`, so
+          // nothing is ever painted at a position this component hasn't
+          // actually chosen yet.
+          visibility: placement === null ? "hidden" : "visible",
         }}
         // See `classifyOutsideInteraction`'s own comment above (issue
         // #326) — all three handlers get it, not just whichever one a
