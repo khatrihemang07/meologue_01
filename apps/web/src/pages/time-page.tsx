@@ -149,6 +149,7 @@ function DailyComparison({
   // included that falls outside the window rather than drawing it off-scale.
   const dayStart = parseISO(`${day}T00:00:00`);
   const dayEnd = addDays(dayStart, 1);
+  const isCurrentDay = day === format(new Date(), "yyyy-MM-dd");
 
   const zoom = useTimelineZoom();
   // A percentage of the page's original 120px/hour scale reads more plainly
@@ -195,6 +196,15 @@ function DailyComparison({
           lanes={lanes}
           dayStart={dayStart.getTime()}
           dayEnd={dayEnd.getTime()}
+          isToday={isCurrentDay}
+          // While `placeholderData` (above) is standing in with the PREVIOUS
+          // day's real data, `intervals`/`lanes` are not empty and not stale
+          // in any way this component can see on its own — only the query
+          // itself knows the records on screen right now belong to
+          // yesterday's request, not today's. See `ComparativeTimeline`'s
+          // own `dataReady` comment for the bug this fixes ("Previous day"
+          // scrolling to ~23:00 instead of the new day's own first record).
+          dataReady={!intervalsQuery.isPlaceholderData}
           openIntervalId={openIntervalId}
           onOpen={setOpenIntervalId}
           pxPerHour={zoom.pxPerHour}

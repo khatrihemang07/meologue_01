@@ -2,7 +2,7 @@ import type { ServerCapabilities } from "@meologue/core";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { useSettingsStore } from "@/lib/settings";
 import { TimePage } from "./time-page";
 
@@ -765,5 +765,372 @@ describe("TimePage", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Zoom in" }));
     expect(scale).toHaveStyle({ height: "5760px" });
+  });
+
+  describe("landing on the day's activity, not its empty hours (issue #430)", () => {
+    /**
+     * A stand-in for the real height `DayNavigator`, `RefreshRow` and
+     * `SearchField` contribute above the timeline, inside the SAME Shell
+     * scroll region the anchor writes `scrollTop` into. jsdom has no layout
+     * engine, so every real `getBoundingClientRect` in this suite otherwise
+     * comes back hard zero (`time-lanes.test.ts`'s own header comment names
+     * the same limitation) — patched here the way
+     * `use-timeline-zoom.test.tsx`'s own `renderHarnessWithScaleOffset` does,
+     * so the anchor effect's "measure `[data-time-scale]`, not the wrapper"
+     * fix (`comparative-timeline.tsx`'s own comment on it) is actually
+     * exercised rather than silently degenerating to zero either way.
+     */
+    const SCALE_OFFSET_PX = 150;
+    let restoreGetBoundingClientRect: (() => void) | null = null;
+
+    function stubScrollGeometry() {
+      const original = HTMLElement.prototype.getBoundingClientRect;
+      HTMLElement.prototype.getBoundingClientRect = function (this: HTMLElement) {
+        if (this.dataset.testid === "shell-scroll-region") {
+          return { top: 0 } as DOMRect;
+        }
+        if (this.hasAttribute("data-time-scale")) {
+          const scroller = document.querySelector<HTMLElement>(
+            '[data-testid="shell-scroll-region"]',
+          );
+          return { top: SCALE_OFFSET_PX - (scroller?.scrollTop ?? 0) } as DOMRect;
+        }
+        return original.call(this);
+      };
+      restoreGetBoundingClientRect = () => {
+        HTMLElement.prototype.getBoundingClientRect = original;
+      };
+    }
+
+    afterEach(() => {
+      restoreGetBoundingClientRect?.();
+      restoreGetBoundingClientRect = null;
+    });
+
+    function yesterdayIso(): string {
+      const at = new Date();
+      at.setDate(at.getDate() - 1);
+      return `${at.getFullYear()}-${String(at.getMonth() + 1).padStart(2, "0")}-${String(
+        at.getDate(),
+      ).padStart(2, "0")}`;
+    }
+
+    function localInstant(daysFromToday: number, hour: number, minute = 0): string {
+      const instant = new Date();
+      instant.setDate(instant.getDate() + daysFromToday);
+      instant.setHours(hour, minute, 0, 0);
+      return instant.toISOString();
+    }
+
+    it("does not move the scroll while a day change is pending, then lands on the new day's first record", async () => {
+      // Measured (pre-fix): scrollTop jumped to ~23:00 on a day whose first
+      // record is 00:03. Root cause: `placeholderData: (previous) =>
+      // previous` means `lanes` is never empty the instant `day` changes — it
+      // is still TODAY's real records while the new day's request is in
+      // flight — so an effect anchoring on `dayStart` alone fired against
+      // stale data, mapping today's 10:00 record onto the NEW day's scale.
+      useSettingsStore.setState({ serverUrl: "https://server.example", capabilities: SUPPORTED });
+      stubScrollGeometry();
+
+      let releaseYesterday: () => void = () => {};
+      const yesterday = yesterdayIso();
+      const fetchMock = vi.fn(async (url: string) => {
+        const parsed = new URL(url);
+        if (parsed.pathname === "/v1/time/sources") {
+          return { ok: true, status: 200, json: async () => [sourceFixture({})] };
+        }
+        if (parsed.pathname === "/v1/time/intervals") {
+          const day = parsed.searchParams.get("day");
+          if (day === yesterday) {
+            // The defect's own trigger: the new day's own request does not
+            // resolve instantly, leaving the placeholder (today's data) on
+            // screen for a beat.
+            await new Promise<void>((resolve) => {
+              releaseYesterday = resolve;
+            });
+            return {
+              ok: true,
+              status: 200,
+              json: async () => [
+                intervalFixture({
+                  id: "interval-yesterday",
+                  started_at: localInstant(-1, 0, 3),
+                  ended_at: localInstant(-1, 0, 4),
+                }),
+              ],
+            };
+          }
+          return { ok: true, status: 200, json: async () => [intervalFixture({})] };
+        }
+        return { ok: false, status: 404, json: async () => ({}) };
+      });
+      vi.stubGlobal("fetch", fetchMock);
+
+      renderPage();
+      await screen.findByRole("region", { name: "Toggl Track lane" });
+      const scroller = screen.getByTestId("shell-scroll-region");
+      const scrollTopBeforeNavigating = scroller.scrollTop;
+
+      fireEvent.click(screen.getByRole("button", { name: "Previous day" }));
+
+      // While yesterday's own fetch is still pending, the scroll position
+      // must not have jumped at all yet.
+      await waitFor(() => expect(fetchMock).toHaveBeenCalled());
+      expect(scroller.scrollTop).toBe(scrollTopBeforeNavigating);
+
+      releaseYesterday();
+
+      // Once yesterday's real data lands, it settles on THAT day's first (and
+      // only) record: 00:03, 3 minutes into a 1440-minute, 2880px-tall day
+      // (6px), plus the scale's own 150px offset within the scroll region,
+      // minus the 60px top margin.
+      await waitFor(() => expect(scroller.scrollTop).toBe(96));
+    });
+
+    it("does not re-anchor a day that only refetched, as Refresh now's running -> idle transition does", async () => {
+      // "Refresh now" itself only starts the mutation; the intervals refetch
+      // this test cares about is the running -> idle transition
+      // `refresh-row.tsx` invalidates `["time", "intervals"]` on — the same
+      // mechanism "survives a run finishing, and re-reads the day it
+      // imported into" (above) already proves fires. This test's own job is
+      // only what THAT refetch must not do to the reader's scroll. (A
+      // background refetch of an already-cached query key never goes through
+      // TanStack's placeholder phase, so `dataReady` alone already protects
+      // this particular case — the next test below is the one that actually
+      // needs `anchoredDayRef`.)
+      useSettingsStore.setState({ serverUrl: "https://server.example", capabilities: SUPPORTED });
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(new Date(2026, 8, 2, 12, 0)); // Sep 2, 2026 (Wed), local noon
+      stubScrollGeometry();
+
+      let running = true;
+      let intervalRequests = 0;
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (url: string) => {
+          const parsed = new URL(url);
+          if (parsed.pathname === "/v1/time/sources") {
+            const state = running ? "running" : "idle";
+            // The next poll sees the run finished.
+            running = false;
+            return { ok: true, status: 200, json: async () => [sourceFixture({ state })] };
+          }
+          if (parsed.pathname === "/v1/time/intervals") {
+            intervalRequests += 1;
+            return {
+              ok: true,
+              status: 200,
+              json: async () => [
+                intervalFixture({ started_at: todayAt(8), ended_at: todayAt(8, 5) }),
+              ],
+            };
+          }
+          return { ok: false, status: 404, json: async () => ({}) };
+        }),
+      );
+
+      renderPage();
+      await screen.findByRole("region", { name: "Toggl Track lane" });
+      const scroller = screen.getByTestId("shell-scroll-region");
+      // now (noon) is half the day: 0.5 * 2880 = 1440, plus the scale's own
+      // 150px offset, minus the 60px top margin.
+      await waitFor(() => expect(scroller.scrollTop).toBe(1530));
+
+      // A reader who scrolled to look at something else, deliberately away
+      // from where the anchor landed.
+      scroller.scrollTop = 900;
+
+      // The running -> idle transition (a real poll, `refetchInterval: 1000`
+      // on the sources query) invalidates and refetches the SAME day's
+      // intervals — `lanes` gets a new array identity, but the day itself
+      // never changed.
+      await waitFor(() => expect(intervalRequests).toBeGreaterThan(1), { timeout: 3000 });
+
+      expect(scroller.scrollTop).toBe(900);
+
+      vi.useRealTimers();
+    });
+
+    it("does not re-anchor when a search on the same day goes through a placeholder of its own", async () => {
+      // A search term changes the query KEY (`activityIntervalsQueryKey`
+      // folds `search` in) without changing `day` — so it goes through
+      // exactly the same placeholder-then-real-data cycle a day change does,
+      // `dataReady` included: false while the filtered request is in flight,
+      // true again once it lands. Unlike a plain background refetch (the
+      // test above), THIS is the case `anchoredDayRef` — not `dataReady` on
+      // its own — has to keep from re-anchoring, because `dataReady` really
+      // does flip back to `true` with `dayStart` unchanged.
+      useSettingsStore.setState({ serverUrl: "https://server.example", capabilities: SUPPORTED });
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(new Date(2026, 8, 2, 12, 0)); // Sep 2, 2026 (Wed), local noon
+      stubScrollGeometry();
+
+      let releaseSearch: () => void = () => {};
+      const fetchMock = vi.fn(async (url: string) => {
+        const parsed = new URL(url);
+        if (parsed.pathname === "/v1/time/sources") {
+          return { ok: true, status: 200, json: async () => [sourceFixture({})] };
+        }
+        if (parsed.pathname === "/v1/time/intervals") {
+          if (parsed.searchParams.get("q")) {
+            await new Promise<void>((resolve) => {
+              releaseSearch = resolve;
+            });
+            // A label distinct from the unfiltered day's "Code" below, so the
+            // test can tell "still showing the PLACEHOLDER" apart from
+            // "showing the real filtered result" — the two would otherwise
+            // read identically and the assertions below would pass whether
+            // or not the real data had actually landed yet.
+            return {
+              ok: true,
+              status: 200,
+              json: async () => [
+                intervalFixture({
+                  id: "interval-xcode",
+                  label: "Xcode session",
+                  started_at: todayAt(8),
+                  ended_at: todayAt(8, 5),
+                }),
+              ],
+            };
+          }
+          return {
+            ok: true,
+            status: 200,
+            json: async () => [
+              intervalFixture({ started_at: todayAt(8), ended_at: todayAt(8, 5) }),
+            ],
+          };
+        }
+        return { ok: false, status: 404, json: async () => ({}) };
+      });
+      vi.stubGlobal("fetch", fetchMock);
+
+      renderPage();
+      await screen.findByRole("region", { name: "Toggl Track lane" });
+      const scroller = screen.getByTestId("shell-scroll-region");
+      // now (noon) is half the day: 0.5 * 2880 = 1440, plus the scale's own
+      // 150px offset, minus the 60px top margin.
+      await waitFor(() => expect(scroller.scrollTop).toBe(1530));
+
+      // A reader who scrolled to look at something else, deliberately away
+      // from where the anchor landed.
+      scroller.scrollTop = 900;
+
+      fireEvent.change(screen.getByLabelText("Search this day's activity"), {
+        target: { value: "xcode" },
+      });
+
+      // While the SAME day's filtered request is pending — the placeholder
+      // (still "Code", the unfiltered fixture) — the scroll must not move.
+      await waitFor(() =>
+        expect(
+          fetchMock.mock.calls.some(
+            (call) => new URL(String(call[0])).searchParams.get("q") === "xcode",
+          ),
+        ).toBe(true),
+      );
+      expect(screen.getByRole("list", { name: "Toggl Track activity" })).toHaveTextContent("Code");
+      expect(scroller.scrollTop).toBe(900);
+
+      releaseSearch();
+
+      // The real filtered result lands for the SAME day.
+      await screen.findByText("Xcode session");
+      expect(scroller.scrollTop).toBe(900);
+
+      vi.useRealTimers();
+    });
+
+    it("anchors today with the current time low in the view, recent activity above it", async () => {
+      useSettingsStore.setState({ serverUrl: "https://server.example", capabilities: SUPPORTED });
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(new Date(2026, 8, 2, 12, 0)); // Sep 2, 2026 (Wed), local noon
+      stubScrollGeometry();
+      stubServer({
+        sources: [sourceFixture({})],
+        intervals: [intervalFixture({ started_at: todayAt(8), ended_at: todayAt(8, 5) })],
+      });
+
+      // An 800px view, set before the page renders: the anchor reads it once,
+      // when today's data first lands. jsdom otherwise reports 0.
+      const clientHeight = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "clientHeight");
+      Object.defineProperty(HTMLElement.prototype, "clientHeight", {
+        configurable: true,
+        get(this: HTMLElement) {
+          return this.dataset.testid === "shell-scroll-region" ? 800 : 0;
+        },
+      });
+      onTestFinished(() => {
+        if (clientHeight) {
+          Object.defineProperty(HTMLElement.prototype, "clientHeight", clientHeight);
+        }
+      });
+      renderPage();
+      await screen.findByRole("region", { name: "Toggl Track lane" });
+      const scroller = screen.getByTestId("shell-scroll-region");
+
+      // now (noon) is half the day: 0.5 * 2880 = 1440, plus the scale's own
+      // 150px offset, minus 70% of the 800px view (560) — so the last few
+      // hours sit above "now" instead of a screen of empty afternoon below it.
+      await waitFor(() => expect(scroller.scrollTop).toBe(1030));
+
+      vi.useRealTimers();
+    });
+  });
+
+  it("draws a now line across the lane, only on today, that reads the clock rather than freezing at mount", async () => {
+    useSettingsStore.setState({ serverUrl: "https://server.example", capabilities: SUPPORTED });
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date(2026, 8, 2, 12, 0)); // Sep 2, 2026 (Wed), local noon
+    stubServer({
+      sources: [sourceFixture({})],
+      intervals: [intervalFixture({ started_at: todayAt(8), ended_at: todayAt(8, 5) })],
+    });
+
+    const { container } = renderPage();
+    await screen.findByRole("region", { name: "Toggl Track lane" });
+
+    // Noon is exactly halfway through the day.
+    expect(container.querySelector('li[aria-hidden="true"].border-destructive')).toHaveStyle({
+      top: "50%",
+    });
+
+    // Leave today (unmounting the line — see the next test) and come back
+    // once the clock has moved on, rather than waiting out a real 60-second
+    // interval tick: this proves `now` actually re-reads `Date.now()` rather
+    // than being frozen at the value it first mounted with.
+    fireEvent.click(screen.getByRole("button", { name: "Previous day" }));
+    await waitFor(() =>
+      expect(screen.queryByRole("heading", { name: "Today" })).not.toBeInTheDocument(),
+    );
+    vi.setSystemTime(new Date(2026, 8, 2, 18, 0)); // 18:00 — three-quarters through the day.
+    fireEvent.click(screen.getByRole("button", { name: "Today" }));
+    await screen.findByRole("heading", { name: "Today" });
+
+    await waitFor(() =>
+      expect(container.querySelector('li[aria-hidden="true"].border-destructive')).toHaveStyle({
+        top: "75%",
+      }),
+    );
+
+    vi.useRealTimers();
+  });
+
+  it("draws no now line on a day that is not today", async () => {
+    useSettingsStore.setState({ serverUrl: "https://server.example", capabilities: SUPPORTED });
+    stubServer({ sources: [sourceFixture({})], intervals: [intervalFixture({})] });
+
+    const { container } = renderPage();
+    await screen.findByRole("region", { name: "Toggl Track lane" });
+
+    fireEvent.click(screen.getByRole("button", { name: "Previous day" }));
+    await waitFor(() =>
+      expect(screen.queryByRole("heading", { name: "Today" })).not.toBeInTheDocument(),
+    );
+
+    expect(
+      container.querySelector('li[aria-hidden="true"].border-destructive'),
+    ).not.toBeInTheDocument();
   });
 });
