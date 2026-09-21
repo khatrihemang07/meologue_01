@@ -23,6 +23,7 @@ import { touchOnlyDevice } from "@/lib/pointer";
 import { resolveRecurrencePhrase } from "@/lib/quick-add-task";
 import {
   computeSchedulePopoverPlacement,
+  type PlacementSize,
   type SchedulePopoverPlacement,
 } from "@/lib/schedule-popover-placement";
 import { cn } from "@/lib/utils";
@@ -89,6 +90,30 @@ function ordinal(day: number): string {
     default:
       return `${day}th`;
   }
+}
+
+/**
+ * Issue #440's own real-browser follow-up: the card's size *before* it has
+ * ever been measured on this popover instance (`lastMeasuredCardSize`,
+ * inside the component below) — read from its own sizing tokens
+ * (index.css's own `--td-popover-width`/`--td-popover-min-height`,
+ * `:root`-scoped, so this resolves identically wherever it's read from,
+ * a portalled card included) rather than a hardcoded literal, so #436's
+ * own future fixed 250×555 needs no matching change here — one source of
+ * truth, the CSS itself. The `Number.isFinite` fallback only fires if the
+ * custom property can't be read at all (a test environment with no real
+ * stylesheet loaded, `getPropertyValue` returning `""`, `parseFloat`ing to
+ * `NaN`) — its two literals are kept in sync with index.css's own current
+ * defaults, not a second design decision about what this card's size is.
+ */
+function cardSizeFromCssTokens(): PlacementSize {
+  const style = getComputedStyle(document.documentElement);
+  const width = Number.parseFloat(style.getPropertyValue("--td-popover-width"));
+  const height = Number.parseFloat(style.getPropertyValue("--td-popover-min-height"));
+  return {
+    width: Number.isFinite(width) ? width : 250,
+    height: Number.isFinite(height) ? height : 525,
+  };
 }
 
 const repeatItemClassName =
@@ -370,52 +395,76 @@ export function TaskSchedulePopover({
   // still `null`.
   const [triggerEl, setTriggerEl] = useState<HTMLButtonElement | null>(null);
   const [contentEl, setContentEl] = useState<HTMLDivElement | null>(null);
-  // `null` until the trigger and the card have both mounted and been
-  // measured at least once — the desktop branch's own `style` keeps the
-  // card `visibility: hidden` for exactly as long as this stays `null`, so
-  // a reader never sees it sitting at the arbitrary `side`/`alignOffset`
-  // fallback the very first (unmeasured) commit below renders with.
+  // `null` until the card has actually been measured post-mount — the
+  // *displayed* placement (`displayPlacement` below) falls back to a
+  // synchronous, pre-mount estimate while this is still `null`, which is
+  // what issue #440's own real-browser follow-up (this section's own
+  // header comment) is about: this state alone is deliberately NOT what
+  // decides what gets shown first.
   const [placement, setPlacement] = useState<SchedulePopoverPlacement | null>(null);
+  // The card's own size, the one time to reach for the moment it's
+  // actually known (`recomputePlacement` below sets it before every
+  // `setPlacement`) — read back as this popover's own best *guess* the
+  // next time it opens, before that open's own measurement has run yet.
+  // Persists across a close/reopen (a plain `useRef`, not reset anywhere):
+  // once this popover has been measured for real once, its own real size
+  // is a better guess than the CSS tokens `cardSizeFromCssTokens` falls
+  // back to for content that legitimately runs taller than the CSS
+  // `min-height` (a long typed Recurrence preview, say).
+  const lastMeasuredCardSize = useRef<PlacementSize | null>(null);
 
-  // Issue #440 (defect found after this ticket's first landing, verified in
-  // a real browser, 3/3): the card was briefly visible BELOW the trigger,
-  // overflowing the viewport, before jumping to the correct beside
-  // position — jsdom's own tests never caught it because jsdom lays
-  // nothing out at all (every measurement, right or wrong, resolves
-  // through the identical zero-cost synchronous path there). Two real
-  // causes, both fixed here:
+  // Issue #440, part two (found after this ticket's first real-browser
+  // verification, itself fixing issue #440's own first defect — the below-
+  // fits cases were already correct there): in every BESIDE case, the card
+  // was still visible for one frame at the wrong, below-shaped position
+  // before snapping to the correct one. The previous fix's own visibility
+  // gate flips exactly in sync with `placement` (React guarantees that,
+  // same commit), so that alone can't explain a visible wrong frame — the
+  // actual cause is what Radix does with a *correct* `placement` once this
+  // effect finally sets it: changing the `side`/`alignOffset` PROPS handed
+  // to `PopoverContent` only changes floating-ui's OWN internal `placement`
+  // OPTION, and floating-ui resolves that through its own promise-based
+  // `computePosition()` (`@floating-ui/dom`, at least one microtask behind
+  // the prop change) before its wrapper's `transform` — the thing that
+  // actually moves the card on screen — catches up. Between the commit
+  // that hands Radix the correct props and the LATER commit where Radix's
+  // own async positioning has actually caught up to them, the card sat
+  // wherever Radix's PREVIOUS `computePosition()` had already placed it —
+  // the arbitrary `side="bottom"` this component used to start every open
+  // with, painted for real in that gap.
   //
-  // 1. This effect used to measure the card with `contentEl.
-  // getBoundingClientRect()` — the WRONG API on principle: that method
-  // reports the card's visual, post-transform box, and Radix's own
-  // PopperContent wrapper (`@radix-ui/react-popper`'s `dist/index.js`,
-  // the `style` object literal with the comment "keep off the page while
-  // measuring") applies `transform: translate(0, -200%)` to that wrapper
-  // — an ancestor of this card — for as long as ITS OWN `isPositioned` is
-  // `false`. `getBoundingClientRect()` is exactly the API that entangles a
-  // measurement with whatever transform happens to be live anywhere in the
-  // ancestor chain at that instant; `offsetWidth`/`offsetHeight` below
-  // read the card's own laid-out box directly, untouched by any ancestor's
-  // transform.
+  // The fix is at the source, not in this effect: make the FIRST props
+  // Radix ever sees for this open already the correct ones, so there is no
+  // later prop change — and so no async catch-up — for it to lag behind.
+  // `displayPlacement` (below, computed inline during render rather than
+  // in an effect) is exactly that: synchronous, using the trigger's real
+  // `getBoundingClientRect()` — already mounted, unlike the card — and a
+  // *known-in-advance* card size (`lastMeasuredCardSize.current` from a
+  // previous open, or `cardSizeFromCssTokens()` on the very first one),
+  // before `PopoverContent` (so Radix's own `useFloating`) has mounted at
+  // all. Radix's own `PopperContent` already keeps a freshly-mounted card
+  // off-page (`translate(0, -200%)`, "keep off the page while measuring")
+  // until ITS OWN first `computePosition()` resolves — with correct
+  // `side`/`alignOffset` from the very first render, that first resolution
+  // already lands on the right spot, so there is nothing left for this
+  // component's own `visibility` gate below to hide: it stays only as a
+  // defensive fallback for the one case `displayPlacement` still can't
+  // estimate (the trigger itself somehow not yet mounted — practically
+  // unreachable, since `trigger` renders unconditionally and has to
+  // already exist for this popover to have been openable at all), not as
+  // this fix's actual mechanism.
   //
-  // 2. Nothing here re-measured once the card's real size became known.
-  // Radix's OWN `whileElementsMounted: autoUpdate` (`@radix-ui/react-
-  // popper`'s own `PopperContent`) *does* eventually re-run Radix's
-  // internal position computation on a resize/scroll/layout-shift — using
-  // whatever `side`/`alignOffset` props this component had most recently
-  // passed it — but that computation is unrelated to THIS component's own
-  // `placement` state, is promise-based (at least one microtask behind
-  // whatever triggered it — the "resolves eventually" of Radix's own
-  // `data-side`, the exact race `PopoverContent`'s own comment on the
-  // `data-side`/`data-align-offset` attributes below describes for jsdom's
-  // sync tests), and Chrome's own Layout Instability API — one of
-  // `autoUpdate`'s default triggers — reports shifts in batched
-  // "sessions," not the instant they happen. That combination is
-  // consistent with "held at the wrong position, then a single later
-  // jump" without this component ever owning a correction of its own. The
-  // `ResizeObserver` and `scroll` listener below make this component
-  // respond to its OWN measurement going stale directly, rather than
-  // depend on Radix noticing and eventually catching up.
+  // This effect's own job, post-mount, is now the CORRECTION path, not the
+  // first paint: it measures the card's own real, untransformed box
+  // (`offsetWidth`/`offsetHeight` — never `getBoundingClientRect()`, which
+  // reads the card's visual, post-transform box, and Radix's own
+  // `PopperContent` wrapper is transformed exactly as described above) and
+  // reconciles `placement` with reality — normally finding nothing to
+  // change, since the render-time estimate is usually already right, but
+  // still catching a genuinely wrong guess (the CSS `min-height` estimate
+  // undershooting real content) or the card's own size changing later
+  // (below) without a second wrong-frame flash, since Radix's own off-page
+  // trick no longer applies once it has already positioned itself once.
   useLayoutEffect(() => {
     if (!open || triggerEl === null || contentEl === null) {
       setPlacement(null);
@@ -428,12 +477,13 @@ export function TaskSchedulePopover({
       if (triggerEl === null || contentEl === null) {
         return;
       }
+      const cardSize = { width: contentEl.offsetWidth, height: contentEl.offsetHeight };
+      lastMeasuredCardSize.current = cardSize;
       setPlacement(
-        computeSchedulePopoverPlacement(
-          triggerEl.getBoundingClientRect(),
-          { width: contentEl.offsetWidth, height: contentEl.offsetHeight },
-          { width: window.innerWidth, height: window.innerHeight },
-        ),
+        computeSchedulePopoverPlacement(triggerEl.getBoundingClientRect(), cardSize, {
+          width: window.innerWidth,
+          height: window.innerHeight,
+        }),
       );
     }
     recomputePlacement();
@@ -1089,6 +1139,30 @@ export function TaskSchedulePopover({
     );
   }
 
+  // Computed inline, during render — not in an effect — so it is already
+  // correct on the very first render `open` is ever `true` for, before
+  // `PopoverContent` (so Radix's own `useFloating`) has mounted at all.
+  // This is issue #440's own real-browser fix, not a defensive extra: see
+  // this file's own header comment above `useLayoutEffect` for why a LATER
+  // prop change can't be relied on to reach the screen without a frame's
+  // worth of lag. Reading `triggerEl.getBoundingClientRect()` here, during
+  // render rather than in an effect, is deliberate and safe: it's a pure
+  // read (nothing here writes to the DOM), so a render React throws away
+  // without committing (Strict Mode's double-invoke, an interrupted
+  // concurrent render) costs nothing beyond the read itself, and `open`
+  // can only ever become `true` from a `trigger` that's already on screen
+  // — `trigger` renders unconditionally, above, so there is no "too early"
+  // case where this reads a trigger that doesn't exist yet.
+  const displayPlacement =
+    placement ??
+    (open && triggerEl !== null
+      ? computeSchedulePopoverPlacement(
+          triggerEl.getBoundingClientRect(),
+          lastMeasuredCardSize.current ?? cardSizeFromCssTokens(),
+          { width: window.innerWidth, height: window.innerHeight },
+        )
+      : null);
+
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger ref={setTriggerEl} asChild>
@@ -1115,16 +1189,16 @@ export function TaskSchedulePopover({
         // `data-side` — through a promise-based `computePosition()`, a real
         // (if usually sub-frame) microtask hop behind the `side` prop it was
         // just given, which a synchronous `render`/`fireEvent` test (no
-        // intervening `await`) never observes resolve; this component's own
-        // `placement` state has no such lag, so asserting against these two
-        // attributes instead is what actually lets a test see this
-        // component's own choice rather than racing floating-ui's.
-        data-side={placement === null ? undefined : placement.side}
-        data-align-offset={placement === null ? undefined : placement.alignOffset}
-        side={placement?.side ?? "bottom"}
+        // intervening `await`) never observes resolve; `displayPlacement`
+        // above has no such lag, so asserting against these two attributes
+        // instead is what actually lets a test see this component's own
+        // choice rather than racing floating-ui's.
+        data-side={displayPlacement === null ? undefined : displayPlacement.side}
+        data-align-offset={displayPlacement === null ? undefined : displayPlacement.alignOffset}
+        side={displayPlacement?.side ?? "bottom"}
         align="start"
-        sideOffset={placement?.sideOffset ?? 0}
-        alignOffset={placement?.alignOffset ?? 0}
+        sideOffset={displayPlacement?.sideOffset ?? 0}
+        alignOffset={displayPlacement?.alignOffset ?? 0}
         avoidCollisions={false}
         className="flex flex-col gap-2 p-2 text-sm"
         style={{
@@ -1134,16 +1208,18 @@ export function TaskSchedulePopover({
           background: "var(--td-popover-background)",
           border: "1px solid var(--td-popover-border)",
           boxShadow: "var(--td-popover-shadow)",
-          // Issue #440's real-browser defect: this card used to be fully
-          // visible the instant it mounted, at whatever `side`/`alignOffset`
-          // guess `placement` still defaulted to before its first real
-          // measurement (`recomputePlacement`'s own comment above). Hidden
-          // — not `display: none`, which would make `offsetWidth`/
-          // `offsetHeight` read 0 and defeat the very measurement this
-          // gates — for exactly as long as `placement` stays `null`, so
-          // nothing is ever painted at a position this component hasn't
-          // actually chosen yet.
-          visibility: placement === null ? "hidden" : "visible",
+          // Defensive only, at this point — `displayPlacement`'s own
+          // comment above: with the first `side`/`alignOffset` Radix ever
+          // sees already correct, its own off-page trick (`components/ui/
+          // popover.tsx`'s own header comment) is what actually keeps a
+          // freshly-mounted card from ever being seen in the wrong spot,
+          // not this. Kept anyway for the one case `displayPlacement` still
+          // can't estimate (`displayPlacement`'s own comment on why that's
+          // practically unreachable) — hidden, not `display: none` (which
+          // would make `offsetWidth`/`offsetHeight` read 0 and defeat the
+          // very measurement this gates), for exactly as long as there is
+          // no placement at all yet to show, estimated or measured.
+          visibility: displayPlacement === null ? "hidden" : "visible",
         }}
         // See `classifyOutsideInteraction`'s own comment above (issue
         // #326) — all three handlers get it, not just whichever one a

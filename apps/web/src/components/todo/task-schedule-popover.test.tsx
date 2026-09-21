@@ -1,6 +1,11 @@
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { WIDE_LAYOUT_QUERY } from "@/hooks/use-wide-layout";
+// `import * as`, not a named import: `vi.spyOn` needs the module namespace
+// object itself to intercept a call task-schedule-popover.tsx makes to its
+// own named import of the same function — the identical pattern entry-
+// row.test.tsx's own `entryDayModule` already uses for the same reason.
+import * as schedulePopoverPlacement from "@/lib/schedule-popover-placement";
 import { installResizeObserverStub } from "@/test/virtualized-scroll";
 import { isOwnedPortalTarget, TaskSchedulePopover } from "./task-schedule-popover";
 
@@ -1588,6 +1593,58 @@ describe("TaskSchedulePopover", () => {
         // above) — the same "last-row trigger near the bottom" geometry
         // `opens above, centred...` above already established.
         expect(view.getAttribute("data-side")).toBe("top");
+      });
+
+      // Issue #440's own second real-browser finding: even with the fixes
+      // above, every BESIDE case still showed one wrong-shaped frame
+      // (below, overflowing the viewport) before snapping to the correct
+      // spot — `task-schedule-popover.tsx`'s own header comment above
+      // `useLayoutEffect` has the full mechanism (Radix's own async
+      // `computePosition()` lagging one frame behind a prop change). The
+      // fix moved the correct computation to the FIRST render, before
+      // `PopoverContent` mounts at all, using the trigger's real rect plus
+      // a card size known WITHOUT mounting the card (`cardSizeFromCssTokens`
+      // — CSS-token-derived in jsdom's own no-real-stylesheet case, which
+      // resolves to a documented, literal fallback: 250×525). This test
+      // proves that render actually happened, and with the right numbers —
+      // not merely that the FINAL state converges there (every test above
+      // already shows that) — by spying on `computeSchedulePopoverPlacement`
+      // itself and reading its very first call, before this popover's own
+      // post-mount measurement effect could have run at all.
+      it("computes the correct beside placement on the FIRST render, before the post-mount measurement effect ever runs", () => {
+        stubLayout(true);
+        renderPopover();
+        // The real, post-mount card size deliberately differs from the
+        // 250×525 CSS-token fallback above, so the two call sites are
+        // distinguishable by their own `card` argument alone.
+        stubDesktopMeasurements({
+          trigger: { top: 140, left: 280, width: 80, height: 32 },
+          card: { width: 250, height: 600 },
+          viewport: { width: 1260, height: 696 },
+        });
+        const computeSpy = vi.spyOn(schedulePopoverPlacement, "computeSchedulePopoverPlacement");
+
+        open();
+
+        expect(computeSpy.mock.calls.length).toBeGreaterThanOrEqual(2);
+        const firstCall = computeSpy.mock.calls.at(0);
+        // The render-time estimate's own card argument — the CSS-token
+        // fallback (525), not the stubbed real measurement (600): proof
+        // this call happened before `contentEl` was ever read.
+        expect(firstCall?.[1]).toEqual({ width: 250, height: 525 });
+        const firstResult = computeSpy.mock.results.at(0)?.value;
+        expect(firstResult?.side).toBe("left");
+
+        // And a later call — the post-mount correction path — did use the
+        // real, stubbed measurement, confirming that path still runs too
+        // (`re-evaluates the side when the card's real height lands...`,
+        // above, already covers what it does when the two disagree).
+        expect(computeSpy.mock.calls.some((call) => call[1].height === 600)).toBe(true);
+
+        // What was actually on screen matches the FIRST call's own result
+        // — this open never showed anything else.
+        const view = screen.getByTestId("scheduler-view");
+        expect(view.getAttribute("data-side")).toBe("left");
       });
     });
   });
