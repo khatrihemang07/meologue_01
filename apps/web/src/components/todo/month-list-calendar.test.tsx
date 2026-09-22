@@ -225,9 +225,84 @@ describe("‹ ○ › navigation", () => {
     // Well past minDay's own Jan 2025 now, so ‹ is enabled again.
     expect(screen.getByRole("button", { name: "Previous month" })).toBeEnabled();
   });
+
+  it("› disables itself once the next month's own start would fall past WEEK_COUNT's ~100-year window", () => {
+    // minMonday = 2026-09-07 (NOW's own current week). At WEEK_COUNT = 5200
+    // weeks, the list's own last representable month is May 2126, whose own
+    // start week is index 5199 — the list's own last index — at cumulative
+    // pixel offset 169472 (computed the identical way `estimateSize` does:
+    // 28px/week plus 20px for every week that starts a new month). Landing
+    // the scroll there (not merely "somewhere far ahead") is what actually
+    // proves the ceiling, not just that a distant scroll happens to disable
+    // it for some other reason.
+    const { scrollElement } = renderCalendar();
+    scrollElement.scrollTop = 169480;
+    fireEvent.scroll(scrollElement);
+
+    expect(screen.getByText("May 2126")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Next month" })).toBeDisabled();
+  });
+
+  it("› stays enabled decades ahead, nowhere near the ~100-year ceiling", () => {
+    const { scrollElement } = renderCalendar();
+    // ~68 years ahead (169480's own week minus ~32 years of weeks) — far
+    // enough to prove this isn't just "any scroll eventually disables it,"
+    // while still nowhere near WEEK_COUNT's own last index.
+    scrollElement.scrollTop = 100000;
+    fireEvent.scroll(scrollElement);
+
+    expect(screen.getByRole("button", { name: "Next month" })).toBeEnabled();
+  });
+
+  it("clicking › while disabled at the ceiling does not move the list", () => {
+    // Asserted synchronously, deliberately no `await` — a real DOM `disabled`
+    // attribute suppresses `click` from ever reaching this button's own
+    // `onClick` at all (confirmed directly: instrumenting `goToNextMonth`
+    // showed it never runs here), so there is nothing async to wait out.
+    // `clickNav`'s own `await Promise.resolve()` exists for the OPPOSITE
+    // case — an ENABLED button's `scrollToIndex` → `scrollTo` → deferred
+    // `dispatchEvent("scroll")` chain — and awaiting it here regardless
+    // would let `@tanstack/virtual-core`'s own internal reconciliation
+    // (unrelated to this component's own `atMaxMonth` logic, and reachable
+    // by scrolling this close to `WEEK_COUNT`'s own last index with no
+    // click at all) re-settle the scroll position, which would make this
+    // test pass for the wrong reason.
+    const { scrollElement } = renderCalendar();
+    scrollElement.scrollTop = 169480;
+    fireEvent.scroll(scrollElement);
+    expect(screen.getByText("May 2126")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Next month" }));
+
+    expect(screen.getByText("May 2126")).toBeInTheDocument();
+  });
 });
 
 describe("day styling", () => {
+  // A regression this suite let through once already: the old
+  // `react-day-picker` grid's own default day-button aria-label
+  // (`labelDayButton`, that library's own source: `format(date, "PPPP")`)
+  // is an ORDINAL date — "Thursday, September 24th, 2026" — and the
+  // replacement cell's own aria-label briefly dropped the ordinal
+  // ("Thursday, September 24, 2026") with nothing here catching it, since
+  // every OTHER test in this file locates a cell by `[data-day]` rather
+  // than by its accessible name. Locating BY the accessible name here,
+  // deliberately, is what actually exercises the string a screen reader
+  // gets, not just the attribute a mouse-driven test happens to prefer.
+  it("a day's own accessible name is the ordinal date (\"24th\"), matching the old react-day-picker grid's own default", () => {
+    renderCalendar();
+    // The cardinal form must be ABSENT, not merely "the ordinal form is
+    // also present" — `queryByRole` (not `getByRole`, which throws on no
+    // match rather than letting this assert the negative).
+    expect(
+      screen.queryByRole("button", { name: "Thursday, September 24, 2026" }),
+    ).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Thursday, September 24th, 2026" })).toHaveAttribute(
+      "data-day",
+      "2026-09-24",
+    );
+  });
+
   it("today is bold and reads --td-calendar-list-today, with no selected circle", () => {
     renderCalendar();
     const today = dayCell("2026-09-10");

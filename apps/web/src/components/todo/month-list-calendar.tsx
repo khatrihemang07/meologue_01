@@ -27,11 +27,11 @@
  * `indexForWeekStart` pair). `WEEK_COUNT` below is a large but finite
  * window (~100 years) rather than a literal infinite list — `@tanstack/
  * react-virtual` needs a `count` — which is the practical reading of the
- * ticket's own "future unbounded (Todoist went past 2118)": nothing a real
- * reader will ever scroll far enough to reach, while `overscan` keeps the
- * actually-rendered DOM small regardless of how far the scroll position
- * has moved (this file's own test suite proves the bound holds after a
- * multi-year jump, not just at rest).
+ * ticket's own "The future is unbounded (Todoist kept going past 2118)":
+ * nothing a real reader will ever scroll far enough to reach, while
+ * `overscan` keeps the actually-rendered DOM small regardless of how far
+ * the scroll position has moved (this file's own test suite proves the
+ * bound holds after a multi-year jump, not just at rest).
  *
  * Each week's own height comes from `estimateSize` ALONE — this component
  * never wires `ref={virtualizer.measureElement}` onto a row, so
@@ -81,14 +81,16 @@ export interface MonthListCalendarProps {
   minDay?: string;
   /**
    * The day the list opens scrolled to, `YYYY-MM-DD`. Defaults to
-   * `minDay` itself — issue #439's own "opening with a future date"
-   * question, deliberately answered as "start at the current week (the
-   * list's natural top)" (the ticket's own wording) rather than
-   * auto-scrolling to a Task's future date: `task-schedule-popover.tsx`
-   * never passes this prop at all, for exactly that reason. It exists so
-   * #442's History caller — which DOES want to open pre-scrolled to a
-   * chosen day — has a door to walk through without this component
-   * growing a second, contradictory default.
+   * `minDay` itself. Todoist was never measured opening from a Task with
+   * a FUTURE date (only "opening from a Task with a past date does not
+   * scroll to it" was measured, per the issue's own body) — whether such
+   * an open should auto-scroll to that date is OUR OWN decision, not one
+   * the ticket makes: we chose not to, so the list always opens at its
+   * own natural top instead. `task-schedule-popover.tsx` never passes
+   * this prop at all, for exactly that reason. It exists so #442's
+   * History caller — which DOES want to open pre-scrolled to a chosen
+   * day — has a door to walk through without this component growing a
+   * second, contradictory default.
    */
   initialDay?: string;
   /** The picker's current value, or `null`. Painted as a filled circle only while it is inside the rendered (index >= 0) range — a day before `minDay` never resolves to a real index, so a past-dated Task's own date is simply never painted, with no separate reachability check needed anywhere in this file. */
@@ -96,7 +98,7 @@ export interface MonthListCalendarProps {
   /** "Today", for the today/greyed-weekend/disabled-nav comparisons below — read once by the caller, never `new Date()` here (mirrors every other `now` consumer in `task-schedule-popover.tsx`). */
   now: Date;
   datesWithTasks: ReadonlyMap<string, number>;
-  /** Fires immediately on a day click — no separate confirm step, mirroring the ticket's own "picking a day commits immediately on mouse devices (as today)." */
+  /** Fires immediately on a day click — no separate confirm step, matching the issue's own "Picking a day commits immediately on mouse devices." */
   onPickDay: (day: string) => void;
 }
 
@@ -166,9 +168,9 @@ export function MonthListCalendar({
   // No hover state survives a day the pointer isn't over — `null` is
   // "showing the weekday row," matching Todoist's own default and every
   // touch device (which never fires `mouseenter` in the first place, so
-  // this state simply never leaves `null` there — the ticket's own "make
-  // sure it's usable on touch" requirement, met by construction rather
-  // than a separate touch branch).
+  // this state simply never leaves `null` there) — touch usability for
+  // this hover-only info line is met by construction this way, rather
+  // than needing a separate touch branch.
   const [hoveredDay, setHoveredDay] = useState<WeekDay | null>(null);
 
   const virtualizer = useVirtualizer({
@@ -199,6 +201,15 @@ export function MonthListCalendar({
 
   const atMinMonth = sameMonthKey(topMonth, minMonth);
   const atTodayMonth = sameMonthKey(topMonth, todayMonth);
+  // `WEEK_COUNT` is a large but still FINITE window (this file's own
+  // header comment) — › would otherwise silently do nothing once the next
+  // month's own start week falls past the list's last real index, rather
+  // than the button visibly refusing the way ‹/○ already do at their own
+  // bound. `indexOfMonthStart` can return an index past `WEEK_COUNT - 1`
+  // for a month this far out; comparing against that ceiling (not just
+  // "did scrollToIndex move anything") is what catches it before a click
+  // ever tries.
+  const atMaxMonth = indexOfMonthStart(minMonday, neighborMonthKey(topMonth, 1)) > WEEK_COUNT - 1;
 
   // Deliberately no `behavior: "smooth"` passed to `scrollToIndex` itself —
   // that option drives `@tanstack/virtual-core`'s own `requestAnimationFrame`
@@ -224,6 +235,9 @@ export function MonthListCalendar({
   }
 
   function goToNextMonth() {
+    if (atMaxMonth) {
+      return;
+    }
     scrollToMonthStart(neighborMonthKey(topMonth, 1));
   }
 
@@ -268,6 +282,7 @@ export function MonthListCalendar({
           <button
             type="button"
             aria-label="Next month"
+            disabled={atMaxMonth}
             onClick={goToNextMonth}
             className={navButtonClassName}
           >
@@ -423,7 +438,15 @@ function DayCell({
       type="button"
       data-day={day.dayKey}
       data-selected={isSelected ? "true" : undefined}
-      aria-label={format(day.date, "EEEE, MMMM d, yyyy")}
+      // Restores the OLD `react-day-picker` day button's own aria-label
+      // shape (`labelDayButton`'s own default, `format(date, "PPPP")`,
+      // which resolves to exactly this pattern in date-fns's en-US
+      // locale) — an ORDINAL day ("September 24th, 2026"), not a bare
+      // cardinal one. Written out explicitly rather than the "PPPP"
+      // shorthand, matching this file's own preference elsewhere (the
+      // pinned/in-list month labels) for a pattern a reader can see the
+      // shape of without knowing date-fns's locale-dependent presets.
+      aria-label={format(day.date, "EEEE, MMMM do, yyyy")}
       onClick={onPick}
       onMouseEnter={onHoverStart}
       className={cn(

@@ -315,8 +315,10 @@ describe("QuickAddContent", () => {
 
       fireEvent.click(await screen.findByRole("button", { name: "Set date" }));
       // `task-schedule-popover.test.tsx`'s own captured label shape:
-      // "Today" plus the weekday hint, distinct from the calendar grid's
-      // own "Today, Thursday, September 10th, 2026" cell.
+      // "Today" plus the weekday hint, distinct from the month list's own
+      // per-day cell (`month-list-calendar.tsx`), whose own aria-label is
+      // the ordinal date alone — "Thursday, September 10th, 2026" — with
+      // no "Today,"/"selected" prefix or suffix of its own.
       fireEvent.click(await screen.findByRole("button", { name: "Today Thu" }));
 
       // `literalDateText`'s own "d MMM yyyy" format — 10 Sep 2026 is

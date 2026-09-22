@@ -1120,14 +1120,16 @@ export function TaskSchedulePopover({
             here (`month-list-calendar.tsx`'s own header comment has the
             full design). `initialDay` is deliberately omitted — a Task
             opened with a FUTURE date does not auto-scroll to it; the list
-            always opens at its own natural top, `minDay`'s own week (this
-            file's own ticket: "pick 'start at the current week' ... unless
-            the date is in the current view," which nothing here needs to
-            special-case when the list already starts there by default). A
-            PAST date needs no handling either: `selectedDay` below simply
-            never appears in the rendered list at all when it's before
-            `minDay`, the same "not reachable" contract this popover's own
-            props already lean on elsewhere. */}
+            always opens at its own natural top, `minDay`'s own week. This
+            is OUR OWN decision, not the ticket's: Todoist was never
+            measured opening from a future-dated Task (only a past-dated
+            one, which the issue's own body covers below), so nothing
+            here needs to special-case a future date at all — the list
+            already starts at its own top by default. A PAST date needs
+            no handling either: `selectedDay` below simply never appears
+            in the rendered list at all when it's before `minDay`, the
+            same "not reachable" contract this popover's own props
+            already lean on elsewhere. */}
         <MonthListCalendar
           now={now}
           selectedDay={dateDay}
