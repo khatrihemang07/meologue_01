@@ -15,8 +15,7 @@ import {
 } from "lucide-react";
 import { DropdownMenu } from "radix-ui";
 import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
-import { Button, buttonVariants } from "@/components/ui/button";
-import { Calendar } from "@/components/ui/calendar";
+import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Sheet, SheetContent, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
 import { formatDay } from "@/lib/format-task-date";
@@ -29,6 +28,7 @@ import {
   type SchedulePopoverPlacement,
 } from "@/lib/schedule-popover-placement";
 import { cn } from "@/lib/utils";
+import { MonthListCalendar } from "./month-list-calendar";
 import { TaskCustomRepeatDialog } from "./task-custom-repeat-dialog";
 import { TaskTimeDialog } from "./task-time-dialog";
 
@@ -423,7 +423,6 @@ export function TaskSchedulePopover({
   // moment the input's own `onChange` fires, so any real edit — even
   // retyping the identical text — starts resolving a preview again.
   const plainDateSeedRef = useRef<string | null>(null);
-  const [month, setMonth] = useState<Date>(() => parseDayKey(dateDay) ?? now);
   const inputId = useId();
   // Whether `TaskTimeDialog` is open. Before issue #326's real fix (see
   // `classifyOutsideInteraction` above the component, and its own comment)
@@ -655,7 +654,6 @@ export function TaskSchedulePopover({
         plainDateSeedRef.current = null;
       }
       setTyped(seed);
-      setMonth(parseDayKey(dateDay) ?? now);
       if (seed !== "") {
         // `typedInputRef` already points at the real, mounted `<input>` by
         // the time a `useEffect` (as against `useLayoutEffect`) fires, the
@@ -1117,109 +1115,24 @@ export function TaskSchedulePopover({
           className="h-px shrink-0 bg-[color:var(--td-popover-divider)]"
         />
 
-        {/* Issue #436's own real-browser follow-up: no fixed height or
-            `overflow-hidden` of its own any more — a 236px box here was
-            what clipped a 6-week month's own last row unreachably (Nov
-            2026 needs 268px). The calendar renders at its own natural
-            height now; the scroll region this sits inside (above) is what
-            absorbs a taller month instead of cutting one off. `shrink-0`
-            keeps flexbox from compressing it below that natural height to
-            make room for a sibling, the one thing still needed here.
-            #439's own endless month list is a separate, later change —
-            this is only the "don't clip" half of that follow-up. */}
-        <Calendar
-          mode="single"
-          weekStartsOn={1}
-          today={now}
-          formatters={{
-            formatWeekdayName: (day) => format(day, "EEEEE"),
-            // Defect 6 (measured 2026-09-15): Todoist's own caption reads
-            // "Sep 2026" — react-day-picker's default `formatCaption`
-            // (`DateLib.formatMonthYear`) renders the locale's full month
-            // name instead ("September 2026"). Same override mechanism as
-            // `formatWeekdayName` above, for the identical reason: left at
-            // the default, this ticket's own reference measurement would
-            // silently diverge from it.
-            formatCaption: (month) => format(month, "MMM yyyy"),
-          }}
-          month={month}
-          onMonthChange={setMonth}
-          selected={parseDayKey(dateDay)}
-          onSelect={(day) => {
-            if (day !== undefined) {
-              commitDay(localDayKey(day));
-            }
-          }}
-          modifiers={{
-            weekend: (day) => day.getDay() === 0 || day.getDay() === 6,
-            busy: (day) => datesWithTasks.has(localDayKey(day)),
-          }}
-          modifiersClassNames={{
-            weekend: "[&>button]:text-muted-foreground",
-            busy: "before:absolute before:bottom-0.5 before:left-1/2 before:size-[3px] before:-translate-x-1/2 before:rounded-full before:bg-[color:var(--td-calendar-busy-dot)] before:content-['']",
-          }}
-          classNames={{
-            today:
-              "[&>button]:font-bold [&:not([data-selected=true])>button]:text-[color:var(--td-calendar-today)]!",
-            selected:
-              "[&>button]:bg-[color:var(--td-calendar-selected)] [&>button]:text-white [&>button]:font-bold [&>button]:hover:bg-[color:var(--td-calendar-selected)]",
-            // Defect 4 (measured 2026-09-15): Todoist gave next-month days
-            // shown in its grid (it had Oct 1–11 visible) no distinguishing
-            // class at all — a next-month Saturday read exactly like a
-            // current-month Saturday. The base `Calendar` primitive
-            // (calendar.tsx) dims every `outside` cell
-            // (`text-muted-foreground opacity-50`) for its two other
-            // callers (the History date picker, the Custom-repeat end-date
-            // picker), neither of which this ticket measured against
-            // Todoist — so the dimming is cleared here, at this call site
-            // only, rather than in the shared primitive. An outside day now
-            // falls through to whichever of `weekend`/`today`/`selected`
-            // actually applies to it, same as a current-month day.
-            outside: "",
-            day_button: cn(
-              buttonVariants({ variant: "ghost" }),
-              "p-0 font-normal aria-selected:opacity-100",
-              "h-7 w-[30px] rounded-[12px]",
-              // Defect 3 (measured 2026-09-15): Todoist's hover is an
-              // OPAQUE rgb(77,77,77) pill, not `ghost`'s translucent
-              // `hover:bg-muted` (this theme's `oklab(0.2686 … / 0.5)`) —
-              // overridden with the shared `--td-calendar-cell-hover`
-              // token (index.css) rather than a second literal, since
-              // defect 2's focus pill below is the identical grey at
-              // partial opacity. `ghost`'s OWN hover is really two rules —
-              // plain `hover:bg-muted` and, separately, `dark:hover:bg-
-              // muted/50` (button.tsx) — and only the plain one shares this
-              // override's specificity; `.dark .cls:hover` outranks a bare
-              // `.cls:hover` regardless of source order, so without a
-              // `dark:` twin of this same override, dark mode (the ONLY
-              // theme Todoist was ever measured in — this file's own
-              // `[data-surface="todo"]` header comment) would keep showing
-              // the old translucent wash on top. Repeated rather than
-              // computed from the plain class so `cn`'s tailwind-merge sees
-              // the identical `dark:hover:bg-*` group and drops `ghost`'s
-              // version outright, instead of leaving two same-specificity
-              // rules to fight over stylesheet order.
-              //
-              // Defect 2 (measured 2026-09-15): a focused day cell computed
-              // `outline-style: none` and an all-zero `box-shadow` live —
-              // no visible focus state at all, unlike every other control
-              // in this popover. `ghost`'s own `focus-visible:ring-3
-              // focus-visible:ring-ring/50 focus-visible:border-ring`
-              // (button.tsx) is neutralised here (`ring-0`/
-              // `border-transparent`) and replaced with Todoist's own
-              // measured focus-visible pill: `rgba(77, 77, 77, 0.306)`,
-              // i.e. the hover token's grey at 30.6% opacity —
-              // `color-mix`'s opacity modifier scales a colour's alpha
-              // alone when mixed with fully-transparent (CSS Color 4), so
-              // `/[30.6%]` on the token reproduces the measured rgba
-              // exactly without a second literal. It deliberately sets no
-              // text colour, so a focused "today" cell stays today-red —
-              // Todoist's own measured behaviour ("inheriting the cell's
-              // own text colour").
-              "hover:bg-[color:var(--td-calendar-cell-hover)] dark:hover:bg-[color:var(--td-calendar-cell-hover)] focus-visible:border-transparent focus-visible:ring-0 focus-visible:bg-[color:var(--td-calendar-cell-hover)]/[30.6%]",
-            ),
-          }}
-          className="mx-auto shrink-0"
+        {/* Issue #439: Todoist web's own endless month list, replacing
+            the fixed month-grid `<Calendar>` this popover used to render
+            here (`month-list-calendar.tsx`'s own header comment has the
+            full design). `initialDay` is deliberately omitted — a Task
+            opened with a FUTURE date does not auto-scroll to it; the list
+            always opens at its own natural top, `minDay`'s own week (this
+            file's own ticket: "pick 'start at the current week' ... unless
+            the date is in the current view," which nothing here needs to
+            special-case when the list already starts there by default). A
+            PAST date needs no handling either: `selectedDay` below simply
+            never appears in the rendered list at all when it's before
+            `minDay`, the same "not reachable" contract this popover's own
+            props already lean on elsewhere. */}
+        <MonthListCalendar
+          now={now}
+          selectedDay={dateDay}
+          datesWithTasks={datesWithTasks}
+          onPickDay={commitDay}
         />
 
         <div
