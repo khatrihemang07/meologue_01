@@ -57,10 +57,10 @@ describe("OverdueSectionSummary — issue #437's sticky Overdue header", () => {
   // `pointer-fine:top-14` — task-row-content.tsx's own hover-gate reused,
   // this file's own header comment — is what moves the stuck offset down
   // to 56px (h-14) on a mouse device, clearing the scroll top bar Shell
-  // renders above it (shell.tsx's own `TODO_MINI_TITLE_THRESHOLD_PX`
-  // neighbour); it is present in the markup unconditionally and resolved
-  // by the device itself, the identical "can't observe real CSS in jsdom,
-  // only that the class is wired" limit shell.test.tsx's own pointer-fine
+  // renders above it (shell.tsx's own `TODO_TOPBAR_HEIGHT_PX` neighbour);
+  // it is present in the markup unconditionally and resolved by the
+  // device itself, the identical "can't observe real CSS in jsdom, only
+  // that the class is wired" limit shell.test.tsx's own pointer-fine
   // assertion already accepts.
   it("shifts its own stuck offset to clear the top bar on a mouse device — pointer-fine:top-14", () => {
     renderSummary();
@@ -81,6 +81,20 @@ describe("OverdueSectionSummary — issue #437's sticky Overdue header", () => {
 
     const summary = screen.getByText("Overdue").closest("summary") as HTMLElement;
     expect(summary).toHaveClass("z-10");
+  });
+
+  // A standards-review flag: a bare `<summary>` keeps the UA stylesheet's
+  // own `display: list-item`, which WebKit has a history of mishandling
+  // under `position: sticky`. `flex` already overrides it (an author-
+  // origin rule always outranks a user-agent one, regardless of selector
+  // specificity — see this component's own comment) — this pins that the
+  // class stays present so a future edit can't drop it while "simplifying"
+  // and silently reintroduce `list-item` under `position: sticky`.
+  it("carries an explicit display (flex), overriding the UA default list-item WebKit has had sticky bugs on", () => {
+    renderSummary();
+
+    const summary = screen.getByText("Overdue").closest("summary") as HTMLElement;
+    expect(summary).toHaveClass("flex");
   });
 
   // Android (issue #437's own measurement): the Overdue header stays

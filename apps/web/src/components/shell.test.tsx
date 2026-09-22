@@ -4,6 +4,7 @@ import { MemoryRouter, useNavigate } from "react-router";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useSettingsStore } from "@/lib/settings";
 import { useSyncStatusStore } from "@/lib/sync-status";
+import { installIntersectionObserverStub } from "@/test/intersection-observer";
 import { Shell } from "./shell";
 
 // Shell reads `useLocation` to work out which Destination this pane is (it
@@ -564,23 +565,74 @@ describe("Shell's Today/Upcoming scroll top bar and mini title (issue #437)", ()
     expect(bar).toHaveClass("pointer-fine:flex");
   });
 
-  it("the mini title is absent before 34px of scroll, appears the instant scrollTop reaches 34px, and disappears again the instant it drops below — no debounce, no transition", () => {
+  // Issue #437's real-browser follow-up: a fixed `scrollTop >= 34` check
+  // measured live with an ~18px, direction-dependent hysteresis (appeared
+  // at ~45px scrolling down, disappeared at ~27px scrolling up) — a
+  // `scroll`-event listener only ever samples `scrollTop` at whatever
+  // granularity the browser dispatches events, and a single programmatic
+  // jump (`scrollTop = 200` in one assignment) was sometimes invisible
+  // altogether, since that design's only chance to re-check position was a
+  // `scroll` event actually firing for it. `use-scrolled-under-bar.ts` (the
+  // hook now driving this) replaced that with `IntersectionObserver`
+  // instead — the browser's own native geometry tracking, which fires for
+  // ANY change to the `<h1>`'s intersection with the bar, single big jump
+  // included, not a JS poll of a DOM event. These tests drive that
+  // observer directly (`installIntersectionObserverStub`), the same
+  // "trigger the real callback with a synthetic entry" idiom
+  // `installResizeObserverStub` already uses elsewhere in this codebase,
+  // rather than simulating `scrollTop` — jsdom computes no real
+  // intersection geometry, so there is nothing here for a `scrollTop`
+  // assignment to actually drive.
+  it("the mini title is absent while the real title still overlaps the bar, and appears the instant IntersectionObserver reports it's fully scrolled under — one big jump, no debounce, no transition", () => {
+    const io = installIntersectionObserverStub();
     render(
       <Shell title="Today" subtitle="3 tasks" hideAppBar>
         content
       </Shell>,
     );
-    const scroller = screen.getByTestId("shell-scroll-region");
+    const heading = screen.getByRole("heading", { name: "Today" });
     expect(screen.queryByTestId("todo-mini-title")).not.toBeInTheDocument();
 
-    setScrollGeometry(scroller, { scrollHeight: 1000, clientHeight: 400, scrollTop: 34 });
-    fireEvent.scroll(scroller);
+    // The single-big-jump case (0→200 in one shot): IntersectionObserver
+    // reports "no longer intersecting" in one callback regardless of how
+    // far the title travelled to get there — there is no intermediate
+    // state for a `scroll`-event-based design to miss.
+    io.trigger(heading, false);
     const mini = screen.getByTestId("todo-mini-title");
     expect(mini).toHaveTextContent("Today");
     expect(mini).toHaveTextContent("3 tasks");
 
-    setScrollGeometry(scroller, { scrollHeight: 1000, clientHeight: 400, scrollTop: 33 });
-    fireEvent.scroll(scroller);
+    // Back to 0 (the title re-enters the bar's own observed region):
+    // hides again, instantly.
+    io.trigger(heading, true);
+    expect(screen.queryByTestId("todo-mini-title")).not.toBeInTheDocument();
+  });
+
+  // The exact boundary itself is native browser geometry this suite can't
+  // reproduce (jsdom computes no real intersection ratios — this file's
+  // own "read the limit honestly" precedent applies here too), but what
+  // IS this component's own responsibility, and what this pins, is the
+  // ±1px mapping AT the boundary: the frame still reporting the tiniest
+  // overlap (`isIntersecting: true`, one CSS pixel of the title still
+  // below the bar's own bottom edge) must keep the mini title hidden, and
+  // the very next frame reporting none at all (`isIntersecting: false`,
+  // one pixel past) must show it — no debounce or extra frame in between.
+  it("boundary: the last still-overlapping report hides it, the first fully-passed report shows it — no hysteresis band", () => {
+    const io = installIntersectionObserverStub();
+    render(
+      <Shell title="Today" subtitle="3 tasks" hideAppBar>
+        content
+      </Shell>,
+    );
+    const heading = screen.getByRole("heading", { name: "Today" });
+
+    io.trigger(heading, true);
+    expect(screen.queryByTestId("todo-mini-title")).not.toBeInTheDocument();
+
+    io.trigger(heading, false);
+    expect(screen.getByTestId("todo-mini-title")).toBeInTheDocument();
+
+    io.trigger(heading, true);
     expect(screen.queryByTestId("todo-mini-title")).not.toBeInTheDocument();
   });
 
@@ -627,14 +679,15 @@ describe("Shell's Today/Upcoming scroll top bar and mini title (issue #437)", ()
   });
 
   it("marks the top bar decorative (aria-hidden) — a visual echo of the real <h1>, never a second heading an assistive-tech or e2e role/name locator could collide with", () => {
+    const io = installIntersectionObserverStub();
     render(
       <Shell title="Today" subtitle="3 tasks" hideAppBar>
         content
       </Shell>,
     );
-    const scroller = screen.getByTestId("shell-scroll-region");
-    setScrollGeometry(scroller, { scrollHeight: 1000, clientHeight: 400, scrollTop: 34 });
-    fireEvent.scroll(scroller);
+    const heading = screen.getByRole("heading", { name: "Today" });
+    io.trigger(heading, false);
+    expect(screen.getByTestId("todo-mini-title")).toBeInTheDocument();
 
     expect(screen.getByTestId("todo-scroll-top-bar")).toHaveAttribute("aria-hidden", "true");
     expect(screen.getAllByRole("heading", { name: "Today" })).toHaveLength(1);

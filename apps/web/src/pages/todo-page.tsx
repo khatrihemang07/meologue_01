@@ -947,10 +947,11 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
   // title — the whole of that mechanism, only for the two views that have
   // one. `todayTaskCount`/`upcomingTaskCount` (todo-view-task-count.ts)
   // are the same pure functions `backgroundTaskList` above already builds
-  // Today's/Upcoming's own row order from (`today()`/`upcoming()`), so
-  // this count can never disagree with what either view actually renders
-  // as rows. `undefined` for every other view (Inbox, a Project, ...),
-  // which have no comparable count Todoist itself shows.
+  // Today's/Upcoming's own row order from (`today()`/`upcoming()`) — see
+  // that file's own doc comment for the one accepted way this count can
+  // still disagree with the rows by a Task, across a render that straddles
+  // local midnight. `undefined` for every other view (Inbox, a Project,
+  // ...), which have no comparable count Todoist itself shows.
   const todoSubtitle =
     backgroundView.view === "today"
       ? `${todayTaskCount(tasks, localDayKey(new Date()))} tasks`

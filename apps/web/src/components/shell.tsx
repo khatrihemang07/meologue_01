@@ -1,22 +1,41 @@
 import { ArrowDown, ArrowLeft, ArrowUp, Search as SearchIcon } from "lucide-react";
-import { createContext, type ReactNode, useCallback, useEffect, useMemo, useState } from "react";
+import {
+  createContext,
+  type ReactNode,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { useLocation } from "react-router";
 import { SyncStatusIndicator } from "@/components/sync-status-indicator";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { usePinnedScroll } from "@/hooks/use-pinned-scroll";
-import { useScrollThreshold } from "@/hooks/use-scroll-threshold";
+import { useScrolledUnderBar } from "@/hooks/use-scrolled-under-bar";
 import { formatDaySeparator } from "@/lib/entry-day";
 import { cn } from "@/lib/utils";
 
 /**
- * Issue #437: the scroll position, in the scroll region's own `scrollTop`
- * CSS pixels, at which Todoist web's mini "Today / N tasks" appears in the
- * top bar — measured live (Todoist web, 1260x696). Below this the bar
- * stays empty (still 56px, still bordered — see `TODO_TOPBAR_HEIGHT_PX`
- * below); at or past it the mini title appears with no transition.
+ * Issue #437: Todoist web's own top bar height (56px), measured live —
+ * `h-14` below, and the offset `use-scrolled-under-bar.ts`'s
+ * `rootMargin` needs to place its boundary at the bar's own bottom edge
+ * rather than the scroll region's bare top.
+ *
+ * This USED to also carry a `TODO_MINI_TITLE_THRESHOLD_PX` scroll-position
+ * constant (34px, later re-measured on Todoist at 23px) driving a
+ * `scrollTop >= threshold` check. That design is gone, not just its
+ * number: `use-scrolled-under-bar.ts`'s own header comment has the full
+ * real-browser findings — the number itself was never a fixed constant
+ * (it moved with Todoist's own layout between the two readings) and the
+ * `scroll`-event-driven comparison it drove showed a real, measured
+ * ~18px, direction-dependent lag under real scrolling, which is why this
+ * now asks "has the title's own bottom edge scrolled under the bar's
+ * bottom edge" directly, via `IntersectionObserver`, rather than
+ * comparing `scrollTop` against any pixel count of its own.
  */
-const TODO_MINI_TITLE_THRESHOLD_PX = 34;
+const TODO_TOPBAR_HEIGHT_PX = 56;
 
 /**
  * Issue #83: what history.tsx's virtualizer needs from Shell, and the one
@@ -542,16 +561,29 @@ export function Shell({
     [scrollElement, registerScrollToNewest, registerScrollToDay, publishDayJumpState],
   );
 
-  // Issue #437: whether the reader has scrolled the region far enough for
-  // Todoist's own mini "Today / N tasks" to appear in the top bar below —
+  // Issue #437: the real `<h1>` below, watched by `useScrolledUnderBar` so
+  // it can tell when that element's own bottom edge has scrolled under the
+  // top bar — a plain `useRef`, not a second bit of state: unlike
+  // `scrollElement` above (which a *descendant*, History, needs to react
+  // to), nothing outside this component ever needs to know this ref
+  // changed, and a stable ref object also means the callback-ref
+  // reattachment churn `scrollElement`'s own inline arrow function pays
+  // on every render never applies here.
+  const titleRef = useRef<HTMLHeadingElement>(null);
+  // Whether that title has scrolled entirely under the top bar below —
   // read off `scrollElement` (this file's own `HistoryScrollContext`
-  // value, populated above), not a second ref: the top bar renders as a
-  // sibling inside the identical `shell-scroll-region` node History's own
-  // virtualizer already measures against, so there is only ever one
-  // scrollable element on this page for either to listen to. Called
-  // unconditionally, like every other Hook in this component — the top
-  // bar itself, further down, is what's conditional on `subtitle`.
-  const pastMiniTitleThreshold = useScrollThreshold(scrollElement, TODO_MINI_TITLE_THRESHOLD_PX);
+  // value, populated above), not a second ref for the scroll region: the
+  // top bar renders as a sibling inside the identical `shell-scroll-
+  // region` node History's own virtualizer already measures against, so
+  // there is only ever one scrollable element on this page for either to
+  // watch. Called unconditionally, like every other Hook in this
+  // component — the top bar itself, further down, is what's conditional
+  // on `subtitle`.
+  const pastMiniTitleThreshold = useScrolledUnderBar(
+    scrollElement,
+    titleRef,
+    TODO_TOPBAR_HEIGHT_PX,
+  );
 
   const { scrollRef, handleScroll, awayFromNewest, jumpToNewest } = usePinnedScroll({
     enabled: pinnedThread !== undefined,
@@ -829,10 +861,12 @@ export function Shell({
             Issue #437: Todoist web's own top bar, mouse-only. A sibling of
             the content column below rather than nested inside it, so it
             can be full-bleed (the column itself is capped/proportional —
-            ADR 0019) while still living inside `shell-scroll-region` and
-            participating in the identical scroll this file's own
-            `pastMiniTitleThreshold` already listens to. `position: sticky`
-            with `top-0`, the scroll region being its nearest positioned
+            ADR 0019) while still living inside `shell-scroll-region` — the
+            same node `useScrolledUnderBar` uses as its `<h1>` observer's
+            `root`, so the mini title's own boundary (that hook's
+            `rootMargin`) is always measured against this exact scrolling
+            box, wherever it actually sits. `position: sticky` with
+            `top-0`, the scroll region being its nearest positioned
             *scrolling* ancestor, is what keeps it pinned to the region's
             own top edge — the exact mechanism overdue-section-summary.tsx
             reuses (its own `top-14` offsets below this bar's 56px height,
@@ -944,7 +978,9 @@ export function Shell({
               {hideAppBar && (
                 <div className="flex items-center gap-2 [padding-top:env(safe-area-inset-top)]">
                   {back}
-                  <h1 className="font-heading font-bold text-[26px] leading-[35px]">{title}</h1>
+                  <h1 ref={titleRef} className="font-heading font-bold text-[26px] leading-[35px]">
+                    {title}
+                  </h1>
                   <SyncStatusIndicator />
                   {action && <div className="ml-auto flex items-center gap-1">{action}</div>}
                 </div>
