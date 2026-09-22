@@ -44,6 +44,7 @@ import { useSettingsStore } from "@/lib/settings";
 import { hasCommentReplyIntent, taskDetailPath, taskIdFromParam } from "@/lib/task-detail-route";
 import { commitTaskTitle } from "@/lib/task-title-commit";
 import { OPEN_QUICK_ADD_EVENT } from "@/lib/todo-keymap";
+import { todayTaskCount, upcomingTaskCount } from "@/lib/todo-view-task-count";
 import { useEntryStore } from "@/pages/entry-store-layout";
 
 /**
@@ -941,6 +942,23 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
     return total;
   }
 
+  // Issue #437: Todoist's own "N tasks" line, and — since Shell's
+  // `subtitle` is the one prop that also gates its scroll top bar/mini
+  // title — the whole of that mechanism, only for the two views that have
+  // one. `todayTaskCount`/`upcomingTaskCount` (todo-view-task-count.ts)
+  // are the same pure functions `backgroundTaskList` above already builds
+  // Today's/Upcoming's own row order from (`today()`/`upcoming()`) — see
+  // that file's own doc comment for the one accepted way this count can
+  // still disagree with the rows by a Task, across a render that straddles
+  // local midnight. `undefined` for every other view (Inbox, a Project,
+  // ...), which have no comparable count Todoist itself shows.
+  const todoSubtitle =
+    backgroundView.view === "today"
+      ? `${todayTaskCount(tasks, localDayKey(new Date()))} tasks`
+      : backgroundView.view === "upcoming"
+        ? `${upcomingTaskCount(tasks, localDayKey(new Date()))} tasks`
+        : undefined;
+
   // Built as a separate expression, rather than nesting `<Shell>` a level
   // deeper inline below, so the sidebar column wrapping it (`return`, just
   // below) costs one indentation level for the wrapper itself and none for
@@ -949,6 +967,7 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
   const content = (
     <Shell
       title={todoHeading(backgroundView, currentProject, currentFilter)}
+      subtitle={todoSubtitle}
       back={<BackToChats />}
       message={message}
       messageAction={messageAction}

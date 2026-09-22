@@ -110,3 +110,29 @@ class NoOpResizeObserver implements ResizeObserver {
 beforeEach(() => {
   vi.stubGlobal("ResizeObserver", NoOpResizeObserver);
 });
+
+/**
+ * jsdom implements no `IntersectionObserver` either — the identical gap,
+ * the identical fix. Issue #437's `use-scrolled-under-bar.ts` (Shell's own
+ * mini-title trigger) constructs one unconditionally the moment its scroll
+ * region and title both exist, so a plain jsdom render of any Today/
+ * Upcoming test throws without a stand-in. A test that wants to actually
+ * drive a callback replaces this with `@/test/intersection-observer.ts`'s
+ * own `installIntersectionObserverStub()`.
+ */
+class NoOpIntersectionObserver implements IntersectionObserver {
+  root: Element | Document | null = null;
+  rootMargin = "";
+  scrollMargin = "";
+  thresholds: ReadonlyArray<number> = [];
+  observe(): void {}
+  unobserve(): void {}
+  disconnect(): void {}
+  takeRecords(): IntersectionObserverEntry[] {
+    return [];
+  }
+}
+
+beforeEach(() => {
+  vi.stubGlobal("IntersectionObserver", NoOpIntersectionObserver);
+});

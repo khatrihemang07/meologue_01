@@ -4,6 +4,7 @@ import { MemoryRouter, useNavigate } from "react-router";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useSettingsStore } from "@/lib/settings";
 import { useSyncStatusStore } from "@/lib/sync-status";
+import { installIntersectionObserverStub } from "@/test/intersection-observer";
 import { Shell } from "./shell";
 
 // Shell reads `useLocation` to work out which Destination this pane is (it
@@ -479,6 +480,217 @@ describe("Shell's column width override and hideAppBar (issue #254)", () => {
 
     const scrollRegion = screen.getByTestId("shell-scroll-region");
     expect(scrollRegion).toContainElement(screen.getByRole("button", { name: "Search" }));
+  });
+});
+
+// Issue #437: Today's/Upcoming's own "N tasks" line, scroll top bar and
+// mini title. All three share one trigger — `subtitle` — so a Todo view
+// with no count of its own (Inbox, a Project, ...) gets none of the three,
+// the same "additive, byte-for-byte unchanged for every other caller"
+// guarantee `columnWidthClassName`/`floatingAction` already make for their
+// own props.
+describe("Shell's Today/Upcoming scroll top bar and mini title (issue #437)", () => {
+  beforeEach(() => {
+    localStorage.clear();
+    useSettingsStore.setState({ serverUrl: "" });
+    useSyncStatusStore.setState({ lastAttempt: null });
+  });
+
+  it("renders 'N tasks' as ordinary scrolling content under the in-column heading, not inside the top bar", () => {
+    render(
+      <Shell title="Today" subtitle="3 tasks" hideAppBar>
+        content
+      </Shell>,
+    );
+
+    const subtitle = screen.getByText("3 tasks");
+    expect(screen.getByTestId("shell-scroll-region")).toContainElement(subtitle);
+    expect(screen.queryByTestId("todo-scroll-top-bar")).not.toContainElement(subtitle);
+  });
+
+  it("renders no subtitle line and no scroll top bar at all when subtitle is omitted — every Todo view but Today/Upcoming", () => {
+    render(
+      <Shell title="Inbox" hideAppBar>
+        content
+      </Shell>,
+    );
+
+    expect(screen.queryByTestId("todo-scroll-top-bar")).not.toBeInTheDocument();
+  });
+
+  it("renders no top bar when hideAppBar is omitted, even with a subtitle — this is Todo's own chrome, not a generic Shell feature", () => {
+    render(
+      <Shell title="Today" subtitle="3 tasks">
+        content
+      </Shell>,
+    );
+
+    expect(screen.queryByTestId("todo-scroll-top-bar")).not.toBeInTheDocument();
+  });
+
+  it("the top bar is 56px tall, carries the measured constant border token, and stays flush with the scroll region's own top edge", () => {
+    render(
+      <Shell title="Today" subtitle="3 tasks" hideAppBar>
+        content
+      </Shell>,
+    );
+
+    const bar = screen.getByTestId("todo-scroll-top-bar");
+    expect(bar).toHaveClass("h-14");
+    expect(bar).toHaveClass("border-b");
+    expect(bar).toHaveClass("border-[color:var(--td-topbar-border)]");
+    expect(bar).toHaveClass("sticky");
+    expect(bar).toHaveClass("top-0");
+    expect(screen.getByTestId("shell-scroll-region").firstElementChild).toBe(bar);
+  });
+
+  // `hidden pointer-fine:flex` is the exact gate task-row-content.tsx's own
+  // hover-revealed row actions already ride (that file's own doc comment,
+  // reused here rather than a second, bespoke touch check) — present in
+  // the markup unconditionally, resolved by the device itself: a
+  // hover-or-fine-pointer device (mouse) shows the bar, a coarse-and-
+  // hoverless one (touch-only) never does. jsdom generates no real
+  // stylesheet, so this proves the class is wired, not that the resulting
+  // CSS renders correctly — task-row.test.tsx's own "read the limit of
+  // this assertion honestly" comment applies here too.
+  it("the top bar rides the pointer-fine gate — visible only on a hover-or-fine-pointer (mouse) device, never on touch-only", () => {
+    render(
+      <Shell title="Today" subtitle="3 tasks" hideAppBar>
+        content
+      </Shell>,
+    );
+
+    const bar = screen.getByTestId("todo-scroll-top-bar");
+    expect(bar).toHaveClass("hidden");
+    expect(bar).toHaveClass("pointer-fine:flex");
+  });
+
+  // Issue #437's real-browser follow-up: a fixed `scrollTop >= 34` check
+  // measured live with an ~18px, direction-dependent hysteresis (appeared
+  // at ~45px scrolling down, disappeared at ~27px scrolling up) — a
+  // `scroll`-event listener only ever samples `scrollTop` at whatever
+  // granularity the browser dispatches events, and a single programmatic
+  // jump (`scrollTop = 200` in one assignment) was sometimes invisible
+  // altogether, since that design's only chance to re-check position was a
+  // `scroll` event actually firing for it. `use-scrolled-under-bar.ts` (the
+  // hook now driving this) replaced that with `IntersectionObserver`
+  // instead — the browser's own native geometry tracking, which fires for
+  // ANY change to the `<h1>`'s intersection with the bar, single big jump
+  // included, not a JS poll of a DOM event. These tests drive that
+  // observer directly (`installIntersectionObserverStub`), the same
+  // "trigger the real callback with a synthetic entry" idiom
+  // `installResizeObserverStub` already uses elsewhere in this codebase,
+  // rather than simulating `scrollTop` — jsdom computes no real
+  // intersection geometry, so there is nothing here for a `scrollTop`
+  // assignment to actually drive.
+  it("the mini title is absent while the real title still overlaps the bar, and appears the instant IntersectionObserver reports it's fully scrolled under — one big jump, no debounce, no transition", () => {
+    const io = installIntersectionObserverStub();
+    render(
+      <Shell title="Today" subtitle="3 tasks" hideAppBar>
+        content
+      </Shell>,
+    );
+    const heading = screen.getByRole("heading", { name: "Today" });
+    expect(screen.queryByTestId("todo-mini-title")).not.toBeInTheDocument();
+
+    // The single-big-jump case (0→200 in one shot): IntersectionObserver
+    // reports "no longer intersecting" in one callback regardless of how
+    // far the title travelled to get there — there is no intermediate
+    // state for a `scroll`-event-based design to miss.
+    io.trigger(heading, false);
+    const mini = screen.getByTestId("todo-mini-title");
+    expect(mini).toHaveTextContent("Today");
+    expect(mini).toHaveTextContent("3 tasks");
+
+    // Back to 0 (the title re-enters the bar's own observed region):
+    // hides again, instantly.
+    io.trigger(heading, true);
+    expect(screen.queryByTestId("todo-mini-title")).not.toBeInTheDocument();
+  });
+
+  // The exact boundary itself is native browser geometry this suite can't
+  // reproduce (jsdom computes no real intersection ratios — this file's
+  // own "read the limit honestly" precedent applies here too), but what
+  // IS this component's own responsibility, and what this pins, is the
+  // ±1px mapping AT the boundary: the frame still reporting the tiniest
+  // overlap (`isIntersecting: true`, one CSS pixel of the title still
+  // below the bar's own bottom edge) must keep the mini title hidden, and
+  // the very next frame reporting none at all (`isIntersecting: false`,
+  // one pixel past) must show it — no debounce or extra frame in between.
+  it("boundary: the last still-overlapping report hides it, the first fully-passed report shows it — no hysteresis band", () => {
+    const io = installIntersectionObserverStub();
+    render(
+      <Shell title="Today" subtitle="3 tasks" hideAppBar>
+        content
+      </Shell>,
+    );
+    const heading = screen.getByRole("heading", { name: "Today" });
+
+    io.trigger(heading, true);
+    expect(screen.queryByTestId("todo-mini-title")).not.toBeInTheDocument();
+
+    io.trigger(heading, false);
+    expect(screen.getByTestId("todo-mini-title")).toBeInTheDocument();
+
+    io.trigger(heading, true);
+    expect(screen.queryByTestId("todo-mini-title")).not.toBeInTheDocument();
+  });
+
+  // Android (issue #437's own measurement): the Overdue header is sticky,
+  // but the title never collapses into a top bar — touch-only devices get
+  // NO mini title at all. Nothing here branches on `touchOnlyDevice()` in
+  // JS: the bar and its mini title render into the DOM unconditionally
+  // (the tests above already assert their classes), and it is the
+  // `pointer-fine:flex` gate alone — a real media query, resolved by the
+  // device itself — that decides whether either ever paints. Stubbing
+  // `matchMedia` to a coarse-and-hoverless device here changes nothing
+  // about the markup this asserts, which is the point: jsdom generates no
+  // real stylesheet to observe the *visual* absence directly (this file's
+  // own "read the limit honestly" precedent, task-row.test.tsx), so this
+  // instead pins that the touch case has no separate JS code path to
+  // silently diverge from the mouse case — one render, one gate, resolved
+  // entirely by CSS.
+  it("touch-only devices still render the top bar's markup, gated by the identical pointer-fine class rather than a JS branch — no separate touch code path to drift", () => {
+    vi.stubGlobal(
+      "matchMedia",
+      vi.fn((query: string) => ({
+        matches: query === "(pointer: coarse)" || query === "(hover: none)",
+        media: query,
+        onchange: null,
+        addListener: vi.fn(),
+        removeListener: vi.fn(),
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+        dispatchEvent: vi.fn(),
+      })),
+    );
+
+    render(
+      <Shell title="Today" subtitle="3 tasks" hideAppBar>
+        content
+      </Shell>,
+    );
+
+    const bar = screen.getByTestId("todo-scroll-top-bar");
+    expect(bar).toHaveClass("hidden");
+    expect(bar).toHaveClass("pointer-fine:flex");
+
+    vi.unstubAllGlobals();
+  });
+
+  it("marks the top bar decorative (aria-hidden) — a visual echo of the real <h1>, never a second heading an assistive-tech or e2e role/name locator could collide with", () => {
+    const io = installIntersectionObserverStub();
+    render(
+      <Shell title="Today" subtitle="3 tasks" hideAppBar>
+        content
+      </Shell>,
+    );
+    const heading = screen.getByRole("heading", { name: "Today" });
+    io.trigger(heading, false);
+    expect(screen.getByTestId("todo-mini-title")).toBeInTheDocument();
+
+    expect(screen.getByTestId("todo-scroll-top-bar")).toHaveAttribute("aria-hidden", "true");
+    expect(screen.getAllByRole("heading", { name: "Today" })).toHaveLength(1);
   });
 });
 

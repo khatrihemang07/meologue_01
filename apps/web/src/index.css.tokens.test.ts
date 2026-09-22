@@ -103,3 +103,21 @@ describe("index.css — issue #436's date-picker frame tokens (measured values)"
     expect(dark.get("--td-schedule-field-text")).toBe("rgb(209, 209, 209)");
   });
 });
+
+/**
+ * Issue #437's own measured pair — the Todoist top bar's constant 1px
+ * bottom border, Today/Upcoming's mouse-only scroll chrome. Not
+ * `--border` (light `rgb(224, 224, 224)`, dark `rgb(61, 61, 61)`): both
+ * measured values are distinct from the app's generic divider, the
+ * identical "measured separately, don't assume it matches a nearby
+ * existing token" call `--td-overdue-reschedule`'s own comment already
+ * makes for a colour close enough to tempt reuse.
+ */
+describe("index.css — issue #437's Todoist top bar (measured values)", () => {
+  const { light, dark } = parseThemeTokens(readIndexCss());
+
+  it("bottom border", () => {
+    expect(light.get("--td-topbar-border")).toBe("rgb(245, 245, 245)");
+    expect(dark.get("--td-topbar-border")).toBe("rgb(40, 40, 40)");
+  });
+});
