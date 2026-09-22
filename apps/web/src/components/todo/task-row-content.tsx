@@ -113,6 +113,22 @@ export interface TaskRowContentProps {
 const HOVER_REVEAL_CLASSES =
   "pointer-fine:opacity-0 pointer-fine:group-hover:opacity-100 pointer-fine:focus-visible:opacity-100";
 
+/**
+ * Issue #438's own hover strip (Edit, Date, Comment, More) — each button
+ * 24×24 (`size-6`, matching the checkbox's own `size-6`, not the pre-#438
+ * `size-11` this ticket's own report measured as spanning most of a 43px
+ * row), `--td-row-action-radius`'s own 3px corner, `--td-row-action-icon`/
+ * `--td-row-action-hover`'s own measured/chosen colours (index.css). No
+ * `-my-1` compensating margin: that trick existed only because a 44px
+ * button was taller than the row it sat in ("Issue #309" comment, this
+ * file's own history) — a 24px button never is, so there is nothing left
+ * to compensate for. Visibility itself is NOT a class on these buttons at
+ * all — see the strip `<div data-row-action-strip>` these are rendered
+ * into, below, for that half of the contract.
+ */
+const ROW_ACTION_BUTTON_CLASSES =
+  "flex size-6 shrink-0 items-center justify-center rounded-[var(--td-row-action-radius)] text-[color:var(--td-row-action-icon)] transition-colors hover:bg-[color:var(--td-row-action-hover)]";
+
 /** One resolved Label as a compact row badge — a dot in the Label's own colour plus its name, mirroring the detail view's identical dot-plus-name pairing (`task-detail-view.tsx`'s Labels attribute) at a size that fits this row's single metadata line rather than that view's own full-width picker row. */
 function LabelBadge({ label }: { label: Label }) {
   return (
@@ -400,44 +416,202 @@ export function TaskRowContent({
         </span>
       </button>
       <span className="flex min-w-0 flex-1 flex-col">
-        {editingTitle ? (
-          <Suspense
-            fallback={
-              <span
+        {/*
+          Issue #438: the hover strip's own anchor — Todoist's own measured
+          behaviour is that Edit/Date/Comment/More sit on the title's FIRST
+          LINE only, never the whole (possibly multi-line, possibly
+          metadata-bearing) row, and never move or resize the title when
+          they appear. `relative` here, not on the outer flex-col span two
+          levels up: that span's own height is the title's up-to-4 lines
+          PLUS the description PLUS the metadata line, so anchoring there
+          would drop the strip's `top-0` well past line one on any row that
+          carries either. This inner span wraps only the title's own
+          button/editor, so its own height IS line one (or the wrapped
+          block up to `line-clamp-4`'s own cap), and `top-0 right-0` on the
+          absolutely-positioned strip below lands exactly on top of it. The
+          strip is taken out of flow entirely — an absolutely-positioned
+          child reserves no space in a normal-flow parent — so the title
+          never reflows when the strip appears or disappears; the strip
+          overlays whatever trailing title text is under it instead, the
+          "or overlay them" half of this ticket's own no-reflow rule (the
+          other half — reserving space — was rejected because it would
+          narrow the title permanently, on every row, mouse or touch, to
+          make room for buttons a touch reader never sees).
+        */}
+        <span className="relative block min-w-0" data-row-title-first-line>
+          {editingTitle ? (
+            <Suspense
+              fallback={
+                <span
+                  className={cn(
+                    "line-clamp-4 block w-full text-left",
+                    "text-[length:var(--td-row-font-size)] leading-[length:var(--td-row-line-height)]",
+                  )}
+                >
+                  {task.content}
+                </span>
+              }
+            >
+              <LazyTaskTitleEditor
+                value={task.content}
+                onCommit={commitTitle}
+                onCancel={() => setEditingTitle(false)}
                 className={cn(
-                  "line-clamp-4 block w-full text-left",
                   "text-[length:var(--td-row-font-size)] leading-[length:var(--td-row-line-height)]",
                 )}
-              >
-                {task.content}
-              </span>
-            }
-          >
-            <LazyTaskTitleEditor
-              value={task.content}
-              onCommit={commitTitle}
-              onCancel={() => setEditingTitle(false)}
+                extraPlugins={[quickAddRecognitionPlugin(() => optionsRef.current)]}
+                autocomplete={autocomplete}
+              />
+            </Suspense>
+          ) : (
+            <button
+              type="button"
+              onClick={() => detailActions.onOpenDetail(task)}
               className={cn(
+                "line-clamp-4 block w-full text-left hover:underline",
                 "text-[length:var(--td-row-font-size)] leading-[length:var(--td-row-line-height)]",
+                isCompleted && "completed-task-text",
               )}
-              extraPlugins={[quickAddRecognitionPlugin(() => optionsRef.current)]}
-              autocomplete={autocomplete}
-            />
-          </Suspense>
-        ) : (
-          <button
-            type="button"
-            onClick={() => detailActions.onOpenDetail(task)}
+              data-row-nav-target
+            >
+              {taskTitleText(task.content)}
+            </button>
+          )}
+          {/*
+            Edit → Date → Comment → More actions — Todoist's own measured
+            order and size (24×24, `--td-row-action-radius`/`-icon`/`-hover`,
+            index.css). `hidden` by default even under `pointer-fine`,
+            flipped to `flex` only by `pointer-fine:group-hover:flex` (the
+            outer row's own `group`, task-row-content.tsx's root div below)
+            — a display swap, not the old opacity fade: nothing here is
+            rendered with any layout box at all until hover, so there is no
+            transition to animate and the reveal is instant, matching what
+            this ticket's own measurement of Todoist found ("not faded in").
+            `scheduleOpen || commandMenuOpen` overrides the hover gate
+            unconditionally to `flex`, because the Date popover and the
+            More menu both have to survive the pointer leaving the row
+            while either is open (#440's own popover anchors to the Date
+            button below, which has to stay mounted for that to keep
+            working) — this is a plain boolean OR, not a second Tailwind
+            variant, since jsdom cannot evaluate `:hover`/`group-hover` at
+            all and this half of the contract is real React state instead.
+
+            Losing the individual `pointer-fine:focus-visible:opacity-100`
+            the pre-#438 buttons carried is a deliberate trade, not an
+            oversight: a `hidden`-by-default element cannot be tabbed to at
+            all, so keyboard focus can no longer reveal this strip the way
+            hovering does — but every one of these four actions already has
+            an independent keyboard door that does not depend on this strip
+            being visible first: `T` opens Date (task-row.tsx's own
+            `OPEN_SCHEDULE_EVENT` listener), `.`/right-click opens More
+            (`OPEN_COMMAND_MENU_EVENT`), and Enter/click on the title itself
+            opens the same detail view Comment does — Edit is the one
+            action with no OTHER keyboard door, unchanged from before this
+            ticket (task-row.tsx's own `TaskDetailActions.onRename` doc
+            comment already notes it as a mouse-measured affordance, not a
+            Todoist-measured one).
+          */}
+          <div
+            data-row-action-strip
             className={cn(
-              "line-clamp-4 block w-full text-left hover:underline",
-              "text-[length:var(--td-row-font-size)] leading-[length:var(--td-row-line-height)]",
-              isCompleted && "completed-task-text",
+              "absolute top-0 right-0 items-center gap-0.5",
+              scheduleOpen || commandMenuOpen ? "flex" : "hidden pointer-fine:group-hover:flex",
             )}
-            data-row-nav-target
           >
-            {taskTitleText(task.content)}
-          </button>
-        )}
+            <button
+              type="button"
+              aria-label={`Edit "${task.content}"`}
+              onClick={() => setEditingTitle(true)}
+              className={ROW_ACTION_BUTTON_CLASSES}
+            >
+              <Pencil aria-hidden="true" className="size-4" />
+            </button>
+            {/*
+              Issue #253: Todoist's own scheduler — an anchored popover, not
+              the bottom sheet this button used to open. One
+              `TaskSchedulePopover` instance per row (`scheduleOpen`/
+              `onScheduleOpenChange`'s own doc comment above), anchored to
+              this very button — a plain `<button>`, not `<Button>`
+              (ui/button.tsx): Radix's `asChild` clones this element and
+              attaches a ref to it to measure where to anchor, and `Button`
+              is a plain function component with no `forwardRef`, so that
+              ref would silently go nowhere (found the hard way, in a real
+              browser, not by this file's own test suite — jsdom never lays
+              anything out to notice).
+            */}
+            <Suspense
+              fallback={
+                <button
+                  type="button"
+                  aria-label={`Date "${task.content}"`}
+                  disabled
+                  className={ROW_ACTION_BUTTON_CLASSES}
+                >
+                  <CalendarClock aria-hidden="true" className="size-4" />
+                </button>
+              }
+            >
+              <LazyTaskSchedulePopover
+                open={scheduleOpen}
+                onOpenChange={onScheduleOpenChange}
+                dateDay={dateDay}
+                dateTime={dateTime}
+                onSetTime={setScheduleTime}
+                dateString={task.dateString}
+                datesWithTasks={detailActions.datesWithTasks}
+                onPickDay={(day) => {
+                  setScheduleDay(day);
+                  if (day === null && task.dateString !== null) {
+                    detailActions.onSetDateString(task.id, null, localDayKey(new Date()));
+                  }
+                }}
+                onPickRecurrence={(dateString) =>
+                  detailActions.onSetDateString(task.id, dateString, localDayKey(new Date()))
+                }
+                trigger={
+                  <button
+                    type="button"
+                    aria-label={`Date "${task.content}"`}
+                    className={ROW_ACTION_BUTTON_CLASSES}
+                  >
+                    <CalendarClock aria-hidden="true" className="size-4" />
+                  </button>
+                }
+              />
+            </Suspense>
+            <button
+              type="button"
+              aria-label={`Comment on "${task.content}"`}
+              onClick={() => detailActions.onOpenDetail(task)}
+              className={ROW_ACTION_BUTTON_CLASSES}
+            >
+              <MessageSquare aria-hidden="true" className="size-4" />
+            </button>
+            <TaskCommandMenu
+              task={task}
+              projects={detailActions.projects}
+              labels={detailActions.labels}
+              open={commandMenuOpen}
+              onOpenChange={onCommandMenuOpenChange}
+              trigger={
+                <button
+                  type="button"
+                  aria-label={`More actions for "${task.content}"`}
+                  className={ROW_ACTION_BUTTON_CLASSES}
+                >
+                  <MoreHorizontal aria-hidden="true" className="size-4" />
+                </button>
+              }
+              onOpenDetail={() => detailActions.onOpenDetail(task)}
+              onOpenDate={() => onScheduleOpenChange(true)}
+              onSetPriority={(priority) => detailActions.onSetPriority(task.id, priority)}
+              onSetProject={(projectId) => detailActions.onSetProject(task.id, projectId)}
+              onSetLabels={(labelIds) => detailActions.onSetLabels(task.id, labelIds)}
+              onCopyLink={() => detailActions.onCopyLink(task)}
+              onRequestDelete={onRequestDelete}
+            />
+          </div>
+        </span>
         {task.description !== null && (
           <div className="truncate text-muted-foreground text-xs">
             {inlineProse(descriptionFirstLine)}
@@ -530,147 +704,6 @@ export function TaskRowContent({
           ))}
         </select>
       )}
-      {/* Edit/Date/Comment/More: hidden by default, revealed on a device
-          this file's own `HOVER_REVEAL_CLASSES` (above) judges capable of
-          hover — see that constant's own doc comment for why the condition
-          widened beyond plain `(hover: hover)`.
-
-          Issue #309: More used to stay unconditional — "the one door onto
-          Edit/Date/Comment's own actions… that a touch reader can always
-          reach" — while #178's full command set (Edit, Date, Priority,
-          Deadline, Labels, Move to…, Copy link, Delete) had nowhere else to
-          go on a phone. It has one now: #302's detail sheet renders Date,
-          Priority, Labels and Project as inline attribute fields (Deadline
-          too, until issue #376 removed its own field from that list) in
-          its own body, and its own `⋮` overflow carries Copy link,
-          Complete forever and Delete — the same three actions this menu's
-          own Copy-link/Delete items duplicate. "Edit" here just calls
-          `onOpenDetail`, the identical destination the title button already
-          opens on a single tap. Nothing this menu offers is missing from
-          that path, so More can now ride the identical `hidden
-          pointer-fine:flex` gate as the other three, and a touch reader
-          loses no capability — checked against #178's own full list, not
-          assumed.
-
-          Edit is issue #225's own measured inline-rename trigger — driven
-          on Todoist directly: hovering a row mounts Complete, Edit, Date,
-          Comment, More actions in that order, and clicking Edit activates
-          the shared `tiptap ProseMirror` editor in place, no dialog, no
-          URL change. This button used to call `onOpenDetail`, the same
-          destination the title and Comment still open; it now activates
-          `editingTitle` instead — the title's own single click keeps
-          meaning "open the detail view," unchanged from before this
-          ticket. */}
-      <button
-        type="button"
-        aria-label={`Edit "${task.content}"`}
-        onClick={() => setEditingTitle(true)}
-        className={cn(
-          "hidden pointer-fine:flex -my-1 size-11 shrink-0 items-center justify-center rounded-md text-muted-foreground transition hover:bg-muted hover:text-foreground",
-          HOVER_REVEAL_CLASSES,
-        )}
-      >
-        <Pencil aria-hidden="true" className="size-4" />
-      </button>
-      {/*
-        Issue #253: Todoist's own scheduler — an anchored popover, not the
-        bottom sheet this button used to open (`TaskScheduleSheet`, reached
-        from this row only via its now-removed "Deadline…" command-menu
-        item — issue #376). One `TaskSchedulePopover` instance per
-        row (`scheduleOpen`/`onScheduleOpenChange`'s own doc comment above),
-        anchored to this very button — a plain `<button>`, not `<Button>`
-        (ui/button.tsx): Radix's `asChild` clones this element and attaches
-        a ref to it to measure where to anchor, and `Button` is a plain
-        function component with no `forwardRef`, so that ref would silently
-        go nowhere (found the hard way, in a real browser, not by this
-        file's own test suite — jsdom never lays anything out to notice).
-        This button was already a plain native element before this ticket,
-        so it needs no change to be a valid trigger.
-      */}
-      <Suspense
-        fallback={
-          <button
-            type="button"
-            aria-label={`Date "${task.content}"`}
-            disabled
-            className={cn(
-              "hidden pointer-fine:flex -my-1 size-11 shrink-0 items-center justify-center rounded-md text-muted-foreground transition hover:bg-muted hover:text-foreground",
-              HOVER_REVEAL_CLASSES,
-            )}
-          >
-            <CalendarClock aria-hidden="true" className="size-4" />
-          </button>
-        }
-      >
-        <LazyTaskSchedulePopover
-          open={scheduleOpen}
-          onOpenChange={onScheduleOpenChange}
-          dateDay={dateDay}
-          dateTime={dateTime}
-          onSetTime={setScheduleTime}
-          dateString={task.dateString}
-          datesWithTasks={detailActions.datesWithTasks}
-          onPickDay={(day) => {
-            setScheduleDay(day);
-            if (day === null && task.dateString !== null) {
-              detailActions.onSetDateString(task.id, null, localDayKey(new Date()));
-            }
-          }}
-          onPickRecurrence={(dateString) =>
-            detailActions.onSetDateString(task.id, dateString, localDayKey(new Date()))
-          }
-          trigger={
-            <button
-              type="button"
-              aria-label={`Date "${task.content}"`}
-              className={cn(
-                "hidden pointer-fine:flex -my-1 size-11 shrink-0 items-center justify-center rounded-md text-muted-foreground transition hover:bg-muted hover:text-foreground",
-                HOVER_REVEAL_CLASSES,
-              )}
-            >
-              <CalendarClock aria-hidden="true" className="size-4" />
-            </button>
-          }
-        />
-      </Suspense>
-      <button
-        type="button"
-        aria-label={`Comment on "${task.content}"`}
-        onClick={() => detailActions.onOpenDetail(task)}
-        className={cn(
-          "hidden pointer-fine:flex -my-1 size-11 shrink-0 items-center justify-center rounded-md text-muted-foreground transition hover:bg-muted hover:text-foreground",
-          HOVER_REVEAL_CLASSES,
-        )}
-      >
-        <MessageSquare aria-hidden="true" className="size-4" />
-      </button>
-      <TaskCommandMenu
-        task={task}
-        projects={detailActions.projects}
-        labels={detailActions.labels}
-        open={commandMenuOpen}
-        onOpenChange={onCommandMenuOpenChange}
-        trigger={
-          <button
-            type="button"
-            aria-label={`More actions for "${task.content}"`}
-            className={cn(
-              "hidden pointer-fine:flex -my-1 size-11 shrink-0 items-center justify-center rounded-md text-muted-foreground transition hover:bg-muted hover:text-foreground",
-              HOVER_REVEAL_CLASSES,
-              "aria-expanded:opacity-100",
-            )}
-          >
-            <MoreHorizontal aria-hidden="true" className="size-4" />
-          </button>
-        }
-        onOpenDetail={() => detailActions.onOpenDetail(task)}
-        onOpenDate={() => onScheduleOpenChange(true)}
-        onSetPriority={(priority) => detailActions.onSetPriority(task.id, priority)}
-        onSetProject={(projectId) => detailActions.onSetProject(task.id, projectId)}
-        onSetLabels={(labelIds) => detailActions.onSetLabels(task.id, labelIds)}
-        onCopyLink={() => detailActions.onCopyLink(task)}
-        onRequestDelete={onRequestDelete}
-      />
     </div>
   );
 }
