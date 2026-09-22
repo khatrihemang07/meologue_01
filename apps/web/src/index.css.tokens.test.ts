@@ -123,34 +123,26 @@ describe("index.css — issue #437's Todoist top bar (measured values)", () => {
 });
 
 /**
- * Issue #438's own hover-strip tokens. Dark was driven live against
- * Todoist: icon `rgb(209, 209, 209)`, per-button hover background
- * `rgb(77, 77, 77)`, 3px corner radius. Light was never measured (the
- * issue's own words: "Light: not measured") — `--td-row-action-icon`
- * reuses this app's own Todoist-reskinned `--muted-foreground`
- * (`rgb(110, 110, 110)`, the colour these buttons already painted before
- * this ticket), and `--td-row-action-hover` reuses the schedule popover's
- * own light hover family (`--td-schedule-option-hover`, `rgb(243, 243,
- * 243)`) rather than `--muted` (`rgb(246, 246, 246)`) — close enough to
- * invite reuse, and the identical "measured separately, don't assume it
- * matches a nearby existing token" trap `--td-topbar-border`'s own comment
- * already names, except here there is no measurement to defer to, so the
- * chip family already used for another hover state in this same picture
- * is the more defensible pick than the generic `--muted`. The radius is
- * declared once, undeclared in `.dark` — theme-independent geometry, the
- * identical pattern `--td-popover-width`'s own test file comment (above)
- * already established for `--td-popover-max-height`.
+ * Issue #438's own hover-strip tokens, both driven live against Todoist:
+ * light icon `rgb(128, 128, 128)`, light per-button hover background
+ * `rgb(238, 238, 238)`; dark icon `rgb(209, 209, 209)`, dark per-button
+ * hover background `rgb(77, 77, 77)`; 3px corner radius, both themes.
+ * Light was measured in a later review round than dark, not alongside it
+ * — `index.css`'s own comment on these tokens has the fuller history. The
+ * radius is declared once, undeclared in `.dark` — theme-independent
+ * geometry, the identical pattern `--td-popover-width`'s own test file
+ * comment (above) already established for `--td-popover-max-height`.
  */
 describe("index.css — issue #438's row hover-strip tokens", () => {
   const { light, dark } = parseThemeTokens(readIndexCss());
 
-  it("icon colour — the app's existing muted icon colour in light, the measured rgb(209,209,209) in dark", () => {
-    expect(light.get("--td-row-action-icon")).toBe("rgb(110, 110, 110)");
+  it("icon colour — the measured rgb(128,128,128) in light, the measured rgb(209,209,209) in dark", () => {
+    expect(light.get("--td-row-action-icon")).toBe("rgb(128, 128, 128)");
     expect(dark.get("--td-row-action-icon")).toBe("rgb(209, 209, 209)");
   });
 
-  it("per-button hover background — the schedule popover's own light hover family, the measured rgb(77,77,77) in dark", () => {
-    expect(light.get("--td-row-action-hover")).toBe("rgb(243, 243, 243)");
+  it("per-button hover background — the measured rgb(238,238,238) in light, the measured rgb(77,77,77) in dark", () => {
+    expect(light.get("--td-row-action-hover")).toBe("rgb(238, 238, 238)");
     expect(dark.get("--td-row-action-hover")).toBe("rgb(77, 77, 77)");
   });
 

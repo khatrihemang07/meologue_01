@@ -517,25 +517,17 @@
 
   /*
    * Issue #438's own hover strip (Edit, Date, Comment, More) — driven live
-   * against Todoist's Dark preset: icon `rgb(209, 209, 209)`, per-button
-   * hover background `rgb(77, 77, 77)`, 3px corner radius. Light was never
-   * measured (the issue's own words: "Light: not measured"), so
-   * `--td-row-action-icon` here is this app's own existing Todoist-
-   * reskinned `--muted-foreground` (these buttons already painted it
-   * before this ticket, `text-muted-foreground`), and `--td-row-action-
-   * hover` reuses `--td-schedule-option-hover`'s own light chip-hover
-   * family rather than the closer-looking `--muted` (`rgb(246, 246,
-   * 246)`) — the identical "measured separately, don't assume it matches
-   * a nearby existing token" trap `--td-topbar-border`'s own comment names,
-   * except there is no measurement here to defer to, so another hover
-   * state already living in this same picture is the more defensible
-   * choice than the app's generic muted surface. `--td-row-action-radius`
-   * is theme-independent geometry — declared once here, not re-declared in
-   * `.dark` below, the identical pattern `--td-popover-width`/`--td-
-   * popover-max-height` already established two blocks up.
+   * against Todoist. First pass only reached the Dark preset (`rgb(209,
+   * 209, 209)` icon, `rgb(77, 77, 77)` hover background) and left light
+   * unmeasured; a review round's own side-by-side then measured light too:
+   * icon `rgb(128, 128, 128)`, per-button hover background `rgb(238, 238,
+   * 238)`. `--td-row-action-radius`'s 3px corner is theme-independent
+   * geometry — declared once here, not re-declared in `.dark` below, the
+   * identical pattern `--td-popover-width`/`--td-popover-max-height`
+   * already established two blocks up.
    */
-  --td-row-action-icon: rgb(110, 110, 110);
-  --td-row-action-hover: rgb(243, 243, 243);
+  --td-row-action-icon: rgb(128, 128, 128);
+  --td-row-action-hover: rgb(238, 238, 238);
   --td-row-action-radius: 3px;
 
   /*

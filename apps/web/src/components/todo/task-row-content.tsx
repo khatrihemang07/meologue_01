@@ -118,11 +118,12 @@ const HOVER_REVEAL_CLASSES =
  * 24×24 (`size-6`, matching the checkbox's own `size-6`, not the pre-#438
  * `size-11` this ticket's own report measured as spanning most of a 43px
  * row), `--td-row-action-radius`'s own 3px corner, `--td-row-action-icon`/
- * `--td-row-action-hover`'s own measured/chosen colours (index.css). No
- * `-my-1` compensating margin: that trick existed only because a 44px
- * button was taller than the row it sat in ("Issue #309" comment, this
- * file's own history) — a 24px button never is, so there is nothing left
- * to compensate for. Visibility itself is NOT a class on these buttons at
+ * `--td-row-action-hover`'s own measured colours (index.css). No `-my-1`
+ * compensating margin: that trick (git history, `83fa8ab`, a pre-#438
+ * parity-programme drive — NOT issue #309, which this file used to cite
+ * here in error) existed only because a 44px button was taller than the
+ * 43px row it sat in — a 24px button never is, so there is nothing left to
+ * compensate for. Visibility itself is NOT a class on these buttons at
  * all — see the strip `<div data-row-action-strip>` these are rendered
  * into, below, for that half of the contract.
  */
@@ -308,7 +309,32 @@ export function TaskRowContent({
         // while every jsdom test stayed green — jsdom has no compositor, so
         // it never cancels, and a unit test cannot observe this at all.
         "touch-pan-y",
-        "group flex items-center gap-2 rounded-lg border-t-2 border-t-transparent transition-colors",
+        // Issue #438's own review round: `items-center` alone (the base,
+        // still what touch gets — Todoist Android was never measured for
+        // this, so touch stays byte-for-byte as it was) centres each
+        // direct child against the row's own cross-size, which for a tall
+        // row (a wrapped title, a metadata line, or both) is taller than
+        // any single child. The checkbox and the title/strip column then
+        // centre independently against THAT shared height rather than
+        // against each other, and a real browser caught the drift a real
+        // measurement gives numbers for: single-line, checkbox top 211px
+        // vs strip top 212.5px (the 1.5px gap between the checkbox's own
+        // 24px box and the title's own ~21px line-height, each centred on
+        // a 43px row by itself); a wrapped title plus a metadata line, the
+        // checkbox centred ~19.5px below the strip. `pointer-fine:items-
+        // start` (mouse/desktop only) pins every direct child's own MARGIN
+        // BOX to the row's own content-top instead — the checkbox and the
+        // title/strip column then share the identical zero offset off the
+        // same edge regardless of how tall either one is, which is what
+        // makes the checkbox and the strip agree exactly, on a single-line
+        // row and a wrapped one alike, without this row needing to know
+        // which case it's in. The grip handle, the recurring-only
+        // "Complete and archive" button and the Section `<select>` each
+        // carry their own `pointer-fine:self-center` immediately below,
+        // specifically to KEEP their pre-existing centred look — this
+        // change is scoped to the checkbox/title pairing the review round
+        // actually measured, not a blanket relayout of every child.
+        "group flex items-center pointer-fine:items-start gap-2 rounded-lg border-t-2 border-t-transparent transition-colors",
         "border-b border-border",
         isDropTarget && "border-t-primary",
         isNestTarget && "bg-primary/10 ring-2 ring-primary ring-inset",
@@ -373,7 +399,12 @@ export function TaskRowContent({
             }
           }}
           className={cn(
-            "hidden pointer-fine:flex size-6 shrink-0 touch-none cursor-grab items-center justify-center rounded text-muted-foreground active:cursor-grabbing",
+            // `pointer-fine:self-center`: the row's own `pointer-fine:items-
+            // start` (above, this div's own comment) is scoped to the
+            // checkbox/title pairing a real measurement drove — this handle
+            // keeps its pre-existing centred look on mouse/desktop, exactly
+            // as it was before that change, by opting back out of it here.
+            "hidden pointer-fine:flex pointer-fine:self-center size-6 shrink-0 touch-none cursor-grab items-center justify-center rounded text-muted-foreground active:cursor-grabbing",
             HOVER_REVEAL_CLASSES,
           )}
         >
@@ -480,42 +511,96 @@ export function TaskRowContent({
           {/*
             Edit → Date → Comment → More actions — Todoist's own measured
             order and size (24×24, `--td-row-action-radius`/`-icon`/`-hover`,
-            index.css). `hidden` by default even under `pointer-fine`,
-            flipped to `flex` only by `pointer-fine:group-hover:flex` (the
-            outer row's own `group`, task-row-content.tsx's root div below)
-            — a display swap, not the old opacity fade: nothing here is
-            rendered with any layout box at all until hover, so there is no
-            transition to animate and the reveal is instant, matching what
-            this ticket's own measurement of Todoist found ("not faded in").
-            `scheduleOpen || commandMenuOpen` overrides the hover gate
-            unconditionally to `flex`, because the Date popover and the
-            More menu both have to survive the pointer leaving the row
-            while either is open (#440's own popover anchors to the Date
-            button below, which has to stay mounted for that to keep
-            working) — this is a plain boolean OR, not a second Tailwind
-            variant, since jsdom cannot evaluate `:hover`/`group-hover` at
-            all and this half of the contract is real React state instead.
+            index.css). `hidden` by default; a `pointer-fine:` variant is
+            the only door to `flex` — a display swap, not an opacity fade:
+            nothing here has any layout box at all until one of those
+            variants matches, so there is no transition to animate and the
+            reveal is instant, matching what this ticket's own measurement
+            of Todoist found ("not faded in"). Never a bare `flex` — see
+            each branch below for why touch (never `pointer-fine`) has to
+            stay `hidden` regardless of which branch fires.
 
-            Losing the individual `pointer-fine:focus-visible:opacity-100`
-            the pre-#438 buttons carried is a deliberate trade, not an
-            oversight: a `hidden`-by-default element cannot be tabbed to at
-            all, so keyboard focus can no longer reveal this strip the way
-            hovering does — but every one of these four actions already has
-            an independent keyboard door that does not depend on this strip
-            being visible first: `T` opens Date (task-row.tsx's own
-            `OPEN_SCHEDULE_EVENT` listener), `.`/right-click opens More
-            (`OPEN_COMMAND_MENU_EVENT`), and Enter/click on the title itself
-            opens the same detail view Comment does — Edit is the one
-            action with no OTHER keyboard door, unchanged from before this
-            ticket (task-row.tsx's own `TaskDetailActions.onRename` doc
-            comment already notes it as a mouse-measured affordance, not a
-            Todoist-measured one).
+            `z-10` plus an opaque `bg-background`: a real-browser review
+            round found the strip laid out correctly on a wrapped
+            (2-3-line) title — `display: flex`, a 24×24 rect at line one's
+            own right edge, `elementFromPoint` resolving to the Pencil SVG —
+            but never actually PAINTED there; only the title's own
+            `line-clamp-4` ellipsis showed. The strip is already the later
+            DOM sibling here, which normally paints on top of an in-flow,
+            non-positioned box like the title button on its own — but
+            `line-clamp-4` compiles to `display:-webkit-box` plus
+            `overflow:hidden`, Chromium's legacy deprecated-flexbox
+            implementation for multi-line clamping, and that legacy box
+            only engages its own clip/paint machinery once it actually HAS
+            to cut text (never on a single line, which is why single-line
+            rows painted fine and only a wrapped title reproduced this).
+            An explicit `z-10` forces this absolutely-positioned strip into
+            its own unambiguous stacking layer instead of leaving the
+            browser to order two same-`z-index:auto` boxes against that
+            legacy box's own compositing quirks; the opaque background is
+            the second half — Todoist's own hard cut over trailing title
+            text, not a transparent overlap — and doubles as a guard here:
+            even a residual paint-order glitch under this box specifically
+            cannot show through an opaque fill on top of it.
+
+            `scheduleOpen || commandMenuOpen` overrides the hover gate to
+            `pointer-fine:flex` (not a bare `flex`, and not `pointer-fine:
+            group-hover:flex` — touch never satisfies `pointer-fine` at
+            all, so it stays `hidden` in every branch below regardless of
+            this boolean), because the Date popover and the More menu both
+            have to survive the pointer leaving the row while either is
+            open (#440's own popover anchors to the Date button below,
+            which has to stay mounted for that to keep working). A review
+            round's own repro: the first cut here used a bare `flex` with
+            no `pointer-fine` gate at all, which opened all four buttons on
+            touch the moment its Date sheet or More menu opened, where
+            `main` kept them hidden — this is a plain boolean OR choosing
+            between two `pointer-fine`-gated strings, never a media feature
+            jsdom could evaluate directly, but the STRING it selects is
+            exactly what a unit test can assert on instead.
+
+            `pointer-fine:group-focus-within:flex`, alongside `pointer-
+            fine:group-hover:flex`, is what restores keyboard reachability
+            a `hidden`-by-default strip would otherwise cost entirely: a
+            review round caught that the pre-#438 buttons carried their own
+            `pointer-fine:focus-visible:opacity-100` (Tab reached them
+            because they were always in the DOM, just faded), and this
+            strip's `hidden` removes it from the tab order outright with no
+            equivalent unless SOMETHING earlier in the same `group` gets
+            focus first — the checkbox and the title button both precede
+            this strip in the row's own tab order and are always focusable,
+            so tabbing into the row (landing on either) satisfies `:focus-
+            within` on the row's own `.group` and reveals the strip before
+            Tab would ever reach it, the identical reveal hovering gives a
+            mouse. `T` (Date, task-row.tsx's own `OPEN_SCHEDULE_EVENT`
+            listener) and `.`/right-click (More, `OPEN_COMMAND_MENU_EVENT`)
+            remain independent keyboard doors that don't depend on this at
+            all; Edit still has no OTHER keyboard door (task-row.tsx's own
+            `TaskDetailActions.onRename` doc comment already notes it as a
+            mouse-measured affordance, not a Todoist-measured one), which
+            is exactly why restoring Tab reachability here, rather than
+            just leaving Edit unreachable by keyboard, is the fix and not
+            an acceptable gap.
+
+            `!editingTitle` gates every reveal branch to nothing at all
+            while this row's own inline title editor (`editingTitle`,
+            below) is mounted — the strip stays in the DOM (so the Date
+            popover/More menu's own open state, owned by `task-row.tsx`,
+            never gets torn down from under itself by an unmount), but it
+            can never become visible over the editor: no hover, no focus-
+            within, and not even `scheduleOpen`/`commandMenuOpen` forcing
+            it open, since none of those are reachable while editing this
+            row's title is what has focus in the first place.
           */}
           <div
             data-row-action-strip
             className={cn(
-              "absolute top-0 right-0 items-center gap-0.5",
-              scheduleOpen || commandMenuOpen ? "flex" : "hidden pointer-fine:group-hover:flex",
+              "absolute top-0 right-0 z-10 items-center gap-0.5 bg-background",
+              "hidden",
+              !editingTitle &&
+                (scheduleOpen || commandMenuOpen
+                  ? "pointer-fine:flex"
+                  : "pointer-fine:group-hover:flex pointer-fine:group-focus-within:flex"),
             )}
           >
             <button
@@ -680,7 +765,11 @@ export function TaskRowContent({
           aria-label={`Complete and archive recurring task "${task.content}"`}
           onClick={onCompleteForever}
           className={cn(
-            "flex -my-1 size-11 shrink-0 items-center justify-center rounded-md text-muted-foreground transition hover:bg-muted hover:text-foreground",
+            // `pointer-fine:self-center` — see the grip handle's own
+            // identical comment just above (this row's own `pointer-fine:
+            // items-start` doesn't touch this button's pre-existing centred
+            // look).
+            "flex -my-1 size-11 shrink-0 items-center justify-center rounded-md text-muted-foreground pointer-fine:self-center transition hover:bg-muted hover:text-foreground",
             HOVER_REVEAL_CLASSES,
           )}
         >
@@ -694,7 +783,9 @@ export function TaskRowContent({
           onChange={(event) =>
             onMoveToSection?.(event.target.value === "" ? null : event.target.value)
           }
-          className="shrink-0 rounded-md border border-border bg-background px-1 py-1 text-muted-foreground text-xs"
+          // `pointer-fine:self-center` — see the grip handle's own identical
+          // comment above.
+          className="shrink-0 rounded-md border border-border bg-background px-1 py-1 text-muted-foreground text-xs pointer-fine:self-center"
         >
           <option value="">No Section</option>
           {sectionOptions.map((section) => (
