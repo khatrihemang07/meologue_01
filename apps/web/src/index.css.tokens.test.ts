@@ -121,3 +121,33 @@ describe("index.css — issue #437's Todoist top bar (measured values)", () => {
     expect(dark.get("--td-topbar-border")).toBe("rgb(40, 40, 40)");
   });
 });
+
+/**
+ * Issue #438's own hover-strip tokens, both driven live against Todoist:
+ * light icon `rgb(128, 128, 128)`, light per-button hover background
+ * `rgb(238, 238, 238)`; dark icon `rgb(209, 209, 209)`, dark per-button
+ * hover background `rgb(77, 77, 77)`; 3px corner radius, both themes.
+ * Light was measured in a later review round than dark, not alongside it
+ * — `index.css`'s own comment on these tokens has the fuller history. The
+ * radius is declared once, undeclared in `.dark` — theme-independent
+ * geometry, the identical pattern `--td-popover-width`'s own test file
+ * comment (above) already established for `--td-popover-max-height`.
+ */
+describe("index.css — issue #438's row hover-strip tokens", () => {
+  const { light, dark } = parseThemeTokens(readIndexCss());
+
+  it("icon colour — the measured rgb(128,128,128) in light, the measured rgb(209,209,209) in dark", () => {
+    expect(light.get("--td-row-action-icon")).toBe("rgb(128, 128, 128)");
+    expect(dark.get("--td-row-action-icon")).toBe("rgb(209, 209, 209)");
+  });
+
+  it("per-button hover background — the measured rgb(238,238,238) in light, the measured rgb(77,77,77) in dark", () => {
+    expect(light.get("--td-row-action-hover")).toBe("rgb(238, 238, 238)");
+    expect(dark.get("--td-row-action-hover")).toBe("rgb(77, 77, 77)");
+  });
+
+  it("corner radius — theme-independent, not re-declared in dark", () => {
+    expect(light.get("--td-row-action-radius")).toBe("3px");
+    expect(dark.get("--td-row-action-radius")).toBe("3px");
+  });
+});

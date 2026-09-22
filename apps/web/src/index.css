@@ -516,6 +516,21 @@
   --td-chrome-font-size: 13px;
 
   /*
+   * Issue #438's own hover strip (Edit, Date, Comment, More) — driven live
+   * against Todoist. First pass only reached the Dark preset (`rgb(209,
+   * 209, 209)` icon, `rgb(77, 77, 77)` hover background) and left light
+   * unmeasured; a review round's own side-by-side then measured light too:
+   * icon `rgb(128, 128, 128)`, per-button hover background `rgb(238, 238,
+   * 238)`. `--td-row-action-radius`'s 3px corner is theme-independent
+   * geometry — declared once here, not re-declared in `.dark` below, the
+   * identical pattern `--td-popover-width`/`--td-popover-max-height`
+   * already established two blocks up.
+   */
+  --td-row-action-icon: rgb(128, 128, 128);
+  --td-row-action-hover: rgb(238, 238, 238);
+  --td-row-action-radius: 3px;
+
+  /*
    * Issue #374: Quick Add's own scoped tokens, renamed off `--td-composer-*`/
    * `--td-add-task-*` — "Composer" is CONTEXT.md's reserved name for the
    * journal Destination, not this surface (D17/#378's own glossary
@@ -665,6 +680,13 @@
      without it dark theme would silently keep painting the light rgb
      rather than falling back to anything sensible. */
   --td-topbar-border: rgb(40, 40, 40);
+
+  /* Issue #438's own dark hover-strip pair — `:root`'s own comment on
+     `--td-row-action-icon`/`--td-row-action-hover` has the measurement.
+     `--td-row-action-radius` is not re-declared here — see that token's
+     own comment for why it's theme-independent. */
+  --td-row-action-icon: rgb(209, 209, 209);
+  --td-row-action-hover: rgb(77, 77, 77);
 }
 
 @layer base {

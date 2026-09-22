@@ -964,27 +964,13 @@ describe("TaskRow", () => {
   // classes Tailwind mechanically turns into that CSS: `hidden` (the base,
   // no-hover state) overridden only by a hover-capable media query.
   //
-  // Issue #309: More used to be the one exception — it carried no `hidden`
-  // at all, because it was the only door onto the full command set (Edit,
-  // Date, Priority, Deadline, Labels, Move to…, Copy link, Delete) on a
-  // touch-only device. #302's detail sheet (inline Date/Priority/Labels/
-  // Project fields — Deadline too, until issue #376 removed its own field
-  // — plus its own `⋮` overflow for Copy link/Complete forever/Delete)
-  // and #308's long-press lift (reordering) between them
-  // give a touch reader a door onto every one of those actions without
-  // this menu, so More now rides the identical `hidden pointer-fine:flex`
-  // gate as the other three — this asserts it does, on a device that
-  // reports coarse-and-hoverless (a genuine touchscreen, not a Tauri
-  // misreport), the exact device this file's own `pointer-fine` doc
-  // comment names.
-  //
   // Issue #224 widened that media query from plain `(hover: hover)` to
   // `(hover: hover),(pointer: fine)` — `task-row-content.tsx`'s own comment
   // explains why: a Tauri desktop window can misreport `(hover: none)` for
   // a real mouse, and OR-ing in `(pointer: fine)` is what stops that
-  // misreport from also taking these four buttons away on a build the real
-  // device fix above was never about. It now rides the `pointer-fine`
-  // variant declared in index.css rather than an inline arbitrary one.
+  // misreport from also taking the grip handle away on a build the real
+  // device fix above was never about. It rides the `pointer-fine` variant
+  // declared in index.css rather than an inline arbitrary one.
   //
   // **Read the limit of this assertion honestly.** `toHaveClass` proves a
   // string is on the element and nothing more — it cannot see whether any
@@ -994,7 +980,206 @@ describe("TaskRow", () => {
   // buttons was fully visible on every row. The class name and the applied
   // style are two different claims; only rendering the real stylesheet
   // settles the second, which is what the side-by-side rig is for.
-  it("Edit, Date, Comment, More and the drag handle are all hidden outside a hover-or-fine-pointer device — asserts the `pointer-fine` gate `(hover: hover) OR (pointer: fine)`, none render on a coarse-and-hoverless touchscreen", () => {
+  it("the drag handle is hidden outside a hover-or-fine-pointer device — asserts the `pointer-fine` gate `(hover: hover) OR (pointer: fine)`, it does not render on a coarse-and-hoverless touchscreen", () => {
+    renderRow({ task: task({ content: "call mum" }) });
+
+    const handle = screen.getByTestId("task-drag-handle");
+    expect(handle).toHaveClass("hidden");
+    expect(handle).toHaveClass("pointer-fine:flex");
+  });
+
+  // Issue #438: Edit/Date/Comment/More no longer carry their own visibility
+  // classes at all — the whole strip they render into
+  // (`[data-row-action-strip]`, task-row-content.tsx's own doc comment on
+  // it) carries exactly one of them, and gets the whole strip's presence
+  // or absence right or wrong together, which is what "the strip stays
+  // visible while its own picker/menu is open" requires: the four buttons
+  // can never disagree about whether they're rendered. `hidden` is ALWAYS
+  // present (the base every device gets, touch included), and at rest the
+  // only door away from it is `pointer-fine:group-hover:flex` plus
+  // `pointer-fine:group-focus-within:flex` (the keyboard-reachability fix
+  // below) — never a bare `flex` and never plain `pointer-fine:flex` at
+  // rest, which is what keeps this a display swap, not the old per-button
+  // opacity fade: there is no opacity step left to fade, so nothing here
+  // can tell a real browser's instant swap from a slow one — see this
+  // file's own header comment two tests up for why that distinction is
+  // out of jsdom's reach regardless. This is also this ticket's own "touch
+  // rows unchanged" contract test: `hidden` never leaves the class list at
+  // rest, and every door out of it is `pointer-fine:`-gated, which touch
+  // never satisfies — the identical media feature the drag-handle test
+  // above already exercises for that device.
+  it("the hover-action strip carries `hidden` plus `pointer-fine:group-hover:flex pointer-fine:group-focus-within:flex` at rest, not a per-button opacity fade", () => {
+    renderRow({ task: task({ content: "call mum" }) });
+
+    const strip = document.querySelector("[data-row-action-strip]");
+    expect(strip).toHaveClass("hidden");
+    expect(strip).toHaveClass("pointer-fine:group-hover:flex");
+    expect(strip).toHaveClass("pointer-fine:group-focus-within:flex");
+    expect(strip).not.toHaveClass("flex");
+    expect(strip).not.toHaveClass("pointer-fine:flex");
+    for (const label of [
+      'Edit "call mum"',
+      'Date "call mum"',
+      'Comment on "call mum"',
+      'More actions for "call mum"',
+    ]) {
+      // The buttons themselves carry `ROW_ACTION_BUTTON_CLASSES` only —
+      // sizing/colour, never a `hidden`/`flex` of their own.
+      const button = screen.getByRole("button", { name: label });
+      expect(button).not.toHaveClass("hidden");
+      expect(button.closest("[data-row-action-strip]")).toBe(strip);
+    }
+  });
+
+  // Review round: a real-browser repro found the strip laid out correctly
+  // on a wrapped (2-3-line) title but never actually painted there — only
+  // the title's own `line-clamp-4` ellipsis showed. Diagnosed as
+  // `line-clamp-4`'s `display:-webkit-box` (Chromium's legacy deprecated-
+  // flexbox clamp implementation, which only engages its clip/paint
+  // machinery once a title actually needs cutting — never on one line,
+  // which is why single-line rows painted fine) fighting the strip's own
+  // `z-index:auto` for paint order. `z-10` forces the strip into its own
+  // unambiguous stacking layer; `bg-background` is the second half —
+  // Todoist's own opaque hard cut over trailing title text rather than a
+  // transparent overlap, and a guard against any residual paint-order
+  // glitch underneath. jsdom paints nothing, so this is a class-contract
+  // test only — the real fix was verified on a real browser, not here.
+  it("the hover-action strip carries `z-10` and an opaque `bg-background` — the real-browser line-clamp paint-order fix", () => {
+    renderRow({ task: task({ content: "call mum" }) });
+
+    const strip = document.querySelector("[data-row-action-strip]");
+    expect(strip).toHaveClass("z-10");
+    expect(strip).toHaveClass("bg-background");
+  });
+
+  // Review round: the first cut's open-state branch
+  // (`scheduleOpen || commandMenuOpen ? "flex" : ...`) carried no
+  // `pointer-fine` gate at all, so opening the Date popover or the More
+  // menu on a touch device showed all four buttons, where `main` kept
+  // them hidden — this asserts the fixed branch is `pointer-fine:flex`,
+  // not a bare `flex`, so `hidden` (touch's own class, every branch)
+  // never has to compete with an ungated one.
+  it("the strip's own open-state override is `pointer-fine:flex`, not a bare `flex` — touch stays hidden even while the Date popover or More menu is open", async () => {
+    renderRow({ task: task({ content: "call mum" }) });
+
+    fireEvent.click(screen.getByRole("button", { name: 'Date "call mum"' }));
+    await waitFor(() => expect(screen.getByRole("dialog")).toBeInTheDocument());
+
+    let strip = document.querySelector("[data-row-action-strip]");
+    expect(strip).toHaveClass("hidden");
+    expect(strip).toHaveClass("pointer-fine:flex");
+    expect(strip).not.toHaveClass("flex");
+
+    // Close it and open the More menu instead — the identical contract.
+    fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" });
+    fireEvent.contextMenu(screen.getByRole("listitem"));
+    expect(screen.getByRole("menu")).toBeInTheDocument();
+
+    strip = document.querySelector("[data-row-action-strip]");
+    expect(strip).toHaveClass("hidden");
+    expect(strip).toHaveClass("pointer-fine:flex");
+    expect(strip).not.toHaveClass("flex");
+  });
+
+  // Review round: the pre-#438 buttons were always in the DOM, each
+  // carrying its own `pointer-fine:focus-visible:opacity-100`, so Tab
+  // reached them even without a hover. `hidden`-by-default removes that
+  // door outright unless something EARLIER in the row's own tab order —
+  // the checkbox, then the title button, both always focusable and both
+  // preceding the strip in DOM order inside `[data-row-title-first-line]`
+  // — brings `:focus-within` to the row's own `.group` first. This can't
+  // assert the strip becomes VISIBLE (jsdom evaluates no `:focus-within`
+  // media/pseudo-state for painting), only that the class doing that work
+  // is actually on the element — the class-contract limit this file's own
+  // header comment on the drag-handle test already names.
+  it("carries `pointer-fine:group-focus-within:flex`, restoring the Tab reachability a hidden-by-default strip would otherwise cost", () => {
+    renderRow({ task: task({ content: "call mum" }) });
+
+    const strip = document.querySelector("[data-row-action-strip]");
+    expect(strip).toHaveClass("pointer-fine:group-focus-within:flex");
+
+    // The title button precedes the strip in DOM order, inside the same
+    // `[data-row-title-first-line]` span the strip lives in — confirms Tab
+    // reaches something that can bring `:focus-within` to the row BEFORE
+    // it would ever reach a strip button, not after.
+    const firstLine = document.querySelector("[data-row-title-first-line]");
+    const titleButton = screen.getByRole("button", { name: "call mum" });
+    const stripEl = strip as Element;
+    expect(firstLine?.contains(titleButton)).toBe(true);
+    expect(firstLine?.contains(stripEl)).toBe(true);
+    const position = titleButton.compareDocumentPosition(stripEl);
+    expect(position & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  // Review round: clicking Edit activates this row's own inline title
+  // editor in place — the strip must not render/show over it. The strip
+  // stays MOUNTED (so the Date popover/More menu's own open state, owned
+  // by `task-row.tsx`, is never torn down from under itself), but every
+  // reveal door — hover, focus-within, and even a forced-open
+  // `scheduleOpen`/`commandMenuOpen` — is gated off by `!editingTitle`.
+  it("shows no reveal classes on the strip while the inline title editor is active", async () => {
+    renderRow({ task: task({ content: "call mum" }) });
+
+    fireEvent.click(screen.getByRole("button", { name: 'Edit "call mum"' }));
+    await screen.findByLabelText("Task name");
+
+    const strip = document.querySelector("[data-row-action-strip]");
+    expect(strip).toHaveClass("hidden");
+    expect(strip).not.toHaveClass("pointer-fine:flex");
+    expect(strip).not.toHaveClass("pointer-fine:group-hover:flex");
+    expect(strip).not.toHaveClass("pointer-fine:group-focus-within:flex");
+    expect(strip).not.toHaveClass("flex");
+    // Still mounted, not unmounted — the Date/More trigger buttons are
+    // still findable in the DOM, just carrying no reveal class.
+    expect(screen.getByRole("button", { name: 'Date "call mum"' })).toBeInTheDocument();
+  });
+
+  // Review round, driven live against Todoist: the checkbox and the strip
+  // have to share the identical top on mouse/desktop, single-line and
+  // wrapped alike — meologue measured 1.5px off on a single-line row (the
+  // checkbox's own 24px box vs the title's own ~21px line-height, each
+  // independently centred against a 43px row) and ~19.5px off on a
+  // wrapped title plus a metadata line (the checkbox centred across the
+  // whole tall column, the strip pinned to line one alone). The fix is
+  // `pointer-fine:items-start` on the row itself (`rowBox()`'s own
+  // `items-center` stays the base every device gets — Todoist Android was
+  // never measured for this, so touch is unaffected) — jsdom lays out no
+  // real geometry to confirm the pixels agree, so this is a class-contract
+  // test: the row carries the override, and the checkbox carries no
+  // `self-center` escape from it (so it inherits the new top alignment),
+  // while the grip handle, "Complete and archive" and the Section
+  // `<select>` — none of which this review touched — each carry
+  // `pointer-fine:self-center` to keep their own pre-existing centred
+  // look unchanged.
+  it("the row is `pointer-fine:items-start` (checkbox pinned to the first line on mouse), `items-center` stays the touch base", () => {
+    renderRow({
+      task: task({ id: "1", content: "call mum", dateString: "every month" }),
+      sectionOptions: [{ id: "s1", name: "Errands" }],
+    });
+
+    const box = rowBox();
+    expect(box).toHaveClass("items-center");
+    expect(box).toHaveClass("pointer-fine:items-start");
+
+    const checkbox = screen.getByRole("checkbox");
+    expect(checkbox).not.toHaveClass("pointer-fine:self-center");
+
+    const handle = screen.getByTestId("task-drag-handle");
+    expect(handle).toHaveClass("pointer-fine:self-center");
+
+    const completeForever = screen.getByRole("button", {
+      name: 'Complete and archive recurring task "call mum"',
+    });
+    expect(completeForever).toHaveClass("pointer-fine:self-center");
+
+    const section = screen.getByRole("combobox", { name: 'Move "call mum" to a Section' });
+    expect(section).toHaveClass("pointer-fine:self-center");
+  });
+
+  // Each button is 24×24 (`size-6`), matching the checkbox's own size —
+  // not the pre-#438 44×44 (`size-11`) this ticket's own report measured
+  // as dominating a 43px row.
+  it("each hover-action button is size-6 (24×24), not the pre-#438 size-11", () => {
     renderRow({ task: task({ content: "call mum" }) });
 
     for (const label of [
@@ -1004,13 +1189,92 @@ describe("TaskRow", () => {
       'More actions for "call mum"',
     ]) {
       const button = screen.getByRole("button", { name: label });
-      expect(button).toHaveClass("hidden");
-      expect(button).toHaveClass("pointer-fine:flex");
+      expect(button).toHaveClass("size-6");
+      expect(button).not.toHaveClass("size-11");
     }
+  });
 
-    const handle = screen.getByTestId("task-drag-handle");
-    expect(handle).toHaveClass("hidden");
-    expect(handle).toHaveClass("pointer-fine:flex");
+  // Issue #438's own no-reflow rule: the strip overlays the title's first
+  // line rather than reserving space that would move it — an absolutely-
+  // positioned element contributes nothing to its normal-flow parent's
+  // box, so `[data-row-action-strip]` has to sit inside
+  // `[data-row-title-first-line]` (task-row-content.tsx's own doc comment
+  // on that span), not as a sibling of the checkbox/title/Section-select
+  // out in the row's own full-height flex row (`rowBox()`'s direct
+  // children) the way it did before this ticket.
+  it("the hover-action strip is structurally inside the title's own first-line span, not a direct child of the row", () => {
+    renderRow({ task: task({ content: "call mum" }) });
+
+    const firstLine = document.querySelector("[data-row-title-first-line]");
+    const strip = document.querySelector("[data-row-action-strip]");
+    expect(firstLine).not.toBeNull();
+    expect(strip).not.toBeNull();
+    expect(strip?.parentElement).toBe(firstLine);
+    // Not a direct child of the row's own full-height box — the very
+    // thing "not spanning the whole row" (this ticket's own acceptance
+    // criterion) depends on structurally, since jsdom lays out no real
+    // geometry to check it visually.
+    const box = document.querySelector("[data-task-row-box]");
+    expect(strip?.parentElement).not.toBe(box);
+  });
+
+  // "Multi-line titles keep the strip on the first line" (this ticket's own
+  // acceptance criterion): a long title (`line-clamp-4`) plus a metadata
+  // line together make `rowBox()`'s own height, and the outer flex-col
+  // title/description/metadata span, considerably taller than one line —
+  // the identical structural check above still has to hold here, since
+  // `[data-row-title-first-line]` wraps only the title button, never the
+  // description or metadata siblings the strip must NOT drift down into.
+  it("keeps the strip inside the title's own first-line span even when the title wraps and the row carries a metadata line", () => {
+    renderRow({
+      task: task({
+        content:
+          "a genuinely long task title that Todoist's own line-clamp-4 would wrap across several lines of this row",
+        date: "2026-09-03",
+      }),
+    });
+
+    const firstLine = document.querySelector("[data-row-title-first-line]");
+    const strip = document.querySelector("[data-row-action-strip]");
+    expect(strip?.parentElement).toBe(firstLine);
+    // The metadata line (the date badge) renders as a LATER sibling of
+    // `[data-row-title-first-line]` inside the same outer flex-col span,
+    // never inside it — confirms the wrapper genuinely holds only the
+    // title, not the whole column this row's own metadata also lives in.
+    expect(firstLine?.parentElement?.querySelector(".lucide-calendar")).not.toBeNull();
+    expect(firstLine?.querySelector(".lucide-calendar")).toBeNull();
+  });
+
+  // #440's own popover-placement measurement anchors to the Date button
+  // itself, which has to stay mounted while the picker is open — this
+  // ticket's own "stays visible while open" rule is what keeps it that
+  // way once the strip is hidden-by-default rather than merely faded.
+  // `pointer-fine:flex`, not a bare `flex` — see the touch-leak test above
+  // for why a bare `flex` here was itself a defect, not just a stricter
+  // assertion.
+  it("the strip's own open-state class is present while its Date popover is genuinely open (a real dialog role, not just the flag)", async () => {
+    renderRow({ task: task({ content: "call mum" }) });
+
+    fireEvent.click(screen.getByRole("button", { name: 'Date "call mum"' }));
+    await waitFor(() => expect(screen.getByRole("dialog")).toBeInTheDocument());
+
+    const strip = document.querySelector("[data-row-action-strip]");
+    expect(strip).toHaveClass("pointer-fine:flex");
+    expect(strip).toHaveClass("hidden");
+  });
+
+  // The identical rule, for the More menu — right-click opens the same
+  // `commandMenuOpen` flag task-row.tsx owns, which task-row-content.tsx
+  // ORs into the strip's own visibility alongside `scheduleOpen` above.
+  it("the strip's own open-state class is present while the More menu is genuinely open (a real menu role, not just the flag)", () => {
+    renderRow({ task: task({ content: "call mum" }) });
+
+    fireEvent.contextMenu(screen.getByRole("listitem"));
+    expect(screen.getByRole("menu")).toBeInTheDocument();
+
+    const strip = document.querySelector("[data-row-action-strip]");
+    expect(strip).toHaveClass("pointer-fine:flex");
+    expect(strip).toHaveClass("hidden");
   });
 
   // Issue #309's own "inset reclaimed" acceptance criterion, spelled out
@@ -1207,11 +1471,20 @@ describe("TaskRow", () => {
   });
 
   describe("row height follows whether the row has a metadata line", () => {
-    it("lays the 44px row actions out at 36px so they cannot hold a title-only row above 43px", () => {
+    // Issue #438 replaced the pre-existing 44px buttons (each taller than
+    // this row's own 43px floor, needing the `-my-1` margin trick this
+    // test used to assert on to avoid inflating it) with 24px ones,
+    // absolutely positioned out of this row's own normal flow entirely
+    // (task-row-content.tsx's own `[data-row-title-first-line]` doc
+    // comment) — they can never affect `rowBox()`'s own height, measured
+    // or otherwise, so there is nothing left here for a margin trick to
+    // compensate for.
+    it("carries no compensating margin on the hover-action buttons — they no longer affect row height at all", () => {
       renderRow({ task: task({ content: "call mum" }) });
 
       const more = screen.getByRole("button", { name: 'More actions for "call mum"' });
-      expect(more).toHaveClass("size-11", "-my-1");
+      expect(more).toHaveClass("size-6");
+      expect(more).not.toHaveClass("-my-1");
     });
 
     it("floors a title-only row at 43px", () => {
