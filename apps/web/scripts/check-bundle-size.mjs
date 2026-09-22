@@ -242,6 +242,28 @@ const CHUNK_BUDGETS = {
     ceilingBytes: 64_200,
     baselineBytes: 49_399,
   },
+  // `task-schedule-popover.tsx` itself — `lazy-task-schedule-popover.ts`'s
+  // own shared lazy chunk, already the dynamic-import target of THREE
+  // call sites before this entry existed (`task-row-content.tsx`'s hover
+  // Date button, `overdue-reschedule-action.tsx`'s Reschedule, `quick-add-
+  // content.tsx`'s date chip — `lazy-task-schedule-popover.ts`'s own
+  // header comment), which is why `readLazyChunksFromManifest` already
+  // discovered it as a route (`isDynamicEntry: true`) with no budget of
+  // its own to check against — this table simply never grew one, and
+  // nothing before now had made this chunk large enough for that gap to
+  // matter. Issue #439 (this file's `task-detail-view.tsx` entry above
+  // now routes through this same lazy wrapper too, its own comment there
+  // has why) is also what grew this chunk for real: its own `Calendar`
+  // became `MonthListCalendar`, pulling in `@tanstack/react-virtual` and
+  // `lib/month-list.ts`, neither of which any of this chunk's three prior
+  // callers needed before. Measured 65,766 bytes gzip (own chunk + 16
+  // shared) on a clean `build:android` immediately after adding
+  // `task-detail-view.tsx` as its fourth caller — the same ~30% headroom
+  // every other entry in this table carries above its own baseline.
+  "src/components/todo/task-schedule-popover.tsx": {
+    ceilingBytes: 85_500,
+    baselineBytes: 65_766,
+  },
   // Issue #416 — raised from 3,400/2,734. #411's Mod-Enter/Cmd-Enter
   // keymap binding and #388's `/` sigil support both landed genuine new
   // code in this shared editor since the previous baseline, measuring

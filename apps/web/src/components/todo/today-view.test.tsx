@@ -2,7 +2,7 @@ import type { Task } from "@meologue/core";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { swipeDown, swipeLeft } from "@/test/swipe";
-import { installResizeObserverStub } from "@/test/virtualized-scroll";
+import { installResizeObserverStub, stubOffsetSize } from "@/test/virtualized-scroll";
 import { TodayView } from "./today-view";
 
 /** The `[data-task-row-box]` `<div>` inside the row that renders `label` — the element `use-swipe-actions.ts` picks up (`SWIPE_TARGET_ATTRIBUTE`'s own doc comment), same as task-tree.test.tsx's identical helper. */
@@ -12,6 +12,34 @@ function rowBox(label: string): HTMLElement {
   const box = row.querySelector<HTMLElement>(":scope > [data-task-row-box]");
   if (!box) throw new Error(`expected a row box on "${label}"'s row`);
   return box;
+}
+
+/**
+ * Issue #439's own `MonthListCalendar` (behind Reschedule's own
+ * `TaskSchedulePopover`) is virtualized, unlike the react-day-picker grid
+ * it replaced — no day cell renders at all until the scroll element's own
+ * viewport has a real, non-zero size (`month-list-calendar.test.tsx`'s own
+ * `renderCalendar` helper documents the full mechanism: jsdom's virtualizer
+ * range is permanently `null` without it).
+ *
+ * `installResizeObserverStub()` has to run BEFORE `openPopover` — the
+ * calendar constructs its own real `ResizeObserver` the moment it mounts,
+ * against whichever `ResizeObserver` CLASS is the current global at that
+ * exact instant (`src/test/setup.ts`'s own file-wide `NoOpResizeObserver`
+ * by default). Swapping in a different stub class AFTER that construction
+ * — installing it only once the popover is already open — does nothing:
+ * the already-constructed instance stays bound to whichever class built
+ * it, and the new stub's own `triggerResize` has no handle on an instance
+ * it never tracked. `beforeAll`'s own one-off warm-up stub, above, is a
+ * different instance again, discarded once that call returns — neither it
+ * nor `setup.ts`'s default can be triggered by hand at all.
+ */
+function stubMonthListViewport(openPopover: () => void) {
+  const { triggerResize } = installResizeObserverStub();
+  openPopover();
+  const scrollElement = screen.getByTestId("month-list-scroll");
+  stubOffsetSize(scrollElement, { width: 226, height: 180 });
+  triggerResize(scrollElement);
 }
 
 function task(overrides: Partial<Task> = {}): Task {
@@ -337,8 +365,10 @@ describe("TodayView", () => {
         onSetDateString,
       });
 
-      fireEvent.click(screen.getByRole("button", { name: "Reschedule" }));
-      fireEvent.click(screen.getByRole("button", { name: /September 20th, 2026/ }));
+      stubMonthListViewport(() =>
+        fireEvent.click(screen.getByRole("button", { name: "Reschedule" })),
+      );
+      fireEvent.click(document.querySelector('[data-day="2026-09-20"]') as HTMLElement);
 
       expect(onSetDate).toHaveBeenCalledTimes(2);
       expect(onSetDate).toHaveBeenCalledWith("a", "2026-09-20T21:00");
@@ -433,12 +463,16 @@ describe("TodayView", () => {
         },
       });
 
-      fireEvent.click(screen.getByRole("button", { name: "Reschedule" }));
+      stubMonthListViewport(() =>
+        fireEvent.click(screen.getByRole("button", { name: "Reschedule" })),
+      );
 
-      const busyCell = document.querySelector('[data-day="2026-09-20"]');
-      const quietCell = document.querySelector('[data-day="2026-09-21"]');
-      expect(busyCell?.className).toContain("before:content-['']");
-      expect(quietCell?.className).not.toContain("before:content-['']");
+      const busyCell = document.querySelector('[data-day="2026-09-20"]') as HTMLElement;
+      const quietCell = document.querySelector('[data-day="2026-09-21"]') as HTMLElement;
+      expect(within(busyCell).getByTestId("busy-dot").style.backgroundColor).toBe(
+        "var(--td-calendar-list-busy-dot)",
+      );
+      expect(within(quietCell).getByTestId("busy-dot").style.backgroundColor).toBe("transparent");
     });
   });
 

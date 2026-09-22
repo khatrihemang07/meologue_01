@@ -8,7 +8,7 @@ import { localDayKey } from "@/lib/local-day-key";
 // own named import of the same function — the identical pattern entry-
 // row.test.tsx's own `entryDayModule` already uses for the same reason.
 import * as schedulePopoverPlacement from "@/lib/schedule-popover-placement";
-import { installResizeObserverStub } from "@/test/virtualized-scroll";
+import { installResizeObserverStub, stubOffsetSize } from "@/test/virtualized-scroll";
 import { isOwnedPortalTarget, TaskSchedulePopover } from "./task-schedule-popover";
 
 /**
@@ -138,6 +138,23 @@ function renderPopover(props: Partial<Parameters<typeof TaskSchedulePopover>[0]>
 
 function open() {
   fireEvent.click(screen.getByRole("button", { name: "Pick a date" }));
+}
+
+/**
+ * Issue #439's own `MonthListCalendar` is virtualized (`month-list-
+ * calendar.tsx`'s own header comment), so — unlike the react-day-picker
+ * grid it replaced, a static grid needing no viewport measurement at all —
+ * every test that wants a real day cell rendered needs the SAME
+ * `stubOffsetSize`/`triggerResize` dance `month-list-calendar.test.tsx`'s
+ * own `renderCalendar` helper documents in full. `resizeObserverStub` is
+ * already installed file-wide (this file's own top-level `beforeEach`);
+ * this just points it at the calendar's own scroll element rather than the
+ * desktop-placement one `stubDesktopMeasurements` targets.
+ */
+function stubMonthListViewport() {
+  const scrollElement = screen.getByTestId("month-list-scroll");
+  stubOffsetSize(scrollElement, { width: 226, height: 180 });
+  act(() => resizeObserverStub?.triggerResize(scrollElement));
 }
 
 /**
@@ -751,7 +768,7 @@ describe("TaskSchedulePopover", () => {
       expect(view.style.boxShadow).toBe("var(--td-popover-shadow)");
     });
 
-    it("renders exactly one scroll region, holding everything below the pinned input", () => {
+    it("renders the card's own outer scroll region, holding everything below the pinned input, plus #439's own nested month-list viewport", () => {
       renderPopover();
       open();
 
@@ -767,9 +784,18 @@ describe("TaskSchedulePopover", () => {
       const quickOptionsScrollRegion = quickOptions.closest('[class*="overflow-y-auto"]');
       expect(quickOptionsScrollRegion).not.toBeNull();
       expect(quickOptionsScrollRegion?.className).toContain("overflow-y-auto");
-      // Exactly one such region in the whole card — not one per section.
+      // TWO such regions now, not one: issue #439's own endless month list
+      // (`month-list-calendar.tsx`) is a NESTED scroll context of its
+      // own — its own ~180px visible window scrolling independently of
+      // this card's outer region, exactly like Todoist's own card (the
+      // calendar's own list scrolls on its own, inside the popover's own
+      // scroll). This test's own pre-#439 assertion ("exactly one") was
+      // right for the old fixed-height month grid, which had no scrolling
+      // of its own — it stops being true the moment the calendar itself
+      // needs to scroll.
       const allScrollRegions = view.querySelectorAll('[class*="overflow-y-auto"]');
-      expect(allScrollRegions).toHaveLength(1);
+      expect(allScrollRegions).toHaveLength(2);
+      expect(screen.getByTestId("month-list-scroll").className).toContain("overflow-y-auto");
     });
 
     // Issue #436's own real-browser follow-up: a fixed 236px, `overflow-
@@ -788,21 +814,6 @@ describe("TaskSchedulePopover", () => {
 
       const view = screen.getByTestId("scheduler-view");
       expect(view.querySelector('[class*="overflow-hidden"]')).toBeNull();
-    });
-
-    it("renders Nov 2026's own sixth week in the DOM (30 Nov) — a weaker check than the one above: jsdom can't see a CSS clip, only a missing node", () => {
-      // Nov 2026: the 1st is a Sunday, so a Monday-start grid needs six
-      // rows to reach the 30th — the exact "6-week month" shape the old
-      // fixed-height, `overflow-hidden` calendar box made visually
-      // unreachable without ever removing it from the DOM (CSS clipping
-      // hides paint, not markup) — so this alone would have passed even
-      // under the bug. Kept anyway as a plain sanity check that the
-      // calendar itself still renders every row a 6-week month needs; the
-      // test above is the one that actually guards the regression.
-      renderPopover({ now: new Date(2026, 10, 1, 12, 0) });
-      open();
-
-      expect(document.querySelector('[data-day="2026-11-30"]')).not.toBeNull();
     });
 
     it("renders exactly three dividers — after the input, after the quick options, and after the calendar", () => {
@@ -883,216 +894,58 @@ describe("TaskSchedulePopover", () => {
     });
   });
 
-  describe("calendar — the six defects measured live 2026-09-15", () => {
-    it("starts the week on Monday", () => {
+  // Issue #439 replaced the old react-day-picker month grid with
+  // `MonthListCalendar` (`month-list-calendar.tsx`) — an endless, virtualized
+  // week list with its own dedicated, thorough test suite
+  // (`month-list-calendar.test.tsx`: start bound, virtualization boundedness,
+  // pinned label tracking, ‹ ○ › nav, today/selected/busy-dot/greyed-weekend
+  // styling, hover info line, minDay/initialDay). This describe block only
+  // proves the WIRING between that component and this popover — the props
+  // it's handed, and that a pick still closes the popover — not the
+  // calendar's own internal behaviour a second time.
+  describe("calendar (issue #439's endless month list)", () => {
+    it("renders the month list, starting on NOW's own current-week Monday", () => {
       renderPopover();
       open();
+      stubMonthListViewport();
 
-      // `<th>` role resolution inside a `role="grid"` table is finicky in
-      // jsdom's accessibility tree — reading the header cells directly
-      // sidesteps that rather than fighting it.
-      const headers = Array.from(document.querySelectorAll("th"));
-      expect(headers.map((h) => h.textContent)).toEqual(["M", "T", "W", "T", "F", "S", "S"]);
+      expect(screen.getByTestId("month-list-weekday-row")).toBeInTheDocument();
+      // NOW = Thu 10 Sep 2026 (module-level constant) -> that week's Monday.
+      expect(document.querySelector('[data-day="2026-09-07"]')).not.toBeNull();
+      expect(screen.getByText("Sep 2026")).toBeInTheDocument();
     });
 
     it("clicking a day commits that day and closes, with no separate Confirm step", () => {
       const { onPickDay } = renderPopover();
       open();
+      stubMonthListViewport();
 
-      fireEvent.click(screen.getByRole("button", { name: /September 20th, 2026/ }));
+      fireEvent.click(document.querySelector('[data-day="2026-09-08"]') as HTMLElement);
 
-      expect(onPickDay).toHaveBeenCalledWith("2026-09-20");
-      expect(screen.queryByRole("button", { name: /^Confirm/ })).not.toBeInTheDocument();
+      expect(onPickDay).toHaveBeenCalledWith("2026-09-08");
+      expect(screen.queryByTestId("scheduler-view")).not.toBeInTheDocument();
     });
 
-    it("today carries no aria-current (deliberate)", () => {
-      renderPopover();
+    it("passes dateDay through as the list's own selectedDay", () => {
+      renderPopover({ dateDay: "2026-09-08" });
       open();
+      stubMonthListViewport();
 
-      const today = screen.getByRole("button", { name: /September 10th, 2026/ });
-      expect(today).not.toHaveAttribute("aria-current");
-      // The `<td>` cell DayPicker itself flags as today, independent of
-      // this file's own styling override. Read through the component's
-      // own injected `now` (NOW = Thu 10 Sep), not react-day-picker's
-      // default reading of the real system clock — `today={now}` on the
-      // `<Calendar>` below is what makes this assertion mean anything on
-      // any day other than the one this suite happens to run on.
-      expect(document.querySelector('[data-day="2026-09-10"]')).toHaveAttribute(
-        "data-today",
+      expect(document.querySelector('[data-day="2026-09-08"]')).toHaveAttribute(
+        "data-selected",
         "true",
       );
     });
 
-    it("today's colour utility carries `!important` so it wins over the weekend utility on a weekday's cell too", () => {
-      renderPopover();
-      open();
-
-      // Thu 10 Sep 2026 is a weekday, so this cell should carry ONLY the
-      // today styling, not the weekend one.
-      const cell = document.querySelector('[data-day="2026-09-10"]');
-      expect(cell?.className).toContain("text-[color:var(--td-calendar-today)]!");
-      expect(cell?.className).not.toContain("text-muted-foreground");
-    });
-
-    it("today's colour utility still carries `!important` when today is itself a weekend day", () => {
-      // The measured defect: Sat 12 Sep 2026 driven as "now" through the
-      // SAME injected clock every other assertion in this file uses (not
-      // the real system clock, which is not this date) — react-day-picker
-      // must derive its own `data-today` from that same injected value via
-      // this component's `today={now}` prop, or this test would silently
-      // pass on the capture day and go stale everywhere else, exactly the
-      // trap this row's own earlier test fell into.
-      const SATURDAY_NOW = new Date(2026, 8, 12, 12, 0); // Sat 12 Sep 2026
-      renderPopover({ now: SATURDAY_NOW });
-      open();
-
-      const cell = document.querySelector('[data-day="2026-09-12"]');
-      expect(cell).toHaveAttribute("data-today", "true");
-      expect(cell?.className).toContain("text-[color:var(--td-calendar-today)]!");
-      expect(cell?.className).toContain("text-muted-foreground");
-    });
-
-    it("the selected day is a filled circle — the cell carries data-selected", () => {
-      renderPopover({ dateDay: "2026-09-05" });
-      open();
-
-      const cell = document.querySelector('[data-day="2026-09-05"]');
-      expect(cell).toHaveAttribute("data-selected", "true");
-      expect(cell?.className).toContain("bg-[color:var(--td-calendar-selected)]");
-    });
-
-    it("weekends dim independently of today/selected", () => {
-      renderPopover();
-      open();
-
-      // 2026-09-12 is a Saturday.
-      const cell = document.querySelector('[data-day="2026-09-12"]');
-      expect(cell?.className).toContain("text-muted-foreground");
-    });
-
-    it("a day carrying a Task gets the busy-dot modifier", () => {
+    it("passes datesWithTasks through to the list's own busy-dot rendering", () => {
       renderPopover({ datesWithTasks: new Map([["2026-09-14", 2]]) });
       open();
+      stubMonthListViewport();
 
-      const busyCell = document.querySelector('[data-day="2026-09-14"]');
-      const quietCell = document.querySelector('[data-day="2026-09-15"]');
-      expect(busyCell?.className).toContain("before:content-['']");
-      expect(quietCell?.className).not.toContain("before:content-['']");
-    });
-
-    it("a day that is both today and selected gets the selected (white-on-coral) treatment, not today-red (defect 1)", () => {
-      // NOW = Thu 10 Sep 2026 (module-level constant above) — seeding
-      // `dateDay` with that same day makes the 10th both `data-today` and
-      // `data-selected` at once, the exact collision defect 1 measured
-      // live: text rgb(226,106,96) on fill rgb(222,76,74), contrast ratio
-      // 1.23:1.
-      renderPopover({ dateDay: "2026-09-10" });
-      open();
-
-      const cell = document.querySelector('[data-day="2026-09-10"]');
-      expect(cell).toHaveAttribute("data-today", "true");
-      expect(cell).toHaveAttribute("data-selected", "true");
-      // The contract, not the paint: `today`'s colour utility is now
-      // scoped with `:not([data-selected=true])`, so on a cell that also
-      // carries `data-selected="true"` this rule cannot match at all —
-      // jsdom can confirm the selector text is exactly this scoped form
-      // (not the old unconditional one), but computing which colour
-      // actually paints needs a real cascade, which jsdom never runs.
-      expect(cell?.className).toContain(
-        "[&:not([data-selected=true])>button]:text-[color:var(--td-calendar-today)]!",
-      );
-      // `selected`'s own white/fill classes are present and — because the
-      // scoped `today` rule above no longer contests them on this cell —
-      // are the only ones left standing. The real check that they
-      // actually render legibly is the live-browser pass this ticket asks
-      // for, not this suite.
-      expect(cell?.className).toContain("bg-[color:var(--td-calendar-selected)]");
-      expect(cell?.className).toContain("text-white");
-    });
-
-    it("the day button carries Todoist's measured hover/focus-visible pill classes, not `ghost`'s translucent hover or an absent focus ring (defects 2/3)", () => {
-      renderPopover();
-      open();
-
-      const dayButton = screen.getByRole("button", { name: /September 20th, 2026/ });
-      // Defect 3: the opaque measured hover pill, via the shared
-      // `--td-calendar-cell-hover` token — not `ghost`'s own translucent
-      // `hover:bg-muted`.
-      expect(dayButton.className).toContain("hover:bg-[color:var(--td-calendar-cell-hover)]");
-      // `ghost`'s own dark-mode hover (`dark:hover:bg-muted/50`,
-      // button.tsx) outranks a bare `hover:` override by CSS specificity
-      // alone (`.dark .cls:hover` beats `.cls:hover` regardless of
-      // stylesheet order) — dark being the only theme Todoist was ever
-      // measured in, this needs its own `dark:` twin of the token, not
-      // just the plain one.
-      expect(dayButton.className).toContain("dark:hover:bg-[color:var(--td-calendar-cell-hover)]");
-      // A plain substring check would false-positive on the token
-      // literal above (it contains "hover:bg-" as a substring of its own
-      // `dark:hover:bg-[...]` form) — split into tokens so only the exact
-      // `hover:bg-muted` / `dark:hover:bg-muted/50` utilities are
-      // asserted absent.
-      const classTokens = dayButton.className.split(" ");
-      expect(classTokens).not.toContain("hover:bg-muted");
-      expect(classTokens).not.toContain("dark:hover:bg-muted/50");
-      // Defect 2: the measured focus-visible pill (the same token at
-      // 30.6% opacity — `rgba(77, 77, 77, 0.306)`), with `ghost`'s own
-      // ring/border neutralised so nothing competes with it.
-      expect(dayButton.className).toContain(
-        "focus-visible:bg-[color:var(--td-calendar-cell-hover)]/[30.6%]",
-      );
-      expect(dayButton.className).toContain("focus-visible:ring-0");
-      expect(dayButton.className).toContain("focus-visible:border-transparent");
-      // NOTE ON WHAT THIS DOES NOT PROVE: jsdom resolves neither `:hover`
-      // nor `:focus-visible` — this only shows the classes carrying the
-      // measured values are present on the element, not that hovering or
-      // focusing it actually paints them. That check is the live-browser
-      // pass.
-    });
-
-    it("outside-month days carry no dimming classes of their own (defect 4)", () => {
-      renderPopover();
-      open();
-
-      // Sep 2026 starts on a Tuesday and the week starts Monday, so the
-      // grid's first row leads with Mon 31 Aug 2026 — an outside day, and
-      // itself a weekday (not a weekend), which isolates the `outside`
-      // dimming this test is about from `weekend`'s own (correct,
-      // untouched) grey.
-      const cell = document.querySelector('[data-day="2026-08-31"]');
-      expect(cell).toHaveAttribute("data-outside", "true");
-      // The base `Calendar` primitive's own `outside` default
-      // (`text-muted-foreground opacity-50`, calendar.tsx) is blanked at
-      // this call site — Todoist showed next-month days painted exactly
-      // like same-weekday current-month ones, no distinguishing class at
-      // all.
-      expect(cell?.className).not.toContain("opacity-50");
-      expect(cell?.className).not.toContain("text-muted-foreground");
-    });
-
-    it("the day button is sized and radiused toward Todoist's measured cell, not the old square 24px circle (defect 5)", () => {
-      renderPopover();
-      open();
-
-      const dayButton = screen.getByRole("button", { name: /September 20th, 2026/ });
-      // Todoist's own cell is ≈30.4×28px; `h-7` (28px) / `w-[30px]` moves
-      // toward that.
-      expect(dayButton.className).toContain("h-7");
-      expect(dayButton.className).toContain("w-[30px]");
-      // The measured 12px selected-pill radius, pinned directly rather
-      // than left to `rounded-full`'s side effect on a now non-square box
-      // (see this key's own comment in task-schedule-popover.tsx for why
-      // `rounded-full` would silently stop being 12px once the box
-      // stopped being square).
-      expect(dayButton.className).toContain("rounded-[12px]");
-      expect(dayButton.className).not.toContain("rounded-full");
-    });
-
-    it("the month caption reads Todoist's short form, 'Sep 2026', not the locale's full month name (defect 6)", () => {
-      renderPopover();
-      open();
-
-      expect(screen.getByText("Sep 2026")).toBeInTheDocument();
-      expect(screen.queryByText("September 2026")).not.toBeInTheDocument();
+      const busyDot = within(
+        document.querySelector('[data-day="2026-09-14"]') as HTMLElement,
+      ).getByTestId("busy-dot");
+      expect(busyDot.style.backgroundColor).toBe("var(--td-calendar-list-busy-dot)");
     });
   });
 

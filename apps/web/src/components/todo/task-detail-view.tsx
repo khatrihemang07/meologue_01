@@ -21,8 +21,8 @@ import { entryProse } from "@/components/entry-prose";
 import { inlineProse } from "@/components/inline-prose";
 import { LazyActivityFeed } from "@/components/todo/lazy-activity-feed";
 import { LazyTaskDescriptionEditor } from "@/components/todo/lazy-task-description-editor";
+import { LazyTaskSchedulePopover } from "@/components/todo/lazy-task-schedule-popover";
 import { LazyTaskTitleEditor } from "@/components/todo/lazy-task-title-editor";
-import { TaskSchedulePopover } from "@/components/todo/task-schedule-popover";
 import { taskTitleText } from "@/components/todo/task-title-text";
 import { ConfirmDialog } from "@/components/ui/alert-dialog";
 import {
@@ -1533,45 +1533,80 @@ function TaskDetailBody({
             `AttributePill` and `AttributeRow` forward refs (their own doc
             comments above) specifically so this works as a Radix `asChild`
             trigger.
+
+            Issue #439's own bundle-size follow-up: this used to import
+            `TaskSchedulePopover` straight from `task-schedule-popover.tsx`
+            (a STATIC import), which made every byte that file statically
+            pulls in — `date-fns`, Radix `Popover`, and, since #439's own
+            endless month list, `@tanstack/react-virtual` and
+            `lib/month-list.ts` too — count against THIS view's own
+            `check-bundle-size.mjs` budget, even though nothing here needs
+            any of it until a reader actually opens the Date picker.
+            `task-row-content.tsx`'s hover Date button and
+            `quick-add-content.tsx`'s date chip already went through
+            `LazyTaskSchedulePopover` (`lazy-task-schedule-popover.ts`'s
+            own header comment — issue #416's identical fix, for the
+            identical reason) for exactly this; this view's own instance
+            had simply never been switched over, and #439's own new weight
+            is what finally pushed its total over budget (78,760 measured
+            gzip bytes against a 73,000 ceiling) rather than growing the
+            chunk quietly forever. `<Suspense>`'s own fallback below
+            renders the IDENTICAL trigger markup, inertly (no `onClick` —
+            nothing can open before the chunk has loaded anyway), so there
+            is no visible flash while `import()` resolves.
           */}
-          <TaskSchedulePopover
-            open={dateScheduleOpen}
-            onOpenChange={setDateScheduleOpen}
-            dateDay={dateDay}
-            dateTime={dateTime}
-            onSetTime={(time) => {
-              pendingRenameDateRef.current = null;
-              setScheduleTime(time);
-            }}
-            dateString={task.dateString}
-            datesWithTasks={datesWithTasks}
-            onPickDay={(day) => {
-              pendingRenameDateRef.current = null;
-              setScheduleDay(day);
-              if (day === null && task.dateString !== null) {
-                onSetDateString(task.id, null, localDayKey(new Date()));
-              }
-            }}
-            onPickRecurrence={(dateString) => {
-              pendingRenameDateRef.current = null;
-              onSetDateString(task.id, dateString, localDayKey(new Date()));
-            }}
-            trigger={
+          <Suspense
+            fallback={
               task.date === null || dateDisplay === null ? (
                 <AttributePill label="Date" />
               ) : (
                 <AttributeRow
                   icon={null}
                   label="Date"
-                  // Issue #224: the identical tone `task-row.tsx`'s own badge
-                  // reads through `formatTaskDate` — `completed`/`recurring`
-                  // passed the same way, so a Task overdue in the row is
-                  // never merely upcoming in its own detail view.
                   value={<span style={{ color: dateDisplay.colour }}>{dateDisplay.text}</span>}
                 />
               )
             }
-          />
+          >
+            <LazyTaskSchedulePopover
+              open={dateScheduleOpen}
+              onOpenChange={setDateScheduleOpen}
+              dateDay={dateDay}
+              dateTime={dateTime}
+              onSetTime={(time) => {
+                pendingRenameDateRef.current = null;
+                setScheduleTime(time);
+              }}
+              dateString={task.dateString}
+              datesWithTasks={datesWithTasks}
+              onPickDay={(day) => {
+                pendingRenameDateRef.current = null;
+                setScheduleDay(day);
+                if (day === null && task.dateString !== null) {
+                  onSetDateString(task.id, null, localDayKey(new Date()));
+                }
+              }}
+              onPickRecurrence={(dateString) => {
+                pendingRenameDateRef.current = null;
+                onSetDateString(task.id, dateString, localDayKey(new Date()));
+              }}
+              trigger={
+                task.date === null || dateDisplay === null ? (
+                  <AttributePill label="Date" />
+                ) : (
+                  <AttributeRow
+                    icon={null}
+                    label="Date"
+                    // Issue #224: the identical tone `task-row.tsx`'s own badge
+                    // reads through `formatTaskDate` — `completed`/`recurring`
+                    // passed the same way, so a Task overdue in the row is
+                    // never merely upcoming in its own detail view.
+                    value={<span style={{ color: dateDisplay.colour }}>{dateDisplay.text}</span>}
+                  />
+                )
+              }
+            />
+          </Suspense>
           {task.priority === 1 ? (
             <AttributePill label="Priority" onClick={onOpenSchedule} />
           ) : (

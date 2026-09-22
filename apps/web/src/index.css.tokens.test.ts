@@ -151,3 +151,42 @@ describe("index.css — issue #438's row hover-strip tokens", () => {
     expect(dark.get("--td-row-action-radius")).toBe("3px");
   });
 });
+
+/**
+ * Issue #439's own endless month list — the `--td-calendar-list-*` family,
+ * deliberately separate from the pre-existing `--td-calendar-selected`/
+ * `-today`/`-busy-dot` shared with `upcoming-week-strip.tsx` (index.css's
+ * own comment on these tokens has the full reasoning). Values are the
+ * issue's own comment correction (2026-09-21, both themes for today/
+ * selected) and, for light's own busy dot and both themes' nav-active
+ * colour, the documented reuse/default choices that same comment block
+ * explains.
+ */
+describe("index.css — issue #439's month-list tokens (measured values)", () => {
+  const { light, dark } = parseThemeTokens(readIndexCss());
+
+  it("today (bold red) — light rgb(211,51,34), dark rgb(226,106,96)", () => {
+    expect(light.get("--td-calendar-list-today")).toBe("rgb(211, 51, 34)");
+    expect(dark.get("--td-calendar-list-today")).toBe("rgb(226, 106, 96)");
+  });
+
+  it("selected (filled circle) — light rgb(220,76,62), dark rgb(222,76,74)", () => {
+    expect(light.get("--td-calendar-list-selected")).toBe("rgb(220, 76, 62)");
+    expect(dark.get("--td-calendar-list-selected")).toBe("rgb(222, 76, 74)");
+  });
+
+  it("weekday letters / greyed weekend / hover info line — one shared token, light rgb(128,128,128), dark rgb(204,204,204)", () => {
+    expect(light.get("--td-calendar-list-weekday")).toBe("rgb(128, 128, 128)");
+    expect(dark.get("--td-calendar-list-weekday")).toBe("rgb(204, 204, 204)");
+  });
+
+  it("busy dot — light reuses the weekday grey (unmeasured on its own), dark is the measured rgb(209,209,209)", () => {
+    expect(resolveToken(light, "--td-calendar-list-busy-dot")).toBe("rgb(128, 128, 128)");
+    expect(dark.get("--td-calendar-list-busy-dot")).toBe("rgb(209, 209, 209)");
+  });
+
+  it("nav active colour (the '›' button) — light falls back to --foreground (unmeasured), dark is the measured rgb(209,209,209)", () => {
+    expect(resolveToken(light, "--td-calendar-list-nav-active")).toBe(light.get("--foreground"));
+    expect(dark.get("--td-calendar-list-nav-active")).toBe("rgb(209, 209, 209)");
+  });
+});
