@@ -387,13 +387,57 @@
   --td-calendar-selected: rgb(222, 76, 74);
   --td-calendar-today: rgb(226, 106, 96);
   --td-calendar-busy-dot: rgb(209, 209, 209);
-  /* The measured hover pill — opaque rgb(77, 77, 77) — and the base grey
-     the measured focus-visible pill (`rgba(77, 77, 77, 0.306)`) is the
-     identical colour at 30.6% opacity. One token, not two literals: the
-     call site derives the focus value from this one via Tailwind's
-     `/[30.6%]` opacity modifier rather than repeating "77, 77, 77" a
-     second time. */
-  --td-calendar-cell-hover: rgb(77, 77, 77);
+
+  /*
+   * Issue #439's own endless month list (`month-list-calendar.tsx`) —
+   * deliberately its OWN `-list-` token family, not a light-mode
+   * redeclaration of `--td-calendar-selected`/`-today`/`-busy-dot` above.
+   * Those three are shared with `upcoming-week-strip.tsx` (issue #343),
+   * which reused them as-is with no light/dark split of its own and no
+   * light-theme re-measurement behind this ticket's own read-only pass —
+   * re-pointing the shared tokens would silently repaint that already-
+   * shipped surface in light theme on the strength of a measurement this
+   * ticket never took of it. The month list's own comment correction
+   * (2026-09-21) gives BOTH themes explicitly for today/selected, so
+   * those two get real per-theme values below; light's own busy-dot has
+   * no measured number of its own ("a day with at least one Task gets a
+   * 3px grey dot" — body text, no rgb given) and reuses the one grey this
+   * exact card already measures in light for the weekday letters/greyed
+   * weekends (`--td-calendar-list-weekday` below) rather than inventing a
+   * fourth literal.
+   */
+  --td-calendar-list-today: rgb(211, 51, 34);
+  --td-calendar-list-selected: rgb(220, 76, 62);
+  --td-calendar-list-busy-dot: var(--td-calendar-list-weekday);
+  /*
+   * Weekday letters (M T W T F S S), a busy-tasks-free weekend's own
+   * greyed number, AND the day-hover info line ("Wed 23 Sep • 0 tasks")
+   * that replaces the weekday row on hover — three call sites, one token:
+   * the comment's own dark reading gives weekday letters and the hover
+   * line the IDENTICAL rgb(204,204,204), and the body's own light reading
+   * gives weekday letters and greyed weekends the identical
+   * rgb(128,128,128) — Todoist using one grey for all three roles in both
+   * themes, not three tokens that happen to agree.
+   */
+  --td-calendar-list-weekday: rgb(128, 128, 128);
+  /*
+   * The `›` (next-month) button's own active-state colour — dark only
+   * (comment: rgb(209,209,209)). `‹`/`○` share this same active colour
+   * (never separately measured: Todoist's own two-month-window measurement
+   * never exercised either of them enabled AND unfocused at once) and all
+   * three fall back to `--foreground` in light, where no active-state
+   * colour was measured for any of them. The disabled state
+   * (`month-list-calendar.tsx`'s own `disabled:opacity-20`) needs no
+   * token of its own either: dark's measured disabled colour,
+   * rgb(255,255,255) at .2, is exactly `--foreground`'s own dark value
+   * (below) dimmed — the same number for a different reason, not a
+   * coincidence this token set has to guard against the way
+   * `--td-overdue-reschedule`'s own comment (above) does, since nothing
+   * here reuses `--foreground` FOR being rgb(255,255,255) — it already
+   * carries that value as the app's own dark foreground regardless of
+   * this ticket.
+   */
+  --td-calendar-list-nav-active: var(--foreground);
 
   /*
    * Issue #436: the light card is white, per the light reference screenshot
@@ -671,6 +715,22 @@
   --td-schedule-no-date: rgb(128, 128, 128);
   --td-schedule-field-border: rgb(61, 61, 61);
   --td-schedule-field-text: rgb(209, 209, 209);
+
+  /*
+   * Issue #439's own `-list-` token family (`:root`'s own comment above
+   * has the full story on why these are separate from the pre-existing
+   * `--td-calendar-selected`/`-today`/`-busy-dot` shared with
+   * `upcoming-week-strip.tsx`). Every value below is the comment's own
+   * explicit dark reading (2026-09-21) — re-declared here per
+   * check-css-cascade.mjs's own invariant, since each one differs from
+   * its `:root` counterpart (a `var(--foreground)`-only token would be
+   * exempt from needing this; none of these four are that).
+   */
+  --td-calendar-list-today: rgb(226, 106, 96);
+  --td-calendar-list-selected: rgb(222, 76, 74);
+  --td-calendar-list-weekday: rgb(204, 204, 204);
+  --td-calendar-list-busy-dot: rgb(209, 209, 209);
+  --td-calendar-list-nav-active: rgb(209, 209, 209);
 
   /* Issue #437's own dark top-bar border — `:root`'s own comment on
      `--td-topbar-border` has the measured light value and why it isn't
