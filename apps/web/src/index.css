@@ -395,13 +395,110 @@
      second time. */
   --td-calendar-cell-hover: rgb(77, 77, 77);
 
-  --td-popover-background: var(--muted);
-  --td-popover-border: var(--border);
+  /*
+   * Issue #436: the light card is white, per the light reference screenshot
+   * (`todoist-picker-internals/01-picker-open.png`) — not `var(--muted)`,
+   * this token's own value before this ticket, which reads `rgb(246,246,246)`
+   * and was never actually measured against Todoist's own picker (it was
+   * carried over from a generic "popover" default). Dark's own measured
+   * card ground is `rgb(38,38,38)` — exactly `var(--muted)`'s dark value —
+   * so `.dark` below re-points this back to `--muted` explicitly rather
+   * than let it inherit `var(--background)`'s dark value instead
+   * (`rgb(31,31,31)`, close enough to look right and wrong regardless).
+   */
+  --td-popover-background: var(--background);
+  /*
+   * Light has NO visible border (Todoist's own light card reads as a pure
+   * shadow-only elevation) — `transparent`, not simply omitted, so the
+   * card's own box model (a real `1px solid` border, this token's only
+   * consumer) stays IDENTICAL in both themes; only its colour vanishes.
+   * Omitting the border in light entirely would shrink the card's content
+   * box by 2px relative to dark's real border, a layout difference the
+   * measurements never called for. `.dark` below re-points this to the
+   * measured `rgb(61,61,61)`.
+   */
+  --td-popover-border: transparent;
   --td-popover-radius: var(--radius);
   --td-popover-width: 250px;
-  --td-popover-min-height: 525px;
-  --td-popover-shadow: 0 10px 20px 0 rgba(0, 0, 0, 0.19), 0 6px 6px 0 rgba(0, 0, 0, 0.23);
+  /*
+   * Issue #436's own fixed frame, corrected after a real-browser side-by-
+   * side found two bugs this token's own former name and use invited: (a)
+   * a forced `min-height` on the card was clipping a 6-week month's own
+   * last row (Nov 2026 needs 268px inside what was a 236px, `overflow-
+   * hidden` calendar area) — Todoist's own card scrolls everything below
+   * the input in ONE region instead (`.scheduler-scrollable`), and (b) the
+   * five-option/Time/Repeat combination actually laid out to 557px, 2px
+   * over the measured 555 `min-height` was supposed to be a FLOOR for.
+   * `min-height` can only ever grow a box past its content, never shrink
+   * one back down to fit — the wrong property for a card the ticket
+   * describes as capped, not padded out. This is now a ceiling
+   * (`max-height`, applied to the card; the scroll region below the input
+   * is what actually absorbs anything past it) at Todoist's own measured
+   * five-option baseline: 36 input + 1 divider + 160 five-option block + 1
+   * divider + 236 calendar + 1 divider + 40 Time row + 40 Repeat row = 515,
+   * plus this card's own 20px top/bottom padding = 555. Four options (the
+   * "current value is already No Date" row of the elision table) render a
+   * genuinely shorter, ~523px card — under the cap, so `max-height` never
+   * touches it; nothing here forces it taller the way the old `min-height`
+   * did.
+   *
+   * Still the one value `cardSizeFromCssTokens` (task-schedule-popover.tsx)
+   * reads for issue #440's own pre-mount placement estimate — a ceiling
+   * doubles as a safe UPPER-BOUND guess for a real card that is either at
+   * or under it, and #440's existing post-mount `ResizeObserver`
+   * measurement corrects a too-tall guess for the four-option case exactly
+   * the way it already corrects a typed-preview row or the Repeat
+   * control's two-part layout changing this card's real height — nothing
+   * new added for this, since over- rather than under-estimating a
+   * pre-mount placement was already the safe direction that mechanism was
+   * built to tolerate.
+   */
+  --td-popover-max-height: 555px;
+  /*
+   * Light: NO border (this token's own comment above), Todoist's own
+   * measured elevation instead — a tighter, more legible shadow than
+   * dark's. Distinct enough from dark's own value (below) that reusing one
+   * literal across both themes, the way this token did before this fix,
+   * was never actually correct — it only happened to look plausible.
+   */
+  --td-popover-shadow: 0 1px 8px 0 rgba(0, 0, 0, 0.08), 0 0 1px 0 rgba(0, 0, 0, 0.3);
   --td-modal-shadow: 0 2px 8px rgba(0, 0, 0, 0.16);
+
+  /*
+   * Issue #436's own frame tokens — the date picker's dividers, "Type a
+   * date" input, quick-option rows, and Time/Repeat fields. Light values
+   * measured directly (issue #436's own ticket body); dark values from a
+   * read-only look at Todoist's Dark preset (issue #436's own comment
+   * correction, 2026-09-21) — recorded in full in that comment, not
+   * re-derived from Todoist's `theme_todoist` account (which has no dark
+   * preset of its own — `--td-quick-add-*`'s own header comment a few
+   * lines up has the full story on why this app's `.dark` targets
+   * Todoist's explicit Dark preset instead).
+   */
+  --td-popover-divider: rgb(238, 238, 238);
+  --td-schedule-input-text: rgb(32, 32, 32);
+  --td-schedule-input-placeholder: rgb(153, 153, 153);
+  --td-schedule-option-label: rgb(32, 32, 32);
+  --td-schedule-option-hint: rgb(128, 128, 128);
+  --td-schedule-option-hover: rgb(243, 243, 243);
+  --td-schedule-today: rgb(75, 146, 68);
+  --td-schedule-tomorrow: rgb(173, 98, 0);
+  --td-schedule-this-weekend: rgb(36, 111, 224);
+  --td-schedule-next-week: rgb(105, 46, 194);
+  /*
+   * "Later this week" — measured on a real-browser side-by-side (this
+   * ticket's own follow-up pass): Next week's own violet, NOT Tomorrow's
+   * orange, which was this token's first guess before that pass existed
+   * to check it against ("the Tomorrow/Today family" reasoning that guess
+   * shipped with was retired along with the literal it produced). `var()`
+   * onto `--td-schedule-next-week` rather than a fourth literal, so dark
+   * theme's identical choice (`.dark` below never re-declares this one)
+   * follows Next week's own dark value automatically.
+   */
+  --td-schedule-later-this-week: var(--td-schedule-next-week);
+  --td-schedule-no-date: rgb(128, 128, 128);
+  --td-schedule-field-border: rgb(230, 230, 230);
+  --td-schedule-field-text: rgb(102, 102, 102);
 
   --td-row-font-size: 14px;
   --td-row-line-height: 21px;
@@ -513,6 +610,41 @@
      of this bug the ticket's own report says must NOT change). */
   --td-recognition-background: rgb(111, 38, 37);
   --td-recognition-foreground: rgb(255, 255, 255);
+
+  /*
+   * Issue #436's own dark picker frame — not required by check-css-
+   * cascade.mjs (none of these are set by the base `.dark` block above),
+   * but required for correctness regardless: `--td-popover-background`
+   * genuinely needs its own re-point now that light points at
+   * `var(--background)` instead of `var(--muted)` (this `:root` block's own
+   * comment on that token) — without this, dark would inherit
+   * `var(--background)` too and paint `rgb(31,31,31)`, not the measured
+   * `rgb(38,38,38)`. `--td-popover-border`/`--td-popover-shadow` need their
+   * own re-point for the identical reason, now that light's own values
+   * (transparent border, a lighter shadow) are no longer dark's own —
+   * before this pass one literal shadow value was shared by both themes,
+   * which only happened to be correct for dark. `--td-schedule-later-
+   * this-week` is deliberately absent here — it's a `var()` reference onto
+   * `--td-schedule-next-week`, which this block already re-points, so it
+   * resolves correctly with no second declaration (this `:root` block's
+   * own comment on that token).
+   */
+  --td-popover-background: var(--muted);
+  --td-popover-border: rgb(61, 61, 61);
+  --td-popover-shadow: 0 10px 20px 0 rgba(0, 0, 0, 0.19), 0 6px 6px 0 rgba(0, 0, 0, 0.23);
+  --td-popover-divider: rgb(61, 61, 61);
+  --td-schedule-input-text: rgb(255, 255, 255);
+  --td-schedule-input-placeholder: rgb(128, 128, 128);
+  --td-schedule-option-label: rgb(255, 255, 255);
+  --td-schedule-option-hint: rgb(204, 204, 204);
+  --td-schedule-option-hover: rgb(54, 54, 54);
+  --td-schedule-today: rgb(28, 140, 58);
+  --td-schedule-tomorrow: rgb(235, 134, 0);
+  --td-schedule-this-weekend: rgb(41, 126, 255);
+  --td-schedule-next-week: rgb(145, 71, 255);
+  --td-schedule-no-date: rgb(128, 128, 128);
+  --td-schedule-field-border: rgb(61, 61, 61);
+  --td-schedule-field-text: rgb(209, 209, 209);
 }
 
 @layer base {
