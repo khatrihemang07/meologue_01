@@ -500,6 +500,17 @@
   --td-schedule-field-border: rgb(230, 230, 230);
   --td-schedule-field-text: rgb(102, 102, 102);
 
+  /*
+   * Issue #437: Today/Upcoming's own 56px top bar, Todoist web (1260x696,
+   * light theme), measured live. NOT `--border` (`rgb(224, 224, 224)`
+   * here) — measured separately, and not equal, the same "don't assume a
+   * close-looking existing token" call `--td-overdue-reschedule`'s own
+   * comment already makes. The bar has no background token of its own: it
+   * paints `--background`, the same ground as the page behind it, which is
+   * what makes the border read as a hairline rather than a distinct panel.
+   */
+  --td-topbar-border: rgb(245, 245, 245);
+
   --td-row-font-size: 14px;
   --td-row-line-height: 21px;
   --td-chrome-font-size: 13px;
@@ -645,6 +656,15 @@
   --td-schedule-no-date: rgb(128, 128, 128);
   --td-schedule-field-border: rgb(61, 61, 61);
   --td-schedule-field-text: rgb(209, 209, 209);
+
+  /* Issue #437's own dark top-bar border — `:root`'s own comment on
+     `--td-topbar-border` has the measured light value and why it isn't
+     `--border`. This is a brand-new token, not one the base `.dark` block
+     above already sets, so check-css-cascade.mjs's re-declaration
+     invariant doesn't require this entry — it's here regardless, because
+     without it dark theme would silently keep painting the light rgb
+     rather than falling back to anything sensible. */
+  --td-topbar-border: rgb(40, 40, 40);
 }
 
 @layer base {

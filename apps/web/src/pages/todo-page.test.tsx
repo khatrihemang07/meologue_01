@@ -1952,6 +1952,37 @@ describe("TodoPage — in-column heading (issue #254)", () => {
     expect(screen.getByRole("heading", { name: "Upcoming" })).toBeInTheDocument();
   });
 
+  // Issue #437: Todoist's own "N tasks" line under Today's/Upcoming's
+  // title — todo-view-task-count.ts's own tests pin the count rule
+  // itself; these pin that TodoPage actually wires the right number
+  // through to Shell's `subtitle` for each view, and that every other
+  // view (Inbox included) keeps rendering none, the same "additive"
+  // guarantee this describe block's other tests already establish for
+  // the heading itself.
+  it("renders Today's own 'N tasks' line — overdue plus due-today", () => {
+    const overdue = task({ id: "overdue", date: "2026-01-01" });
+    const dueToday = task({ id: "due-today", date: localDayKey(new Date()) });
+    const future = task({ id: "future", date: "2999-01-01" });
+    renderTodoPage(readyContext({ tasks: [overdue, dueToday, future] }), "/todo/today");
+
+    expect(screen.getByText("2 tasks")).toBeInTheDocument();
+  });
+
+  it("renders Upcoming's own 'N tasks' line — overdue plus every dated day section", () => {
+    const overdue = task({ id: "overdue", date: "2026-01-01" });
+    const dueToday = task({ id: "due-today", date: localDayKey(new Date()) });
+    const future = task({ id: "future", date: "2999-01-01" });
+    renderTodoPage(readyContext({ tasks: [overdue, dueToday, future] }), "/todo/upcoming");
+
+    expect(screen.getByText("3 tasks")).toBeInTheDocument();
+  });
+
+  it("renders no 'N tasks' line for Inbox, which has no comparable count", () => {
+    renderTodoPage(readyContext({ tasks: [task({ id: "a" })] }));
+
+    expect(screen.queryByText(/tasks$/)).not.toBeInTheDocument();
+  });
+
   it("renders a Project's own resolved name as the heading", () => {
     const project = {
       id: "p1",

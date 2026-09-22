@@ -5,8 +5,18 @@ import { SyncStatusIndicator } from "@/components/sync-status-indicator";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { usePinnedScroll } from "@/hooks/use-pinned-scroll";
+import { useScrollThreshold } from "@/hooks/use-scroll-threshold";
 import { formatDaySeparator } from "@/lib/entry-day";
 import { cn } from "@/lib/utils";
+
+/**
+ * Issue #437: the scroll position, in the scroll region's own `scrollTop`
+ * CSS pixels, at which Todoist web's mini "Today / N tasks" appears in the
+ * top bar — measured live (Todoist web, 1260x696). Below this the bar
+ * stays empty (still 56px, still bordered — see `TODO_TOPBAR_HEIGHT_PX`
+ * below); at or past it the mini title appears with no transition.
+ */
+const TODO_MINI_TITLE_THRESHOLD_PX = 34;
 
 /**
  * Issue #83: what history.tsx's virtualizer needs from Shell, and the one
@@ -343,6 +353,19 @@ interface ShellProps {
    * faithful choice, not an oversight.
    */
   hideAppBar?: boolean;
+  /**
+   * Issue #437: Todoist web's own "N tasks" line under Today's/Upcoming's
+   * title, e.g. "3 tasks" — ordinary content that scrolls away with the
+   * rest of the in-column heading, exactly like `title` itself (measured:
+   * no fade, no sticky treatment of its own). `undefined` (every caller
+   * but Today/Upcoming) renders no subtitle line — and, since the same
+   * prop is what gates the scroll top bar and its mini title below, no
+   * top bar either: only a view with something to shrink `title` down to
+   * gets a place to shrink it into. Only read at all when `hideAppBar` is
+   * set; every non-Todo page has no in-column heading for a subtitle to
+   * sit under.
+   */
+  subtitle?: ReactNode;
 }
 
 /**
@@ -449,6 +472,7 @@ export function Shell({
   columnWidthClassName,
   hideAppBar,
   floatingAction,
+  subtitle,
 }: ShellProps) {
   // Issue #83: the escape hatch History registers its virtualizer's
   // `scrollToIndex` into (see HistoryScrollContext's own comment above).
@@ -517,6 +541,17 @@ export function Shell({
     }),
     [scrollElement, registerScrollToNewest, registerScrollToDay, publishDayJumpState],
   );
+
+  // Issue #437: whether the reader has scrolled the region far enough for
+  // Todoist's own mini "Today / N tasks" to appear in the top bar below —
+  // read off `scrollElement` (this file's own `HistoryScrollContext`
+  // value, populated above), not a second ref: the top bar renders as a
+  // sibling inside the identical `shell-scroll-region` node History's own
+  // virtualizer already measures against, so there is only ever one
+  // scrollable element on this page for either to listen to. Called
+  // unconditionally, like every other Hook in this component — the top
+  // bar itself, further down, is what's conditional on `subtitle`.
+  const pastMiniTitleThreshold = useScrollThreshold(scrollElement, TODO_MINI_TITLE_THRESHOLD_PX);
 
   const { scrollRef, handleScroll, awayFromNewest, jumpToNewest } = usePinnedScroll({
     enabled: pinnedThread !== undefined,
@@ -790,6 +825,49 @@ export function Shell({
           // bar, not just this region's own scrolled content.
           className="relative flex-1 overflow-x-hidden overflow-y-auto"
         >
+          {/*
+            Issue #437: Todoist web's own top bar, mouse-only. A sibling of
+            the content column below rather than nested inside it, so it
+            can be full-bleed (the column itself is capped/proportional —
+            ADR 0019) while still living inside `shell-scroll-region` and
+            participating in the identical scroll this file's own
+            `pastMiniTitleThreshold` already listens to. `position: sticky`
+            with `top-0`, the scroll region being its nearest positioned
+            *scrolling* ancestor, is what keeps it pinned to the region's
+            own top edge — the exact mechanism overdue-section-summary.tsx
+            reuses (its own `top-14` offsets below this bar's 56px height,
+            `pointer-fine:top-14` there mirroring the identical gate here).
+
+            `hidden pointer-fine:flex`: task-row-content.tsx's own hover-
+            revealed-row-actions gate, reused rather than a second,
+            bespoke touch check — issue #437's own measurement found
+            Android's Overdue header sticky with NO top bar/mini title
+            above it, so this bar (and everything inside it) simply does
+            not exist there; every other utility below is unprefixed since
+            none of them matter while `display: none`.
+
+            `aria-hidden`: a visual echo of the real `<h1>`/subtitle just
+            below, which stay in the DOM (and the accessible tree)
+            regardless of scroll position — this never becomes a second
+            heading a screen reader, or an e2e role/name locator, could
+            collide with.
+          */}
+          {hideAppBar && subtitle !== undefined && (
+            <div
+              aria-hidden="true"
+              data-testid="todo-scroll-top-bar"
+              className="hidden sticky top-0 z-20 h-14 w-full shrink-0 items-center justify-center border-b border-[color:var(--td-topbar-border)] bg-background pointer-fine:flex"
+            >
+              {pastMiniTitleThreshold && (
+                <div data-testid="todo-mini-title" className="flex flex-col items-center">
+                  <span className="font-heading font-semibold text-base text-foreground leading-[19px]">
+                    {title}
+                  </span>
+                  <span className="text-muted-foreground text-xs">{subtitle}</span>
+                </div>
+              )}
+            </div>
+          )}
           <HistoryScrollContext.Provider value={historyScrollContextValue}>
             {/* A pinned thread hugs the bottom when it is shorter than the
               viewport (ticket 53): the newest Entry belongs next to the
@@ -870,6 +948,23 @@ export function Shell({
                   <SyncStatusIndicator />
                   {action && <div className="ml-auto flex items-center gap-1">{action}</div>}
                 </div>
+              )}
+              {/*
+                Issue #437: Todoist's own "N tasks" line, e.g. "3 tasks" —
+                ordinary content, a sibling of the heading row above rather
+                than nested inside it (`heading.closest("div")?.
+                parentElement`'s own traversal, shell.test.tsx's
+                pre-existing "in-column heading row" assertion, walks up
+                from the `<h1>` through exactly one ancestor `<div>` to
+                reach this content column; nesting a second wrapper around
+                the `<h1>` for this line would have broken that without
+                touching a single byte of that test). It scrolls away with
+                everything else in this column — no fade, matching the
+                measured Todoist behaviour this ticket names for the big
+                title itself.
+              */}
+              {hideAppBar && subtitle !== undefined && (
+                <p className="text-muted-foreground text-sm">{subtitle}</p>
               )}
               {message && <p className="text-sm text-destructive">{message}</p>}
               {messageAction && (
