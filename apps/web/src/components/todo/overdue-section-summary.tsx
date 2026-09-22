@@ -43,6 +43,39 @@ export function OverdueSectionSummary({
     // `z-10`, one below the top bar's own `z-20` (shell.tsx), so the top
     // bar always wins the boundary where the two sticky elements meet.
     //
+    // Issue #437's own real-device follow-up: on Android (edge-to-edge,
+    // the WebView drawn full-bleed under the status bar — shell.tsx's own
+    // `env(safe-area-inset-top)` comment on the in-column heading row has
+    // the measured numbers, 43 CSS px) a bare `top-0` stuck this element's
+    // whole clickable content — the chevron and Reschedule — INSIDE the
+    // status bar's own band, which Android was confirmed (on-device) to
+    // swallow every touch in, real presses on Reschedule and on an
+    // ordinary row alike producing not even a `pointerdown`. `top-0`
+    // itself stays correct (that is still where `shell-scroll-region`'s
+    // own top edge is — it carries no padding of its own; only the
+    // heading row deep inside it does, shell.tsx's own `TODO_TOPBAR_
+    // HEIGHT_PX` neighbour), so the fix is not to move the stuck
+    // *position* but to pad this element's own content away from its own
+    // top edge by the identical inset the heading row already uses —
+    // `max(0.5rem, env(safe-area-inset-top))`, the same "keep the ordinary
+    // padding when there's no inset, grow to cover it when there is"
+    // shape `ui/sheet.tsx`'s and `quick-add-sheet.tsx`'s own
+    // `paddingBottom` already use for the identical reason at the other
+    // edge of the screen. `bg-background` still paints the WHOLE padded
+    // box, top included — that's what keeps the status-bar band itself
+    // opaque rather than showing scrolled-past rows through the gap; only
+    // this element's own *content* moves down, clear of the swallowed
+    // touches, not its background.
+    //
+    // Arbitrary-property syntax for the base value (not `pt-*`, which
+    // would collide with `py-2`'s own `padding-top` contribution at
+    // identical specificity with no reliable winner) — `pointer-fine:pt-2`
+    // is a plain, already-`py-2`-equivalent utility instead, restoring the
+    // ordinary 0.5rem the mouse case had before this fix (a real mouse-
+    // primary device has no meaningful inset of its own to grow for, and
+    // this keeps that case's own generated rule untouched in every way but
+    // the one property it needs to reset).
+    //
     // `flex` is also load-bearing for a second, unrelated reason: a bare
     // `<summary>` keeps the UA stylesheet's own `display: list-item`,
     // which WebKit has a history of mishandling under `position: sticky`.
@@ -54,7 +87,7 @@ export function OverdueSectionSummary({
     // silently reintroduce it. Nothing about the disclosure chevron
     // depends on the native marker either: `<ChevronDown>` below is this
     // component's own rendered affordance, not `::marker`.
-    <summary className="sticky top-0 z-10 flex cursor-pointer select-none items-center justify-between bg-background px-3 py-2 text-sm pointer-fine:top-14">
+    <summary className="sticky top-0 z-10 flex cursor-pointer select-none items-center justify-between bg-background px-3 pb-2 [padding-top:max(0.5rem,env(safe-area-inset-top))] text-sm pointer-fine:top-14 pointer-fine:pt-2">
       <span className="font-bold">Overdue</span>
       <div className="flex items-center gap-2">
         <OverdueRescheduleAction

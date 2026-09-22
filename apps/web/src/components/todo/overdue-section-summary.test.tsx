@@ -83,6 +83,29 @@ describe("OverdueSectionSummary — issue #437's sticky Overdue header", () => {
     expect(summary).toHaveClass("z-10");
   });
 
+  // Issue #437's own on-device Android follow-up: `top-0` alone stuck
+  // this element's clickable content (the chevron, Reschedule) INSIDE the
+  // status bar's own band on an edge-to-edge WebView — confirmed on the
+  // real device to swallow every touch there, not even a `pointerdown`
+  // reaching the page. `padding-top`, not `top`, is the fix — `top-0`
+  // stays where `shell-scroll-region`'s own unpadded top edge really is
+  // (this component's own header comment); only the CONTENT inside the
+  // stuck box needs to move down, and `bg-background` still paints the
+  // whole padded box so the status-bar band itself stays opaque.
+  it("pads its own content below the safe-area inset by default (touch) — the same measured status-bar band shell.tsx's heading row already accounts for", () => {
+    renderSummary();
+
+    const summary = screen.getByText("Overdue").closest("summary") as HTMLElement;
+    expect(summary).toHaveClass("[padding-top:max(0.5rem,env(safe-area-inset-top))]");
+  });
+
+  it("resets that padding back to the ordinary 0.5rem on a mouse device — pointer-fine:pt-2, no growth for an inset a mouse-primary device doesn't have", () => {
+    renderSummary();
+
+    const summary = screen.getByText("Overdue").closest("summary") as HTMLElement;
+    expect(summary).toHaveClass("pointer-fine:pt-2");
+  });
+
   // A standards-review flag: a bare `<summary>` keeps the UA stylesheet's
   // own `display: list-item`, which WebKit has a history of mishandling
   // under `position: sticky`. `flex` already overrides it (an author-
@@ -124,6 +147,7 @@ describe("OverdueSectionSummary — issue #437's sticky Overdue header", () => {
     const summary = screen.getByText("Overdue").closest("summary") as HTMLElement;
     expect(summary).toHaveClass("top-0");
     expect(summary).toHaveClass("sticky");
+    expect(summary).toHaveClass("[padding-top:max(0.5rem,env(safe-area-inset-top))]");
 
     vi.unstubAllGlobals();
   });
