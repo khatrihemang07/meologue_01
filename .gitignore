@@ -28,6 +28,9 @@ graphify-out/
 # Serena MCP local state
 .serena/
 
+# Command Code local state (taste, plans, session scratch)
+.commandcode/
+
 # TypeScript incremental build state, written beside each package's tsconfig
 # by `tsc -b`. Generated, machine-specific, and never useful in a diff.
 *.tsbuildinfo
