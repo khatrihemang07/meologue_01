@@ -64,6 +64,7 @@ import {
 } from "@/lib/composer-picker";
 import { decideSend } from "@/lib/composer-send";
 import { buildSlashMenuItems, filterSlashItems, type SlashMenuState } from "@/lib/composer-slash";
+import { dictationNeedsLeadingSpace } from "@/lib/dictation-spacing";
 import { deviceUtcOffsetMinutes, entryDayKey, formatDaySeparator } from "@/lib/entry-day";
 import { entryDocumentToMarkdown, entryMarkdownToDocument } from "@/lib/entry-document";
 import { entrySchema, type ReferenceAttrs } from "@/lib/entry-schema";
@@ -897,17 +898,15 @@ export function Composer({
 
   // A transcript arrives with no surrounding whitespace, so dictating
   // twice, or after typed text, would glue words together. A leading space
-  // goes in unless the caret is at the very start or already follows
-  // whitespace. Never auto-sends: the reader reviews the text first.
+  // goes in unless the caret is at the start of a block, follows whitespace
+  // or follows a non-text leaf other than XX
   const insertDictation = useCallback(
     (text: string) => {
       const view = viewRef.current;
       if (view === null) {
         return;
       }
-      const { from } = view.state.selection;
-      const before = view.state.doc.textBetween(Math.max(0, from - 1), from, "\n", "\ufffc");
-      const needsSpace = before !== "" && !/\s/.test(before);
+      const needsSpace = dictationNeedsLeadingSpace(view.state.selection.$from);
       insertTextAtCursor(needsSpace ? ` ${text}` : text);
     },
     [insertTextAtCursor],
