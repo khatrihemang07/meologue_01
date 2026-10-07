@@ -12,10 +12,9 @@ class FakeRecorder {
   ondataavailable: ((e: { data: Blob }) => void) | null = null;
   onstop: (() => void) | null = null;
   options: { mimeType?: string } | undefined;
-  constructor(
-    public stream: MediaStream,
-    options?: { mimeType?: string },
-  ) {
+  stream: MediaStream;
+  constructor(stream: MediaStream, options?: { mimeType?: string }) {
+    this.stream = stream;
     this.options = options;
     this.mimeType = options?.mimeType ?? "audio/default";
     FakeRecorder.instances.push(this);

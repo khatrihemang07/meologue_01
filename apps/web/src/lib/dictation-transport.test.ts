@@ -157,7 +157,7 @@ describe("transcribeRecording", () => {
 
 describe("checkDictationGateway", () => {
   it("returns the health report", async () => {
-    const fetchImpl = vi.fn(async () =>
+    const fetchImpl = vi.fn(async (_url: string) =>
       json(200, {
         ok: true,
         openwhispr: { reachable: true, version: "1.2.3", verifiedVersion: "1.2.3" },

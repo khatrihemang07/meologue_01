@@ -3,6 +3,7 @@ import { act, fireEvent, render, screen } from "@testing-library/react";
 import { createRef } from "react";
 import { describe, expect, it, vi } from "vitest";
 import { formatTaskReference } from "@/lib/inline-markdown";
+import { useSettingsStore } from "@/lib/settings";
 import { Composer, type ComposerHandle } from "./composer";
 
 /**
@@ -170,5 +171,22 @@ describe("Composer's Send button keeps focus on the editor", () => {
 
     expect(onSend).toHaveBeenCalledWith("hello", expect.objectContaining({ active: null }));
     expect(document.activeElement).toBe(field);
+  });
+
+  describe("dictation (issue #454)", () => {
+    it("shows no mic button until a gateway URL is set", () => {
+      useSettingsStore.setState({ dictationUrl: "" });
+      render(<Composer onSend={vi.fn()} />);
+      expect(screen.queryByRole("button", { name: "Dictate" })).not.toBeInTheDocument();
+    });
+
+    it("shows the mic button, before Send, once a gateway URL is set", () => {
+      useSettingsStore.setState({ dictationUrl: "http://gw" });
+      render(<Composer onSend={vi.fn()} />);
+      const mic = screen.getByRole("button", { name: "Dictate" });
+      const send = screen.getByRole("button", { name: "Send" });
+      expect(mic.compareDocumentPosition(send) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+      useSettingsStore.setState({ dictationUrl: "" });
+    });
   });
 });

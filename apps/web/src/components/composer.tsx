@@ -35,6 +35,7 @@ import { EditorState, Selection, type Transaction } from "prosemirror-state";
 import { EditorView } from "prosemirror-view";
 import { type Ref, useCallback, useEffect, useImperativeHandle, useRef, useState } from "react";
 import { type CommandState, ComposerToolbar } from "@/components/composer-toolbar";
+import { DictateButton } from "@/components/dictate-button";
 import { entrySnippet } from "@/components/entry-row";
 import { Button } from "@/components/ui/button";
 import { type ComposerCommand, composerCommands } from "@/lib/composer-commands";
@@ -69,7 +70,7 @@ import { entrySchema, type ReferenceAttrs } from "@/lib/entry-schema";
 import { normalizeEntryBody } from "@/lib/entry-text";
 import { parseReferenceDate } from "@/lib/inline-markdown";
 import type { ComposerPromotionContext } from "@/lib/promote-tasks";
-import { useSettingsStore } from "@/lib/settings";
+import { useDictationEnabled, useSettingsStore } from "@/lib/settings";
 import { isSubmitChord } from "@/lib/submit-chord";
 import { cn } from "@/lib/utils";
 
@@ -309,6 +310,9 @@ export function Composer({
   // `disabled` prop needs a value on every render, not just the ones where
   // a transaction happened to fire beforehand.
   const [isEmpty, setIsEmpty] = useState(true);
+
+  // Issue #454: the mic button only exists once a gateway URL is set.
+  const dictationEnabled = useDictationEnabled();
 
   // The inline `[[` picker's own state (issue #144) — mirrored from
   // composer-editor.ts's `pickerPlugin`, which derives it fresh from the
@@ -873,29 +877,46 @@ export function Composer({
     previousEditingIdRef.current = currentId;
   }, [editingEntry, loadDocument]);
 
+  // The body `ComposerHandle.insertAtCursor` always had, lifted into a
+  // local function so dictation (issue #454) inserts through the very same
+  // path rather than a second copy of the transaction logic.
+  const insertTextAtCursor = useCallback((text: string) => {
+    const view = viewRef.current;
+    if (view === null) {
+      return;
+    }
+    const attrs = parseReferenceMarkText(text);
+    const { from, to } = view.state.selection;
+    const tr =
+      attrs !== null
+        ? view.state.tr.replaceRangeWith(from, to, referenceNodeType.create(attrs))
+        : view.state.tr.insertText(text, from, to);
+    view.dispatch(tr);
+    view.focus();
+  }, []);
+
+  // A transcript arrives with no surrounding whitespace, so dictating
+  // twice, or after typed text, would glue words together. A leading space
+  // goes in unless the caret is at the very start or already follows
+  // whitespace. Never auto-sends: the reader reviews the text first.
+  const insertDictation = useCallback(
+    (text: string) => {
+      const view = viewRef.current;
+      if (view === null) {
+        return;
+      }
+      const { from } = view.state.selection;
+      const before = view.state.doc.textBetween(Math.max(0, from - 1), from, "\n", "\ufffc");
+      const needsSpace = before !== "" && !/\s/.test(before);
+      insertTextAtCursor(needsSpace ? ` ${text}` : text);
+    },
+    [insertTextAtCursor],
+  );
+
   // The "Refer" action (entry-actions.tsx, via composer-page.tsx) reaches
   // in through this — see ComposerHandle's own comment for why it has to
   // be imperative at all.
-  useImperativeHandle(
-    ref,
-    () => ({
-      insertAtCursor(text: string) {
-        const view = viewRef.current;
-        if (view === null) {
-          return;
-        }
-        const attrs = parseReferenceMarkText(text);
-        const { from, to } = view.state.selection;
-        const tr =
-          attrs !== null
-            ? view.state.tr.replaceRangeWith(from, to, referenceNodeType.create(attrs))
-            : view.state.tr.insertText(text, from, to);
-        view.dispatch(tr);
-        view.focus();
-      },
-    }),
-    [],
-  );
+  useImperativeHandle(ref, () => ({ insertAtCursor: insertTextAtCursor }), [insertTextAtCursor]);
 
   return (
     // Docked to Shell's composerSlot (ticket 51, #49's Discord layout) rather
@@ -1040,6 +1061,7 @@ export function Composer({
               function instead. */}
           <div ref={hostRef} />
         </div>
+        {dictationEnabled && <DictateButton onText={insertDictation} disabled={disabled} />}
         <Button
           aria-label="Send"
           size="icon-lg"
