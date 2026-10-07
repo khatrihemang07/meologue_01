@@ -54,10 +54,20 @@ export interface TranscribeOptions {
   pollIntervalMs?: number;
   /** How long to keep polling a 202 before giving up. Default 10 minutes: a long dictation on a busy Mac is slow, and the audio is already uploaded. */
   timeoutMs?: number;
+  /** Bounds the initial upload; each poll uses its own shorter default. Tests pass small values for both. */
+  requestTimeoutMs?: number;
+}
+
+export interface CheckOptions {
+  requestTimeoutMs?: number;
 }
 
 const DEFAULT_POLL_INTERVAL_MS = 1000;
 const DEFAULT_TIMEOUT_MS = 10 * 60 * 1000;
+/** The gateway holds `?wait=1` for up to 25 s, and a long recording takes time to upload over Wi-Fi. */
+const UPLOAD_REQUEST_TIMEOUT_MS = 90 * 1000;
+const POLL_REQUEST_TIMEOUT_MS = 15 * 1000;
+const HEALTH_REQUEST_TIMEOUT_MS = 10 * 1000;
 
 /**
  * Container extension for a recorded blob. The gateway converts every upload
@@ -85,24 +95,76 @@ function defaultFetch(url: string, init?: RequestInit): Promise<Response> {
   return fetch(url, init);
 }
 
+interface BoundedSignal {
+  signal: AbortSignal;
+  /** True when the per-request timeout fired rather than the caller's own signal. */
+  timedOut: () => boolean;
+  /** Clears the timer once the request has finished. */
+  dispose: () => void;
+}
+
+/**
+ * The caller's signal combined with a per-request timeout. On a real Android
+ * phone an unroutable address drops packets instead of refusing, so a bare
+ * `fetch` hangs for minutes. `AbortSignal.any` and `AbortSignal.timeout` are
+ * used when present; otherwise a manual controller and timer do the same job.
+ */
+function boundSignal(caller: AbortSignal | undefined, ms: number): BoundedSignal {
+  if (typeof AbortSignal.any === "function" && typeof AbortSignal.timeout === "function") {
+    const timeout = AbortSignal.timeout(ms);
+    return {
+      signal: caller ? AbortSignal.any([caller, timeout]) : timeout,
+      timedOut: () => timeout.aborted && !caller?.aborted,
+      dispose: () => {},
+    };
+  }
+  const controller = new AbortController();
+  let fired = false;
+  const timer = setTimeout(() => {
+    fired = true;
+    controller.abort();
+  }, ms);
+  const onCallerAbort = () => controller.abort();
+  if (caller?.aborted) {
+    controller.abort();
+  } else {
+    caller?.addEventListener("abort", onCallerAbort, { once: true });
+  }
+  return {
+    signal: controller.signal,
+    timedOut: () => fired && !caller?.aborted,
+    dispose: () => {
+      clearTimeout(timer);
+      caller?.removeEventListener("abort", onCallerAbort);
+    },
+  };
+}
+
 /** Runs one request, turning every failure into a `DictationError`. */
 async function request(
   fetchImpl: FetchLike,
   url: string,
   init: RequestInit,
-  signal: AbortSignal | undefined,
+  callerSignal: AbortSignal | undefined,
+  timeoutMs: number,
 ): Promise<Response> {
+  const bound = boundSignal(callerSignal, timeoutMs);
   let response: Response;
   try {
-    response = await fetchImpl(url, { ...init, ...(signal ? { signal } : {}) });
+    response = await fetchImpl(url, { ...init, signal: bound.signal });
   } catch (error) {
-    if (signal?.aborted || (error instanceof DOMException && error.name === "AbortError")) {
+    if (bound.timedOut()) {
+      throw new DictationError("unreachable", "Couldn't reach the dictation gateway.");
+    }
+    if (callerSignal?.aborted || (error instanceof DOMException && error.name === "AbortError")) {
       throw new DictationError("aborted", "Dictation was cancelled.");
     }
     // A thrown fetch is a TypeError in every browser (DNS, refused, CORS,
     // mixed content); anything else is unexpected and reads the same to a
     // user: the gateway could not be reached.
     throw new DictationError("unreachable", "Couldn't reach the dictation gateway.");
+  } finally {
+    bound.dispose();
   }
   if (response.status === 401) {
     throw new DictationError("unauthorized", "The dictation gateway rejected the token.");
@@ -186,6 +248,8 @@ export async function transcribeRecording(
   const fetchImpl = options.fetchImpl ?? defaultFetch;
   const pollIntervalMs = options.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS;
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  const uploadTimeoutMs = options.requestTimeoutMs ?? UPLOAD_REQUEST_TIMEOUT_MS;
+  const pollTimeoutMs = options.requestTimeoutMs ?? POLL_REQUEST_TIMEOUT_MS;
   const headers = { Authorization: `Bearer ${options.token}` };
 
   const form = new FormData();
@@ -197,6 +261,7 @@ export async function transcribeRecording(
     `${options.url}/v1/dictations?wait=1`,
     { method: "POST", headers, body: form },
     options.signal,
+    uploadTimeoutMs,
   );
   if (!response.ok) {
     throw await failureFrom(response);
@@ -231,6 +296,7 @@ export async function transcribeRecording(
       `${options.url}/v1/dictations/${encodeURIComponent(id)}`,
       { headers },
       options.signal,
+      pollTimeoutMs,
     );
     if (!response.ok) {
       throw await failureFrom(response);
@@ -244,12 +310,14 @@ export async function checkDictationGateway(
   url: string,
   token: string,
   fetchImpl: FetchLike = defaultFetch,
+  options: CheckOptions = {},
 ): Promise<GatewayHealth> {
   const response = await request(
     fetchImpl,
     `${url}/v1/health`,
     { headers: { Authorization: `Bearer ${token}` } },
     undefined,
+    options.requestTimeoutMs ?? HEALTH_REQUEST_TIMEOUT_MS,
   );
   if (!response.ok) {
     throw new DictationError("failed", `The dictation gateway answered ${response.status}.`);

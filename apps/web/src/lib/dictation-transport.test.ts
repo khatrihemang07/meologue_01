@@ -230,3 +230,113 @@ describe("checkDictationGateway", () => {
     expect(await kindOf(checkDictationGateway("http://gw:1", "t", fetchImpl))).toBe("unreachable");
   });
 });
+
+/** A fetch that, like an unroutable address, never answers until its signal aborts. */
+function hangingFetch() {
+  return vi.fn(async (_url: string, init?: RequestInit) => {
+    return new Promise<Response>((_resolve, reject) => {
+      init?.signal?.addEventListener("abort", () =>
+        reject(new DOMException("aborted", "AbortError")),
+      );
+    });
+  });
+}
+
+describe("per-request timeouts", () => {
+  it("health that never answers is unreachable", async () => {
+    expect(
+      await kindOf(
+        checkDictationGateway("http://gw:1", "t", hangingFetch(), { requestTimeoutMs: 20 }),
+      ),
+    ).toBe("unreachable");
+  });
+
+  it("an upload that never answers is unreachable", async () => {
+    expect(
+      await kindOf(
+        transcribeRecording(new Blob(["x"]), {
+          ...base,
+          fetchImpl: hangingFetch(),
+          requestTimeoutMs: 20,
+        }),
+      ),
+    ).toBe("unreachable");
+  });
+
+  it("a poll that never answers is unreachable", async () => {
+    const fetchImpl = vi
+      .fn(hangingFetch())
+      .mockResolvedValueOnce(json(202, { id: "j1", status: "queued" }));
+    expect(
+      await kindOf(
+        transcribeRecording(new Blob(["x"]), {
+          ...base,
+          fetchImpl,
+          pollIntervalMs: 1,
+          requestTimeoutMs: 20,
+        }),
+      ),
+    ).toBe("unreachable");
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+
+  it("the caller's abort stays aborted even with a timeout set", async () => {
+    const controller = new AbortController();
+    const promise = transcribeRecording(new Blob(["x"]), {
+      ...base,
+      fetchImpl: hangingFetch(),
+      signal: controller.signal,
+      requestTimeoutMs: 60_000,
+    });
+    controller.abort();
+    expect(await kindOf(promise)).toBe("aborted");
+  });
+
+  it("clears its timer after a fast success", async () => {
+    vi.useFakeTimers();
+    try {
+      let seen: AbortSignal | undefined;
+      const fetchImpl = vi.fn(async (_url: string, init?: RequestInit) => {
+        seen = init?.signal ?? undefined;
+        return json(200, { text: "hi", rawText: "hi" });
+      });
+      await transcribeRecording(new Blob(["x"]), { ...base, fetchImpl, requestTimeoutMs: 50 });
+      expect(vi.getTimerCount()).toBe(0);
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(seen?.aborted).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe("per-request timeouts without AbortSignal.any", () => {
+  it("still times out, keeps caller aborts, and leaks no timer", async () => {
+    vi.stubGlobal("AbortSignal", { ...AbortSignal, any: undefined, timeout: undefined });
+    try {
+      expect(
+        await kindOf(
+          checkDictationGateway("http://gw:1", "t", hangingFetch(), { requestTimeoutMs: 20 }),
+        ),
+      ).toBe("unreachable");
+
+      const controller = new AbortController();
+      const aborted = transcribeRecording(new Blob(["x"]), {
+        ...base,
+        fetchImpl: hangingFetch(),
+        signal: controller.signal,
+        requestTimeoutMs: 60_000,
+      });
+      controller.abort();
+      expect(await kindOf(aborted)).toBe("aborted");
+
+      vi.useFakeTimers();
+      const fetchImpl = vi.fn(async () => json(200, { text: "hi", rawText: "hi" }));
+      await transcribeRecording(new Blob(["x"]), { ...base, fetchImpl, requestTimeoutMs: 50 });
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+      vi.unstubAllGlobals();
+    }
+  });
+});
