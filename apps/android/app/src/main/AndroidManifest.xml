@@ -39,4 +39,7 @@
     <!-- Permissions -->
 
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- Composer dictation (issue #454): the WebView's getUserMedia({audio}) needs both; Capacitor's BridgeWebChromeClient requests them at runtime. -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
 </manifest>

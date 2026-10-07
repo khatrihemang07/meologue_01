@@ -125,6 +125,14 @@ have already captured. Composer names the view, not the action performed in it â
 It renders History beneath its input rather than holding Entries of its own: what Send commits
 lives in History, and the Composer view is one way of looking at it.
 
+### Dictation
+
+Speaking an Entry instead of typing it: the Composer's mic button records the user's voice, has it
+transcribed, and puts the resulting text at the cursor. Dictation only fills the Composer; the user
+still reads it and Sends it themselves, so it is never itself a Send. It is available only on a
+Device that has been given a dictation gateway's address, and the gateway's token is the one Device
+setting a Backup does not carry (ADR 0090).
+
 ### Sync
 
 The ongoing process by which Devices exchange Entries with each other, so that an Entry

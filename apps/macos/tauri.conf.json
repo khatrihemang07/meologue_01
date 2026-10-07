@@ -31,7 +31,8 @@
       "icons/icon.ico"
     ],
     "macOS": {
-      "signingIdentity": "meologue Dev"
+      "signingIdentity": "meologue Dev",
+      "entitlements": "Entitlements.plist"
     }
   }
 }
