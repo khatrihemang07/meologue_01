@@ -942,7 +942,17 @@ export function Composer({
         </div>
       )}
       {formatBarVisible && (
-        <ComposerToolbar commandStates={commandStates} onRun={runToolbarCommand} />
+        <ComposerToolbar
+          commandStates={commandStates}
+          onRun={runToolbarCommand}
+          // The mic lives only in the format toolbar (issue #454, owner's
+          // call), so with the toolbar switched off there is no mic.
+          dictation={
+            dictationEnabled ? (
+              <DictateButton onText={insertDictation} disabled={disabled} />
+            ) : undefined
+          }
+        />
       )}
       <div className="mx-auto flex w-[97%] items-end gap-2 px-4 py-2.5 md:w-[85%]">
         {/* `relative` anchors the picker (issue #144) to the field itself
@@ -1060,7 +1070,6 @@ export function Composer({
               function instead. */}
           <div ref={hostRef} />
         </div>
-        {dictationEnabled && <DictateButton onText={insertDictation} disabled={disabled} />}
         <Button
           aria-label="Send"
           size="icon-lg"

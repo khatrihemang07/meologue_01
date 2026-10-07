@@ -157,6 +157,14 @@ describe("ComposerSection", () => {
       expect(screen.getByText(/not included in Backups/)).toBeInTheDocument();
     });
 
+    it("says the mic appears in the format toolbar", () => {
+      render(<ComposerSection />);
+
+      expect(
+        screen.getByText(/mic button appears at the start of the format toolbar/),
+      ).toBeInTheDocument();
+    });
+
     it("saves a normalised URL and the token only on Save", () => {
       render(<ComposerSection />);
 

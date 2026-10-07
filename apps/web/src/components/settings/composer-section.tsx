@@ -184,7 +184,7 @@ export function ComposerSection() {
         */}
         <SettingsSection
           label="Dictation"
-          hint="Records in the Composer and sends audio to an OpenWhispr gateway on your network. The token stays on this Device and is not included in Backups."
+          hint="Records in the Composer and sends audio to an OpenWhispr gateway on your network. The mic button appears at the start of the format toolbar. The token stays on this Device and is not included in Backups."
         >
           <form
             className="flex flex-col gap-2"

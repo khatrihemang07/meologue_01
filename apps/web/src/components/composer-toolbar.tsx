@@ -13,7 +13,7 @@ import {
   Strikethrough,
   Undo2,
 } from "lucide-react";
-import type { ComponentType } from "react";
+import type { ComponentType, ReactNode } from "react";
 import { Button } from "@/components/ui/button";
 import {
   bold,
@@ -43,6 +43,8 @@ interface ComposerToolbarProps {
   commandStates: Readonly<Record<string, CommandState>>;
   /** Runs `command` against the live `EditorView` — composer.tsx's own concern; see this file's module comment. */
   onRun: (command: ComposerCommand) => void;
+  /** Rendered as the first group, before Bold, with a divider after it. The caller supplies the whole control (composer.tsx passes the mic button), so this toolbar knows nothing of settings or transport. Its own width, e.g. a recording timer, lives inside this group so the group never pushes the buttons after it out of reach any further than its own content. */
+  dictation?: ReactNode;
 }
 
 /** One button's fixed shape — icon, and which `ComposerCommand` it runs — paired with an accessible label pulled from the command's own `label` rather than a second copy of it here. */
@@ -111,7 +113,7 @@ const TOUCH_GROUPS: readonly (readonly ToolbarButtonSpec[])[] = [
 
 const FALLBACK_STATE: CommandState = { active: false, enabled: false };
 
-export function ComposerToolbar({ commandStates, onRun }: ComposerToolbarProps) {
+export function ComposerToolbar({ commandStates, onRun, dictation }: ComposerToolbarProps) {
   // Read fresh on every render rather than cached — see this file's own
   // module comment on why (a mouse can be plugged into a tablet mid-session).
   const groups = hoverCapable() ? POINTER_GROUPS : TOUCH_GROUPS;
@@ -121,12 +123,13 @@ export function ComposerToolbar({ commandStates, onRun }: ComposerToolbarProps) 
       aria-label="Formatting"
       className="mx-auto flex w-[97%] items-center gap-1 overflow-x-auto px-4 pt-2 md:w-[85%]"
     >
+      {dictation && <div className="flex shrink-0 items-center gap-0.5">{dictation}</div>}
       {groups.map((group, groupIndex) => (
         <div
           key={group.map((spec) => spec.command.id).join("-")}
           className="flex shrink-0 items-center gap-0.5"
         >
-          {groupIndex > 0 && (
+          {(groupIndex > 0 || dictation) && (
             // A plain divider between groups — decorative only, per this
             // file's own module comment on why the groups aren't a second
             // structural layer for assistive tech.

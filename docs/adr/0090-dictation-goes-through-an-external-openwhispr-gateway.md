@@ -43,7 +43,7 @@ in again.
 non-empty URL, and the Composer renders the button only then. This follows ADR 0011's reading of an
 empty address: unset means the feature is off, not broken. A button that always showed would, for
 every user without a gateway, lead to a failure toast on first press. Hiding it keeps the Composer
-unchanged for them.
+unchanged for them. The button sits at the start of the format toolbar, so a Device with the format toolbar switched off has no mic either.
 
 **Recording needs a secure context.** `navigator.mediaDevices` is undefined on a plain-http page
 that is not `localhost`, so `getUserMedia` cannot even be called there. This is the same constraint

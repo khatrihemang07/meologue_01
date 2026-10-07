@@ -30,7 +30,9 @@ function formatElapsed(seconds: number): string {
 
 /**
  * The Composer's mic button (issue #454, ADR 0090): idle, recording,
- * transcribing. Sized and shaped like Send so the two read as a pair.
+ * transcribing. Composer passes it into the format toolbar's first group
+ * (the owner moved it there from beside Send), so it is sized and styled
+ * like the toolbar's own buttons: square, ghost when idle.
  *
  * Owns the recording and the in-flight request, and releases both whenever
  * this component goes away or the Composer is disabled: an orphaned
@@ -163,7 +165,7 @@ export function DictateButton({
   const transcribing = phase === "transcribing";
 
   return (
-    <div className="flex shrink-0 items-center gap-2 self-end">
+    <div className="flex shrink-0 items-center gap-1">
       {recording && (
         // Visible, not just announced: a user glancing at the screen has to
         // be able to tell at once that the mic is live and for how long.
@@ -175,10 +177,10 @@ export function DictateButton({
       <Button
         type="button"
         size="icon-lg"
-        variant={recording ? "destructive" : "outline"}
+        variant={recording ? "destructive" : "ghost"}
         aria-label={recording ? "Stop dictation" : transcribing ? "Transcribing" : "Dictate"}
-        className="size-11 shrink-0 rounded-full"
-        // Same "steals no caret" trick as Send (composer.tsx): without it a
+        className="size-11 shrink-0"
+        // Same "steals no caret" trick as the toolbar's other buttons: without it a
         // tap blurs the editor and drops the soft keyboard, and the
         // transcript then has no caret to land at.
         onMouseDown={(event) => event.preventDefault()}

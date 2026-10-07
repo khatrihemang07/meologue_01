@@ -1,10 +1,21 @@
 import type { Entry } from "@meologue/core";
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { createRef } from "react";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { formatTaskReference } from "@/lib/inline-markdown";
 import { useSettingsStore } from "@/lib/settings";
 import { Composer, type ComposerHandle } from "./composer";
+
+const dictationMocks = vi.hoisted(() => ({
+  startDictationRecording: vi.fn(),
+  transcribeRecording: vi.fn(),
+}));
+vi.mock("@/lib/dictation-recorder", () => ({
+  startDictationRecording: dictationMocks.startDictationRecording,
+}));
+vi.mock("@/lib/dictation-transport", () => ({
+  transcribeRecording: dictationMocks.transcribeRecording,
+}));
 
 /**
  * The one test this ticket's own diagnosis says would have caught issue
@@ -174,19 +185,57 @@ describe("Composer's Send button keeps focus on the editor", () => {
   });
 
   describe("dictation (issue #454)", () => {
+    afterEach(() => {
+      useSettingsStore.setState({ dictationUrl: "", formatBarVisible: true });
+    });
+
     it("shows no mic button until a gateway URL is set", () => {
-      useSettingsStore.setState({ dictationUrl: "" });
+      useSettingsStore.setState({ dictationUrl: "", formatBarVisible: true });
       render(<Composer onSend={vi.fn()} />);
       expect(screen.queryByRole("button", { name: "Dictate" })).not.toBeInTheDocument();
     });
 
-    it("shows the mic button, before Send, once a gateway URL is set", () => {
-      useSettingsStore.setState({ dictationUrl: "http://gw" });
+    it("puts the mic inside the format toolbar, before Bold and not beside Send", () => {
+      useSettingsStore.setState({ dictationUrl: "http://gw", formatBarVisible: true });
       render(<Composer onSend={vi.fn()} />);
+      const toolbar = screen.getByRole("toolbar");
       const mic = screen.getByRole("button", { name: "Dictate" });
+      const bold = screen.getByRole("button", { name: "Bold" });
+      expect(toolbar).toContainElement(mic);
+      expect(mic.compareDocumentPosition(bold) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
       const send = screen.getByRole("button", { name: "Send" });
-      expect(mic.compareDocumentPosition(send) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-      useSettingsStore.setState({ dictationUrl: "" });
+      expect(send.parentElement).not.toContainElement(mic);
+    });
+
+    it("inserts the transcript at the caret", async () => {
+      useSettingsStore.setState({ dictationUrl: "http://gw", formatBarVisible: true });
+      dictationMocks.startDictationRecording.mockResolvedValue({
+        stop: async () => new Blob(["a"]),
+        cancel: vi.fn(),
+      });
+      dictationMocks.transcribeRecording.mockResolvedValue({ text: "spoken words" });
+      const onSend = vi.fn();
+      render(<Composer onSend={onSend} />);
+
+      await act(async () => {
+        fireEvent.click(screen.getByRole("button", { name: "Dictate" }));
+      });
+      await act(async () => {
+        fireEvent.click(screen.getByRole("button", { name: "Stop dictation" }));
+      });
+
+      await vi.waitFor(() =>
+        expect(screen.getByPlaceholderText("What's on your mind?")).toHaveTextContent(
+          "spoken words",
+        ),
+      );
+      expect(onSend).not.toHaveBeenCalled();
+    });
+
+    it("shows no mic when the format toolbar is off, even with a gateway URL", () => {
+      useSettingsStore.setState({ dictationUrl: "http://gw", formatBarVisible: false });
+      render(<Composer onSend={vi.fn()} />);
+      expect(screen.queryByRole("button", { name: "Dictate" })).not.toBeInTheDocument();
     });
   });
 });

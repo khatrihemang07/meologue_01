@@ -70,4 +70,32 @@ describe("ComposerToolbar", () => {
 
     expect(onRun).toHaveBeenCalledWith(expect.objectContaining({ id: "softBreak" }));
   });
+
+  it.each([true, false])(
+    "renders the dictation slot first, before Bold (hover-capable: %s)",
+    (hover) => {
+      stubHoverCapable(hover);
+
+      render(
+        <ComposerToolbar
+          commandStates={{}}
+          onRun={vi.fn()}
+          dictation={<button type="button">Dictate</button>}
+        />,
+      );
+
+      const mic = screen.getByRole("button", { name: "Dictate" });
+      const bold = screen.getByRole("button", { name: "Bold" });
+      expect(screen.getByRole("toolbar")).toContainElement(mic);
+      expect(mic.compareDocumentPosition(bold) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    },
+  );
+
+  it("renders no dictation group when none is given", () => {
+    stubHoverCapable(true);
+
+    render(<ComposerToolbar commandStates={{}} onRun={vi.fn()} />);
+
+    expect(screen.queryByRole("button", { name: "Dictate" })).not.toBeInTheDocument();
+  });
 });
