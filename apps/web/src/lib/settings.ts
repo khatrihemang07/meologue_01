@@ -219,8 +219,8 @@ export const DEFAULT_TEXT_SIZE: TextSizeId = "default";
 
 /**
  * The Destinations a reader can hide from the root screen's list (issue
- * #134, extended to Todo by issue #168 and Time by issue #418) — Composer,
- * Reflect, Digest, Todo and Time, matching `chat-list.tsx`'s own
+ * #134, extended to Todo by issue #168 — Composer, Reflect,
+ * Digest and Todo, matching `chat-list.tsx`'s own
  * `DESTINATIONS` slugs (each row's
  * `to` with the leading slash stripped). Settings is deliberately not one
  * of these ids and is never offered a control by `settings-page.tsx`: ADR
@@ -228,14 +228,13 @@ export const DEFAULT_TEXT_SIZE: TextSizeId = "default";
  * the Server URL is wrong, so it must never be capable of disappearing
  * from the list that leads to it.
  */
-export type HideableDestinationId = "composer" | "reflect" | "digest" | "todo" | "time";
+export type HideableDestinationId = "composer" | "reflect" | "digest" | "todo";
 
 export const HIDEABLE_DESTINATIONS: { id: HideableDestinationId; label: string }[] = [
   { id: "composer", label: "Composer" },
   { id: "reflect", label: "Reflect" },
   { id: "digest", label: "Digest" },
   { id: "todo", label: "Todo" },
-  { id: "time", label: "Time" },
 ];
 
 /**

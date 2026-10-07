@@ -450,13 +450,12 @@ describe("settings store", () => {
       expect(useSettingsStore.getState().hiddenDestinations).toEqual(new Set(["digest"]));
     });
 
-    it("offers exactly the five hideable Destinations — Settings is never among them", () => {
+    it("offers exactly the four hideable Destinations — Settings is never among them", () => {
       expect(HIDEABLE_DESTINATIONS.map((destination) => destination.id)).toEqual([
         "composer",
         "reflect",
         "digest",
         "todo",
-        "time",
       ]);
     });
 
@@ -484,6 +483,18 @@ describe("settings store", () => {
       // the good one surviving proves this drops one at a time rather than
       // discarding the whole value the way a failed `JSON.parse` would.
       localStorage.setItem("meologue.hidden-destinations", "history,digest");
+
+      vi.resetModules();
+      return import("./settings").then((fresh) => {
+        expect(fresh.useSettingsStore.getState().hiddenDestinations).toEqual(new Set(["digest"]));
+      });
+    });
+
+    it("ignores 'time' left behind by a build that had the Time Destination", () => {
+      // Time was removed (issue #452). A Device that hid it, or restored a
+      // backup from that era, still carries the slug; it must read back
+      // without it and without throwing.
+      localStorage.setItem("meologue.hidden-destinations", "time,digest");
 
       vi.resetModules();
       return import("./settings").then((fresh) => {
@@ -538,13 +549,7 @@ describe("settings store", () => {
   // Issue #133.
   describe("capabilities", () => {
     it("round-trips a written capability report, in the store and in storage", () => {
-      const capabilities = {
-        reflect: true,
-        digest: false,
-        embeddings: true,
-        todo: true,
-        time: true,
-      };
+      const capabilities = { reflect: true, digest: false, embeddings: true, todo: true };
 
       useSettingsStore.getState().setCapabilities(capabilities);
 
@@ -557,7 +562,7 @@ describe("settings store", () => {
     it("clears the stored report when set back to null (unknown)", () => {
       useSettingsStore
         .getState()
-        .setCapabilities({ reflect: true, digest: true, embeddings: true, todo: true, time: true });
+        .setCapabilities({ reflect: true, digest: true, embeddings: true, todo: true });
 
       useSettingsStore.getState().setCapabilities(null);
 
@@ -569,13 +574,7 @@ describe("settings store", () => {
       vi.spyOn(localStorage, "setItem").mockImplementation(() => {
         throw new Error("storage unavailable");
       });
-      const capabilities = {
-        reflect: false,
-        digest: true,
-        embeddings: false,
-        todo: true,
-        time: true,
-      };
+      const capabilities = { reflect: false, digest: true, embeddings: false, todo: true };
 
       expect(() => useSettingsStore.getState().setCapabilities(capabilities)).not.toThrow();
       expect(useSettingsStore.getState().capabilities).toEqual(capabilities);
@@ -584,13 +583,7 @@ describe("settings store", () => {
 
   describe("refreshCapabilities", () => {
     it("stores the server's capability report and marks the server reachable", async () => {
-      const capabilities = {
-        reflect: true,
-        digest: false,
-        embeddings: false,
-        todo: true,
-        time: true,
-      };
+      const capabilities = { reflect: true, digest: false, embeddings: false, todo: true };
       vi.stubGlobal(
         "fetch",
         vi.fn(async () => healthResponse(capabilities)),
@@ -614,7 +607,7 @@ describe("settings store", () => {
       useSettingsStore.getState().setServerUrl("https://server.example");
       useSettingsStore
         .getState()
-        .setCapabilities({ reflect: true, digest: true, embeddings: true, todo: true, time: true });
+        .setCapabilities({ reflect: true, digest: true, embeddings: true, todo: true });
 
       await refreshCapabilities();
 
@@ -627,13 +620,7 @@ describe("settings store", () => {
     // quiet for a moment says nothing about what it could serve the last
     // time it answered.
     it("marks the server unreachable on a network failure, without touching a known capability report", async () => {
-      const capabilities = {
-        reflect: true,
-        digest: true,
-        embeddings: false,
-        todo: true,
-        time: true,
-      };
+      const capabilities = { reflect: true, digest: true, embeddings: false, todo: true };
       useSettingsStore.getState().setServerUrl("https://server.example");
       useSettingsStore.getState().setCapabilities(capabilities);
       vi.stubGlobal(
@@ -654,7 +641,7 @@ describe("settings store", () => {
       vi.stubGlobal("fetch", fetchMock);
       useSettingsStore
         .getState()
-        .setCapabilities({ reflect: true, digest: true, embeddings: true, todo: true, time: true });
+        .setCapabilities({ reflect: true, digest: true, embeddings: true, todo: true });
       useSettingsStore.getState().setServerReachable(false);
 
       await refreshCapabilities();
