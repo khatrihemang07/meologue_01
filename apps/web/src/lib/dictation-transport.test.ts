@@ -93,6 +93,54 @@ describe("transcribeRecording", () => {
     expect(error.message).toBe("whisper crashed");
   });
 
+  it("reads the gateway's message from a 500 on a failed ?wait=1 job", async () => {
+    const fetchImpl = vi.fn(async () =>
+      json(500, { id: "j1", status: "failed", error: "ffmpeg exploded" }),
+    );
+    const error = await transcribeRecording(new Blob(["x"]), { ...base, fetchImpl }).catch(
+      (e) => e,
+    );
+    expect(error).toBeInstanceOf(DictationError);
+    expect(error.kind).toBe("failed");
+    expect(error.message).toBe("ffmpeg exploded");
+  });
+
+  it.each([
+    [400, "missing_audio"],
+    [400, "empty_audio"],
+    [413, "payload_too_large"],
+    [404, "not_found"],
+  ])("uses the error string from a %s body (%s)", async (status, code) => {
+    const fetchImpl = vi.fn(async () => json(status, { error: code }));
+    const error = await transcribeRecording(new Blob(["x"]), { ...base, fetchImpl }).catch(
+      (e) => e,
+    );
+    expect(error.kind).toBe("failed");
+    expect(error.message).toBe(code);
+  });
+
+  it("keeps the 'answered N' message when the error body is unreadable", async () => {
+    const fetchImpl = vi.fn(async () => new Response("<html>", { status: 502 }));
+    const error = await transcribeRecording(new Blob(["x"]), { ...base, fetchImpl }).catch(
+      (e) => e,
+    );
+    expect(error.kind).toBe("failed");
+    expect(error.message).toBe("The dictation gateway answered 502.");
+  });
+
+  it("reads the gateway's message from a failed poll response", async () => {
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(json(202, { id: "j1", status: "queued" }))
+      .mockResolvedValueOnce(json(404, { error: "not_found" }));
+    const error = await transcribeRecording(new Blob(["x"]), {
+      ...base,
+      fetchImpl,
+      pollIntervalMs: 1,
+    }).catch((e) => e);
+    expect(error.message).toBe("not_found");
+  });
+
   it("times out when the job never finishes", async () => {
     const fetchImpl = vi.fn(async (url: string) =>
       url.includes("wait=1")

@@ -60,9 +60,10 @@ const DEFAULT_POLL_INTERVAL_MS = 1000;
 const DEFAULT_TIMEOUT_MS = 10 * 60 * 1000;
 
 /**
- * Container extension for a recorded blob. The gateway accepts any
- * container but sniffs by filename, so the name has to agree with what the
- * MediaRecorder actually produced (Safari records mp4, Chromium webm).
+ * Container extension for a recorded blob. The gateway converts every upload
+ * with ffmpeg, which probes the content, so the extension is cosmetic: it
+ * only makes logs and debugging legible. It still follows what the
+ * MediaRecorder actually produced (mp4 on WebKit, webm elsewhere).
  */
 function extensionFor(mimeType: string): string {
   const base = mimeType.split(";")[0]?.trim().toLowerCase() ?? "";
@@ -121,6 +122,27 @@ async function readJson(response: Response): Promise<Record<string, unknown>> {
   throw new DictationError("bad-response", "The dictation gateway sent an unreadable response.");
 }
 
+/**
+ * The error for a non-ok, non-401 response. The gateway answers a failed
+ * `?wait=1` job with 500 and `{id, status:"failed", error}`, and 400/404/413
+ * with `{error}`, so the body's own message is used when it has one; only an
+ * unreadable body falls back to the bare status.
+ */
+async function failureFrom(response: Response): Promise<DictationError> {
+  try {
+    const body: unknown = await response.json();
+    if (typeof body === "object" && body !== null) {
+      const { error } = body as Record<string, unknown>;
+      if (typeof error === "string" && error !== "") {
+        return new DictationError("failed", error);
+      }
+    }
+  } catch {
+    // fall through to the status-only message
+  }
+  return new DictationError("failed", `The dictation gateway answered ${response.status}.`);
+}
+
 function resultFrom(body: Record<string, unknown>): DictationResult {
   const text = body.text;
   if (typeof text !== "string") {
@@ -177,7 +199,7 @@ export async function transcribeRecording(
     options.signal,
   );
   if (!response.ok) {
-    throw new DictationError("failed", `The dictation gateway answered ${response.status}.`);
+    throw await failureFrom(response);
   }
   let body = await readJson(response);
   if (response.status === 200 && body.status === "done") {
@@ -211,7 +233,7 @@ export async function transcribeRecording(
       options.signal,
     );
     if (!response.ok) {
-      throw new DictationError("failed", `The dictation gateway answered ${response.status}.`);
+      throw await failureFrom(response);
     }
     body = await readJson(response);
   }
