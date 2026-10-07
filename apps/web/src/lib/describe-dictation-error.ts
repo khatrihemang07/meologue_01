@@ -5,7 +5,7 @@ import { DictationError, type GatewayHealth } from "@/lib/dictation-transport";
  * The one sentence a dictation failure reads as, shared by the Composer's
  * toast and Settings' Test line so a given failure is worded identically
  * wherever it surfaces (same reason `describe-server-check.ts` exists for
- * Sync). Returns `null` for an `aborted` error: the user (or an unmount)
+ * Sync). Returns `null` for an `aborted` or `cancelled` error: the user (or an unmount)
  * cancelled it on purpose, so there is nothing to report.
  */
 export function describeDictationError(error: unknown): string | null {
@@ -17,6 +17,8 @@ export function describeDictationError(error: unknown): string | null {
         return "No microphone was found.";
       case "insecure-context":
         return "Dictation needs a secure (HTTPS or localhost) page.";
+      case "cancelled":
+        return null;
       case "unknown":
         return "The microphone couldn't be started.";
     }

@@ -96,7 +96,7 @@ export function DictateButton({
     }
   }
 
-  async function begin() {
+  async function startDictation() {
     const run = ++runRef.current;
     setPhase("starting");
     try {
@@ -116,18 +116,22 @@ export function DictateButton({
     }
   }
 
-  async function finish() {
+  async function stopAndTranscribe() {
     const recording = recordingRef.current;
     if (recording === null) {
       return;
     }
-    recordingRef.current = null;
+    // Left in `recordingRef` while the stop is pending, so a release
+    // (unmount, disabled) can still cancel it and settle the stop.
     const run = runRef.current;
     const controller = new AbortController();
     abortRef.current = controller;
     setPhase("transcribing");
     try {
       const blob = await recording.stop();
+      if (run === runRef.current) {
+        recordingRef.current = null;
+      }
       const { dictationUrl, dictationToken } = useSettingsStore.getState();
       const result = await transcribe(blob, {
         url: dictationUrl,
@@ -148,6 +152,7 @@ export function DictateButton({
       }
     } finally {
       if (run === runRef.current) {
+        recordingRef.current = null;
         abortRef.current = null;
         setPhase("idle");
       }
@@ -177,7 +182,7 @@ export function DictateButton({
         // tap blurs the editor and drops the soft keyboard, and the
         // transcript then has no caret to land at.
         onMouseDown={(event) => event.preventDefault()}
-        onClick={recording ? finish : begin}
+        onClick={recording ? stopAndTranscribe : startDictation}
         disabled={disabled || transcribing || phase === "starting"}
       >
         {recording ? (

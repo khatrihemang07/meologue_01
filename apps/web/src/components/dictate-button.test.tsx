@@ -163,6 +163,34 @@ describe("DictateButton", () => {
     expect(recording.cancel).toHaveBeenCalled();
   });
 
+  it("toasts nothing when unmount cancels a still-pending stop", async () => {
+    let rejectStop: (e: unknown) => void = () => {};
+    const recording = {
+      stop: vi.fn(
+        () =>
+          new Promise<Blob>((_resolve, reject) => {
+            rejectStop = reject;
+          }),
+      ),
+      cancel: vi.fn(() => rejectStop(new DictationRecorderError("cancelled", "cancelled"))),
+    } satisfies DictationRecording;
+    const onText = vi.fn();
+    const { unmount } = render(
+      <DictateButton onText={onText} startRecording={async () => recording} transcribe={vi.fn()} />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Dictate" }));
+    await flush();
+    fireEvent.click(screen.getByRole("button", { name: "Stop dictation" }));
+    await flush();
+
+    unmount();
+    await flush();
+
+    expect(recording.cancel).toHaveBeenCalled();
+    expect(toastMock.error).not.toHaveBeenCalled();
+    expect(onText).not.toHaveBeenCalled();
+  });
+
   it("aborts an in-flight transcription on unmount and inserts nothing", async () => {
     let signal: AbortSignal | undefined;
     const onText = vi.fn();

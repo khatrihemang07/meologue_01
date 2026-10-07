@@ -6,7 +6,12 @@
  * held) long after the UI looks finished.
  */
 
-export type DictationRecorderErrorKind = "denied" | "no-device" | "insecure-context" | "unknown";
+export type DictationRecorderErrorKind =
+  | "denied"
+  | "no-device"
+  | "insecure-context"
+  | "cancelled"
+  | "unknown";
 
 export class DictationRecorderError extends Error {
   readonly kind: DictationRecorderErrorKind;
@@ -21,16 +26,19 @@ export class DictationRecorderError extends Error {
 export interface DictationRecording {
   /** Ends the recording and resolves the captured audio. */
   stop(): Promise<Blob>;
-  /** Ends the recording and discards the audio. */
+  /**
+   * Ends the recording and discards the audio. A `stop()` still pending
+   * rejects with a `"cancelled"` error rather than hanging.
+   */
   cancel(): void;
 }
 
 /**
- * Preference order: Opus-in-WebM is what Chromium and Firefox record; mp4 is
- * what Safari/WKWebView records; no match falls through to the browser's own
- * default rather than failing on an engine that supports none of these by
- * name. The gateway accepts any container, so the order is a preference for
- * small files, not a compatibility requirement.
+ * Preference order: the first type an engine supports is what it records, so
+ * this list decides the format per engine: webm/opus on Chromium and Android
+ * WebView, mp4 on WebKit. No match falls through to the browser's own default
+ * rather than failing. The gateway converts every upload with ffmpeg, which
+ * probes the content, so the order is not a compatibility requirement.
  */
 const MIME_TYPES = ["audio/webm;codecs=opus", "audio/webm", "audio/mp4", "audio/ogg;codecs=opus"];
 
@@ -89,10 +97,26 @@ export async function startDictationRecording(): Promise<DictationRecording> {
     }
   };
 
+  // A MediaRecorder `error` ends the recording on its own; the tracks are
+  // released at once and any pending or later `stop()` rejects.
+  let failure: DictationRecorderError | null = null;
+  let rejectPending: ((error: DictationRecorderError) => void) | null = null;
+  recorder.onerror = () => {
+    failure = new DictationRecorderError("unknown", "The recording failed.");
+    stopTracks();
+    rejectPending?.(failure);
+    rejectPending = null;
+  };
+
   return {
     stop() {
-      return new Promise<Blob>((resolve) => {
+      return new Promise<Blob>((resolve, reject) => {
+        if (failure !== null) {
+          reject(failure);
+          return;
+        }
         const finish = () => {
+          rejectPending = null;
           stopTracks();
           resolve(new Blob(chunks, { type: recorder.mimeType }));
         };
@@ -100,6 +124,7 @@ export async function startDictationRecording(): Promise<DictationRecording> {
           finish();
           return;
         }
+        rejectPending = reject;
         recorder.onstop = finish;
         recorder.stop();
       });
@@ -107,10 +132,13 @@ export async function startDictationRecording(): Promise<DictationRecording> {
     cancel() {
       recorder.ondataavailable = null;
       recorder.onstop = null;
+      recorder.onerror = null;
       if (recorder.state !== "inactive") {
         recorder.stop();
       }
       stopTracks();
+      rejectPending?.(new DictationRecorderError("cancelled", "Dictation was cancelled."));
+      rejectPending = null;
     },
   };
 }

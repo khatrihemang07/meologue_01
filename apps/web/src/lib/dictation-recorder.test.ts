@@ -11,6 +11,9 @@ class FakeRecorder {
   mimeType: string;
   ondataavailable: ((e: { data: Blob }) => void) | null = null;
   onstop: (() => void) | null = null;
+  onerror: (() => void) | null = null;
+  /** When true, `stop()` leaves `onstop` for the test to fire, like a real recorder that finalises later. */
+  static deferStop = false;
   options: { mimeType?: string } | undefined;
   stream: MediaStream;
   constructor(stream: MediaStream, options?: { mimeType?: string }) {
@@ -24,6 +27,9 @@ class FakeRecorder {
   }
   stop() {
     this.state = "inactive";
+    if (FakeRecorder.deferStop) {
+      return;
+    }
     this.ondataavailable?.({ data: new Blob(["chunk"], { type: this.mimeType }) });
     this.onstop?.();
   }
@@ -38,6 +44,7 @@ describe("startDictationRecording", () => {
   beforeEach(() => {
     FakeRecorder.supported = new Set();
     FakeRecorder.instances = [];
+    FakeRecorder.deferStop = false;
     vi.stubGlobal("MediaRecorder", FakeRecorder);
   });
   afterEach(() => {
@@ -89,6 +96,48 @@ describe("startDictationRecording", () => {
 
     expect(track.stop).toHaveBeenCalled();
     expect(FakeRecorder.instances[0]?.state).toBe("inactive");
+  });
+
+  it("cancel rejects a pending stop as cancelled and stops every track", async () => {
+    FakeRecorder.deferStop = true;
+    const { stream, track } = fakeStream();
+    stubMedia(async () => stream);
+
+    const recording = await startDictationRecording();
+    const pending = recording.stop().catch((e) => e);
+    recording.cancel();
+
+    const error = await pending;
+    expect(error).toBeInstanceOf(DictationRecorderError);
+    expect(error.kind).toBe("cancelled");
+    expect(track.stop).toHaveBeenCalled();
+  });
+
+  it("a recorder error rejects a pending stop and stops every track", async () => {
+    FakeRecorder.deferStop = true;
+    const { stream, track } = fakeStream();
+    stubMedia(async () => stream);
+
+    const recording = await startDictationRecording();
+    const pending = recording.stop().catch((e) => e);
+    FakeRecorder.instances[0]?.onerror?.();
+
+    const error = await pending;
+    expect(error).toBeInstanceOf(DictationRecorderError);
+    expect(error.kind).toBe("unknown");
+    expect(track.stop).toHaveBeenCalled();
+  });
+
+  it("a recorder error while recording stops tracks and fails the later stop", async () => {
+    const { stream, track } = fakeStream();
+    stubMedia(async () => stream);
+
+    const recording = await startDictationRecording();
+    FakeRecorder.instances[0]?.onerror?.();
+
+    expect(track.stop).toHaveBeenCalled();
+    const error = await recording.stop().catch((e) => e);
+    expect(error.kind).toBe("unknown");
   });
 
   it.each([
