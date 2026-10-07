@@ -9,7 +9,9 @@
  * Persisted as plain `localStorage` string keys, one per setting —
  * `meologue.theme`, `meologue.server-url`, since #128 `meologue.accent` and
  * `meologue.text-size`, since #134 `meologue.hidden-destinations`, and since
- * #358 `meologue.completed-tasks-visible` — not a single JSON blob under
+ * #358 `meologue.completed-tasks-visible`, and since #454
+ * `meologue.dictation-url` / `meologue.dictation-token` (the token is the
+ * one key excluded from Backup, see `BACKUP_EXCLUDED_KEYS`) — not a single JSON blob under
  * Zustand's `persist` middleware, which writes the whole store under one
  * key. Three things depend on that format: the inline
  * blocking script in `index.html` that applies the theme before first paint
@@ -68,13 +70,12 @@ const DEVICE_SETTINGS_PREFIX = "meologue.";
 
 /**
  * Keys that exist in `localStorage` but must never travel in a Backup or be
- * written by a Restore (issue #454). The dictation token is a bearer secret
- * for a gateway on the user's own network: a Backup zip gets copied to
- * cloud drives and sent between Devices, so carrying the token there would
- * widen who holds it far beyond the Device the user typed it into. An
- * explicit set rather than a name pattern like `*-token`, so the decision
- * for each key is written down once, here, and a future secret is added on
- * purpose rather than caught (or missed) by a naming accident.
+ * written by a Restore (issue #454). The dictation token is a credential,
+ * and Backup files are user-handled files that leave the Device, so the
+ * token stays out of them. An explicit set rather than a name pattern like
+ * `*-token`, so the decision for each key is written down once, here, and a
+ * future secret is added on purpose rather than caught (or missed) by a
+ * naming accident.
  */
 const BACKUP_EXCLUDED_KEYS: ReadonlySet<string> = new Set([DICTATION_TOKEN_KEY]);
 

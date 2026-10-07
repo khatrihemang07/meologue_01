@@ -29,15 +29,15 @@ transport deliberately does not go through `server-request.ts`: that helper mark
 Server unreachable on any network failure, and a dictation gateway outage must never read as
 "Sync is down" (ADR 0011).
 
-**The token is a Device-local secret and is excluded from Backup and Restore.** The gateway URL
-and token are stored as plain `meologue.dictation-url` and `meologue.dictation-token` keys
-(ADR 0008's format). The URL travels in a Backup like any other Device setting. The token does not:
+**The token is a Device-local secret and is excluded from Backup and Restore.** The gateway URL and
+token are stored as plain `meologue.dictation-url` and `meologue.dictation-token` keys (ADR 0008's
+format). The URL travels in a Backup like any other Device setting. The token does not:
 `readAllDeviceSettings` skips it and `applyDeviceSettings` refuses to write it, through a small
-explicit set (`BACKUP_EXCLUDED_KEYS` in `apps/web/src/lib/settings.ts`). A Backup zip is the kind of
-file that is copied to a cloud drive or sent to another Device, so carrying a bearer token in it
-would hand the token to everywhere the zip goes. Both directions are checked, because a Backup made
-by another build or edited by hand could still carry a token, and Restore must not overwrite the one
-this Device holds. The cost is that a restored Device has to have the token typed in again.
+explicit set (`BACKUP_EXCLUDED_KEYS` in `apps/web/src/lib/settings.ts`). The token is a credential,
+and Backup files are user-handled files that leave the Device. Both directions are checked, because
+a Backup made by another build or edited by hand could still carry a token, and Restore must not
+overwrite the one this Device holds. The cost is that a restored Device has to have the token typed
+in again.
 
 **The mic button is hidden while no gateway URL is set.** `useDictationEnabled()` is true only for a
 non-empty URL, and the Composer renders the button only then. This follows ADR 0011's reading of an
@@ -49,11 +49,12 @@ unchanged for them.
 that is not `localhost`, so `getUserMedia` cannot even be called there. This is the same constraint
 0017 and 0081 describe for OPFS, and the app reports it as its own failure ("Dictation needs a
 secure (HTTPS or localhost) page.") rather than as a denied permission, because the fix is a
-different URL, not a different permission setting. The Android shell serves the app from `http://localhost` (`apps/web/capacitor.config.ts`), which
-is a secure context; whether the macOS Tauri origin counts as one for `getUserMedia` is checked by
-the acceptance run on that shell, not assumed. Both native shells also declare the microphone
-permission (`RECORD_AUDIO` on Android; `NSMicrophoneUsageDescription` and the audio-input
-entitlement on macOS, whose build is signed with the hardened runtime).
+different URL, not a different permission setting. The Android shell serves the app from
+`http://localhost` (`apps/web/capacitor.config.ts`), which is a secure context; whether the macOS
+Tauri origin counts as one for `getUserMedia` is checked by the acceptance run on that shell, not
+assumed. Both native shells also declare the microphone permission (`RECORD_AUDIO` on Android;
+`NSMicrophoneUsageDescription` and the audio-input entitlement on macOS, whose build is signed with
+the hardened runtime).
 
 **An HTTPS-served web origin cannot call an http gateway.** The gateway is a LAN service with no
 certificate, in the same position as the meologue Server (ADR 0003), but a page served over HTTPS
@@ -61,20 +62,18 @@ certificate, in the same position as the meologue Server (ADR 0003), but a page 
 another Device) is blocked by mixed-content rules from fetching an `http://` address. The browser
 reports that as a network failure, so it surfaces as "Couldn't reach the dictation gateway."
 meologue does not work around it. The gateway has to be served over HTTPS too (for example its own
-Tailscale Serve address) when the web app is itself on HTTPS. The Android shell's `http://localhost` origin may call an `http://` gateway (the reason
-`capacitor.config.ts` picks the `http` scheme), so the restriction is specific to the web target
-served over HTTPS.
+Tailscale Serve address) when the web app is itself on HTTPS. The Android shell's
+`http://localhost` origin may call an `http://` gateway (the reason `capacitor.config.ts` picks
+the `http` scheme), so the restriction is specific to the web target served over HTTPS.
 
 ## Alternatives considered
 
-- **Transcribe inside meologue's own Server.** Rejected: it would duplicate OpenWhispr's pipeline
-  and lose the dictionary, cleanup, snippets and shared history that are the reason for the feature.
-- **Use the browser's SpeechRecognition API.** Rejected for the same reason, and because it is not
-  available in the Tauri and Android WebViews.
-- **Back up the token, encrypted.** Rejected: there is no key management in Backup to hold the
-  encryption key, so the token would still be recoverable by anyone who can open the zip with the
-  same code.
-- **Always show the button and explain in a toast.** Rejected, see above.
+- **Put the endpoint inside meologue's own Rust Server.** Rejected by the owner in favour of a
+  standalone service that other clients can use later.
+- **Have the gateway reproduce OpenWhispr's pipeline itself, or drive the running app.** This
+  belongs to the gateway's design; see the gateway's README.
+- **Expose OpenWhispr's whisper-server port directly.** Rejected: it has no auth, no cleanup or
+  dictionary, and is not OpenWhispr's full processing.
 
 ## Consequences
 

@@ -56,9 +56,7 @@ export function ComposerSection() {
 
   // Local drafts, committed on Save — the same shape `sync-section.tsx`
   // uses for the Server URL, for the same reason: the field must keep
-  // showing what is being typed until the user chooses to apply it, and
-  // the mic button appearing the instant the first character is typed
-  // would be a surprise.
+  // showing what is being typed until the user chooses to apply it.
   const [dictationUrl, setDictationUrl] = useState(storedDictationUrl);
   const [dictationToken, setDictationToken] = useState(storedDictationToken);
   const [testing, setTesting] = useState(false);
