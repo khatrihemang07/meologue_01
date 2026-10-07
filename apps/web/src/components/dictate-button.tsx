@@ -166,14 +166,6 @@ export function DictateButton({
 
   return (
     <div className="flex shrink-0 items-center gap-1">
-      {recording && (
-        // Visible, not just announced: a user glancing at the screen has to
-        // be able to tell at once that the mic is live and for how long.
-        <span className="flex items-center gap-1.5 text-destructive text-sm tabular-nums">
-          <span aria-hidden="true" className="size-2 animate-pulse rounded-full bg-destructive" />
-          {formatElapsed(elapsed)}
-        </span>
-      )}
       <Button
         type="button"
         size="icon-lg"
@@ -195,6 +187,16 @@ export function DictateButton({
           <Mic aria-hidden="true" className="size-5" />
         )}
       </Button>
+      {recording && (
+        // Visible, not just announced: a user glancing at the screen has to
+        // be able to tell at once that the mic is live and for how long. After
+        // the button, not before it, so starting a recording never shifts the
+        // button out from under the finger that will tap it again to stop.
+        <span className="flex items-center gap-1.5 text-destructive text-sm tabular-nums">
+          <span aria-hidden="true" className="size-2 animate-pulse rounded-full bg-destructive" />
+          {formatElapsed(elapsed)}
+        </span>
+      )}
     </div>
   );
 }

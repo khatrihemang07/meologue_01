@@ -56,6 +56,13 @@ describe("DictateButton", () => {
     await flush();
     expect(screen.getByRole("button", { name: "Stop dictation" })).toBeInTheDocument();
     expect(screen.getByText("0:00")).toBeInTheDocument();
+    // The timer follows the stop button, so starting a recording never moves
+    // the button out from under the finger that will tap it again to stop.
+    expect(
+      screen
+        .getByRole("button", { name: "Stop dictation" })
+        .compareDocumentPosition(screen.getByText("0:00")),
+    ).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
 
     await act(async () => {
       vi.advanceTimersByTime(65_000);
