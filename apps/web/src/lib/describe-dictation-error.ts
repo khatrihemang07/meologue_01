@@ -1,5 +1,5 @@
 import { DictationRecorderError } from "@/lib/dictation-recorder";
-import { DictationError } from "@/lib/dictation-transport";
+import { DictationError, type GatewayHealth } from "@/lib/dictation-transport";
 
 /**
  * The one sentence a dictation failure reads as, shared by the Composer's
@@ -37,4 +37,25 @@ export function describeDictationError(error: unknown): string | null {
     }
   }
   return "Dictation failed.";
+}
+
+/**
+ * Settings' Test line for a gateway that answered `/v1/health`. `degraded`
+ * and `down` describe OpenWhispr behind the gateway, not the gateway
+ * itself, which is why both still start "Connected": the address and token
+ * are right, and the fix lives elsewhere.
+ */
+export function describeGatewayHealth(health: GatewayHealth): string {
+  const { openwhispr, status } = health;
+  const version = openwhispr.version ?? "unknown version";
+  if (status === "ok") {
+    return `Connected — OpenWhispr ${version}`;
+  }
+  if (!openwhispr.reachable) {
+    return "Connected, but degraded: the gateway can't reach OpenWhispr.";
+  }
+  if (openwhispr.verifiedVersion !== null && openwhispr.version !== openwhispr.verifiedVersion) {
+    return `Connected, but degraded: OpenWhispr ${version} hasn't been verified (the gateway expects ${openwhispr.verifiedVersion}).`;
+  }
+  return `Connected, but ${status}: OpenWhispr ${version} isn't healthy.`;
 }

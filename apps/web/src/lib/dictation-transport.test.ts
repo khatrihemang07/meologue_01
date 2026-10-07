@@ -54,9 +54,7 @@ describe("transcribeRecording", () => {
   });
 
   it("surfaces the no_speech warning", async () => {
-    const fetchImpl = vi.fn(async () =>
-      json(200, { text: "", rawText: "", warning: "no_speech" }),
-    );
+    const fetchImpl = vi.fn(async () => json(200, { text: "", rawText: "", warning: "no_speech" }));
     const result = await transcribeRecording(new Blob(["x"]), { ...base, fetchImpl });
     expect(result.warning).toBe("no_speech");
   });
