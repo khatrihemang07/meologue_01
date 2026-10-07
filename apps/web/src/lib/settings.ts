@@ -60,9 +60,23 @@ const DEFAULT_REFLECT_MODEL_KEY = "meologue.default-reflect-model";
 const HIDDEN_DESTINATIONS_KEY = "meologue.hidden-destinations";
 const CAPABILITIES_KEY = "meologue.capabilities";
 const COMPLETED_TASKS_VISIBLE_KEY = "meologue.completed-tasks-visible";
+const DICTATION_URL_KEY = "meologue.dictation-url";
+const DICTATION_TOKEN_KEY = "meologue.dictation-token";
 
 /** The prefix every key this file writes shares — see `readAllDeviceSettings` below. */
 const DEVICE_SETTINGS_PREFIX = "meologue.";
+
+/**
+ * Keys that exist in `localStorage` but must never travel in a Backup or be
+ * written by a Restore (issue #454). The dictation token is a bearer secret
+ * for a gateway on the user's own network: a Backup zip gets copied to
+ * cloud drives and sent between Devices, so carrying the token there would
+ * widen who holds it far beyond the Device the user typed it into. An
+ * explicit set rather than a name pattern like `*-token`, so the decision
+ * for each key is written down once, here, and a future secret is added on
+ * purpose rather than caught (or missed) by a naming accident.
+ */
+const BACKUP_EXCLUDED_KEYS: ReadonlySet<string> = new Set([DICTATION_TOKEN_KEY]);
 
 /**
  * Every `meologue.*` key currently sitting in `localStorage`, verbatim, as a
@@ -93,7 +107,11 @@ export function readAllDeviceSettings(): Record<string, string> {
     const settings: Record<string, string> = {};
     for (let index = 0; index < localStorage.length; index += 1) {
       const key = localStorage.key(index);
-      if (key === null || !key.startsWith(DEVICE_SETTINGS_PREFIX)) {
+      if (
+        key === null ||
+        !key.startsWith(DEVICE_SETTINGS_PREFIX) ||
+        BACKUP_EXCLUDED_KEYS.has(key)
+      ) {
         continue;
       }
       const value = localStorage.getItem(key);
@@ -138,7 +156,15 @@ export function readAllDeviceSettings(): Record<string, string> {
  */
 export function applyDeviceSettings(incoming: Record<string, string>): void {
   for (const [key, value] of Object.entries(incoming)) {
-    if (key === SERVER_URL_KEY || !key.startsWith(DEVICE_SETTINGS_PREFIX)) {
+    // `BACKUP_EXCLUDED_KEYS` is checked on this side too, not only when
+    // reading: a Backup made by another build, or hand-edited, could carry
+    // a token, and Restore must not let it overwrite the one this Device
+    // already holds.
+    if (
+      key === SERVER_URL_KEY ||
+      BACKUP_EXCLUDED_KEYS.has(key) ||
+      !key.startsWith(DEVICE_SETTINGS_PREFIX)
+    ) {
       continue;
     }
     try {
@@ -592,6 +618,54 @@ function writeStoredServerUrl(url: string): void {
   }
 }
 
+/**
+ * Issue #454: the dictation gateway's address, normalised on read for the
+ * same reason `readStoredServerUrl` is — both are concatenated with a
+ * `/v1/...` path, so a surviving trailing slash breaks every request.
+ */
+function readStoredDictationUrl(): string {
+  try {
+    return normaliseServerUrl(localStorage.getItem(DICTATION_URL_KEY) ?? "");
+  } catch {
+    return "";
+  }
+}
+
+function writeStoredDictationUrl(url: string): void {
+  try {
+    if (url === "") {
+      // No key rather than an empty string, so "dictation off" leaves the
+      // same storage as a Device that never configured it.
+      localStorage.removeItem(DICTATION_URL_KEY);
+    } else {
+      localStorage.setItem(DICTATION_URL_KEY, url);
+    }
+  } catch {
+    // Refused write — the in-memory value still applies for this session.
+  }
+}
+
+/** Issue #454: the gateway's bearer token. Never backed up — see `BACKUP_EXCLUDED_KEYS`. */
+function readStoredDictationToken(): string {
+  try {
+    return localStorage.getItem(DICTATION_TOKEN_KEY) ?? "";
+  } catch {
+    return "";
+  }
+}
+
+function writeStoredDictationToken(token: string): void {
+  try {
+    if (token === "") {
+      localStorage.removeItem(DICTATION_TOKEN_KEY);
+    } else {
+      localStorage.setItem(DICTATION_TOKEN_KEY, token);
+    }
+  } catch {
+    // Refused write — the in-memory value still applies for this session.
+  }
+}
+
 function readStoredListWidth(): number {
   try {
     const parsed = Number(localStorage.getItem(LIST_WIDTH_KEY));
@@ -681,6 +755,10 @@ interface SettingsState {
   /** Issue #202: which model a fresh Reflect Conversation starts on. See `DEFAULT_REFLECT_MODEL`'s own doc comment above. */
   defaultReflectModel: string;
   serverUrl: string;
+  /** Issue #454: the dictation gateway's address; empty hides the Composer's mic button. */
+  dictationUrl: string;
+  /** Issue #454: the gateway's bearer token. Device-local and excluded from Backup. */
+  dictationToken: string;
   listWidth: number;
   capabilities: ServerCapabilities | null;
   /**
@@ -714,6 +792,8 @@ interface SettingsState {
   setSmartDatesEnabled: (enabled: boolean) => void;
   setDefaultReflectModel: (model: string) => void;
   setServerUrl: (url: string) => void;
+  setDictationUrl: (url: string) => void;
+  setDictationToken: (token: string) => void;
   setListWidth: (width: number) => void;
   setCapabilities: (capabilities: ServerCapabilities | null) => void;
   setServerReachable: (reachable: boolean) => void;
@@ -737,6 +817,8 @@ export const useSettingsStore = create<SettingsState>()((set) => ({
   smartDatesEnabled: readStoredSmartDatesEnabled(),
   defaultReflectModel: readStoredDefaultReflectModel(),
   serverUrl: readStoredServerUrl(),
+  dictationUrl: readStoredDictationUrl(),
+  dictationToken: readStoredDictationToken(),
   listWidth: readStoredListWidth(),
   capabilities: readStoredCapabilities(),
   serverReachable: true,
@@ -771,6 +853,16 @@ export const useSettingsStore = create<SettingsState>()((set) => ({
     writeStoredServerUrl(normalised);
     set({ serverUrl: normalised });
   },
+  setDictationUrl: (url) => {
+    const normalised = normaliseServerUrl(url);
+    writeStoredDictationUrl(normalised);
+    set({ dictationUrl: normalised });
+  },
+  setDictationToken: (token) => {
+    const trimmed = token.trim();
+    writeStoredDictationToken(trimmed);
+    set({ dictationToken: trimmed });
+  },
   setListWidth: (width) => {
     const rounded = Math.round(width);
     writeStoredListWidth(rounded);
@@ -798,6 +890,11 @@ export const useSettingsStore = create<SettingsState>()((set) => ({
 /** ADR 0011: an empty Server URL means Sync is off. Re-renders when the Server URL changes. */
 export function useSyncEnabled(): boolean {
   return useSettingsStore((state) => state.serverUrl !== "");
+}
+
+/** Issue #454: an empty dictation URL means the Composer shows no mic button. */
+export function useDictationEnabled(): boolean {
+  return useSettingsStore((state) => state.dictationUrl !== "");
 }
 
 /**
