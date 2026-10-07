@@ -13,10 +13,6 @@ use crate::sync::{
     LabelOutput, ProjectInput, ProjectOutput, SectionInput, SectionOutput, SyncRequest,
     SyncResponse, TaskInput, TaskOutput,
 };
-use crate::time::{
-    ActivityInterval, ActivityIntervalDetail, CreateTimeSource, RefreshAccepted, SourceRunState,
-    TimeSource, UpdateTimeSource,
-};
 
 #[derive(OpenApi)]
 #[openapi(
@@ -36,12 +32,6 @@ use crate::time::{
         crate::backup::rebuild_mismatched_embeddings_handler,
         crate::settings::get_config_handler,
         crate::settings::patch_config_handler,
-        crate::time::list_sources_handler,
-        crate::time::create_source_handler,
-        crate::time::update_source_handler,
-        crate::time::refresh_handler,
-        crate::time::list_intervals_handler,
-        crate::time::interval_detail_handler,
     ),
     components(schemas(
         HealthResponse,
@@ -78,13 +68,6 @@ use crate::time::{
         ResolvedField,
         Source,
         InstanceMode,
-        TimeSource,
-        CreateTimeSource,
-        UpdateTimeSource,
-        RefreshAccepted,
-        SourceRunState,
-        ActivityInterval,
-        ActivityIntervalDetail,
     ))
 )]
 struct ApiDoc;

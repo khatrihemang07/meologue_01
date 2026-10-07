@@ -1,4 +1,3 @@
-import type { ServerCapabilities } from "@meologue/core";
 import { render, screen, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -19,10 +18,10 @@ describe("ChatList", () => {
   // and every ADR since has kept it there — including ADR 0036, which
   // declined to add a fifth row for Reflect's Sessions, and issue #168's
   // Todo, the Destination that finally does reach that fifth slot.
-  it("offers exactly six destinations", () => {
+  it("offers exactly five destinations", () => {
     renderAt("/");
 
-    expect(within(screen.getByRole("navigation")).getAllByRole("link")).toHaveLength(6);
+    expect(within(screen.getByRole("navigation")).getAllByRole("link")).toHaveLength(5);
   });
 
   it("gives every row a real href rather than a placeholder", () => {
@@ -32,7 +31,6 @@ describe("ChatList", () => {
     expect(screen.getByRole("link", { name: /Reflect/ })).toHaveAttribute("href", "/reflect");
     expect(screen.getByRole("link", { name: /Digest/ })).toHaveAttribute("href", "/digest");
     expect(screen.getByRole("link", { name: /Todo/ })).toHaveAttribute("href", "/todo");
-    expect(screen.getByRole("link", { name: /Time/ })).toHaveAttribute("href", "/time");
     expect(screen.getByRole("link", { name: /Settings/ })).toHaveAttribute("href", "/settings");
   });
 
@@ -45,7 +43,6 @@ describe("ChatList", () => {
     expect(screen.getByRole("link", { name: /Composer/ })).not.toHaveAttribute("aria-current");
     expect(screen.getByRole("link", { name: /Reflect/ })).not.toHaveAttribute("aria-current");
     expect(screen.getByRole("link", { name: /Todo/ })).not.toHaveAttribute("aria-current");
-    expect(screen.getByRole("link", { name: /Time/ })).not.toHaveAttribute("aria-current");
     expect(screen.getByRole("link", { name: /Settings/ })).not.toHaveAttribute("aria-current");
   });
 
@@ -66,11 +63,6 @@ describe("ChatList", () => {
     expect(screen.getByRole("link", { name: /Todo/ })).toHaveAttribute("aria-current", "page");
   });
 
-  it("marks Time current from its own route", () => {
-    renderAt("/time");
-    expect(screen.getByRole("link", { name: /Time/ })).toHaveAttribute("aria-current", "page");
-  });
-
   // Composer is the one destination with `end`, so an unrelated route must
   // not light it up the way a prefix match would.
   it("does not mark Composer current from another destination", () => {
@@ -89,7 +81,7 @@ describe("ChatList", () => {
   // comment says it avoids.
   it("renders with no Entry-store read, even when nothing has provided one", () => {
     expect(() => renderAt("/")).not.toThrow();
-    expect(screen.getAllByRole("link")).toHaveLength(6);
+    expect(screen.getAllByRole("link")).toHaveLength(5);
   });
 
   it("scopes its landmark to the list rather than announcing app-wide navigation", () => {
@@ -106,7 +98,7 @@ describe("ChatList", () => {
     const summaries = screen
       .getAllByRole("link")
       .map((link) => link.querySelector("span > span:last-child"));
-    expect(summaries).toHaveLength(6);
+    expect(summaries).toHaveLength(5);
     for (const summary of summaries) {
       expect(summary).toHaveClass("truncate");
     }
@@ -131,7 +123,6 @@ describe("ChatList", () => {
 
       expect(screen.getByRole("link", { name: /Reflect/ })).toHaveAttribute("data-locked", "true");
       expect(screen.getByRole("link", { name: /Digest/ })).toHaveAttribute("data-locked", "true");
-      expect(screen.getByRole("link", { name: /Time/ })).toHaveAttribute("data-locked", "true");
       // Settings is how a locked row gets fixed — it must never lock itself.
       expect(screen.getByRole("link", { name: /Settings/ })).not.toHaveAttribute("data-locked");
     });
@@ -172,7 +163,7 @@ describe("ChatList", () => {
       expect(reflect.className).not.toMatch(/destructive/);
     });
 
-    it("keeps Time locked until a Server has positively reported its capability", () => {
+    it("unlocks every row once a Server URL is configured and capabilities are unknown", () => {
       // A fresh Server, or one this Device hasn't heard back from yet
       // (`capabilities: null`) — "unknown means unlocked."
       useSettingsStore.setState({ serverUrl: "https://server.example", capabilities: null });
@@ -182,13 +173,12 @@ describe("ChatList", () => {
       for (const name of [/Composer/, /Reflect/, /Digest/, /Todo/, /Settings/]) {
         expect(screen.getByRole("link", { name })).not.toHaveAttribute("data-locked");
       }
-      expect(screen.getByRole("link", { name: /Time/ })).toHaveAttribute("data-locked", "true");
     });
 
     it("locks only the Destination a configured Server reports it cannot serve", () => {
       useSettingsStore.setState({
         serverUrl: "https://server.example",
-        capabilities: { reflect: true, digest: false, embeddings: true, todo: true, time: true },
+        capabilities: { reflect: true, digest: false, embeddings: true, todo: true },
       });
 
       renderAt("/");
@@ -197,25 +187,7 @@ describe("ChatList", () => {
       expect(screen.getByRole("link", { name: /Reflect/ })).not.toHaveAttribute("data-locked");
       expect(screen.getByRole("link", { name: /Digest/ })).toHaveAttribute("data-locked", "true");
       expect(screen.getByRole("link", { name: /Todo/ })).not.toHaveAttribute("data-locked");
-      expect(screen.getByRole("link", { name: /Time/ })).not.toHaveAttribute("data-locked");
       expect(screen.getByRole("link", { name: /Settings/ })).not.toHaveAttribute("data-locked");
-    });
-
-    it("locks Time when an older Server omits its capability", () => {
-      useSettingsStore.setState({
-        serverUrl: "https://server.example",
-        capabilities: {
-          reflect: true,
-          digest: true,
-          embeddings: true,
-          todo: true,
-        } as unknown as ServerCapabilities,
-      });
-
-      renderAt("/");
-
-      expect(screen.getByRole("link", { name: /Reflect/ })).not.toHaveAttribute("data-locked");
-      expect(screen.getByRole("link", { name: /Time/ })).toHaveAttribute("data-locked", "true");
     });
   });
 
@@ -238,9 +210,8 @@ describe("ChatList", () => {
       expect(screen.getByRole("link", { name: /Composer/ })).toBeInTheDocument();
       expect(screen.getByRole("link", { name: /Reflect/ })).toBeInTheDocument();
       expect(screen.getByRole("link", { name: /Todo/ })).toBeInTheDocument();
-      expect(screen.getByRole("link", { name: /Time/ })).toBeInTheDocument();
       expect(screen.getByRole("link", { name: /Settings/ })).toBeInTheDocument();
-      expect(within(screen.getByRole("navigation")).getAllByRole("link")).toHaveLength(5);
+      expect(within(screen.getByRole("navigation")).getAllByRole("link")).toHaveLength(4);
     });
 
     it("removes a hidden Todo row from the list", () => {
@@ -249,16 +220,7 @@ describe("ChatList", () => {
       renderAt("/");
 
       expect(screen.queryByRole("link", { name: /Todo/ })).not.toBeInTheDocument();
-      expect(within(screen.getByRole("navigation")).getAllByRole("link")).toHaveLength(5);
-    });
-
-    it("removes a hidden Time row from the list", () => {
-      useSettingsStore.setState({ hiddenDestinations: new Set(["time"]) });
-
-      renderAt("/");
-
-      expect(screen.queryByRole("link", { name: /Time/ })).not.toBeInTheDocument();
-      expect(within(screen.getByRole("navigation")).getAllByRole("link")).toHaveLength(5);
+      expect(within(screen.getByRole("navigation")).getAllByRole("link")).toHaveLength(4);
     });
 
     // Settings can never be hidden (ADR 0008/0009 — it's the recovery route
@@ -274,7 +236,7 @@ describe("ChatList", () => {
         // instead, where the type system would otherwise refuse to let a
         // non-`HideableDestinationId` slug in at all.
         hiddenDestinations: new Set(["settings"]) as unknown as ReadonlySet<
-          "composer" | "reflect" | "digest" | "todo" | "time"
+          "composer" | "reflect" | "digest" | "todo"
         >,
       });
 
@@ -289,7 +251,7 @@ describe("ChatList", () => {
     // depends on is still standing.
     it("leaves Settings behind when every hideable Destination is hidden", () => {
       useSettingsStore.setState({
-        hiddenDestinations: new Set(["composer", "reflect", "digest", "todo", "time"]),
+        hiddenDestinations: new Set(["composer", "reflect", "digest", "todo"]),
       });
 
       renderAt("/");

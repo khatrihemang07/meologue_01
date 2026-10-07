@@ -601,7 +601,7 @@ export async function closeDevices(devices: TwoDevices): Promise<void> {
  */
 export async function openDestination(
   page: Page,
-  name: "Composer" | "Reflect" | "Digest" | "Todo" | "Time" | "Settings",
+  name: "Composer" | "Reflect" | "Digest" | "Todo" | "Settings",
 ): Promise<void> {
   await page.goto("/");
   // Scoped to the Chats list and matched on the row's own label element,

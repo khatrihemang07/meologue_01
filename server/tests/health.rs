@@ -220,7 +220,7 @@ async fn it_answers_with_no_database_available_and_a_flag_off() {
     assert_eq!(body["capabilities"]["digest"], true);
     assert_eq!(body["capabilities"]["embeddings"], true);
     assert_eq!(body["capabilities"]["todo"], true);
-    assert_eq!(body["capabilities"]["time"], true);
+    assert!(body["capabilities"].get("time").is_none());
 }
 
 #[tokio::test]
@@ -269,7 +269,7 @@ async fn it_reports_every_capability_off_when_unconfigured() {
     // rather than only true whenever something else happens to be
     // configured too.
     assert_eq!(capabilities["todo"], true);
-    assert_eq!(capabilities["time"], true);
+    assert!(capabilities.get("time").is_none());
 }
 
 #[tokio::test]
@@ -286,7 +286,7 @@ async fn it_reports_reflect_and_digest_on_with_no_embed_client() {
     assert_eq!(capabilities["digest"], true);
     assert_eq!(capabilities["embeddings"], false);
     assert_eq!(capabilities["todo"], true);
-    assert_eq!(capabilities["time"], true);
+    assert!(capabilities.get("time").is_none());
 }
 
 #[tokio::test]
@@ -302,5 +302,19 @@ async fn it_reports_embeddings_on_only_once_an_embed_client_resolved() {
     assert_eq!(capabilities["digest"], false);
     assert_eq!(capabilities["embeddings"], true);
     assert_eq!(capabilities["todo"], true);
-    assert_eq!(capabilities["time"], true);
+    assert!(capabilities.get("time").is_none());
+}
+
+// Time was removed (issue #452). Migrations 0020-0024 still create its tables;
+// 0025 drops them, so a fresh database ends up without them.
+#[sqlx::test]
+async fn time_tables_are_gone_after_migrations(pool: sqlx::PgPool) {
+    for table in ["time_sources", "activity_intervals"] {
+        let found: Option<String> = sqlx::query_scalar("select to_regclass($1)::text")
+            .bind(format!("public.{table}"))
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(found, None, "{table} should have been dropped");
+    }
 }
