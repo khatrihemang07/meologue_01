@@ -26,8 +26,8 @@ import { Button } from "@/components/ui/button";
  * itself — `refreshCapabilities()` (`settings.ts`) is what every caller
  * uses to learn whether the Server has come back, but each of the two
  * pages that render this also has its own cached read to nudge once that
- * happens (Reflection's Session, Digest's cards), so the composition lives with them rather than being guessed
- * at here.
+ * happens (Reflection's Session, Digest's cards), so the composition
+ * lives with them rather than being guessed at here.
  */
 export function ServerUnreachableBanner({
   message,

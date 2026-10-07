@@ -65,7 +65,15 @@ test("the root screen is a list of five destinations, each of which opens", asyn
     ["Settings", "/settings"],
   ] as const) {
     await page.goto("/");
-    await page.getByRole("link", { name }).click();
+    // Scoped and exact, not `getByRole("link", { name })` over the page:
+    // Playwright matches an accessible name by substring, and a row's name
+    // is its label plus its summary, so a label that appears inside another
+    // row's summary would match two rows.
+    await page
+      .getByRole("navigation", { name: "Chats" })
+      .getByRole("link")
+      .filter({ has: page.getByText(name, { exact: true }) })
+      .click();
     await expect(page).toHaveURL(url);
     await expect(page.getByRole("link", { name: "Back to chats" })).toBeVisible();
   }

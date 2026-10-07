@@ -219,9 +219,8 @@ export const DEFAULT_TEXT_SIZE: TextSizeId = "default";
 
 /**
  * The Destinations a reader can hide from the root screen's list (issue
- * #134, extended to Todo by issue #168 — Composer, Reflect,
- * Digest and Todo, matching `chat-list.tsx`'s own
- * `DESTINATIONS` slugs (each row's
+ * #134, extended to Todo by issue #168): Composer, Reflect, Digest and
+ * Todo, matching `chat-list.tsx`'s own `DESTINATIONS` slugs (each row's
  * `to` with the leading slash stripped). Settings is deliberately not one
  * of these ids and is never offered a control by `settings-page.tsx`: ADR
  * 0008/0009 make it the recovery route when the Entry store won't open or

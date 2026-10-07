@@ -26,7 +26,7 @@ import { cn } from "@/lib/utils";
  * Destination already shows — it is a second root noun with its own
  * lifecycle, and a full-bleed row is what every other root noun here
  * already gets. Issue #134 lets a reader hide Composer, Reflect, Digest or
- * or Todo from the *rendered* list without touching this array — see
+ * Todo from the *rendered* list without touching this array — see
  * `useDestinations()` below for where that filter actually happens.
  *
  * `end` on Composer alone: every other route is a prefix of deeper routes
