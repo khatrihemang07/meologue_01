@@ -2,7 +2,13 @@
 
 ## Status
 
-Accepted. Builds on [0008](0008-device-settings-are-local-configuration-held-outside-the-entry-store.md)
+Partly superseded by [0091](0091-dictation-goes-through-the-meologue-server.md), which moves the
+gateway URL and token from each Device to the Server and replaces the hidden-until-configured mic.
+The separate-gateway decision, the secure-context constraint and the audio flow still stand; the
+per-Device `meologue.dictation-url` and `meologue.dictation-token` keys, the Backup exclusion of
+the token and the mic's visibility rule below no longer apply.
+
+Originally accepted. Builds on [0008](0008-device-settings-are-local-configuration-held-outside-the-entry-store.md)
 (the gateway address and token are Device settings) and on
 [0017](0017-https-transport-for-another-device-is-a-tailscale-serve-concern.md) and
 [0081](0081-an-insecure-origin-names-the-https-address-that-would-work.md) (the secure-context
