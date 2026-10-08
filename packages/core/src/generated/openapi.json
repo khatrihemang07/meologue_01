@@ -90,6 +90,168 @@
         }
       }
     },
+    "/v1/dictations": {
+      "post": {
+        "tags": [
+          "crate::dictation"
+        ],
+        "operationId": "create_dictation_handler",
+        "parameters": [
+          {
+            "name": "wait",
+            "in": "query",
+            "description": "`1` holds the response until the job finishes (up to 25 s)",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/DictationUpload"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Transcribed (wait=1)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DictationJob"
+                }
+              }
+            }
+          },
+          "202": {
+            "description": "Accepted; poll GET /v1/dictations/{id}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DictationJob"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The gateway rejected the upload",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DictationError"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Upload too large",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DictationError"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The job failed (wait=1)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DictationJob"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "gateway_unreachable or gateway_rejected_token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DictationError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "dictation_unavailable: no token configured, or switched off",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DictationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/dictations/{id}": {
+      "get": {
+        "tags": [
+          "crate::dictation"
+        ],
+        "operationId": "get_dictation_handler",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The job id from POST /v1/dictations",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The job",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DictationJob"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such job",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DictationError"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "gateway_unreachable or gateway_rejected_token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DictationError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "dictation_unavailable: no token configured, or switched off",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DictationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/digests/{period}": {
       "get": {
         "tags": [
@@ -608,6 +770,29 @@
               "null"
             ]
           },
+          "dictation_base_url": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Issue #455. `dictation_token` is write-only: see `SecretField`."
+          },
+          "dictation_enabled": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/TogglePatch"
+              }
+            ]
+          },
+          "dictation_token": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "digest_enabled": {
             "oneOf": [
               {
@@ -681,7 +866,10 @@
           "tz",
           "reflect",
           "digest",
-          "embeddings"
+          "embeddings",
+          "dictation_base_url",
+          "dictation_token",
+          "dictation"
         ],
         "properties": {
           "chat_api_key": {
@@ -692,6 +880,18 @@
           },
           "chat_model": {
             "$ref": "#/components/schemas/ResolvedField"
+          },
+          "dictation": {
+            "$ref": "#/components/schemas/FeatureConfig",
+            "description": "`configured` = a token is resolved; `boot_active` = the same (the\nroutes are always registered and the gateway is read live, so no\nrestart is ever needed); `effective` = what `/v1/health`\n`capabilities.dictation` reports."
+          },
+          "dictation_base_url": {
+            "$ref": "#/components/schemas/ResolvedField",
+            "description": "Issue #455 / ADR 0091. Unset in both layers, the value is\n`DEFAULT_DICTATION_URL` with `source: unset`."
+          },
+          "dictation_token": {
+            "$ref": "#/components/schemas/SecretField",
+            "description": "Write-only: whether a token is resolved and where from, never the\ntoken itself."
           },
           "digest": {
             "$ref": "#/components/schemas/FeatureConfig"
@@ -724,6 +924,80 @@
             "type": "integer",
             "format": "int64",
             "description": "`select count(*) from entries where embedding is null and deleted_at\nis null` — see `count_unembedded`. Reported here rather than left\nfor a Device to ask the embedding worker directly (there is no such\nroute, and there should not be one just for this): Settings is\nwhere a reader already comes to ask \"what is this Server doing,\"\nand a backlog count answers \"is embedding still catching up\" without\na second endpoint."
+          }
+        }
+      },
+      "DictationError": {
+        "type": "object",
+        "description": "`{\"error\": \"...\"}` — the Server's own errors and the gateway's.",
+        "required": [
+          "error"
+        ],
+        "properties": {
+          "error": {
+            "type": "string"
+          }
+        }
+      },
+      "DictationJob": {
+        "type": "object",
+        "description": "The gateway's job shape, passed through unchanged.",
+        "required": [
+          "id",
+          "status"
+        ],
+        "properties": {
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "string"
+          },
+          "rawText": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "status": {
+            "type": "string",
+            "description": "`queued`, `processing`, `done` or `failed`."
+          },
+          "text": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "warning": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "DictationUpload": {
+        "type": "object",
+        "description": "`POST /v1/dictations`'s multipart body, for the schema only.",
+        "required": [
+          "audio"
+        ],
+        "properties": {
+          "audio": {
+            "type": "string",
+            "format": "binary",
+            "description": "The recorded audio."
+          },
+          "language": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Optional language hint."
           }
         }
       },
@@ -1066,6 +1340,13 @@
           "todo"
         ],
         "properties": {
+          "dictation": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Issue #455 / ADR 0091: a dictation token is resolved (stored or\nenv) and the toggle is not Off. Read from `RuntimeFlags`, like the\nothers — health stays database-free and never probes the gateway.\nOptional on the wire so a Device can read an older Server's\nhealth, which lacks it, as \"unknown\"."
+          },
           "digest": {
             "type": "boolean"
           },
@@ -1518,6 +1799,22 @@
           "mismatched_embedding_count": {
             "type": "integer",
             "format": "int64"
+          }
+        }
+      },
+      "SecretField": {
+        "type": "object",
+        "description": "A secret setting on the wire: that it is set and where it came from,\nnever its value.",
+        "required": [
+          "configured",
+          "source"
+        ],
+        "properties": {
+          "configured": {
+            "type": "boolean"
+          },
+          "source": {
+            "$ref": "#/components/schemas/Source"
           }
         }
       },

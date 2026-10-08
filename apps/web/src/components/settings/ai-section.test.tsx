@@ -35,6 +35,9 @@ const EMPTY_CONFIG: WireConfigResponse = {
   reflect: { stored: null, configured: false, boot_active: false, effective: false },
   digest: { stored: null, configured: false, boot_active: false, effective: false },
   embeddings: { stored: null, configured: false, boot_active: false, effective: false },
+  dictation_base_url: { value: "http://127.0.0.1:47300", source: "unset" },
+  dictation_token: { configured: false, source: "unset" },
+  dictation: { stored: null, configured: false, boot_active: false, effective: false },
 };
 
 /**

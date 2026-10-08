@@ -74,6 +74,38 @@ export interface paths {
         patch: operations["patch_config_handler"];
         trace?: never;
     };
+    "/v1/dictations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["create_dictation_handler"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/dictations/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["get_dictation_handler"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/digests/{period}": {
         parameters: {
             query?: never;
@@ -409,6 +441,10 @@ export interface components {
             chat_api_key?: string | null;
             chat_base_url?: string | null;
             chat_model?: string | null;
+            /** @description Issue #455. `dictation_token` is write-only: see `SecretField`. */
+            dictation_base_url?: string | null;
+            dictation_enabled?: null | components["schemas"]["TogglePatch"];
+            dictation_token?: string | null;
             digest_enabled?: null | components["schemas"]["TogglePatch"];
             embed_api_key?: string | null;
             embed_base_url?: string | null;
@@ -427,6 +463,23 @@ export interface components {
             chat_api_key: components["schemas"]["ResolvedField"];
             chat_base_url: components["schemas"]["ResolvedField"];
             chat_model: components["schemas"]["ResolvedField"];
+            /**
+             * @description `configured` = a token is resolved; `boot_active` = the same (the
+             *     routes are always registered and the gateway is read live, so no
+             *     restart is ever needed); `effective` = what `/v1/health`
+             *     `capabilities.dictation` reports.
+             */
+            dictation: components["schemas"]["FeatureConfig"];
+            /**
+             * @description Issue #455 / ADR 0091. Unset in both layers, the value is
+             *     `DEFAULT_DICTATION_URL` with `source: unset`.
+             */
+            dictation_base_url: components["schemas"]["ResolvedField"];
+            /**
+             * @description Write-only: whether a token is resolved and where from, never the
+             *     token itself.
+             */
+            dictation_token: components["schemas"]["SecretField"];
             digest: components["schemas"]["FeatureConfig"];
             embed_api_key: components["schemas"]["ResolvedField"];
             embed_base_url: components["schemas"]["ResolvedField"];
@@ -447,6 +500,30 @@ export interface components {
              *     a second endpoint.
              */
             unembedded_entries: number;
+        };
+        /** @description `{"error": "..."}` — the Server's own errors and the gateway's. */
+        DictationError: {
+            error: string;
+        };
+        /** @description The gateway's job shape, passed through unchanged. */
+        DictationJob: {
+            error?: string | null;
+            id: string;
+            rawText?: string | null;
+            /** @description `queued`, `processing`, `done` or `failed`. */
+            status: string;
+            text?: string | null;
+            warning?: string | null;
+        };
+        /** @description `POST /v1/dictations`'s multipart body, for the schema only. */
+        DictationUpload: {
+            /**
+             * Format: binary
+             * @description The recorded audio.
+             */
+            audio: string;
+            /** @description Optional language hint. */
+            language?: string | null;
         };
         /**
          * @description The wire shape of one Digest — everything a client needs to render it
@@ -776,6 +853,14 @@ export interface components {
          *       field here can distinguish.
          */
         HealthCapabilities: {
+            /**
+             * @description Issue #455 / ADR 0091: a dictation token is resolved (stored or
+             *     env) and the toggle is not Off. Read from `RuntimeFlags`, like the
+             *     others — health stays database-free and never probes the gateway.
+             *     Optional on the wire so a Device can read an older Server's
+             *     health, which lacks it, as "unknown".
+             */
+            dictation?: boolean | null;
             digest: boolean;
             embeddings: boolean;
             reflect: boolean;
@@ -1077,6 +1162,14 @@ export interface components {
         RestoreReport: {
             /** Format: int64 */
             mismatched_embedding_count: number;
+        };
+        /**
+         * @description A secret setting on the wire: that it is set and where it came from,
+         *     never its value.
+         */
+        SecretField: {
+            configured: boolean;
+            source: components["schemas"]["Source"];
         };
         /**
          * @description The Section-shaped sibling of `TaskInput` — `project_id` is a plain
@@ -1663,6 +1756,137 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ConfigResponse"];
+                };
+            };
+        };
+    };
+    create_dictation_handler: {
+        parameters: {
+            query?: {
+                /** @description `1` holds the response until the job finishes (up to 25 s) */
+                wait?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "multipart/form-data": components["schemas"]["DictationUpload"];
+            };
+        };
+        responses: {
+            /** @description Transcribed (wait=1) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DictationJob"];
+                };
+            };
+            /** @description Accepted; poll GET /v1/dictations/{id} */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DictationJob"];
+                };
+            };
+            /** @description The gateway rejected the upload */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DictationError"];
+                };
+            };
+            /** @description Upload too large */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DictationError"];
+                };
+            };
+            /** @description The job failed (wait=1) */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DictationJob"];
+                };
+            };
+            /** @description gateway_unreachable or gateway_rejected_token */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DictationError"];
+                };
+            };
+            /** @description dictation_unavailable: no token configured, or switched off */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DictationError"];
+                };
+            };
+        };
+    };
+    get_dictation_handler: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The job id from POST /v1/dictations */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The job */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DictationJob"];
+                };
+            };
+            /** @description No such job */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DictationError"];
+                };
+            };
+            /** @description gateway_unreachable or gateway_rejected_token */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DictationError"];
+                };
+            };
+            /** @description dictation_unavailable: no token configured, or switched off */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DictationError"];
                 };
             };
         };

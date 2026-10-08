@@ -17,6 +17,9 @@ const configBody: WireConfigResponse = {
   reflect: { stored: null, configured: true, boot_active: true, effective: true },
   digest: { stored: null, configured: true, boot_active: true, effective: true },
   embeddings: { stored: null, configured: true, boot_active: true, effective: true },
+  dictation_base_url: { value: "http://127.0.0.1:47300", source: "unset" },
+  dictation_token: { configured: false, source: "unset" },
+  dictation: { stored: null, configured: false, boot_active: false, effective: false },
 };
 
 describe("getConfig / patchConfig", () => {
