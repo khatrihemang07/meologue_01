@@ -1,4 +1,4 @@
-import type { WireConfigResponse } from "@meologue/core";
+import { PROTOCOL_VERSION, type WireConfigResponse } from "@meologue/core";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -324,6 +324,214 @@ describe("AiSection", () => {
           body: JSON.stringify({ chat_model: "a-bogus-model" }),
         }),
       );
+    });
+
+    describe("dictation (issue #455)", () => {
+      const URL = "https://phone.example:41207";
+      const patchCall = (body: unknown) => [
+        `${URL}/v1/config`,
+        {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        },
+      ];
+
+      it("shows the gateway URL with its source, and never any token value", async () => {
+        useSettingsStore.setState({ serverUrl: URL });
+        vi.stubGlobal(
+          "fetch",
+          stubAiFetch({
+            ...EMPTY_CONFIG,
+            dictation_token: { configured: true, source: "env" },
+          }),
+        );
+
+        renderAiSection();
+
+        expect(await screen.findByLabelText("Gateway URL")).toHaveValue("http://127.0.0.1:47300");
+        const token = screen.getByLabelText("Gateway token");
+        expect(token).toHaveAttribute("type", "password");
+        expect(token).toHaveValue("");
+        expect(screen.getByTestId("server-dictation-token-status")).toHaveTextContent(
+          "Configured. From this server's own environment.",
+        );
+      });
+
+      it("says Not set when no token is configured", async () => {
+        useSettingsStore.setState({ serverUrl: URL });
+        vi.stubGlobal("fetch", stubAiFetch(EMPTY_CONFIG));
+
+        renderAiSection();
+
+        await screen.findByLabelText("Gateway token");
+        expect(screen.getByTestId("server-dictation-token-status")).toHaveTextContent(/^Not set\./);
+        expect(screen.queryByRole("button", { name: "Clear stored token" })).toBeNull();
+      });
+
+      it("PATCHes only the gateway URL when only it changed", async () => {
+        useSettingsStore.setState({ serverUrl: URL });
+        const fetchMock = stubAiFetch(EMPTY_CONFIG);
+        vi.stubGlobal("fetch", fetchMock);
+
+        renderAiSection();
+        fireEvent.change(await screen.findByLabelText("Gateway URL"), {
+          target: { value: "http://10.0.0.2:47300" },
+        });
+        fireEvent.click(screen.getByRole("button", { name: "Save server AI settings" }));
+
+        await waitFor(() =>
+          expect(fetchMock).toHaveBeenCalledWith(
+            ...(patchCall({ dictation_base_url: "http://10.0.0.2:47300" }) as [string, object]),
+          ),
+        );
+      });
+
+      it("PATCHes a typed token, trimmed, and shows it nowhere afterwards", async () => {
+        useSettingsStore.setState({ serverUrl: URL });
+        const fetchMock = stubAiFetch(EMPTY_CONFIG, () => ({
+          ...EMPTY_CONFIG,
+          dictation_token: { configured: true, source: "stored" },
+        }));
+        vi.stubGlobal("fetch", fetchMock);
+
+        renderAiSection();
+        fireEvent.change(await screen.findByLabelText("Gateway token"), {
+          target: { value: "  s3cret \n" },
+        });
+        fireEvent.click(screen.getByRole("button", { name: "Save server AI settings" }));
+
+        await waitFor(() =>
+          expect(fetchMock).toHaveBeenCalledWith(
+            ...(patchCall({ dictation_token: "s3cret" }) as [string, object]),
+          ),
+        );
+        await waitFor(() =>
+          expect(screen.getByTestId("server-dictation-token-status")).toHaveTextContent(
+            "Configured. Stored on this server.",
+          ),
+        );
+        expect(screen.getByLabelText("Gateway token")).toHaveValue("");
+        expect(document.body.innerHTML).not.toContain("s3cret");
+      });
+
+      it("a whitespace-only token is not a change", async () => {
+        useSettingsStore.setState({ serverUrl: URL });
+        vi.stubGlobal("fetch", stubAiFetch(EMPTY_CONFIG));
+
+        renderAiSection();
+        fireEvent.change(await screen.findByLabelText("Gateway token"), {
+          target: { value: "   " },
+        });
+
+        expect(screen.getByRole("button", { name: "Save server AI settings" })).toBeDisabled();
+      });
+
+      it("Clear stored token sends an empty string so it falls back to the environment", async () => {
+        useSettingsStore.setState({ serverUrl: URL });
+        const fetchMock = stubAiFetch(
+          { ...EMPTY_CONFIG, dictation_token: { configured: true, source: "stored" } },
+          () => ({ ...EMPTY_CONFIG, dictation_token: { configured: true, source: "env" } }),
+        );
+        vi.stubGlobal("fetch", fetchMock);
+
+        renderAiSection();
+        fireEvent.click(await screen.findByRole("button", { name: "Clear stored token" }));
+        fireEvent.click(screen.getByRole("button", { name: "Save server AI settings" }));
+
+        await waitFor(() =>
+          expect(fetchMock).toHaveBeenCalledWith(
+            ...(patchCall({ dictation_token: "" }) as [string, object]),
+          ),
+        );
+        await waitFor(() =>
+          expect(screen.getByTestId("server-dictation-token-status")).toHaveTextContent(
+            "From this server's own environment.",
+          ),
+        );
+      });
+
+      it("the Dictation toggle sends dictation_enabled", async () => {
+        useSettingsStore.setState({ serverUrl: URL });
+        const fetchMock = stubAiFetch(EMPTY_CONFIG);
+        vi.stubGlobal("fetch", fetchMock);
+
+        renderAiSection();
+        await screen.findByLabelText("Gateway URL");
+        // Dictation is the fourth Default/On/Off row, after Reflect, Digest and Embeddings.
+        fireEvent.click(screen.getAllByRole("button", { name: "Off" })[3] as HTMLElement);
+        fireEvent.click(screen.getByRole("button", { name: "Save server AI settings" }));
+
+        await waitFor(() =>
+          expect(fetchMock).toHaveBeenCalledWith(
+            ...(patchCall({ dictation_enabled: "off" }) as [string, object]),
+          ),
+        );
+      });
+
+      it("seeds the toggle from the stored value", async () => {
+        useSettingsStore.setState({ serverUrl: URL });
+        vi.stubGlobal(
+          "fetch",
+          stubAiFetch({
+            ...EMPTY_CONFIG,
+            dictation: { stored: true, configured: true, boot_active: true, effective: true },
+          }),
+        );
+
+        renderAiSection();
+        await screen.findByLabelText("Gateway URL");
+
+        expect(screen.getAllByRole("button", { name: "On" })[3]).toHaveAttribute(
+          "aria-pressed",
+          "true",
+        );
+      });
+
+      it("refreshes capabilities after a successful save, so the mic follows without a restart", async () => {
+        useSettingsStore.setState({ serverUrl: URL, capabilities: null });
+        const base = stubAiFetch(EMPTY_CONFIG);
+        vi.stubGlobal(
+          "fetch",
+          vi.fn(async (url: string, init?: RequestInit) => {
+            if (url.endsWith("/v1/health")) {
+              return {
+                ok: true,
+                status: 200,
+                json: async () => ({
+                  protocol_version: PROTOCOL_VERSION,
+                  capabilities: {
+                    reflect: true,
+                    digest: true,
+                    embeddings: true,
+                    todo: true,
+                    dictation: true,
+                  },
+                }),
+              };
+            }
+            return base(url, init);
+          }),
+        );
+
+        renderAiSection();
+        fireEvent.change(await screen.findByLabelText("Gateway token"), {
+          target: { value: "tok" },
+        });
+        fireEvent.click(screen.getByRole("button", { name: "Save server AI settings" }));
+
+        await waitFor(() => expect(useSettingsStore.getState().capabilities?.dictation).toBe(true));
+      });
+
+      it("disables the dictation controls when the Server is locked", async () => {
+        useSettingsStore.setState({ serverUrl: URL });
+        vi.stubGlobal("fetch", stubAiFetch({ ...EMPTY_CONFIG, locked: true }));
+
+        renderAiSection();
+
+        expect(await screen.findByLabelText("Gateway URL")).toBeDisabled();
+        expect(screen.getByLabelText("Gateway token")).toBeDisabled();
+      });
     });
 
     it("clearing a stored field reverts it to the environment's value, not to empty", async () => {

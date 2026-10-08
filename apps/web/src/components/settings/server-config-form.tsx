@@ -142,6 +142,74 @@ export function ServerTextField({
   );
 }
 
+/**
+ * A write-only Server secret (issue #455: the dictation gateway token).
+ * `GET /v1/config` reports only `{configured, source}` and never the value
+ * (ADR 0091), so unlike `ServerTextField` there is nothing to pre-fill: the
+ * input starts empty and a non-empty entry replaces the stored token. Since
+ * an empty box can't also mean "clear", clearing is its own button
+ * (`onClear`), shown only for a stored token: an environment-sourced one
+ * isn't this Device's to remove, and a PATCH of `""` would be a no-op there.
+ */
+export function ServerSecretField({
+  id,
+  label,
+  field,
+  value,
+  onChange,
+  clearing,
+  onClear,
+  locked,
+}: {
+  id: string;
+  label: string;
+  field: { configured: boolean; source: WireSource };
+  value: string;
+  onChange: (value: string) => void;
+  clearing: boolean;
+  onClear: () => void;
+  locked: boolean;
+}) {
+  return (
+    <div className="flex flex-col gap-1">
+      <label htmlFor={id} className="text-sm">
+        {label}
+      </label>
+      <Input
+        id={id}
+        type="password"
+        autoComplete="off"
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        disabled={locked}
+        placeholder={field.configured ? "Enter a new token to replace it" : "Enter a token"}
+        className="h-11"
+      />
+      <p data-testid={`${id}-status`} className="text-muted-foreground text-xs">
+        {field.configured ? "Configured" : "Not set"}. {sourceHint(field.source)}
+      </p>
+      {field.source === "stored" && (
+        <div className="flex items-center gap-3">
+          <Button
+            type="button"
+            size="touch"
+            variant="outline"
+            disabled={locked || clearing}
+            onClick={onClear}
+          >
+            Clear stored token
+          </Button>
+          {clearing && (
+            <span className="text-muted-foreground text-xs">
+              The stored token will be cleared when you save.
+            </span>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 const TOGGLE_OPTIONS: { id: WireTogglePatch; label: string }[] = [
   { id: "unset", label: "Default" },
   { id: "on", label: "On" },

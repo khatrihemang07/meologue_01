@@ -8,6 +8,7 @@ import {
   ServerSaveButton,
   type ServerSaveStatus,
   ServerSaveStatusLine,
+  ServerSecretField,
   ServerTextField,
   ServerToggleField,
 } from "@/components/settings/server-config-form";
@@ -191,7 +192,7 @@ function toggleDraftFromStored(stored: boolean | null | undefined): WireTogglePa
   return "unset";
 }
 
-/** This group's own seven text fields and three toggles, read off one `ConfigResponse`. */
+/** This group's own text fields, toggles and the write-only dictation token, read off one `ConfigResponse`. */
 interface AiServerDraft {
   chatBaseUrl: string;
   chatModel: string;
@@ -202,6 +203,12 @@ interface AiServerDraft {
   reflectEnabled: WireTogglePatch;
   digestEnabled: WireTogglePatch;
   embeddingsEnabled: WireTogglePatch;
+  dictationEnabled: WireTogglePatch;
+  dictationBaseUrl: string;
+  /** Write-only (ADR 0091): what the reader typed, never seeded from the Server. */
+  dictationTokenInput: string;
+  /** "Clear stored token" was pressed; sends `""` so the token falls back to the environment. */
+  dictationTokenClear: boolean;
 }
 
 function draftFromConfig(config: WireConfigResponse): AiServerDraft {
@@ -215,6 +222,10 @@ function draftFromConfig(config: WireConfigResponse): AiServerDraft {
     reflectEnabled: toggleDraftFromStored(config.reflect.stored),
     digestEnabled: toggleDraftFromStored(config.digest.stored),
     embeddingsEnabled: toggleDraftFromStored(config.embeddings.stored),
+    dictationEnabled: toggleDraftFromStored(config.dictation.stored),
+    dictationBaseUrl: config.dictation_base_url.value ?? "",
+    dictationTokenInput: "",
+    dictationTokenClear: false,
   };
 }
 
@@ -243,6 +254,19 @@ function buildAiPatch(original: AiServerDraft, draft: AiServerDraft): WireConfig
   if (draft.embeddingsEnabled !== original.embeddingsEnabled) {
     patch.embeddings_enabled = draft.embeddingsEnabled;
   }
+  if (draft.dictationEnabled !== original.dictationEnabled) {
+    patch.dictation_enabled = draft.dictationEnabled;
+  }
+  if (draft.dictationBaseUrl !== original.dictationBaseUrl) {
+    patch.dictation_base_url = draft.dictationBaseUrl;
+  }
+  // The token has no original to diff against (it is never echoed), so it
+  // is sent only when the reader typed a new one or pressed Clear.
+  if (draft.dictationTokenClear) {
+    patch.dictation_token = "";
+  } else if (draft.dictationTokenInput.trim() !== "") {
+    patch.dictation_token = draft.dictationTokenInput.trim();
+  }
   return patch;
 }
 
@@ -268,7 +292,7 @@ function restartRequiredLabels(config: WireConfigResponse): string[] {
 }
 
 /**
- * The AI section's "On the server" rows — three toggles, six chat/embed
+ * The AI section's "On the server" rows — four toggles, six chat/embed
  * endpoint fields, and the unembedded-Entry backlog (issue #203).
  *
  * Only ever rendered once `ServerGroup` has a loaded `ConfigResponse` in
@@ -348,6 +372,12 @@ function ServerAiFields({
           onChange={(value) => editField("embeddingsEnabled", value)}
           locked={locked}
         />
+        <ServerToggleField
+          label="Dictation"
+          value={draft.dictationEnabled}
+          onChange={(value) => editField("dictationEnabled", value)}
+          locked={locked}
+        />
       </SettingsSection>
 
       <SettingsSection label="Chat endpoint">
@@ -412,6 +442,51 @@ function ServerAiFields({
             {semanticGap}
           </p>
         )}
+      </SettingsSection>
+
+      {/*
+        Issue #455 / ADR 0091. Dictation is proxied by the Server to an
+        OpenWhispr gateway on its own machine; the mic appears on every
+        Device once a token resolves and the toggle above allows it. No
+        restart note: unlike the three features above, the routes are
+        always registered.
+      */}
+      <SettingsSection
+        label="Dictation gateway"
+        hint="The Server sends recordings from the Composer's mic to this OpenWhispr gateway. The token stays on the Server and is never shown here."
+      >
+        <ServerTextField
+          id="server-dictation-base-url"
+          label="Gateway URL"
+          field={config.dictation_base_url}
+          value={draft.dictationBaseUrl}
+          onChange={(value) => editField("dictationBaseUrl", value)}
+          locked={locked}
+        />
+        <ServerSecretField
+          id="server-dictation-token"
+          label="Gateway token"
+          field={config.dictation_token}
+          value={draft.dictationTokenInput}
+          onChange={(value) => {
+            setDraft((current) => ({
+              ...current,
+              dictationTokenInput: value,
+              dictationTokenClear: false,
+            }));
+            setStatus({ state: "idle" });
+          }}
+          clearing={draft.dictationTokenClear}
+          onClear={() => {
+            setDraft((current) => ({
+              ...current,
+              dictationTokenInput: "",
+              dictationTokenClear: true,
+            }));
+            setStatus({ state: "idle" });
+          }}
+          locked={locked}
+        />
       </SettingsSection>
 
       <div className="flex items-center gap-3">
