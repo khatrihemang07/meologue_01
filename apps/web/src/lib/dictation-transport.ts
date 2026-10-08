@@ -1,20 +1,24 @@
 /**
- * The client half of the dictation gateway contract (issue #454, ADR 0090):
- * upload a recording, get text back. The gateway is a separate service on
- * the user's network that runs OpenWhispr's own pipeline; meologue only
- * speaks its small HTTP surface, so nothing here knows about Whisper or
- * cleanup.
+ * The client half of dictation (issue #454, reworked by #455 / ADR 0091):
+ * upload a recording to the meologue Server, get text back. The Server
+ * proxies to the OpenWhispr gateway and holds its token, so this speaks
+ * only to the Server URL and sends no Authorization header; nothing here
+ * knows about Whisper, cleanup or the gateway's address.
  *
  * Deliberately NOT routed through `server-request.ts`. That helper flips
- * `serverReachable` in the settings store on every network failure, and the
- * gateway is not the meologue Server: a gateway outage must never mark Sync
+ * `serverReachable` in the settings store on every network failure, and a
+ * dictation outage (gateway down, recording too long) must never mark Sync
  * as down (ADR 0011). `fetch` is injectable for tests, the same way
  * `server-check.ts` injects it.
  */
 
+import { useSettingsStore } from "@/lib/settings";
+
 export type DictationErrorKind =
-  | "unauthorized"
   | "unreachable"
+  | "unavailable"
+  | "gateway-unreachable"
+  | "gateway-rejected"
   | "failed"
   | "timeout"
   | "aborted"
@@ -38,17 +42,9 @@ export interface DictationResult {
   warning: string | null;
 }
 
-export interface GatewayHealth {
-  ok: boolean;
-  openwhispr: { reachable: boolean; version: string | null; verifiedVersion: string | null };
-  status: "ok" | "degraded" | "down";
-}
-
 type FetchLike = (url: string, init?: RequestInit) => Promise<Response>;
 
 export interface TranscribeOptions {
-  url: string;
-  token: string;
   signal?: AbortSignal;
   fetchImpl?: FetchLike;
   pollIntervalMs?: number;
@@ -58,16 +54,11 @@ export interface TranscribeOptions {
   requestTimeoutMs?: number;
 }
 
-export interface CheckOptions {
-  requestTimeoutMs?: number;
-}
-
 const DEFAULT_POLL_INTERVAL_MS = 1000;
 const DEFAULT_TIMEOUT_MS = 10 * 60 * 1000;
 /** The gateway holds `?wait=1` for up to 25 s, and a long recording takes time to upload over Wi-Fi. */
 const UPLOAD_REQUEST_TIMEOUT_MS = 90 * 1000;
 const POLL_REQUEST_TIMEOUT_MS = 15 * 1000;
-const HEALTH_REQUEST_TIMEOUT_MS = 10 * 1000;
 
 /**
  * Container extension for a recorded blob. The gateway converts every upload
@@ -154,20 +145,17 @@ async function request(
     response = await fetchImpl(url, { ...init, signal: bound.signal });
   } catch (error) {
     if (bound.timedOut()) {
-      throw new DictationError("unreachable", "Couldn't reach the dictation gateway.");
+      throw new DictationError("unreachable", "Couldn't reach the Server.");
     }
     if (callerSignal?.aborted || (error instanceof DOMException && error.name === "AbortError")) {
       throw new DictationError("aborted", "Dictation was cancelled.");
     }
     // A thrown fetch is a TypeError in every browser (DNS, refused, CORS,
     // mixed content); anything else is unexpected and reads the same to a
-    // user: the gateway could not be reached.
-    throw new DictationError("unreachable", "Couldn't reach the dictation gateway.");
+    // user: the Server could not be reached.
+    throw new DictationError("unreachable", "Couldn't reach the Server.");
   } finally {
     bound.dispose();
-  }
-  if (response.status === 401) {
-    throw new DictationError("unauthorized", "The dictation gateway rejected the token.");
   }
   return response;
 }
@@ -181,11 +169,14 @@ async function readJson(response: Response): Promise<Record<string, unknown>> {
   } catch {
     // fall through
   }
-  throw new DictationError("bad-response", "The dictation gateway sent an unreadable response.");
+  throw new DictationError("bad-response", "The Server sent an unreadable response.");
 }
 
 /**
- * The error for a non-ok, non-401 response. The gateway answers a failed
+ * The error for a non-ok response. The Server's own three errors
+ * (`dictation_unavailable`, `gateway_unreachable`, `gateway_rejected_token`)
+ * get their own kinds so the toast can say which hop failed. Everything else
+ * is the gateway's passthrough: it answers a failed
  * `?wait=1` job with 500 and `{id, status:"failed", error}`, and 400/404/413
  * with `{error}`, so the body's own message is used when it has one; only an
  * unreadable body falls back to the bare status.
@@ -195,6 +186,21 @@ async function failureFrom(response: Response): Promise<DictationError> {
     const body: unknown = await response.json();
     if (typeof body === "object" && body !== null) {
       const { error } = body as Record<string, unknown>;
+      if (error === "dictation_unavailable") {
+        return new DictationError("unavailable", "Dictation is turned off on the Server.");
+      }
+      if (error === "gateway_unreachable") {
+        return new DictationError(
+          "gateway-unreachable",
+          "The Server couldn't reach the dictation gateway.",
+        );
+      }
+      if (error === "gateway_rejected_token") {
+        return new DictationError(
+          "gateway-rejected",
+          "The Server's dictation token was rejected by the gateway.",
+        );
+      }
       if (typeof error === "string" && error !== "") {
         return new DictationError("failed", error);
       }
@@ -202,13 +208,13 @@ async function failureFrom(response: Response): Promise<DictationError> {
   } catch {
     // fall through to the status-only message
   }
-  return new DictationError("failed", `The dictation gateway answered ${response.status}.`);
+  return new DictationError("failed", `The Server answered ${response.status}.`);
 }
 
 function resultFrom(body: Record<string, unknown>): DictationResult {
   const text = body.text;
   if (typeof text !== "string") {
-    throw new DictationError("bad-response", "The dictation gateway sent no text.");
+    throw new DictationError("bad-response", "The Server sent no text.");
   }
   return {
     text,
@@ -237,7 +243,7 @@ function sleep(ms: number, signal: AbortSignal | undefined): Promise<void> {
 
 /**
  * Uploads `blob` and resolves with the transcript. `?wait=1` lets the
- * gateway answer in one round trip when the job is quick (200); otherwise
+ * Server answer in one round trip when the job is quick (200); otherwise
  * it returns 202 and this polls `GET /v1/dictations/:id` until the job is
  * `done` or `failed`.
  */
@@ -250,7 +256,7 @@ export async function transcribeRecording(
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const uploadTimeoutMs = options.requestTimeoutMs ?? UPLOAD_REQUEST_TIMEOUT_MS;
   const pollTimeoutMs = options.requestTimeoutMs ?? POLL_REQUEST_TIMEOUT_MS;
-  const headers = { Authorization: `Bearer ${options.token}` };
+  const baseUrl = useSettingsStore.getState().serverUrl;
 
   const form = new FormData();
   form.append("audio", blob, `dictation.${extensionFor(blob.type)}`);
@@ -258,8 +264,8 @@ export async function transcribeRecording(
   const startedAt = Date.now();
   let response = await request(
     fetchImpl,
-    `${options.url}/v1/dictations?wait=1`,
-    { method: "POST", headers, body: form },
+    `${baseUrl}/v1/dictations?wait=1`,
+    { method: "POST", body: form },
     options.signal,
     uploadTimeoutMs,
   );
@@ -276,7 +282,7 @@ export async function transcribeRecording(
 
   const id = body.id;
   if (typeof id !== "string") {
-    throw new DictationError("bad-response", "The dictation gateway sent no job id.");
+    throw new DictationError("bad-response", "The Server sent no job id.");
   }
 
   for (;;) {
@@ -285,7 +291,7 @@ export async function transcribeRecording(
     }
     if (body.status === "failed") {
       const message = typeof body.error === "string" && body.error !== "" ? body.error : null;
-      throw new DictationError("failed", message ?? "Dictation failed on the gateway.");
+      throw new DictationError("failed", message ?? "Dictation failed.");
     }
     if (Date.now() - startedAt >= timeoutMs) {
       throw new DictationError("timeout", "Dictation took too long.");
@@ -293,8 +299,8 @@ export async function transcribeRecording(
     await sleep(pollIntervalMs, options.signal);
     response = await request(
       fetchImpl,
-      `${options.url}/v1/dictations/${encodeURIComponent(id)}`,
-      { headers },
+      `${baseUrl}/v1/dictations/${encodeURIComponent(id)}`,
+      {},
       options.signal,
       pollTimeoutMs,
     );
@@ -303,39 +309,4 @@ export async function transcribeRecording(
     }
     body = await readJson(response);
   }
-}
-
-/** `GET /v1/health`, for Settings' Test button. Throws a `DictationError` on 401, a network failure or a malformed body. */
-export async function checkDictationGateway(
-  url: string,
-  token: string,
-  fetchImpl: FetchLike = defaultFetch,
-  options: CheckOptions = {},
-): Promise<GatewayHealth> {
-  const response = await request(
-    fetchImpl,
-    `${url}/v1/health`,
-    { headers: { Authorization: `Bearer ${token}` } },
-    undefined,
-    options.requestTimeoutMs ?? HEALTH_REQUEST_TIMEOUT_MS,
-  );
-  if (!response.ok) {
-    throw new DictationError("failed", `The dictation gateway answered ${response.status}.`);
-  }
-  const body = await readJson(response);
-  const openwhispr = body.openwhispr as Record<string, unknown> | undefined;
-  const status = body.status;
-  if (status !== "ok" && status !== "degraded" && status !== "down") {
-    throw new DictationError("bad-response", "That address isn't a dictation gateway.");
-  }
-  return {
-    ok: body.ok === true,
-    openwhispr: {
-      reachable: openwhispr?.reachable === true,
-      version: typeof openwhispr?.version === "string" ? openwhispr.version : null,
-      verifiedVersion:
-        typeof openwhispr?.verifiedVersion === "string" ? openwhispr.verifiedVersion : null,
-    },
-    status,
-  };
 }

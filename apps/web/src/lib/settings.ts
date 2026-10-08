@@ -9,9 +9,7 @@
  * Persisted as plain `localStorage` string keys, one per setting —
  * `meologue.theme`, `meologue.server-url`, since #128 `meologue.accent` and
  * `meologue.text-size`, since #134 `meologue.hidden-destinations`, and since
- * #358 `meologue.completed-tasks-visible`, and since #454
- * `meologue.dictation-url` / `meologue.dictation-token` (the token is the
- * one key excluded from Backup, see `BACKUP_EXCLUDED_KEYS`) — not a single JSON blob under
+ * #358 `meologue.completed-tasks-visible` — not a single JSON blob under
  * Zustand's `persist` middleware, which writes the whole store under one
  * key. Three things depend on that format: the inline
  * blocking script in `index.html` that applies the theme before first paint
@@ -62,22 +60,31 @@ const DEFAULT_REFLECT_MODEL_KEY = "meologue.default-reflect-model";
 const HIDDEN_DESTINATIONS_KEY = "meologue.hidden-destinations";
 const CAPABILITIES_KEY = "meologue.capabilities";
 const COMPLETED_TASKS_VISIBLE_KEY = "meologue.completed-tasks-visible";
-const DICTATION_URL_KEY = "meologue.dictation-url";
-const DICTATION_TOKEN_KEY = "meologue.dictation-token";
+// Issue #454 shipped these two per-Device dictation keys in v0.17.0; issue
+// #455 (ADR 0091) moved the gateway URL and token to the Server, so nothing
+// reads them any more. Unlike `meologue.completed-style` above, which is
+// left inert because a stale value there is harmless, the token is a
+// credential: leaving it in `localStorage` for no reader is a standing
+// exposure, so both keys are actively removed once at startup
+// (`removeRetiredDictationKeys`). The token key also stays in
+// `BACKUP_EXCLUDED_KEYS` for good, so a Device that hasn't run the cleanup
+// yet, or a hand-edited Backup, can never carry it in or out.
+const RETIRED_DICTATION_URL_KEY = "meologue.dictation-url";
+const RETIRED_DICTATION_TOKEN_KEY = "meologue.dictation-token";
 
 /** The prefix every key this file writes shares — see `readAllDeviceSettings` below. */
 const DEVICE_SETTINGS_PREFIX = "meologue.";
 
 /**
- * Keys that exist in `localStorage` but must never travel in a Backup or be
- * written by a Restore (issue #454). The dictation token is a credential,
- * and Backup files are user-handled files that leave the Device, so the
- * token stays out of them. An explicit set rather than a name pattern like
+ * Keys that must never travel in a Backup or be written by a Restore
+ * (issue #454, kept by #455). The retired per-Device dictation token is a
+ * credential, and Backup files are user-handled files that leave the
+ * Device, so the token stays out of them even though nothing writes it now. An explicit set rather than a name pattern like
  * `*-token`, so the decision for each key is written down once, here, and a
  * future secret is added on purpose rather than caught (or missed) by a
  * naming accident.
  */
-const BACKUP_EXCLUDED_KEYS: ReadonlySet<string> = new Set([DICTATION_TOKEN_KEY]);
+const BACKUP_EXCLUDED_KEYS: ReadonlySet<string> = new Set([RETIRED_DICTATION_TOKEN_KEY]);
 
 /**
  * Every `meologue.*` key currently sitting in `localStorage`, verbatim, as a
@@ -620,50 +627,18 @@ function writeStoredServerUrl(url: string): void {
 }
 
 /**
- * Issue #454: the dictation gateway's address, normalised on read for the
- * same reason `readStoredServerUrl` is — both are concatenated with a
- * `/v1/...` path, so a surviving trailing slash breaks every request.
+ * Removes the two per-Device dictation keys v0.17.0 wrote (issue #455). Runs
+ * once at module load, before the store is built. Exported so a test can
+ * call it directly against a seeded `localStorage`.
  */
-function readStoredDictationUrl(): string {
-  try {
-    return normaliseServerUrl(localStorage.getItem(DICTATION_URL_KEY) ?? "");
-  } catch {
-    return "";
-  }
-}
-
-function writeStoredDictationUrl(url: string): void {
-  try {
-    if (url === "") {
-      // No key rather than an empty string, so "dictation off" leaves the
-      // same storage as a Device that never configured it.
-      localStorage.removeItem(DICTATION_URL_KEY);
-    } else {
-      localStorage.setItem(DICTATION_URL_KEY, url);
+export function removeRetiredDictationKeys(): void {
+  for (const key of [RETIRED_DICTATION_URL_KEY, RETIRED_DICTATION_TOKEN_KEY]) {
+    try {
+      localStorage.removeItem(key);
+    } catch {
+      // Storage refused: nothing reads the key, so leaving it is harmless
+      // beyond the exposure this cleanup was trying to end; retry next start.
     }
-  } catch {
-    // Refused write — the in-memory value still applies for this session.
-  }
-}
-
-/** Issue #454: the gateway's bearer token. Never backed up — see `BACKUP_EXCLUDED_KEYS`. */
-function readStoredDictationToken(): string {
-  try {
-    return localStorage.getItem(DICTATION_TOKEN_KEY) ?? "";
-  } catch {
-    return "";
-  }
-}
-
-function writeStoredDictationToken(token: string): void {
-  try {
-    if (token === "") {
-      localStorage.removeItem(DICTATION_TOKEN_KEY);
-    } else {
-      localStorage.setItem(DICTATION_TOKEN_KEY, token);
-    }
-  } catch {
-    // Refused write — the in-memory value still applies for this session.
   }
 }
 
@@ -756,10 +731,6 @@ interface SettingsState {
   /** Issue #202: which model a fresh Reflect Conversation starts on. See `DEFAULT_REFLECT_MODEL`'s own doc comment above. */
   defaultReflectModel: string;
   serverUrl: string;
-  /** Issue #454: the dictation gateway's address; empty hides the Composer's mic button. */
-  dictationUrl: string;
-  /** Issue #454: the gateway's bearer token. Device-local and excluded from Backup. */
-  dictationToken: string;
   listWidth: number;
   capabilities: ServerCapabilities | null;
   /**
@@ -793,14 +764,14 @@ interface SettingsState {
   setSmartDatesEnabled: (enabled: boolean) => void;
   setDefaultReflectModel: (model: string) => void;
   setServerUrl: (url: string) => void;
-  setDictationUrl: (url: string) => void;
-  setDictationToken: (token: string) => void;
   setListWidth: (width: number) => void;
   setCapabilities: (capabilities: ServerCapabilities | null) => void;
   setServerReachable: (reachable: boolean) => void;
   setHiddenDestinations: (hidden: ReadonlySet<HideableDestinationId>) => void;
   setCompletedTasksVisible: (visible: boolean) => void;
 }
+
+removeRetiredDictationKeys();
 
 /**
  * Initial state is read from storage once, at module load — the same
@@ -818,8 +789,6 @@ export const useSettingsStore = create<SettingsState>()((set) => ({
   smartDatesEnabled: readStoredSmartDatesEnabled(),
   defaultReflectModel: readStoredDefaultReflectModel(),
   serverUrl: readStoredServerUrl(),
-  dictationUrl: readStoredDictationUrl(),
-  dictationToken: readStoredDictationToken(),
   listWidth: readStoredListWidth(),
   capabilities: readStoredCapabilities(),
   serverReachable: true,
@@ -854,16 +823,6 @@ export const useSettingsStore = create<SettingsState>()((set) => ({
     writeStoredServerUrl(normalised);
     set({ serverUrl: normalised });
   },
-  setDictationUrl: (url) => {
-    const normalised = normaliseServerUrl(url);
-    writeStoredDictationUrl(normalised);
-    set({ dictationUrl: normalised });
-  },
-  setDictationToken: (token) => {
-    const trimmed = token.trim();
-    writeStoredDictationToken(trimmed);
-    set({ dictationToken: trimmed });
-  },
   setListWidth: (width) => {
     const rounded = Math.round(width);
     writeStoredListWidth(rounded);
@@ -891,11 +850,6 @@ export const useSettingsStore = create<SettingsState>()((set) => ({
 /** ADR 0011: an empty Server URL means Sync is off. Re-renders when the Server URL changes. */
 export function useSyncEnabled(): boolean {
   return useSettingsStore((state) => state.serverUrl !== "");
-}
-
-/** Issue #454: an empty dictation URL means the Composer shows no mic button. */
-export function useDictationEnabled(): boolean {
-  return useSettingsStore((state) => state.dictationUrl !== "");
 }
 
 /**

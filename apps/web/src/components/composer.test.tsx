@@ -184,19 +184,66 @@ describe("Composer's Send button keeps focus on the editor", () => {
     expect(document.activeElement).toBe(field);
   });
 
-  describe("dictation (issue #454)", () => {
+  describe("dictation (issues #454, #455)", () => {
+    const caps = (dictation: boolean | undefined) => ({
+      reflect: true,
+      digest: true,
+      embeddings: true,
+      todo: true,
+      dictation,
+    });
+    function setup(state: {
+      serverUrl?: string;
+      capabilities?: ReturnType<typeof caps> | null;
+      formatBarVisible?: boolean;
+    }) {
+      useSettingsStore.setState({
+        serverUrl: "http://server",
+        capabilities: caps(true),
+        formatBarVisible: true,
+        ...state,
+      });
+    }
     afterEach(() => {
-      useSettingsStore.setState({ dictationUrl: "", formatBarVisible: true });
+      useSettingsStore.setState({ serverUrl: "", capabilities: null, formatBarVisible: true });
     });
 
-    it("shows no mic button until a gateway URL is set", () => {
-      useSettingsStore.setState({ dictationUrl: "", formatBarVisible: true });
+    it("shows the mic with the toolbar on, Sync on and capabilities.dictation true", () => {
+      setup({});
+      render(<Composer onSend={vi.fn()} />);
+      expect(screen.getByRole("button", { name: "Dictate" })).toBeInTheDocument();
+    });
+
+    it("hides the mic when capabilities are unknown (an older Server)", () => {
+      setup({ capabilities: null });
+      render(<Composer onSend={vi.fn()} />);
+      expect(screen.queryByRole("button", { name: "Dictate" })).not.toBeInTheDocument();
+    });
+
+    it("hides the mic when the Server reports dictation false or omits it", () => {
+      setup({ capabilities: caps(false) });
+      const { unmount } = render(<Composer onSend={vi.fn()} />);
+      expect(screen.queryByRole("button", { name: "Dictate" })).not.toBeInTheDocument();
+      unmount();
+      setup({ capabilities: caps(undefined) });
+      render(<Composer onSend={vi.fn()} />);
+      expect(screen.queryByRole("button", { name: "Dictate" })).not.toBeInTheDocument();
+    });
+
+    it("hides the mic when Sync is off, even with a cached capability report", () => {
+      setup({ serverUrl: "" });
+      render(<Composer onSend={vi.fn()} />);
+      expect(screen.queryByRole("button", { name: "Dictate" })).not.toBeInTheDocument();
+    });
+
+    it("hides the mic when the format toolbar is off", () => {
+      setup({ formatBarVisible: false });
       render(<Composer onSend={vi.fn()} />);
       expect(screen.queryByRole("button", { name: "Dictate" })).not.toBeInTheDocument();
     });
 
     it("puts the mic inside the format toolbar, before Bold and not beside Send", () => {
-      useSettingsStore.setState({ dictationUrl: "http://gw", formatBarVisible: true });
+      setup({});
       render(<Composer onSend={vi.fn()} />);
       const toolbar = screen.getByRole("toolbar");
       const mic = screen.getByRole("button", { name: "Dictate" });
@@ -208,7 +255,7 @@ describe("Composer's Send button keeps focus on the editor", () => {
     });
 
     it("inserts the transcript at the caret", async () => {
-      useSettingsStore.setState({ dictationUrl: "http://gw", formatBarVisible: true });
+      setup({});
       dictationMocks.startDictationRecording.mockResolvedValue({
         stop: async () => new Blob(["a"]),
         cancel: vi.fn(),
@@ -230,12 +277,6 @@ describe("Composer's Send button keeps focus on the editor", () => {
         ),
       );
       expect(onSend).not.toHaveBeenCalled();
-    });
-
-    it("shows no mic when the format toolbar is off, even with a gateway URL", () => {
-      useSettingsStore.setState({ dictationUrl: "http://gw", formatBarVisible: false });
-      render(<Composer onSend={vi.fn()} />);
-      expect(screen.queryByRole("button", { name: "Dictate" })).not.toBeInTheDocument();
     });
   });
 });

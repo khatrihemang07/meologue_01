@@ -1,5 +1,6 @@
-import { describe, expect, it, vi } from "vitest";
-import { checkDictationGateway, DictationError, transcribeRecording } from "./dictation-transport";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { DictationError, transcribeRecording } from "./dictation-transport";
+import { useSettingsStore } from "./settings";
 
 function json(status: number, body: unknown): Response {
   return new Response(JSON.stringify(body), {
@@ -8,7 +9,11 @@ function json(status: number, body: unknown): Response {
   });
 }
 
-const base = { url: "http://gw:1", token: "tok" };
+const base = {};
+
+beforeEach(() => {
+  useSettingsStore.setState({ serverUrl: "http://server:9" });
+});
 
 async function kindOf(promise: Promise<unknown>): Promise<string> {
   try {
@@ -23,7 +28,7 @@ async function kindOf(promise: Promise<unknown>): Promise<string> {
 }
 
 describe("transcribeRecording", () => {
-  it("posts multipart audio with a matching extension and the bearer token", async () => {
+  it("posts multipart audio with a matching extension and no Authorization header, against the Server URL", async () => {
     const fetchImpl = vi.fn(async () =>
       json(200, { id: "1", status: "done", text: "hello", rawText: "hello uh" }),
     );
@@ -35,9 +40,9 @@ describe("transcribeRecording", () => {
 
     expect(result).toEqual({ text: "hello", rawText: "hello uh", warning: null });
     const [url, init] = fetchImpl.mock.calls[0] as unknown as [string, RequestInit];
-    expect(url).toBe("http://gw:1/v1/dictations?wait=1");
+    expect(url).toBe("http://server:9/v1/dictations?wait=1");
     expect(init.method).toBe("POST");
-    expect((init.headers as Record<string, string>).Authorization).toBe("Bearer tok");
+    expect(init.headers).toBeUndefined();
     const file = (init.body as FormData).get("audio") as File;
     expect(file.name).toBe("dictation.webm");
   });
@@ -73,7 +78,7 @@ describe("transcribeRecording", () => {
     });
 
     expect(result.text).toBe("yo");
-    expect(fetchImpl.mock.calls[1]?.[0]).toBe("http://gw:1/v1/dictations/j1");
+    expect(fetchImpl.mock.calls[1]?.[0]).toBe("http://server:9/v1/dictations/j1");
   });
 
   it("reports a failed job with the gateway's message", async () => {
@@ -125,7 +130,7 @@ describe("transcribeRecording", () => {
       (e) => e,
     );
     expect(error.kind).toBe("failed");
-    expect(error.message).toBe("The dictation gateway answered 502.");
+    expect(error.message).toBe("The Server answered 502.");
   });
 
   it("reads the gateway's message from a failed poll response", async () => {
@@ -159,11 +164,54 @@ describe("transcribeRecording", () => {
     ).toBe("timeout");
   });
 
-  it("maps 401 to unauthorized", async () => {
-    const fetchImpl = vi.fn(async () => json(401, { error: "no" }));
-    expect(await kindOf(transcribeRecording(new Blob(["x"]), { ...base, fetchImpl }))).toBe(
-      "unauthorized",
+  it.each([
+    [
+      503,
+      { error: "dictation_unavailable" },
+      "unavailable",
+      "Dictation is turned off on the Server.",
+    ],
+    [
+      502,
+      { error: "gateway_unreachable" },
+      "gateway-unreachable",
+      "The Server couldn't reach the dictation gateway.",
+    ],
+    [
+      502,
+      { error: "gateway_rejected_token" },
+      "gateway-rejected",
+      "The Server's dictation token was rejected by the gateway.",
+    ],
+  ])("maps %i %j to %s", async (status, body, kind, message) => {
+    const fetchImpl = vi.fn(async () => json(status, body));
+    const error = await transcribeRecording(new Blob(["x"]), { ...base, fetchImpl }).catch(
+      (e) => e,
     );
+    expect(error).toBeInstanceOf(DictationError);
+    expect(error.kind).toBe(kind);
+    expect(error.message).toBe(message);
+  });
+
+  it("maps the same Server errors on a poll", async () => {
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(json(202, { id: "j1", status: "queued" }))
+      .mockResolvedValueOnce(json(502, { error: "gateway_unreachable" }));
+    expect(
+      await kindOf(transcribeRecording(new Blob(["x"]), { ...base, fetchImpl, pollIntervalMs: 1 })),
+    ).toBe("gateway-unreachable");
+  });
+
+  it("passes a gateway 400 and 413 message through as failed", async () => {
+    for (const status of [400, 413]) {
+      const fetchImpl = vi.fn(async () => json(status, { error: "too_big" }));
+      const error = await transcribeRecording(new Blob(["x"]), { ...base, fetchImpl }).catch(
+        (e) => e,
+      );
+      expect(error.kind).toBe("failed");
+      expect(error.message).toBe("too_big");
+    }
   });
 
   it("maps a thrown TypeError to unreachable", async () => {
@@ -201,36 +249,6 @@ describe("transcribeRecording", () => {
   });
 });
 
-describe("checkDictationGateway", () => {
-  it("returns the health report", async () => {
-    const fetchImpl = vi.fn(async (_url: string) =>
-      json(200, {
-        ok: true,
-        openwhispr: { reachable: true, version: "1.2.3", verifiedVersion: "1.2.3" },
-        status: "ok",
-      }),
-    );
-    const health = await checkDictationGateway("http://gw:1", "tok", fetchImpl);
-    expect(health.status).toBe("ok");
-    expect(health.openwhispr.version).toBe("1.2.3");
-    expect(fetchImpl.mock.calls[0]?.[0]).toBe("http://gw:1/v1/health");
-  });
-
-  it("maps 401 to unauthorized", async () => {
-    const fetchImpl = vi.fn(async () => json(401, {}));
-    expect(await kindOf(checkDictationGateway("http://gw:1", "bad", fetchImpl))).toBe(
-      "unauthorized",
-    );
-  });
-
-  it("maps a network failure to unreachable", async () => {
-    const fetchImpl = vi.fn(async () => {
-      throw new TypeError("nope");
-    });
-    expect(await kindOf(checkDictationGateway("http://gw:1", "t", fetchImpl))).toBe("unreachable");
-  });
-});
-
 /** A fetch that, like an unroutable address, never answers until its signal aborts. */
 function hangingFetch() {
   return vi.fn(async (_url: string, init?: RequestInit) => {
@@ -243,14 +261,6 @@ function hangingFetch() {
 }
 
 describe("per-request timeouts", () => {
-  it("health that never answers is unreachable", async () => {
-    expect(
-      await kindOf(
-        checkDictationGateway("http://gw:1", "t", hangingFetch(), { requestTimeoutMs: 20 }),
-      ),
-    ).toBe("unreachable");
-  });
-
   it("an upload that never answers is unreachable", async () => {
     expect(
       await kindOf(
@@ -314,12 +324,6 @@ describe("per-request timeouts without AbortSignal.any", () => {
   it("still times out, keeps caller aborts, and leaks no timer", async () => {
     vi.stubGlobal("AbortSignal", { ...AbortSignal, any: undefined, timeout: undefined });
     try {
-      expect(
-        await kindOf(
-          checkDictationGateway("http://gw:1", "t", hangingFetch(), { requestTimeoutMs: 20 }),
-        ),
-      ).toBe("unreachable");
-
       const controller = new AbortController();
       const aborted = transcribeRecording(new Blob(["x"]), {
         ...base,

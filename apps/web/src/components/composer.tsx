@@ -71,7 +71,7 @@ import { entrySchema, type ReferenceAttrs } from "@/lib/entry-schema";
 import { normalizeEntryBody } from "@/lib/entry-text";
 import { parseReferenceDate } from "@/lib/inline-markdown";
 import type { ComposerPromotionContext } from "@/lib/promote-tasks";
-import { useDictationEnabled, useSettingsStore } from "@/lib/settings";
+import { useCapabilities, useSettingsStore, useSyncEnabled } from "@/lib/settings";
 import { isSubmitChord } from "@/lib/submit-chord";
 import { cn } from "@/lib/utils";
 
@@ -312,8 +312,12 @@ export function Composer({
   // a transaction happened to fire beforehand.
   const [isEmpty, setIsEmpty] = useState(true);
 
-  // Issue #454: the mic button only exists once a gateway URL is set.
-  const dictationEnabled = useDictationEnabled();
+  // Issues #454/#455: the mic exists only while Sync is on and the connected
+  // Server reports `capabilities.dictation === true` (ADR 0091). Unknown
+  // capabilities (`null`, e.g. an older Server) read as "no dictation".
+  const syncEnabled = useSyncEnabled();
+  const capabilities = useCapabilities();
+  const dictationEnabled = syncEnabled && capabilities?.dictation === true;
 
   // The inline `[[` picker's own state (issue #144) — mirrored from
   // composer-editor.ts's `pickerPlugin`, which derives it fresh from the

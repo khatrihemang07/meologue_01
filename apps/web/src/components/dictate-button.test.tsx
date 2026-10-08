@@ -2,7 +2,6 @@ import { act, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DictationRecorderError, type DictationRecording } from "@/lib/dictation-recorder";
 import { DictationError, type TranscribeOptions } from "@/lib/dictation-transport";
-import { useSettingsStore } from "@/lib/settings";
 import { DictateButton } from "./dictate-button";
 
 const toastMock = vi.hoisted(() => Object.assign(vi.fn(), { error: vi.fn(), success: vi.fn() }));
@@ -28,7 +27,6 @@ describe("DictateButton", () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     toastMock.mockClear();
     toastMock.error.mockClear();
-    useSettingsStore.setState({ dictationUrl: "http://gw", dictationToken: "tok" });
   });
   afterEach(() => {
     vi.useRealTimers();
@@ -73,7 +71,7 @@ describe("DictateButton", () => {
     await flush();
     const busy = screen.getByRole("button", { name: "Transcribing" });
     expect(busy).toBeDisabled();
-    expect(transcribe.mock.calls[0]?.[1]).toMatchObject({ url: "http://gw", token: "tok" });
+    expect(transcribe.mock.calls[0]?.[1]).toHaveProperty("signal");
 
     await act(async () => {
       resolveTranscript({ text: "hello there", rawText: "hello there", warning: null });
@@ -123,8 +121,16 @@ describe("DictateButton", () => {
   });
 
   it.each([
-    [new DictationError("unreachable", "x"), "Couldn't reach the dictation gateway."],
-    [new DictationError("unauthorized", "x"), "The dictation gateway rejected the token."],
+    [new DictationError("unreachable", "x"), "Couldn't reach the Server."],
+    [new DictationError("unavailable", "x"), "Dictation is turned off on the Server."],
+    [
+      new DictationError("gateway-unreachable", "x"),
+      "The Server couldn't reach the dictation gateway.",
+    ],
+    [
+      new DictationError("gateway-rejected", "x"),
+      "The Server's dictation token was rejected by the gateway.",
+    ],
     [new DictationError("failed", "whisper crashed"), "whisper crashed"],
   ])("toasts a transcription failure (%#)", async (error, sentence) => {
     render(

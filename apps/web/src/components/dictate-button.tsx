@@ -9,7 +9,6 @@ import {
   type TranscribeOptions,
   transcribeRecording,
 } from "@/lib/dictation-transport";
-import { useSettingsStore } from "@/lib/settings";
 
 type Phase = "idle" | "starting" | "recording" | "transcribing";
 
@@ -134,12 +133,7 @@ export function DictateButton({
       if (run === runRef.current) {
         recordingRef.current = null;
       }
-      const { dictationUrl, dictationToken } = useSettingsStore.getState();
-      const result = await transcribe(blob, {
-        url: dictationUrl,
-        token: dictationToken,
-        signal: controller.signal,
-      });
+      const result = await transcribe(blob, { signal: controller.signal });
       if (run !== runRef.current || !aliveRef.current) {
         return;
       }

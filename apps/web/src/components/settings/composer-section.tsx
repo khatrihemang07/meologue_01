@@ -1,13 +1,7 @@
-import { useState } from "react";
 import { DeviceGroup } from "@/components/settings/device-group";
 import { SettingsSection } from "@/components/settings/settings-section";
 import { SwitchRow } from "@/components/settings/switch-row";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { describeDictationError, describeGatewayHealth } from "@/lib/describe-dictation-error";
-import { checkDictationGateway } from "@/lib/dictation-transport";
-import { normaliseServerUrl, useSettingsStore } from "@/lib/settings";
-import { cn } from "@/lib/utils";
+import { useSettingsStore } from "@/lib/settings";
 
 /**
  * What the Composer looks and behaves like while a reader is writing —
@@ -48,48 +42,6 @@ export function ComposerSection() {
   const setStoredCompletedTasksVisible = useSettingsStore(
     (state) => state.setCompletedTasksVisible,
   );
-
-  const storedDictationUrl = useSettingsStore((state) => state.dictationUrl);
-  const setStoredDictationUrl = useSettingsStore((state) => state.setDictationUrl);
-  const storedDictationToken = useSettingsStore((state) => state.dictationToken);
-  const setStoredDictationToken = useSettingsStore((state) => state.setDictationToken);
-
-  // Local drafts, committed on Save — the same shape `sync-section.tsx`
-  // uses for the Server URL, for the same reason: the field must keep
-  // showing what is being typed until the user chooses to apply it.
-  const [dictationUrl, setDictationUrl] = useState(storedDictationUrl);
-  const [dictationToken, setDictationToken] = useState(storedDictationToken);
-  const [testing, setTesting] = useState(false);
-  const [testResult, setTestResult] = useState<{ ok: boolean; message: string } | null>(null);
-
-  function saveDictation() {
-    setStoredDictationUrl(dictationUrl);
-    setStoredDictationToken(dictationToken);
-    // Shown normalised, computed rather than read back from storage, for
-    // the reason `saveServerUrl` gives.
-    setDictationUrl(normaliseServerUrl(dictationUrl));
-    setDictationToken(dictationToken.trim());
-  }
-
-  // Tests what is in the fields, saved or not, so a user can check an
-  // address before committing to it.
-  async function testDictation() {
-    const url = normaliseServerUrl(dictationUrl);
-    if (url === "") {
-      setTestResult({ ok: false, message: "Enter a gateway URL first." });
-      return;
-    }
-    setTesting(true);
-    setTestResult(null);
-    try {
-      const health = await checkDictationGateway(url, dictationToken.trim());
-      setTestResult({ ok: health.status === "ok", message: describeGatewayHealth(health) });
-    } catch (error) {
-      setTestResult({ ok: false, message: describeDictationError(error) ?? "Test cancelled." });
-    } finally {
-      setTesting(false);
-    }
-  }
 
   // No `applyX` step: there is no on-screen paint for a `localStorage`
   // write to drive immediately from here — `composer.tsx` reads this
@@ -172,73 +124,6 @@ export function ComposerSection() {
             checked={completedTasksVisible}
             onToggle={toggleCompletedTasksVisible}
           />
-        </SettingsSection>
-
-        {/*
-          Issue #454. Empty URL means the Composer has no mic button at all
-          (ADR 0090). The token is a secret: password input, and excluded
-          from Backups (`BACKUP_EXCLUDED_KEYS` in lib/settings.ts). Buttons
-          are named "Save dictation" / "Test dictation gateway" rather than
-          bare Save/Test because this page already has several Save buttons
-          and Playwright matches names by substring.
-        */}
-        <SettingsSection
-          label="Dictation"
-          hint="Records in the Composer and sends audio to an OpenWhispr gateway on your network. The mic button appears at the start of the format toolbar. The token stays on this Device and is not included in Backups."
-        >
-          <form
-            className="flex flex-col gap-2"
-            onSubmit={(event) => {
-              event.preventDefault();
-              saveDictation();
-            }}
-          >
-            <label htmlFor="dictation-url" className="sr-only">
-              Gateway URL
-            </label>
-            <Input
-              id="dictation-url"
-              type="text"
-              placeholder="Gateway URL — leave empty to turn dictation off"
-              value={dictationUrl}
-              onChange={(event) => setDictationUrl(event.target.value)}
-              className="h-11"
-            />
-            <label htmlFor="dictation-token" className="sr-only">
-              Gateway token
-            </label>
-            <Input
-              id="dictation-token"
-              type="password"
-              autoComplete="off"
-              placeholder="Token"
-              value={dictationToken}
-              onChange={(event) => setDictationToken(event.target.value)}
-              className="h-11"
-            />
-            <div className="flex gap-2">
-              <Button type="submit" size="touch">
-                Save dictation
-              </Button>
-              <Button
-                type="button"
-                size="touch"
-                variant="outline"
-                onClick={testDictation}
-                disabled={testing}
-              >
-                Test dictation gateway
-              </Button>
-            </div>
-          </form>
-          {testResult && (
-            <p
-              data-testid="dictation-status"
-              className={cn("text-sm", testResult.ok ? "text-foreground" : "text-destructive")}
-            >
-              {testResult.message}
-            </p>
-          )}
         </SettingsSection>
       </DeviceGroup>
     </section>
