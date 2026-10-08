@@ -129,9 +129,8 @@ lives in History, and the Composer view is one way of looking at it.
 
 Speaking an Entry instead of typing it: the mic button at the start of the Composer's format toolbar records the user's voice, has it
 transcribed, and puts the resulting text at the cursor. Dictation only fills the Composer; the user
-still reads it and Sends it themselves, so it is never itself a Send. It records only on a
-Device that has been given a dictation gateway's address; until then the same mic button opens
-Settings at the gateway field so the feature can be found. The gateway's token is the one Device
+still reads it and Sends it themselves, so it is never itself a Send. It is available only on a
+Device that has been given a dictation gateway's address, and the gateway's token is the one Device
 setting a Backup does not carry (ADR 0090).
 
 ### Sync

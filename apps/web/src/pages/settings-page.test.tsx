@@ -33,11 +33,11 @@ vi.mock("@/pages/entry-store-layout", () => ({
 // The `/` route renders a probe element rather than the real ComposerPage:
 // nothing in this file needs to re-render everything that page depends on
 // (its own store, context, etc.) to prove a Nav link's href is correct.
-function renderPage(path = "/settings") {
+function renderPage() {
   const queryClient = new QueryClient();
   render(
     <QueryClientProvider client={queryClient}>
-      <MemoryRouter initialEntries={[path]}>
+      <MemoryRouter initialEntries={["/settings"]}>
         <Routes>
           <Route path="/" element={<div>Composer probe</div>} />
           <Route path="/settings" element={<SettingsPage />} />
@@ -48,16 +48,6 @@ function renderPage(path = "/settings") {
 }
 
 describe("SettingsPage", () => {
-  it("focuses the dictation gateway URL field when opened at #dictation-url", async () => {
-    renderPage("/settings#dictation-url");
-    await vi.waitFor(() => expect(screen.getByLabelText("Gateway URL")).toHaveFocus());
-  });
-
-  it("leaves focus alone without the #dictation-url hash", () => {
-    renderPage();
-    expect(screen.getByLabelText("Gateway URL")).not.toHaveFocus();
-  });
-
   beforeEach(() => {
     // Never resolves — this file doesn't exercise anything that depends on
     // the store actually opening (see data-section.test.tsx for that).

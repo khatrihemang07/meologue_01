@@ -1,8 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { useEffect } from "react";
-import { useLocation } from "react-router";
 import { BackToChats } from "@/components/back-to-chats";
-import { DICTATION_URL_FIELD_ID } from "@/components/dictation-setup-button";
 import { AiSection } from "@/components/settings/ai-section";
 import { AppearanceSection } from "@/components/settings/appearance-section";
 import { ComposerSection } from "@/components/settings/composer-section";
@@ -40,19 +37,6 @@ export function SettingsPage() {
   // needs no such handle at all (see DataSection's own doc comment).
   const storeQuery = useQuery(entryStoreQueryOptions);
   const opened = storeQuery.data;
-
-  // The Composer's "Set up dictation" mic links here with `#dictation-url`.
-  // Focusing the field scrolls it into view (and raises the keyboard on
-  // Android); scrollIntoView is the fallback if focus is refused.
-  const { hash } = useLocation();
-  useEffect(() => {
-    if (hash !== `#${DICTATION_URL_FIELD_ID}`) {
-      return;
-    }
-    const field = document.getElementById(DICTATION_URL_FIELD_ID);
-    field?.scrollIntoView?.({ block: "center" });
-    field?.focus({ preventScroll: true });
-  }, [hash]);
 
   return (
     // Settings gets the same persistent Nav as every other page (ticket 54
