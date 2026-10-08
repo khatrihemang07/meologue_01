@@ -161,7 +161,7 @@ fn resolved_with_reflect_off() -> meologue_server::settings::ResolvedSettings {
         reflect_enabled: Some(false),
         ..Default::default()
     };
-    meologue_server::settings::resolve(&env, None, &stored, false)
+    meologue_server::settings::resolve(&env, None, &meologue_server::settings::DictationEnv::default(), &stored, false)
 }
 
 #[tokio::test]

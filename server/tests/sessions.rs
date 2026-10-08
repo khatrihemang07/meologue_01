@@ -642,6 +642,7 @@ async fn listing_sessions_still_answers_200_while_reflection_is_switched_off(poo
             embed_api_key: None,
         },
         None,
+        &meologue_server::settings::DictationEnv::default(),
         &meologue_server::settings::StoredSettings {
             reflect_enabled: Some(false),
             ..Default::default()

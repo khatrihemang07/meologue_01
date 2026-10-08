@@ -660,7 +660,7 @@ fn resolved_with_toggles(reflect_enabled: Option<bool>, embeddings_enabled: Opti
         embeddings_enabled,
         ..Default::default()
     };
-    meologue_server::settings::resolve(&env, None, &stored, false)
+    meologue_server::settings::resolve(&env, None, &meologue_server::settings::DictationEnv::default(), &stored, false)
 }
 
 /// Issue #201: configured but switched off is a different fact from

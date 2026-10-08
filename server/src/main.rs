@@ -108,6 +108,7 @@ async fn main() -> anyhow::Result<()> {
     let resolved_settings = settings::resolve(
         &env_llm_config,
         env_tz.as_deref(),
+        &settings::DictationEnv::from_env(),
         &stored_settings,
         settings_locked,
     );

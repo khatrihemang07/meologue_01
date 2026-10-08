@@ -140,6 +140,7 @@ async fn a_switched_off_reflection_answers_503_rather_than_404(pool: PgPool) {
             embed_api_key: None,
         },
         None,
+        &meologue_server::settings::DictationEnv::default(),
         &meologue_server::settings::StoredSettings {
             reflect_enabled: Some(false),
             ..Default::default()

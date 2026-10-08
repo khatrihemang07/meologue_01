@@ -22,7 +22,7 @@
 //! `lib.rs` registers unconditionally as `GET`/`PATCH /v1/config`).
 
 use std::env;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use axum::extract::State;
@@ -144,6 +144,10 @@ pub struct StoredSettings {
     pub reflect_enabled: Option<bool>,
     pub digest_enabled: Option<bool>,
     pub embeddings_enabled: Option<bool>,
+    /// Issue #455 / ADR 0091: the dictation gateway the Server proxies to.
+    pub dictation_base_url: Option<String>,
+    pub dictation_token: Option<String>,
+    pub dictation_enabled: Option<bool>,
 }
 
 /// Loads the one settings row, or `StoredSettings::default()` (every field
@@ -153,7 +157,8 @@ pub struct StoredSettings {
 pub async fn load_stored(pool: &PgPool) -> sqlx::Result<StoredSettings> {
     let row = sqlx::query_as::<_, StoredSettings>(
         "select chat_base_url, chat_model, chat_api_key, embed_base_url, embed_model, \
-         embed_api_key, tz, reflect_enabled, digest_enabled, embeddings_enabled \
+         embed_api_key, tz, reflect_enabled, digest_enabled, embeddings_enabled, \
+         dictation_base_url, dictation_token, dictation_enabled \
          from server_settings where id = 1",
     )
     .fetch_optional(pool)
@@ -211,6 +216,31 @@ fn resolve_field(stored: Option<&String>, env: Option<&String>, locked: bool) ->
     }
 }
 
+/// Where the dictation gateway is when nothing is configured: the gateway
+/// (`~/Documents/Code/openwhispr-gateway`) and the Server share a machine
+/// (ADR 0091), so loopback on the gateway's own default port is right.
+pub const DEFAULT_DICTATION_URL: &str = "http://127.0.0.1:47300";
+
+/// The environment half of the dictation settings, read once per
+/// resolution the way `LlmConfig::from_env` is for chat and embed.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct DictationEnv {
+    pub base_url: Option<String>,
+    pub token: Option<String>,
+}
+
+impl DictationEnv {
+    pub fn from_env() -> Self {
+        fn var(name: &str) -> Option<String> {
+            env::var(name).ok().filter(|value| !value.is_empty())
+        }
+        Self {
+            base_url: var("MEOLOGUE_DICTATION_URL"),
+            token: var("MEOLOGUE_DICTATION_TOKEN"),
+        }
+    }
+}
+
 /// `resolve`'s output — one `ResolvedField` per overridable string/timezone
 /// setting. `GET /v1/config` reports this (via `ConfigResponse`) more or
 /// less verbatim; `llm_config`/`timezone` below turn it back into the plain
@@ -234,6 +264,13 @@ pub struct ResolvedSettings {
     pub reflect_enabled: Option<bool>,
     pub digest_enabled: Option<bool>,
     pub embeddings_enabled: Option<bool>,
+    /// Issue #455: unset in both layers still *behaves* as
+    /// `DEFAULT_DICTATION_URL` — see `DictationGateway::from_resolved`.
+    pub dictation_base_url: ResolvedField,
+    /// A secret: the value is used by the proxy but never put on the wire
+    /// (`SecretField`).
+    pub dictation_token: ResolvedField,
+    pub dictation_enabled: Option<bool>,
 }
 
 impl ResolvedSettings {
@@ -289,6 +326,7 @@ impl ResolvedSettings {
 pub fn resolve(
     env: &llm::LlmConfig,
     env_tz: Option<&str>,
+    env_dictation: &DictationEnv,
     stored: &StoredSettings,
     locked: bool,
 ) -> ResolvedSettings {
@@ -309,6 +347,17 @@ pub fn resolve(
         reflect_enabled: resolve_toggle(stored.reflect_enabled, locked),
         digest_enabled: resolve_toggle(stored.digest_enabled, locked),
         embeddings_enabled: resolve_toggle(stored.embeddings_enabled, locked),
+        dictation_base_url: resolve_field(
+            stored.dictation_base_url.as_ref(),
+            env_dictation.base_url.as_ref(),
+            locked,
+        ),
+        dictation_token: resolve_field(
+            stored.dictation_token.as_ref(),
+            env_dictation.token.as_ref(),
+            locked,
+        ),
+        dictation_enabled: resolve_toggle(stored.dictation_enabled, locked),
     }
 }
 
@@ -343,6 +392,41 @@ pub struct RuntimeFlags {
     reflect: Arc<AtomicBool>,
     digest: Arc<AtomicBool>,
     embeddings: Arc<AtomicBool>,
+    /// Issue #455: the dictation toggle and the resolved gateway it guards.
+    /// Held here, live, rather than as a boot-time fact: the proxy routes
+    /// are always registered and a `PATCH` re-derives both, so dictation
+    /// needs no restart and `/v1/health` stays database-free.
+    dictation: Arc<AtomicBool>,
+    dictation_gateway: Arc<RwLock<DictationGateway>>,
+}
+
+/// The resolved gateway address and token the dictation proxy uses.
+#[derive(Clone, PartialEq, Eq)]
+pub struct DictationGateway {
+    pub base_url: String,
+    pub token: Option<String>,
+}
+
+impl std::fmt::Debug for DictationGateway {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DictationGateway")
+            .field("base_url", &self.base_url)
+            .field("token", &self.token.as_ref().map(|_| "<redacted>"))
+            .finish()
+    }
+}
+
+impl DictationGateway {
+    pub fn from_resolved(resolved: &ResolvedSettings) -> Self {
+        Self {
+            base_url: resolved
+                .dictation_base_url
+                .value
+                .clone()
+                .unwrap_or_else(|| DEFAULT_DICTATION_URL.to_string()),
+            token: resolved.dictation_token.value.clone(),
+        }
+    }
 }
 
 impl RuntimeFlags {
@@ -355,6 +439,8 @@ impl RuntimeFlags {
             reflect: Arc::new(AtomicBool::new(enabled(resolved.reflect_enabled))),
             digest: Arc::new(AtomicBool::new(enabled(resolved.digest_enabled))),
             embeddings: Arc::new(AtomicBool::new(enabled(resolved.embeddings_enabled))),
+            dictation: Arc::new(AtomicBool::new(enabled(resolved.dictation_enabled))),
+            dictation_gateway: Arc::new(RwLock::new(DictationGateway::from_resolved(resolved))),
         }
     }
 
@@ -370,6 +456,13 @@ impl RuntimeFlags {
             reflect: Arc::new(AtomicBool::new(true)),
             digest: Arc::new(AtomicBool::new(true)),
             embeddings: Arc::new(AtomicBool::new(true)),
+            dictation: Arc::new(AtomicBool::new(true)),
+            // No token: dictation is not configured, so it reports
+            // unavailable — the pre-#455 behaviour of every capability.
+            dictation_gateway: Arc::new(RwLock::new(DictationGateway {
+                base_url: DEFAULT_DICTATION_URL.to_string(),
+                token: None,
+            })),
         }
     }
 
@@ -385,6 +478,29 @@ impl RuntimeFlags {
         self.reflect.store(enabled(resolved.reflect_enabled), Ordering::Relaxed);
         self.digest.store(enabled(resolved.digest_enabled), Ordering::Relaxed);
         self.embeddings.store(enabled(resolved.embeddings_enabled), Ordering::Relaxed);
+        self.dictation.store(enabled(resolved.dictation_enabled), Ordering::Relaxed);
+        *self.dictation_gateway.write().unwrap_or_else(|e| e.into_inner()) =
+            DictationGateway::from_resolved(resolved);
+    }
+
+    /// The gateway to proxy to, or `None` when dictation is unavailable:
+    /// no token resolved (stored or env), or the toggle is Off. This is
+    /// the single predicate both `/v1/health` and the proxy routes read,
+    /// so the capability and the 503 can never disagree.
+    pub fn dictation_gateway(&self) -> Option<DictationGateway> {
+        if !self.dictation.load(Ordering::Relaxed) {
+            return None;
+        }
+        let gateway = self.dictation_gateway.read().unwrap_or_else(|e| e.into_inner());
+        gateway.token.is_some().then(|| gateway.clone())
+    }
+
+    pub fn dictation_available(&self) -> bool {
+        self.dictation_gateway().is_some()
+    }
+
+    pub fn dictation_enabled(&self) -> bool {
+        self.dictation.load(Ordering::Relaxed)
     }
 
     pub fn reflect_enabled(&self) -> bool {
@@ -448,6 +564,13 @@ pub struct ConfigPatch {
     pub digest_enabled: Option<TogglePatch>,
     #[serde(default)]
     pub embeddings_enabled: Option<TogglePatch>,
+    /// Issue #455. `dictation_token` is write-only: see `SecretField`.
+    #[serde(default)]
+    pub dictation_base_url: Option<String>,
+    #[serde(default)]
+    pub dictation_token: Option<String>,
+    #[serde(default)]
+    pub dictation_enabled: Option<TogglePatch>,
 }
 
 /// The wire value one tri-state toggle field of a `PATCH /v1/config` body
@@ -536,6 +659,16 @@ pub async fn apply_patch(pool: &PgPool, patch: &ConfigPatch) -> sqlx::Result<Sto
         current.embeddings_enabled = toggle.to_stored();
     }
 
+    if let Some(value) = &patch.dictation_base_url {
+        current.dictation_base_url = normalize_written(value);
+    }
+    if let Some(value) = &patch.dictation_token {
+        current.dictation_token = normalize_written(value);
+    }
+    if let Some(toggle) = patch.dictation_enabled {
+        current.dictation_enabled = toggle.to_stored();
+    }
+
     upsert(pool, &current).await?;
     Ok(current)
 }
@@ -544,8 +677,9 @@ async fn upsert(pool: &PgPool, settings: &StoredSettings) -> sqlx::Result<()> {
     sqlx::query(
         "insert into server_settings \
            (id, chat_base_url, chat_model, chat_api_key, embed_base_url, embed_model, \
-            embed_api_key, tz, reflect_enabled, digest_enabled, embeddings_enabled) \
-         values (1, $1, $2, $3, $4, $5, $6, $7, $8, $9, $10) \
+            embed_api_key, tz, reflect_enabled, digest_enabled, embeddings_enabled, \
+            dictation_base_url, dictation_token, dictation_enabled) \
+         values (1, $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) \
          on conflict (id) do update set \
            chat_base_url = excluded.chat_base_url, \
            chat_model = excluded.chat_model, \
@@ -556,7 +690,10 @@ async fn upsert(pool: &PgPool, settings: &StoredSettings) -> sqlx::Result<()> {
            tz = excluded.tz, \
            reflect_enabled = excluded.reflect_enabled, \
            digest_enabled = excluded.digest_enabled, \
-           embeddings_enabled = excluded.embeddings_enabled",
+           embeddings_enabled = excluded.embeddings_enabled, \
+           dictation_base_url = excluded.dictation_base_url, \
+           dictation_token = excluded.dictation_token, \
+           dictation_enabled = excluded.dictation_enabled",
     )
     .bind(&settings.chat_base_url)
     .bind(&settings.chat_model)
@@ -568,6 +705,9 @@ async fn upsert(pool: &PgPool, settings: &StoredSettings) -> sqlx::Result<()> {
     .bind(settings.reflect_enabled)
     .bind(settings.digest_enabled)
     .bind(settings.embeddings_enabled)
+    .bind(&settings.dictation_base_url)
+    .bind(&settings.dictation_token)
+    .bind(settings.dictation_enabled)
     .execute(pool)
     .await?;
     Ok(())
@@ -614,6 +754,25 @@ pub struct ConfigResponse {
     pub reflect: FeatureConfig,
     pub digest: FeatureConfig,
     pub embeddings: FeatureConfig,
+    /// Issue #455 / ADR 0091. Unset in both layers, the value is
+    /// `DEFAULT_DICTATION_URL` with `source: unset`.
+    pub dictation_base_url: ResolvedField,
+    /// Write-only: whether a token is resolved and where from, never the
+    /// token itself.
+    pub dictation_token: SecretField,
+    /// `configured` = a token is resolved; `boot_active` = the same (the
+    /// routes are always registered and the gateway is read live, so no
+    /// restart is ever needed); `effective` = what `/v1/health`
+    /// `capabilities.dictation` reports.
+    pub dictation: FeatureConfig,
+}
+
+/// A secret setting on the wire: that it is set and where it came from,
+/// never its value.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, ToSchema)]
+pub struct SecretField {
+    pub configured: bool,
+    pub source: Source,
 }
 
 /// One of the three tri-state toggles, reported from four different angles
@@ -671,7 +830,7 @@ fn feature_config(stored: Option<bool>, configured: bool, boot_active: bool, fla
 fn resolve_now(stored: &StoredSettings, locked: bool) -> ResolvedSettings {
     let env = llm::LlmConfig::from_env();
     let env_tz = env::var("MEOLOGUE_TZ").ok();
-    resolve(&env, env_tz.as_deref(), stored, locked)
+    resolve(&env, env_tz.as_deref(), &DictationEnv::from_env(), stored, locked)
 }
 
 /// `boot_active` per feature — `AppState`'s own three facts about what
@@ -715,6 +874,7 @@ fn build_response(
 ) -> ConfigResponse {
     let resolved = resolve_now(stored, locked);
     let live = resolved.llm_config();
+    let dictation_configured = resolved.dictation_token.value.is_some();
     ConfigResponse {
         mode,
         locked,
@@ -743,6 +903,26 @@ fn build_response(
             live.embed_worker_config().is_some(),
             boot.embeddings,
             flags.embeddings_enabled(),
+        ),
+        dictation_base_url: ResolvedField {
+            value: Some(
+                resolved
+                    .dictation_base_url
+                    .value
+                    .clone()
+                    .unwrap_or_else(|| DEFAULT_DICTATION_URL.to_string()),
+            ),
+            source: resolved.dictation_base_url.source,
+        },
+        dictation_token: SecretField {
+            configured: dictation_configured,
+            source: resolved.dictation_token.source,
+        },
+        dictation: feature_config(
+            stored.dictation_enabled,
+            dictation_configured,
+            dictation_configured,
+            flags.dictation_enabled(),
         ),
     }
 }
@@ -847,7 +1027,7 @@ pub async fn patch_config_handler(
 #[cfg(test)]
 mod tests {
     use super::{
-        InstanceMode, ResolvedField, RuntimeFlags, Source, StoredSettings, parse_mode, resolve,
+        DictationEnv, DictationGateway, InstanceMode, ResolvedField, RuntimeFlags, Source, StoredSettings, parse_mode, resolve,
     };
     use crate::llm::LlmConfig;
 
@@ -881,7 +1061,7 @@ mod tests {
     fn a_stored_value_wins_over_the_environment() {
         let resolved = resolve(
             &env(Some("http://env.invalid")),
-            None,
+            None, &DictationEnv::default(),
             &stored_chat_base_url(Some("http://stored.invalid")),
             false,
         );
@@ -899,7 +1079,7 @@ mod tests {
     fn the_environment_seeds_when_nothing_is_stored() {
         let resolved = resolve(
             &env(Some("http://env.invalid")),
-            None,
+            None, &DictationEnv::default(),
             &stored_chat_base_url(None),
             false,
         );
@@ -915,7 +1095,7 @@ mod tests {
 
     #[test]
     fn unset_in_both_layers_is_unset_not_off_in_some_third_sense() {
-        let resolved = resolve(&env(None), None, &stored_chat_base_url(None), false);
+        let resolved = resolve(&env(None), None, &DictationEnv::default(), &stored_chat_base_url(None), false);
 
         assert_eq!(
             resolved.chat_base_url,
@@ -935,11 +1115,11 @@ mod tests {
         // exactly like one that was never stored at all.
         let cleared = resolve(
             &env(Some("http://env.invalid")),
-            None,
+            None, &DictationEnv::default(),
             &stored_chat_base_url(None),
             false,
         );
-        let never_stored = resolve(&env(Some("http://env.invalid")), None, &StoredSettings::default(), false);
+        let never_stored = resolve(&env(Some("http://env.invalid")), None, &DictationEnv::default(), &StoredSettings::default(), false);
 
         assert_eq!(cleared.chat_base_url, never_stored.chat_base_url);
         assert_eq!(cleared.chat_base_url.source, Source::Env);
@@ -949,7 +1129,7 @@ mod tests {
     fn a_locked_server_ignores_a_stored_value_even_when_one_exists() {
         let resolved = resolve(
             &env(Some("http://env.invalid")),
-            None,
+            None, &DictationEnv::default(),
             &stored_chat_base_url(Some("http://stored.invalid")),
             true,
         );
@@ -967,7 +1147,7 @@ mod tests {
     fn a_locked_server_with_nothing_in_the_environment_is_unset_not_stored() {
         let resolved = resolve(
             &env(None),
-            None,
+            None, &DictationEnv::default(),
             &stored_chat_base_url(Some("http://stored.invalid")),
             true,
         );
@@ -988,7 +1168,7 @@ mod tests {
         // same filter to `env_tz`, since dotenvy can hand back `Ok("")` for
         // a variable present in `.env` with no value (server/.env.example
         // ships several exactly this way).
-        let resolved = resolve(&env(None), Some(""), &StoredSettings::default(), false);
+        let resolved = resolve(&env(None), Some(""), &DictationEnv::default(), &StoredSettings::default(), false);
 
         assert_eq!(
             resolved.tz,
@@ -1029,14 +1209,14 @@ mod tests {
 
     #[test]
     fn an_unset_toggle_resolves_to_none_meaning_defer_to_configuration() {
-        let resolved = resolve(&env(None), None, &stored_reflect_enabled(None), false);
+        let resolved = resolve(&env(None), None, &DictationEnv::default(), &stored_reflect_enabled(None), false);
         assert_eq!(resolved.reflect_enabled, None);
     }
 
     #[test]
     fn a_stored_toggle_survives_resolution_when_unlocked() {
-        let on = resolve(&env(None), None, &stored_reflect_enabled(Some(true)), false);
-        let off = resolve(&env(None), None, &stored_reflect_enabled(Some(false)), false);
+        let on = resolve(&env(None), None, &DictationEnv::default(), &stored_reflect_enabled(Some(true)), false);
+        let off = resolve(&env(None), None, &DictationEnv::default(), &stored_reflect_enabled(Some(false)), false);
         assert_eq!(on.reflect_enabled, Some(true));
         assert_eq!(off.reflect_enabled, Some(false));
     }
@@ -1049,8 +1229,114 @@ mod tests {
         // `Some(false)`) is what keeps a locked Server's toggles reading as
         // "on if otherwise configured" — the same default an unset toggle
         // already has — rather than silently forcing every feature off.
-        let resolved = resolve(&env(None), None, &stored_reflect_enabled(Some(false)), true);
+        let resolved = resolve(&env(None), None, &DictationEnv::default(), &stored_reflect_enabled(Some(false)), true);
         assert_eq!(resolved.reflect_enabled, None);
+    }
+
+    // -- dictation (issue #455) -----------------------------------------------
+
+    fn dictation_env(url: Option<&str>, token: Option<&str>) -> DictationEnv {
+        DictationEnv {
+            base_url: url.map(str::to_string),
+            token: token.map(str::to_string),
+        }
+    }
+
+    fn stored_dictation(url: Option<&str>, token: Option<&str>) -> StoredSettings {
+        StoredSettings {
+            dictation_base_url: url.map(str::to_string),
+            dictation_token: token.map(str::to_string),
+            ..StoredSettings::default()
+        }
+    }
+
+    #[test]
+    fn stored_dictation_settings_win_over_the_environment() {
+        let resolved = resolve(
+            &env(None),
+            None,
+            &dictation_env(Some("http://env.invalid"), Some("env-token")),
+            &stored_dictation(Some("http://stored.invalid"), Some("stored-token")),
+            false,
+        );
+        assert_eq!(resolved.dictation_base_url.source, Source::Stored);
+        assert_eq!(resolved.dictation_token.source, Source::Stored);
+        let gateway = DictationGateway::from_resolved(&resolved);
+        assert_eq!(gateway.base_url, "http://stored.invalid");
+        assert_eq!(gateway.token.as_deref(), Some("stored-token"));
+    }
+
+    #[test]
+    fn the_dictation_environment_seeds_when_nothing_is_stored() {
+        let resolved = resolve(
+            &env(None),
+            None,
+            &dictation_env(Some("http://env.invalid"), Some("env-token")),
+            &StoredSettings::default(),
+            false,
+        );
+        assert_eq!(resolved.dictation_base_url.source, Source::Env);
+        assert_eq!(resolved.dictation_token.source, Source::Env);
+        assert!(RuntimeFlags::seed(&resolved).dictation_available());
+    }
+
+    #[test]
+    fn with_nothing_set_the_gateway_defaults_to_loopback_and_is_unavailable() {
+        let resolved = resolve(
+            &env(None),
+            None,
+            &DictationEnv::default(),
+            &StoredSettings::default(),
+            false,
+        );
+        assert_eq!(resolved.dictation_base_url.source, Source::Unset);
+        assert_eq!(resolved.dictation_token.source, Source::Unset);
+        let gateway = DictationGateway::from_resolved(&resolved);
+        assert_eq!(gateway.base_url, "http://127.0.0.1:47300");
+        assert_eq!(gateway.token, None);
+        assert!(!RuntimeFlags::seed(&resolved).dictation_available());
+    }
+
+    #[test]
+    fn a_locked_server_ignores_stored_dictation_settings() {
+        let resolved = resolve(
+            &env(None),
+            None,
+            &dictation_env(None, Some("env-token")),
+            &StoredSettings {
+                dictation_enabled: Some(false),
+                ..stored_dictation(Some("http://stored.invalid"), Some("stored-token"))
+            },
+            true,
+        );
+        assert_eq!(resolved.dictation_token.source, Source::Env);
+        assert_eq!(resolved.dictation_base_url.source, Source::Unset);
+        assert_eq!(resolved.dictation_enabled, None);
+        assert!(RuntimeFlags::seed(&resolved).dictation_available());
+    }
+
+    #[test]
+    fn the_toggle_off_makes_a_configured_gateway_unavailable() {
+        let resolved = resolve(
+            &env(None),
+            None,
+            &dictation_env(None, Some("env-token")),
+            &StoredSettings {
+                dictation_enabled: Some(false),
+                ..StoredSettings::default()
+            },
+            false,
+        );
+        assert!(!RuntimeFlags::seed(&resolved).dictation_available());
+    }
+
+    #[test]
+    fn the_gateway_debug_output_redacts_the_token() {
+        let gateway = DictationGateway {
+            base_url: "http://x".to_string(),
+            token: Some("hunter2".to_string()),
+        };
+        assert!(!format!("{gateway:?}").contains("hunter2"));
     }
 
     // -- RuntimeFlags (issue #201) --------------------------------------------
@@ -1065,7 +1351,7 @@ mod tests {
 
     #[test]
     fn seed_reads_an_explicit_off_as_disabled() {
-        let mut resolved = resolve(&env(None), None, &StoredSettings::default(), false);
+        let mut resolved = resolve(&env(None), None, &DictationEnv::default(), &StoredSettings::default(), false);
         resolved.reflect_enabled = Some(false);
         resolved.digest_enabled = Some(true);
         resolved.embeddings_enabled = None;
@@ -1088,7 +1374,7 @@ mod tests {
         let held_elsewhere = flags.clone();
         assert!(held_elsewhere.reflect_enabled());
 
-        let mut resolved = resolve(&env(None), None, &StoredSettings::default(), false);
+        let mut resolved = resolve(&env(None), None, &DictationEnv::default(), &StoredSettings::default(), false);
         resolved.reflect_enabled = Some(false);
         flags.apply(&resolved);
 
