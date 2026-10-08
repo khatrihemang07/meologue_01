@@ -157,11 +157,13 @@ describe("ComposerSection", () => {
       expect(screen.getByText(/not included in Backups/)).toBeInTheDocument();
     });
 
-    it("says the mic appears in the format toolbar", () => {
+    it("says the mic sits in the format toolbar and brings you here until a URL is saved", () => {
       render(<ComposerSection />);
 
       expect(
-        screen.getByText(/mic button appears at the start of the format toolbar/),
+        screen.getByText(
+          /mic button sits at the start of the format toolbar; until a URL is saved, it brings you here/,
+        ),
       ).toBeInTheDocument();
     });
 

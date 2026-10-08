@@ -893,7 +893,7 @@ export function useSyncEnabled(): boolean {
   return useSettingsStore((state) => state.serverUrl !== "");
 }
 
-/** Issue #454: an empty dictation URL means the Composer shows no mic button. */
+/** Issue #454: an empty dictation URL means the Composer's mic opens Settings instead of recording. */
 export function useDictationEnabled(): boolean {
   return useSettingsStore((state) => state.dictationUrl !== "");
 }

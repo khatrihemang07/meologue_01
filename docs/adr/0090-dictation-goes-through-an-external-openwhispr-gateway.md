@@ -39,11 +39,15 @@ a Backup made by another build or edited by hand could still carry a token, and 
 overwrite the one this Device holds. The cost is that a restored Device has to have the token typed
 in again.
 
-**The mic button is hidden while no gateway URL is set.** `useDictationEnabled()` is true only for a
-non-empty URL, and the Composer renders the button only then. This follows ADR 0011's reading of an
-empty address: unset means the feature is off, not broken. A button that always showed would, for
-every user without a gateway, lead to a failure toast on first press. Hiding it keeps the Composer
-unchanged for them. The button sits at the start of the format toolbar, so a Device with the format toolbar switched off has no mic either.
+**The mic button is always in the format toolbar, but only records once a gateway URL is set.**
+This reverses the first decision, which hid the button while `useDictationEnabled()` was false.
+Owner report on v0.17.0: "I installed the latest release and couldn't find any mic button
+anywhere." A hidden mic made the feature undiscoverable on a fresh install, where no URL is saved.
+Now, with no URL, the first toolbar button is a mic labelled "Set up dictation"; tapping it never
+records, it navigates to `/settings#dictation-url` and Settings focuses the gateway URL field. With
+a URL it is the Dictate button as before. ADR 0011's "unset means off, not broken" still holds:
+nothing is requested and no failure toast appears. The button still sits inside the format
+toolbar, so a Device with the format toolbar switched off has no mic in either state.
 
 **Recording needs a secure context.** `navigator.mediaDevices` is undefined on a plain-http page
 that is not `localhost`, so `getUserMedia` cannot even be called there. This is the same constraint

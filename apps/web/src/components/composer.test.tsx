@@ -1,10 +1,24 @@
 import type { Entry } from "@meologue/core";
-import { act, fireEvent, render, screen } from "@testing-library/react";
-import { createRef } from "react";
+import {
+  act,
+  fireEvent,
+  type RenderOptions,
+  render as rtlRender,
+  screen,
+  within,
+} from "@testing-library/react";
+import { createRef, type ReactElement } from "react";
+import { MemoryRouter, useLocation } from "react-router";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { formatTaskReference } from "@/lib/inline-markdown";
 import { useSettingsStore } from "@/lib/settings";
 import { Composer, type ComposerHandle } from "./composer";
+
+// Composer's unconfigured mic is a router link (DictationSetupButton), and
+// most tests here leave the dictation URL empty, so every render sits in a router.
+function render(ui: ReactElement, options?: RenderOptions) {
+  return rtlRender(ui, { wrapper: MemoryRouter, ...options });
+}
 
 const dictationMocks = vi.hoisted(() => ({
   startDictationRecording: vi.fn(),
@@ -185,13 +199,52 @@ describe("Composer's Send button keeps focus on the editor", () => {
   });
 
   describe("dictation (issue #454)", () => {
+    function Where() {
+      const location = useLocation();
+      return <div data-testid="where">{location.pathname + location.hash}</div>;
+    }
+    function renderComposer(onSend = vi.fn()) {
+      return render(
+        <>
+          <Where />
+          <Composer onSend={onSend} />
+        </>,
+      );
+    }
     afterEach(() => {
       useSettingsStore.setState({ dictationUrl: "", formatBarVisible: true });
     });
 
-    it("shows no mic button until a gateway URL is set", () => {
+    it("offers Set up dictation as the toolbar's first button without a gateway URL", () => {
       useSettingsStore.setState({ dictationUrl: "", formatBarVisible: true });
-      render(<Composer onSend={vi.fn()} />);
+      renderComposer();
+      const toolbar = screen.getByRole("toolbar");
+      const first = within(toolbar).getAllByRole("button")[0];
+      expect(first).toHaveAccessibleName("Set up dictation");
+      expect(screen.queryByRole("button", { name: "Dictate" })).not.toBeInTheDocument();
+    });
+
+    it("sends Set up dictation to Settings without recording", () => {
+      useSettingsStore.setState({ dictationUrl: "", formatBarVisible: true });
+      dictationMocks.startDictationRecording.mockClear();
+      renderComposer();
+      fireEvent.click(screen.getByRole("button", { name: "Set up dictation" }));
+      expect(screen.getByTestId("where")).toHaveTextContent("/settings#dictation-url");
+      expect(dictationMocks.startDictationRecording).not.toHaveBeenCalled();
+    });
+
+    it("makes Dictate the toolbar's first button once a URL is set", () => {
+      useSettingsStore.setState({ dictationUrl: "http://gw", formatBarVisible: true });
+      renderComposer();
+      const first = within(screen.getByRole("toolbar")).getAllByRole("button")[0];
+      expect(first).toHaveAccessibleName("Dictate");
+      expect(screen.queryByRole("button", { name: "Set up dictation" })).not.toBeInTheDocument();
+    });
+
+    it("shows no mic of either kind when the format toolbar is off and no URL is set", () => {
+      useSettingsStore.setState({ dictationUrl: "", formatBarVisible: false });
+      renderComposer();
+      expect(screen.queryByRole("button", { name: "Set up dictation" })).not.toBeInTheDocument();
       expect(screen.queryByRole("button", { name: "Dictate" })).not.toBeInTheDocument();
     });
 

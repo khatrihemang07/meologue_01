@@ -36,6 +36,7 @@ import { EditorView } from "prosemirror-view";
 import { type Ref, useCallback, useEffect, useImperativeHandle, useRef, useState } from "react";
 import { type CommandState, ComposerToolbar } from "@/components/composer-toolbar";
 import { DictateButton } from "@/components/dictate-button";
+import { DictationSetupButton } from "@/components/dictation-setup-button";
 import { entrySnippet } from "@/components/entry-row";
 import { Button } from "@/components/ui/button";
 import { type ComposerCommand, composerCommands } from "@/lib/composer-commands";
@@ -946,11 +947,16 @@ export function Composer({
           commandStates={commandStates}
           onRun={runToolbarCommand}
           // The mic lives only in the format toolbar (issue #454, owner's
-          // call), so with the toolbar switched off there is no mic.
+          // call), so with the toolbar switched off there is no mic. With
+          // the toolbar on it is always there: without a saved gateway URL
+          // it is the "Set up dictation" shortcut to Settings, so the
+          // feature is discoverable on a fresh install (ADR 0090).
           dictation={
             dictationEnabled ? (
               <DictateButton onText={insertDictation} disabled={disabled} />
-            ) : undefined
+            ) : (
+              <DictationSetupButton />
+            )
           }
         />
       )}

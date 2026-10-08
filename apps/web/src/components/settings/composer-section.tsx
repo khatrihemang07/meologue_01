@@ -175,8 +175,8 @@ export function ComposerSection() {
         </SettingsSection>
 
         {/*
-          Issue #454. Empty URL means the Composer has no mic button at all
-          (ADR 0090). The token is a secret: password input, and excluded
+          Issue #454. Empty URL means the Composer's mic only links here
+          ("Set up dictation") instead of recording (ADR 0090). The token is a secret: password input, and excluded
           from Backups (`BACKUP_EXCLUDED_KEYS` in lib/settings.ts). Buttons
           are named "Save dictation" / "Test dictation gateway" rather than
           bare Save/Test because this page already has several Save buttons
@@ -184,7 +184,7 @@ export function ComposerSection() {
         */}
         <SettingsSection
           label="Dictation"
-          hint="Records in the Composer and sends audio to an OpenWhispr gateway on your network. The mic button appears at the start of the format toolbar. The token stays on this Device and is not included in Backups."
+          hint="Records in the Composer and sends audio to an OpenWhispr gateway on your network. The mic button sits at the start of the format toolbar; until a URL is saved, it brings you here. The token stays on this Device and is not included in Backups."
         >
           <form
             className="flex flex-col gap-2"
