@@ -107,6 +107,7 @@ export function ServerTextField({
   onChange,
   locked,
   type = "text",
+  unsetHint,
 }: {
   id: string;
   label: string;
@@ -115,6 +116,8 @@ export function ServerTextField({
   onChange: (value: string) => void;
   locked: boolean;
   type?: "text" | "password";
+  /** Replaces "Not set anywhere." for a field whose Server falls back to a built-in default when unset, so the hint doesn't contradict the default the field is showing. */
+  unsetHint?: string;
 }) {
   return (
     <div className="flex flex-col gap-1">
@@ -137,7 +140,9 @@ export function ServerTextField({
         placeholder="Clear to fall back to the environment"
         className="h-11"
       />
-      <p className="text-muted-foreground text-xs">{sourceHint(field.source)}</p>
+      <p className="text-muted-foreground text-xs">
+        {field.source === "unset" && unsetHint !== undefined ? unsetHint : sourceHint(field.source)}
+      </p>
     </div>
   );
 }

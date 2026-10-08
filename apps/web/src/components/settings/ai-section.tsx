@@ -462,6 +462,7 @@ function ServerAiFields({
           value={draft.dictationBaseUrl}
           onChange={(value) => editField("dictationBaseUrl", value)}
           locked={locked}
+          unsetHint="Not set — the Server uses its default."
         />
         <ServerSecretField
           id="server-dictation-token"

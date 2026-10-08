@@ -350,6 +350,9 @@ describe("AiSection", () => {
         renderAiSection();
 
         expect(await screen.findByLabelText("Gateway URL")).toHaveValue("http://127.0.0.1:47300");
+        // An unset Gateway URL is not "not set anywhere": the Server falls
+        // back to a built-in default, and the field is showing it.
+        expect(screen.getByText("Not set — the Server uses its default.")).toBeInTheDocument();
         const token = screen.getByLabelText("Gateway token");
         expect(token).toHaveAttribute("type", "password");
         expect(token).toHaveValue("");
