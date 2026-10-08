@@ -50,9 +50,12 @@ field is optional on the wire; an older Server lacks it, which a Device reads as
 mic (first group of the format toolbar) shows only when the format toolbar is on and the connected
 Server reports the capability.
 
-**Device-side configuration is removed.** The per-Device dictation URL and token, the Dictation
-settings section, and the Backup exclusion for the token (0090) go away; there is no Device secret
-left to exclude.
+**Device-side configuration is removed.** The per-Device dictation URL and token and the Dictation
+settings section (0090) go away, and a Device deletes the two `localStorage` keys v0.17.0 wrote
+(`meologue.dictation-url`, `meologue.dictation-token`) once at startup, because the token is a
+credential and nothing reads it any more. The Backup exclusion for the token is deliberately kept,
+though no code writes the key now: a Device that has not yet run the cleanup, or a hand-edited
+Backup, must never carry the token out or write it back in on Restore.
 
 **`PROTOCOL_VERSION` is not bumped.** The change is additive: a new optional capability and new
 routes, with no change to the sync wire shape. This follows the precedent of issue #184 (Events).

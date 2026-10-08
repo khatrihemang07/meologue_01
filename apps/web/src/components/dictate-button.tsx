@@ -28,7 +28,7 @@ function formatElapsed(seconds: number): string {
 }
 
 /**
- * The Composer's mic button (issue #454, ADR 0090): idle, recording,
+ * The Composer's mic button (issue #454, ADR 0090; Server-backed since #455, ADR 0091): idle, recording,
  * transcribing. Composer passes it into the format toolbar's first group
  * (the owner moved it there from beside Send), so it is sized and styled
  * like the toolbar's own buttons: square, ghost when idle.
