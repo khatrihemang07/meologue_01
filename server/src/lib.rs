@@ -1,4 +1,5 @@
 pub mod backup;
+pub mod dictation;
 pub mod digest;
 pub mod embedding;
 pub mod harness;
@@ -563,7 +564,15 @@ pub fn router_with_everything(
         .route(
             "/v1/config",
             get(settings::get_config_handler).patch(settings::patch_config_handler),
-        );
+        )
+        // Issue #455 / ADR 0091: unconditional too — whether dictation is
+        // available is decided per request from `RuntimeFlags`, because a
+        // `PATCH /v1/config` must turn it on with no restart.
+        .route(
+            "/v1/dictations",
+            post(dictation::create_dictation_handler).layer(dictation::upload_body_limit()),
+        )
+        .route("/v1/dictations/{id}", get(dictation::get_dictation_handler));
 
     if reflect.is_some() {
         // `/v1/sessions/{id}` and `/v1/sessions` are gated on the same

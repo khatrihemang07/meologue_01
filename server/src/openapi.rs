@@ -1,13 +1,14 @@
 use utoipa::OpenApi;
 
 use crate::backup::{RebuildReport, RestoreReport};
+use crate::dictation::{DictationError, DictationJob, DictationUpload};
 use crate::digest::{Digest, DigestResponse};
 use crate::health::{HealthCapabilities, HealthResponse};
 use crate::llm::ModelInfo;
 use crate::models::ModelsResponse;
 use crate::reflect::{ReflectRequest, ReflectResponse};
 use crate::sessions::{SessionResponse, SessionRow, SessionTurnRow};
-use crate::settings::{ConfigPatch, ConfigResponse, InstanceMode, ResolvedField, Source};
+use crate::settings::{ConfigPatch, ConfigResponse, FeatureConfig, InstanceMode, ResolvedField, SecretField, Source, TogglePatch};
 use crate::sync::{
     CommentInput, CommentOutput, EntryInput, EntryOutput, EventInput, EventOutput, LabelInput,
     LabelOutput, ProjectInput, ProjectOutput, SectionInput, SectionOutput, SyncRequest,
@@ -32,6 +33,8 @@ use crate::sync::{
         crate::backup::rebuild_mismatched_embeddings_handler,
         crate::settings::get_config_handler,
         crate::settings::patch_config_handler,
+        crate::dictation::create_dictation_handler,
+        crate::dictation::get_dictation_handler,
     ),
     components(schemas(
         HealthResponse,
@@ -68,6 +71,12 @@ use crate::sync::{
         ResolvedField,
         Source,
         InstanceMode,
+        SecretField,
+        FeatureConfig,
+        TogglePatch,
+        DictationUpload,
+        DictationJob,
+        DictationError,
     ))
 )]
 struct ApiDoc;

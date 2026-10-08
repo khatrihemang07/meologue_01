@@ -71,6 +71,12 @@ pub struct HealthCapabilities {
     pub digest: bool,
     pub embeddings: bool,
     pub todo: bool,
+    /// Issue #455 / ADR 0091: a dictation token is resolved (stored or
+    /// env) and the toggle is not Off. Read from `RuntimeFlags`, like the
+    /// others — health stays database-free and never probes the gateway.
+    /// Optional on the wire so a Device can read an older Server's
+    /// health, which lacks it, as "unknown".
+    pub dictation: Option<bool>,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -126,6 +132,7 @@ pub async fn health_handler(
         // bare `true` rather than reading anything off `LlmConfig` or
         // `RuntimeFlags` — Todo has no toggle to read in the first place.
         todo: true,
+        dictation: Some(flags.dictation_available()),
     };
 
     Json(HealthResponse {
